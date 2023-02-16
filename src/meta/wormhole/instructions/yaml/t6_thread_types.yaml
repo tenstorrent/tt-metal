@@ -1,0 +1,211 @@
+
+- namespace:
+  - tb
+  - t6_thread
+
+- enum:
+    name: sfunc_op_e
+    values:
+      - name: NONE
+      - name: SIGMOID
+      - name: TANH
+      - name: RECIP
+      - name: LRELU
+      - name: EXP
+      - name: EXP_APPROX
+      - name: GELU
+      - name: GELU_ERF
+      - name: SQRT_APPROX
+      - name: SQRT
+      - name: ADD
+      - name: IADD
+      - name: SCALE
+      - name: SCALE1
+      - name: SCALE2
+      - name: SORT
+      - name: PASS_THROUGH
+      - name: MFREDUCE
+      - name: BP_MAX_POOL
+      - name: LOG
+      - name: DROPOUT
+
+
+- enum:
+    name: mutex_resource
+    values:
+      - name: MATH
+        encoding: 0
+      - name: PACKER
+        encoding: 1
+      - name: UNPACKER0
+        encoding: 2
+      - name: UNPACKER1
+        encoding: 3
+- enum:
+    name: instr_state
+    values:
+      - name: START
+      - name: AVAIL
+- enum:
+    name: stall_resource
+    bitmask:
+    values:
+      - name: TDMA
+      - name: SYNC
+      - name: PACK
+      - name: UNPACK
+      - name: XMOV
+      - name: THCON
+      - name: MATH
+      - name: CFG
+      - name: SFPU
+      - name: NONE
+- enum:
+    name: sem_wait_cond
+    values:
+      - name: WHILE_AT_0
+        encoding: 1
+      - name: WHILE_AT_MAX
+        encoding: 2
+
+
+- enum:
+    name: semaphore_wait_cond
+    values:
+      - name: SEMAPHORE_ZERO
+        encoding: 1
+      - name: SEMAPHORE_MAX
+        encoding: 2
+
+
+- enum:
+    name: semwait_stall_on
+    values:
+      - name: MIN
+        encoding: 1
+      - name: MAX
+        encoding: 2
+
+- enum:
+    name: stallwait_wait_res
+    bitmask:
+    values:
+      - name: THCON
+      - name: UNPACK0
+      - name: UNPACK1
+      - name: PACKER0
+      - name: PACKER1
+      - name: PACKER2
+      - name: PACKER3
+      - name: MATH
+      - name: SRCA_CLEARED
+      - name: SRCB_CLEARED
+      - name: SRCA_VALID
+      - name: SRCB_VALID
+      - name: MOVER
+      - name: CFG  # FIXME: this is just trisc config
+      - name: SFPU
+
+- enum:
+    name: stalwait_stall_res_expanded
+    bitmask:
+    values:
+      - name: TDMA
+      - name: SYNC
+      - name: PACK
+      - name: UNPACK0
+      - name: UNPACK1
+      - name: XMOV
+      - name: THCON
+      - name: MATH
+      - name: CFG
+      - name: SFPU
+      - name: NONE
+
+- const:
+    name: SEMAPHORE_RESET_VAL
+    value: 0x0
+- const:
+    name: SEMAPHORE_MAX_RESET_VAL
+    value: 0xF
+- enum:
+    name: stallwait_wait_res_expanded
+    values:
+      - name: THCON
+      - name: UNPACK0
+      - name: UNPACK1
+      - name: PACKER0
+      - name: PACKER1
+      - name: PACKER2
+      - name: PACKER3
+      - name: MATH
+      - name: SEMAPHORE_ZERO_S0
+      - name: SEMAPHORE_MAX_S0
+      - name: SEMAPHORE_ZERO_S1
+      - name: SEMAPHORE_MAX_S1
+      - name: SEMAPHORE_ZERO_S2
+      - name: SEMAPHORE_MAX_S2
+      - name: SEMAPHORE_ZERO_S3
+      - name: SEMAPHORE_MAX_S3
+      - name: SEMAPHORE_ZERO_S4
+      - name: SEMAPHORE_MAX_S4
+      - name: SEMAPHORE_ZERO_S5
+      - name: SEMAPHORE_MAX_S5
+      - name: SEMAPHORE_ZERO_S6
+      - name: SEMAPHORE_MAX_S6
+      - name: SEMAPHORE_ZERO_S7
+      - name: SEMAPHORE_MAX_S7
+      - name: SRCA_CLEARED_B0
+      - name: SRCB_CLEARED_B0
+      - name: SRCA_VALID_B0
+      - name: SRCB_VALID_B0
+      - name: SRCA_CLEARED_B1
+      - name: SRCB_CLEARED_B1
+      - name: SRCA_VALID_B1
+      - name: SRCB_VALID_B1
+      - name: MOVER
+      - name: CFG
+      - name: SFPU
+- const:
+    name: THREAD_COUNT
+    value: 3
+- const:
+    name: PACK_COUNT
+    value: 4
+- const:
+    name: UNPACK_COUNT
+    value: 2
+- const:
+    name: MOVER_COUNT
+    value: 1
+- const:
+    name: SEM_COUNT
+    value: 8
+- enum:
+    name: tensix_test_name
+    values:
+      - name: multi_core_noc
+      - name: multi_core_noc_broadcase
+      - name: multi_core_noc_remote_fifo_push
+      - name: kullnet
+      - name: random
+      - name: remote_push_load_pop
+      - name: single_core_conv
+      - name: single_core_data
+      - name: single_core_deinterlace
+      - name: single_core_dsc
+      - name: single_core_dvalid
+      - name: single_core_fullcon
+      - name: single_core_haloconv
+      - name: single_core_haloize
+      - name: single_core_loop
+      - name: single_core_matrix
+      - name: single_core_multilayer
+      - name: single_core_perf
+      - name: single_core_pool
+      - name: single_core_random
+      - name: single_core_synth_ckernel
+      - name: single_core_synth_ckernel_mailbox
+      - name: single_core_sfunc
+      - name: single_core_realign
+      - name: single_core_reset

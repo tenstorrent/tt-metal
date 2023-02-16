@@ -1,0 +1,3 @@
+template/extra.mk
+**/out
+**/gen

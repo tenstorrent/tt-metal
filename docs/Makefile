@@ -1,0 +1,45 @@
+# Minimal makefile for Sphinx documentation
+#
+
+# You can set these variables from the command line, and also
+# from the environment for the first two.
+SPHINXOPTS    	?=
+SPHINXBUILD   	?= sphinx-build
+SOURCEDIR     	= source
+BUILDDIR      	= build
+HTMLDIR       	= $(BUILDDIR)/html
+PORT          	?= 8888
+#TODO: Update when folder created on web server with updated name
+#PUBLIC_DOCDIR   = yyz-webservice-02:/var/www/html/docs/<PROJECT-NAME>
+BRANCH = $(shell git rev-parse --abbrev-ref HEAD)
+
+# Put it first so that "make" without argument is like "make help".
+help:
+	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
+
+.PHONY: help default clean html publish
+
+default: html
+
+all: clean html server
+
+clean:
+	@rm -rf $(BUILDDIR)
+
+html:
+	@$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
+
+server:
+	@echo "Navigate to: \033[4;33mlocalhost:$(PORT)/index.html\033[0m"
+	@cd $(HTMLDIR) && python -m http.server $(PORT)
+
+publish:
+ifeq ($(BRANCH), master)
+	@echo "Publishing docs to server"
+	@chmod -R g+w $(HTMLDIR)/*
+	@rsync --delete-before --delete-excluded --omit-dir-times -avz $(HTMLDIR)/* $(PUBLIC_DOCDIR)
+else
+	@echo "Publishing docs to server failed, only supported on master branch"
+	@echo "You are currently on branch: $(BRANCH)"
+endif
+

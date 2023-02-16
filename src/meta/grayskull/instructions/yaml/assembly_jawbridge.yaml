@@ -1,0 +1,1548 @@
+# Instruction types: 
+#   This field only matters for verilog generation, it signifies which hierarchical decoder "owns" instruction
+#   LOCAL_CREGS  - 
+#   PC_MODIFYING -
+#   COMPUTE      -
+#   COMMON_CREGS - ???? Jel se ovo koristi? Nema ga us assembler.cpp
+# 
+ATGETM:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa0
+    arguments:
+        - name: mutex_index
+          start_bit: 0
+          field_type: HEX
+          description: <resource> 0 - math, 1 - pacr, 2 -unpacr0, 3 - unpacr1
+    description: "Acquires mutex - thread will stall until mutex is acquired"
+
+ATRELM:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa1
+    arguments:
+        - name: mutex_index
+          start_bit: 0
+          field_type: HEX
+          description: <resource> 0 - math, 1 - pacr, 2 -unpacr0, 3 - unpacr1
+    description: "Releases mutex"
+
+STALLWAIT:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa2
+    arguments:
+        - name: wait_res
+          start_bit: 0
+          field_type: DEC
+          description: "resource to be waited for - bit mask: {srcB valid, srcA valid, srcB cleared, srcA cleared, semaphone max, sempahore zero, math, packer, unpack1, unpack0, thcon}"
+        - name: stall_res
+          start_bit: 12
+          field_type: HEX
+          description: resource to be stalled -- bit mask for resources (compute/tdma, sync, pack, unpack, xsearch, xmov, thcon, math  )
+    description: "Barrier instruction, stall resource until condition is met"
+
+SEMINIT:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa3
+    arguments:
+        - name: init_value
+          start_bit: 0
+          field_type: DEC
+          description: "Semaphore initial value [0..15]"
+        - name: max_value
+          start_bit: 8
+          field_type: DEC
+          description: "Semaphore max value [0..15]"
+        - name: sem_sel
+          start_bit: 20
+          field_type: DEC
+          description: "One-hot encoded semaphore 0..3 select"
+    description: "Initialize a semaphore"
+
+SEMPOST:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa4
+    arguments:
+        - name: sem_sel
+          start_bit: 20
+          field_type: DEC
+          description: "One-hot encoded semaphore 0..3 select"
+    description: "Semaphore increment"
+
+SEMGET:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa5
+    arguments:
+        - name: sem_sel
+          start_bit: 20
+          field_type: DEC
+          description: "One-hot encoded semaphore 0..3 select"
+    description: "Semaphore decrement"
+
+SEMWAIT:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa6
+    arguments:
+        - name: wait_sem_cond
+          start_bit: 0
+          field_type: DEC
+          description: "Wait on semaphore. 1 - wait while semaphore is 0, 2 - wait while semaphore is max"
+        - name: stall_res
+          start_bit: 12
+          field_type: HEX
+          description: resource to be stalled -- bit mask for resources (compute/tdma, sync, pack, unpack, xsearch, xmov, thcon, math  )
+        - name: sem_sel
+          start_bit: 20
+          field_type: DEC
+          description: "One-hot encoded semaphore 0..3 select"
+    description: "Semaphore barrier instruction, stall resource until semaphore condition is met"
+
+CGKICK:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa7
+    arguments:
+        - name: arg
+          start_bit: 0
+          field_type: DEC
+          description: "Dummy arg, currently kick is applied to all clock gaters"
+    description: "Clock gating kick signal to turn on clock"
+
+CGON:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa8
+    arguments:
+        - name: arg
+          start_bit: 0
+          field_type: DEC
+          description: "Dummy arg, currently kick is applied to all clock gaters"
+    description: "Clock gating force signal to turn on clock"
+
+CGOFF:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xa9
+    arguments:
+        - name: arg
+          start_bit: 0
+          field_type: DEC
+          description: "Dummy arg, currently kick is applied to all clock gaters"
+    description: "Clock gating release signal to turn on clock"
+
+SETC:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0x80
+    arguments:
+        - name: set_value
+          start_bit: 0
+          field_type: HEX
+          description: The value to store
+        - name: set_reg
+          start_bit: 32
+          field_type: HEX
+          description: <register> - Register index
+    description: "Sets thread specific control register <register> to the value stored in the slot argument"
+
+FLUSH:
+    op_binary: 0x81
+    instrn_type: PC_MODIFYING  
+    arguments: null
+    description: "Flush all buffers of oustanding instructions, reads/writes."
+
+JMPI:
+    op_binary: 0x84
+    instrn_type: PC_MODIFYING
+    arguments: 
+        - name: pc
+          start_bit: 0
+          field_type: HEX
+          description: <address> - Absolute address to jump to
+    description: "Unconditional jump to <address>"
+
+JMPR:
+    op_binary: 0x85
+    instrn_type: PC_MODIFYING
+    arguments:
+        - name: pc
+          start_bit: 0
+          field_type: DEC
+          description: <address> - Relative address to jump to
+    description: "Unconditional relative jump to PC + <address>"
+
+LOOPONE:
+    op_binary: 0x86
+    instrn_type: PC_MODIFYING
+    arguments:
+        - name: loop_cnt2
+          start_bit: 0
+          field_type: DEC
+          description: <M> - Number of loop iterations
+    description: "Loop the following instruction <M> times"
+
+LOOP:
+    op_binary: 0x87
+    instrn_type: PC_MODIFYING
+    arguments:
+        - name: loop_cnt
+          start_bit: 0
+          field_type: DEC
+          description: <M> - Number of loop iterations
+        - name: instrn_cnt
+          start_bit: 10
+          field_type: DEC
+          description: <N> - Number of instructions to loop over
+    description: "Loop <N> following instructions <M> times"
+
+LOOPR:
+    op_binary: 0x82
+    instrn_type: PC_MODIFYING
+    arguments:
+        - name: LoopCntIndex
+          start_bit: 0
+          field_type: DEC
+          description: Loop count register index
+        - name: Label
+          start_bit: 10
+          field_type: DEC
+          description: Number of instructions to loop over (calculate from the label by assembler)
+    description: "Loop <N> following instructions as many times as specified in loop count register index <M>"
+
+CLOOPR:
+    op_binary: 0x83
+    instrn_type: PC_MODIFYING
+    arguments:
+        - name: LoopCntIndex
+          start_bit: 0
+          field_type: DEC
+          description: Loop count register index
+        - name: CondRegIndex
+          start_bit: 4
+          field_type: DEC
+          description: Conditional register with mask
+        - name: Label
+          start_bit: 10
+          field_type: DEC
+          description: Number of instructions to loop over (calculate from the label by assembler)
+        - name: ExecuteLoop
+          start_bit: 20
+          field_type: BIN
+          description: Execute loop with conditional flag (1), or skip over loop iteration (0)
+    description: "Conditional loop. Same as LOOPR, but using register C as mask for conditional execution. On each iteration, if LSB is 1, then either the loop iteration is skipped or conditional flag is set (for conditional instructions), and then mask is shifted to the right. Maximum of 16 loop iterations can be performed with conditional execution."
+
+HALT:
+    op_binary: 0x88
+    instrn_type: PC_MODIFYING
+    arguments: 0
+    description: "Halt PC, it will stop the thread in question from executing until trigerred again."
+
+HALTF:
+    op_binary: 0x90
+    instrn_type: PC_MODIFYING
+    arguments: 0
+    description: "Final Halt PC, it will stop the thread in question from executing and only tensix reset can unhalt, can't be unhalted by usual register write."
+
+NOP:
+    op_binary: 0x89
+    instrn_type: COMPUTE
+    arguments: 0
+    description: "Do nothing and consume an instruction slot and cycle"
+
+
+SHIFTXB:
+    op_binary: 0x9
+    instrn_type: COMPUTE
+    arguments: &SRCB_SHIFTX
+        - name: srcb_offset_0
+          field_type: DEC
+          start_bit: 0
+          description: srcb offset 
+        - name: double_row
+          field_type: DEC
+          start_bit: 5
+          description: 0 = shift 1 row, 1 = shift 2 rows
+        - name: log2_amount
+          field_type: DEC
+          start_bit: 6
+          description: Log2 of the shift amount (possible amounts 1, 2, 4, 8)
+        - name: combined_shift
+          field_type: DEC
+          start_bit: 8
+          description: 0 = shift rows separately, 1 = combined 2-row shift; don't-care if double_row=0
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode (same as convolution instructions, only srcb increment used) 
+    description: "right-shift one or two registers from SRCB"  
+
+
+ZEROACC:
+    op_binary: 0x10
+    instrn_type: COMPUTE
+    arguments:
+        - name: clear_mode
+          field_type: BIN
+          start_bit: 0
+          description: "00 - clear only specified dest register. 01 - dest_index specifies block of 16 registers to clear. 10 - dest_index specified upper or lower half to clear. 11 - clear all registers"
+        - name: dest_index
+          field_type: DEC
+          start_bit: 5
+          description: dest register index
+        - name: AddrMode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode
+    description: "Zero out accumulator. Single (00) mode clears one register and updates counters using the addressing mode. For other modes, zero-flags are set to emulate clearing of the dest memory, and dest_index is used to determine which portion is to be cleared."
+
+ZEROSRC:
+    op_binary: 0x11
+    instrn_type: COMPUTE
+    arguments: 
+        - name: src_mask
+          field_type: DEC
+          start_bit: 0
+          description: 1 = zero out source A, 2 = zero out source B, 3 = zero out source A & B
+    description: "Zero out source A or B registers"
+
+MOVA2D:
+    op_binary: 0x12
+    instrn_type: COMPUTE
+    arguments: &MOV_REG
+        - name: src_index
+          field_type: DEC
+          start_bit: 0
+          description: src register index
+        - name: dest_index
+          field_type: DEC
+          start_bit: 5
+          description: dest register index 
+        - name: move_size
+          field_type: BIN
+          start_bit: 13
+          description: 0 = move 1 row, 1 = move 2 rows
+        - name: move_mode2
+          field_type: BIN
+          start_bit: 14
+          description: for srcb => 0 = move words, 1 = move single element / for srca => 0 = regular addressing, 1 = haloize mode addressing / don't-care otherwise
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode
+    description: "move srca register to dest"
+
+
+MOVD2A:
+    op_binary: 0x8
+    instrn_type: COMPUTE
+    arguments: *MOV_REG
+    description: "Move dest register to srca. "
+
+
+MOVB2D:
+    op_binary: 0x13
+    instrn_type: COMPUTE
+    arguments: &MOVB_REG
+        - name: src_index
+          field_type: DEC
+          start_bit: 0
+          description: src register index
+        - name: dest_index
+          field_type: DEC
+          start_bit: 5
+          description: dest register index 
+        - name: move_mode3
+          field_type: BIN
+          start_bit: 13
+          description: 00 - move 1 row, 10 - move 1 row broadcasted to 2 words, 01 - move single element, 11 - move single element broadcasted to 2 words
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode
+    description: "move srcb register to dest"
+
+TRNSPSRCA:
+    op_binary: 0x14
+    instrn_type: COMPUTE
+    arguments: 0
+    description: "transpose SRCA main registers"  
+
+A2SHIFT:
+    op_binary: 0x15
+    instrn_type: COMPUTE
+    arguments: &SRCA2SHIFT
+        - name: srca_offset
+          field_type: DEC
+          start_bit: 0
+          description: srca offset
+        - name: num_rows
+          field_type: DEC
+          start_bit: 4
+          description: Number of rows to move
+        - name: shift_vals
+          field_type: DEC
+          start_bit: 5
+          description: Whether to shift existing content
+        - name: upsample
+          field_type: DEC
+          start_bit: 6
+          description: 00 = no upsample, 01 = upsample with zeroes, 10 = upsample with duplicated values
+        - name: datum_enable
+          field_type: DEC
+          start_bit: 8
+          description: 16-bit enable mask        
+    description: "move 1 or 2 main SRCA words into SRCA shift reg, with or without shifting the rest"  
+
+SHIFT2A:
+    op_binary: 0x16
+    instrn_type: COMPUTE
+    arguments: &SHIFT2SRCA
+        - name: srca_offset
+          field_type: DEC
+          start_bit: 0
+          description: srca offset
+        - name: num_rows
+          field_type: DEC
+          start_bit: 4
+          description: Number of rows to move
+        - name: upsample
+          field_type: DEC
+          start_bit: 6
+          description: 00 = no upsample, 01 = upsample with zeroes, 10 = upsample with duplicated values
+        - name: datum_enable
+          field_type: DEC
+          start_bit: 8
+          description: 16-bit enable mask        
+    description: "move SRCA shift register to main SRCA regs"  
+
+SHIFTXA:
+    op_binary: 0x17
+    instrn_type: COMPUTE
+    arguments: &SRCA_SHIFTX
+        - name: shift_mode
+          field_type: DEC
+          start_bit: 0
+          description: 00 = combined row shift, 01 = rotate, 10 = shift rows independently, 11 = haloize mode combined main registers shift by 1
+        - name: log2_amount2
+          field_type: DEC
+          start_bit: 2
+          description: Log2 of the shift amount (possible amounts 1, 2, 4, 8); don't-care if shift_mode=11
+    description: "horizontal SRCA shift"
+
+ROTSWPB:
+    op_binary: 0x18
+    instrn_type: COMPUTE
+    arguments: &SRCB_ROT_SWAP
+        - name: srcb_offset_0
+          field_type: DEC
+          start_bit: 0
+          description: srcb offset of operand 0 (used together with srcb counter, similar to convolution instructions)
+        - name: srcb_offset_1
+          field_type: DEC
+          start_bit: 4
+          description: srcb offset of operand 1 (used if field use_offset_1=1 is set, otherwise calculated as srcb_offset_0+1, or n/a if rotating single row)
+        - name: double_row2
+          field_type: DEC
+          start_bit: 9
+          description: 0 = rotate 1 row, 1 = rotate 2 rows
+        - name: rotate
+          field_type: DEC
+          start_bit: 10
+          description: 0 = no rotate, 1 = rotate
+        - name: swap
+          field_type: DEC
+          start_bit: 11
+          description: 0 = no swap, 1 = swap (always set double_row=1 if this bit is set)
+        - name: use_offset_1
+          field_type: DEC
+          start_bit: 12
+          description: 0 = use srcb_offset_0+1 for second operand (enables 2 by 2 rows with autoincrement), 1 = use srcb_offset_1 field
+        - name: mirror_offset_1
+          field_type: DEC
+          start_bit: 13
+          description: 0 = address operand 1 directly, 1 = compute second address as (srcb_offset_1 - srcb_offset) - useful for looped mirroring/rotating a 2D kernel
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode (same as convolution instructions, only srcb increment used) 
+    description: "180-rotate and/or swap one or two SRCB registers"  
+
+SHIFTHALO:
+    op_binary: 0x19
+    instrn_type: COMPUTE
+    arguments: &SRCA_SHIFT_HALO
+        - name: amount
+          field_type: DEC
+          start_bit: 0
+          description: Shift amount (1-8, encoded as 0-7)
+    description: "SRCA halo register shift"  
+
+SETASHRMH0:
+    op_binary: 0x1A
+    instrn_type: COMPUTE
+    arguments: &SRCSHRH0_MASK
+        - name: halo_mask
+          field_type: HEX
+          start_bit: 0
+          description: halo mask
+        - name: reg_mask
+          field_type: HEX
+          start_bit: 1
+          description: 16bit wide register mask
+    description: "SRCA right shift horizontal mask, covering left halo and thread0 reg_array"
+
+SETASHRMH1:
+    op_binary: 0x1B
+    instrn_type: COMPUTE
+    arguments: *SRCSHRH0_MASK
+    description: "SRCA right shift horizontal mask 1, covering thread1 reg_array. halo_mask argument is not used as there's no additional left halo storage with respect to thread1, right halo_mask is implied through the main_reg_mask"
+
+SETASHRMV:
+    op_binary: 0x1C
+    instrn_type: COMPUTE
+    arguments: &SRCSHRV_MASK
+        - name: reg_mask2
+          field_type: HEX
+          start_bit: 0
+          description: 20bit wide register mask
+    description: "SRCA right shift vertical mask, covering main reg_array and central_sr"
+
+SETASHRMH:
+    op_binary: 0x36
+    instrn_type: COMPUTE
+    arguments: *SRCSHRH0_MASK
+    description: "SRCA right shift horizontal mask, only targeting own thread regs"
+
+SETPKEDGOF:
+    op_binary: 0x1D
+    instrn_type: COMPUTE
+    arguments: &PKEDGE_OFFSET
+        - name: x_start
+          field_type: DEC
+          start_bit: 0
+          description: starting datum index for X
+        - name: x_end
+          field_type: DEC
+          start_bit: 4
+          description: ending datum index for X
+        - name: y_start
+          field_type: DEC
+          start_bit: 8
+          description: starting datum index for Y
+        - name: y_end
+          field_type: DEC
+          start_bit: 12
+          description: ending datum index for Y
+    description: "Packer row/column offsets to zero out edges of X-Y plane"  
+
+B2DSTOFF:
+    op_binary: 0x1E
+    instrn_type: COMPUTE
+    arguments: &MOV2DSTOFF
+        - name: src_index
+          field_type: DEC
+          start_bit: 0
+          description: src register index
+        - name: dst_offset_ptr
+          field_type: DEC
+          start_bit: 5
+          description: if mode == 1, ptr = 0 lower half of dst offset word, ptr = 1 upper half of dst offset word
+        - name: move_mode
+          field_type: BIN
+          start_bit: 13
+          description: 00 - move whole word, 01 - move half word, 10 - move zero, 11 - reserved
+    description: "Move word or half word from B to dest offset register"  
+
+SETHLPTR:
+    op_binary: 0x1F
+    instrn_type: COMPUTE
+    arguments: &SETHALOPTR
+        - name: halo start pointer
+          field_type: DEC
+          start_bit: 0
+          description: 
+    description: "Set halo start row pointer"
+
+INCHLPTR:
+    op_binary: 0x35
+    instrn_type: COMPUTE
+    arguments: *SETHALOPTR
+    description: "Increment halo start row pointer"
+
+STOREG:
+    op_binary: 0x20
+    instrn_type: COMPUTE
+    arguments: 
+        - name: Aidx
+          field_type: DEC
+          start_bit: 0
+          description: Src A index
+        - name: BAddrSpec
+          field_type: DEC
+          start_bit: 4
+          description: Src B address spec
+        - name: DestAddrSpec
+          field_type: DEC
+          start_bit: 8
+          description: Dest address spec
+        - name: SpaceSpec
+          field_type: DEC
+          start_bit: 13
+          description: Storage
+        - name: StoreAddr
+          field_type: HEX
+          start_bit: 15
+          description: Address in dataram to which to write the result
+    description: Store machine state (such as registers) to a given dataram address <StoreAddr>. 
+         
+MGSTAT:
+    op_binary: 0x21
+    instrn_type: COMPUTE
+    arguments:
+        - name: DstSpec
+          field_type: DEC
+          start_bit: 8
+          description: Destination specifier
+        - name: SpaceSpec
+          field_type: DEC
+          start_bit: 13
+          description: Space specifier
+    description: "Manage stats, counters and timers"
+
+CONV3S1:
+    op_binary: 0x22
+    instrn_type: COMPUTE
+    arguments: &CONV_ARGS
+        - name: params
+          field_type: DEC
+          start_bit: 0
+          description: convolution/pool parameters
+        - name: src_b
+          field_type: DEC
+          start_bit: 6
+          description: Src B address spec
+        - name: dst
+          field_type: DEC
+          start_bit: 10
+          description: Dest address spec
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode
+        - name: clear_dvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear data valid bits (B,A) after math is done."
+    description: "3x3 primitive for convolution, with stride 1. Outputs 2x 16-wide rows of data"
+
+CONV3S2:
+    op_binary: 0x23
+    instrn_type: COMPUTE
+    arguments: *CONV_ARGS
+    description: "Convolution with 3x3 primitive, with stride 2. Outputs 2x 16-wide rows of data"
+
+CONV5S1:
+    op_binary: 0x24
+    instrn_type: COMPUTE
+    arguments: *CONV_ARGS
+    description: "Convolution with 5x5 primitive, with stride 1. Outputs 2x 16-wide rows of data"
+
+CONV1D_A:
+    op_binary: 0x25
+    instrn_type: COMPUTE
+    arguments: *CONV_ARGS
+    description: "Convolution with 2xN primitive (N<=9). Outputs 1 row."
+
+CONV1D_B:
+    op_binary: 0x26
+    instrn_type: COMPUTE
+    arguments: *CONV_ARGS
+    description: "Convolution with 1xN primitive (N<=17). Outputs 1 row."
+
+POOL2D:
+    op_binary: 0x28
+    instrn_type: COMPUTE
+    arguments: &POOL2D_ARGS
+        - name: size_2d
+          field_type: DEC
+          start_bit: 0
+          description: pool 2D window sizes values 2-5 supported
+        - name: avg_sel
+          field_type: DEC
+          start_bit: 3
+          description: 0-max pooling, 1-average pooling
+        - name: stride
+          field_type: DEC
+          start_bit: 4
+          description: pool 2D stride, d0=>stride=1, d1=>stride=2
+        - name: src_b
+          field_type: DEC
+          start_bit: 6
+          description: Src B address spec
+        - name: dst
+          field_type: DEC
+          start_bit: 10
+          description: Dest address spec
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode
+        - name: clear_dvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear data valid bits (B,A) after math is done."
+    description: "2D primitive for pooling, with programable stride. Supported 2D windows are 2x2 to 5x5. Outputs 2x 16-wide rows of data"
+
+POOLM1D:
+    op_binary: 0x29
+    instrn_type: COMPUTE
+    arguments: *CONV_ARGS
+    description: "Max pooling with 1xN primitive, N and stride specified through params field. Outputs 2x 16-wide rows of partial results"
+
+POOLA1D:
+    op_binary: 0x2A
+    instrn_type: COMPUTE
+    arguments: *CONV_ARGS
+    description: "Max pooling with 1xN primitive, N and stride specified through params field. Outputs 2x 16-wide rows of partial results"
+
+MVMUL:
+    op_binary: 0x30
+    instrn_type: COMPUTE
+    arguments: &MMUL_ARGS
+        - name: src_a
+          field_type: DEC
+          start_bit: 0
+          description: Src A address spec
+        - name: src_b
+          field_type: DEC
+          start_bit: 6
+          description: Src B address spec
+        - name: dst
+          field_type: DEC
+          start_bit: 10
+          description: Dest address spec
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode
+        - name: clear_dvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear data valid bits (B,A) after math is done."
+    description: "Vector-matrix multiply. Outputs 1x 16-wide row"
+
+ELWMUL:
+    op_binary: 0x31
+    instrn_type: COMPUTE
+    arguments: &ELW_ARGS
+        - name: src_a
+          field_type: DEC
+          start_bit: 0
+          description: SrcA address spec
+        - name: bcast_srcb
+          field_type: DEC
+          start_bit: 5
+          description: broadcast srcb
+        - name: src_b
+          field_type: DEC
+          start_bit: 6
+          description: Src B address spec
+        - name: dst
+          field_type: DEC
+          start_bit: 10
+          description: Dest address spec
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode
+        - name: clear_dvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear data valid bits (B,A) after math is done."
+    description: "Elementwise multiply operation"
+
+ELWADD:
+    op_binary: 0x32
+    instrn_type: COMPUTE
+    arguments: *ELW_ARGS
+    description: "Elementwise add operation"
+
+DOTPV:
+    op_binary: 0x33
+    instrn_type: COMPUTE
+    arguments: *ELW_ARGS
+    description: "dot product of two vectors"
+
+VMAC16:
+    op_binary: 0x34
+    instrn_type: COMPUTE
+    arguments: &VMAC_ARGS
+        - name: shift_srca
+          field_type: DEC
+          start_bit: 0
+          description: enable horizontal shift for srca
+        - name: shift_srca_amount
+          field_type: DEC
+          start_bit: 1
+          description: log2 of srca shift amount
+        - name: bcast_srcb
+          field_type: DEC
+          start_bit: 5
+          description: broadcast srcb
+        - name: src_b
+          field_type: DEC
+          start_bit: 6
+          description: Src B address spec
+        - name: dst
+          field_type: DEC
+          start_bit: 10
+          description: Dest address spec
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode
+        - name: clear_dvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear data valid bits (B,A) after math is done."
+    description: "16-wide vector MAC"
+
+SETDVALID:
+    op_binary: 0x57
+    instrn_type: TDMA
+    arguments:
+        - name: setvalid
+          field_type: BIN
+          start_bit: 0
+          description: "Set {B,A} data valid (2 bits)"
+    description: "Sets A/B data valid for current write ID. TDMA instruction."
+
+CLEARDVALID:
+    op_binary: 0x37
+    instrn_type: COMPUTE
+    arguments:
+        - name: reset
+          field_type: BIN
+          start_bit: 0
+          description: "When set, clears all data valid bits, and reset write and read IDs to 0."
+        - name: cleardvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear {B,A} data valid (2 bits)"
+    description: "Clear data valid bits, or reset data valid mechanism completely."
+
+SETRWC:
+    op_binary: 0x38
+    instrn_type: COMPUTE
+    arguments: &SETRWC_ARGS
+        - name: BitMask
+          field_type: BIN
+          start_bit: 0
+          description: "bit mask (rwc_d,rwc_b,rwc_a)"
+        - name: rwc_a
+          field_type: DEC
+          start_bit: 6
+          description: rwc A value
+        - name: rwc_b
+          field_type: DEC
+          start_bit: 10
+          description: rwc B value
+        - name: rwc_d
+          field_type: DEC
+          start_bit: 14
+          description: rwc DST value
+        - name: rwc_cr
+          field_type: BIN
+          start_bit: 18
+          description: apply values specified to RWC CR counters
+        - name: clear_ab_vld
+          field_type: BIN
+          start_bit: 22
+          description: clear srcA and srcB valids indicating to unpacker that new data can be written in
+    description: "Set RWC counters or CR counters"
+
+INCRWC:
+    op_binary: 0x39
+    instrn_type: COMPUTE
+    arguments: &INCRWC_ARGS
+        - name: rwc_a
+          field_type: DEC
+          start_bit: 6
+          description: rwc A value
+        - name: rwc_b
+          field_type: DEC
+          start_bit: 10
+          description: rwc B value
+        - name: rwc_d
+          field_type: DEC
+          start_bit: 14
+          description: rwc DST value
+        - name: rwc_cr
+          field_type: BIN
+          start_bit: 18
+          description: apply values specified to RWC CR counters
+    description: "Increment RWC counters or CR counters"
+
+SETRWCINC:
+    op_binary: 0x3A
+    instrn_type: COMPUTE
+    arguments: &SETRWCINC_ARGS
+        - name: prog_inc_value 
+          field_type: DEC
+          start_bit: 0
+          description: Programable increment value 
+    description: "Set value used for programable increment"
+   
+SETMAXEXP:
+    op_binary: 0x3B
+    instrn_type: COMPUTE
+    arguments:
+        - name: MaxExpValue
+          field_type: DEC
+          start_bit: 0
+          description: "Value of product expoent to initialize max exponent array"
+        - name: dest_index_first
+          field_type: DEC
+          start_bit: 8
+          description: "First dest index whose max exp will be updated"
+        - name: dest_index_last
+          field_type: DEC
+          start_bit: 15
+          description: "Last dest index whose max exp will be updated"
+    description: "Initialize max exp array with a value for dynamic HF instructions"
+    
+ELWSUB:
+    op_binary: 0x3C
+    instrn_type: COMPUTE
+    arguments: *ELW_ARGS
+    description: "Elementwise subtract operation (A-B)"
+
+CLREXPHIST:
+    op_binary: 0x3D
+    instrn_type: COMPUTE
+    arguments: 0
+    description: "Clear exponent histogram"
+
+XMOV:
+    op_binary: 0x40
+    instrn_type: TDMA
+    arguments:
+        - name: Last
+          field_type: BIN
+          start_bit: 0 
+          description: "To be set to 0 for all invocations of XMOV except for the last in a task of assembling input data for     a thread (in which it should be set to 1). Causes data accumulation buffers in mover to flush  to memory"
+        - name: Mov block selection
+          field_type: BIN
+          start_bit: 23
+          description: Select between two move blocks 
+    description: "Move data between L0 and L1"
+
+
+PACR:
+    op_binary: 0x41
+    instrn_type: TDMA
+    arguments:
+        - name: Last
+          field_type: BIN
+          start_bit: 0
+          description: "To be set to 0 for all invocations of PACR except for the last in a tile, when it should be set to 1"
+        - name: Concat
+          field_type: BIN
+          start_bit: 4
+          description: "To be set to 1 when packed data needs to be concataned to the output of the previous PACR instruction. Must be set to 1 for the first pack instruction and 0 for the last PACR in a row "
+        - name: Flush
+          field_type: BIN
+          start_bit: 8
+          description: "When this bit is set the PACR instruction will just cause a flush of non-empty WAs in the packer"
+        - name: ZeroWrite
+          field_type: BIN
+          start_bit: 12
+          description: "Will cause zeros to be written regardless of source data"
+        - name: AddrMode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode
+    description: "Pack row from DST registers to L0"
+
+UNPACR:
+    op_binary: 0x42
+    instrn_type: TDMA
+    arguments:
+        - name: Last
+          field_type: BIN
+          start_bit: 0
+          description: "To be set to 0 for all invocations of UNPACR except for the last in a task of assembling input data for a thread (in which it should be set to 1). Causes data accumulation buffers in unpacker to flush  to memory"
+        - name: ZeroWrite2
+          field_type: BIN
+          start_bit: 4
+          description: "Will cause zeros to be written regardless of source data"
+        - name: Conditional
+          field_type: BIN
+          start_bit: 5
+          description: "Marks this instruction as conditional. It will be NOPed in conditional execution loops where flag is set"
+        - name: SetDataValid
+          field_type: BIN
+          start_bit: 6
+          description: "Unpacker will set data valid bit for the registers it is unpacking into once data has been written."
+        - name: AddrMode
+          field_type: BIN
+          start_bit: 15
+          description: "Addressing mode: CR, CH1_Y_INC, CH1_X_INC, CH0_Y_INC, CH0_X_INC. CR=1 bit, INCs are 2 bits"
+        - name: Unpack block selection
+          field_type: BIN
+          start_bit: 23
+          description: Select between two unpackers 
+    description: "Unpack row from tile in L0 to SRCA/SRCB registers (by UNPACK0/UNPACK1)"
+
+XSEARCH:
+    op_binary: 0x43
+    instrn_type: TDMA
+    arguments:
+        - name: Search cache flush
+          field_type: BIN
+          start_bit: 0
+          description: Flush row pointer cache in the search block
+        - name: Row search 
+          field_type: BIN
+          start_bit: 4
+          description: "Search for start and end of selected row(s) within tile. If not set search is done per datum(s)"
+        - name: Conditional
+          field_type: BIN
+          start_bit: 5
+          description: "Marks this instruction as conditional. It will be NOPed in conditional execution loops where flag is set"
+        - name: Search block selection for unpack
+          field_type: BIN
+          start_bit: 23
+          description: Select for which unpack block to invoke row search
+    description: "Search for start and end of selected datums or rows within tile. To be invoked prior to each invocation of UNPACR."
+
+RSTDMA:
+    op_binary: 0x44
+    instrn_type: TDMA
+    arguments:
+    description: "Soft reset of TDMA engine"
+
+SETDMAREG:
+    op_binary: 0x45
+    instrn_type: TDMA
+    arguments:
+        - name: RegIndex16b
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA register index in 16b quants"
+        - name: SetSignalsMode
+          field_type: BIN
+          start_bit: 7
+          description: "Sets registers from signals routed into TDMA block rather than from payload immediate bellow. In this mode payload immediate represents a mux control for which 16b signal chunk to feed into selected register"
+        - name: Payload_SigSel
+          field_type: DEC
+          start_bit: 8
+          description: "In normal mode - immediate payload to set into selected register. In SetSignals mode selector for which 16b chunk of signals to set into selected register.
+          SetSignals mode values:
+            2 - Last written tile size
+            3 - Accumulated tile size
+            4 - All zero flag per XY plane [15:0]
+            5 - All zero flag per XY plane [31:16]
+            6 - Clears DMA register and register that holds accumulated tile size in packer
+            7 - Packer dest format"
+    description: "Set TDMA register file register with 16b immediate value provided with instruction"
+
+FLUSHDMA:
+    op_binary: 0x46
+    instrn_type: TDMA
+    arguments:
+        - name: FlushSpec
+          field_type: DEC
+          start_bit: 0
+          description: "Flushes (blocks until completely drained and idle) the entire TDMA engine or a selected component of it. 0 - flush entire DMA, 1 - flush TC(thread controller), 2 flush unpacker0, 4 flush unpacker1, 8 flush packer"
+    description: "Flush TDMA engine or some subset of it as specified by instruction argument"
+
+CTORISC:
+    op_binary: 0x47
+    instrn_type: TDMA
+    arguments:
+    description: "Transfer program flow from Tensix to RISCV"
+
+REG2FLOP:
+    op_binary: 0x48
+    instrn_type: TDMA
+    arguments:
+        - name: RegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index"
+        - name: FlopIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b flop storage location"
+        - name: ByteOffset
+          field_type: DEC
+          start_bit: 18
+          description: "Offset (in bytes) into the 32 bit register location. Used for field extraction during 8 or 16 bit moves."          
+        - name: TargetSel
+          field_type: DEC
+          start_bit: 20
+          description: "Target Select. 0: TDMA Registers, 1: Local Registers, 2: Context Registers, 3: Reserved."          
+        - name: SizeSel
+          field_type: DEC
+          start_bit: 22
+          description: "Select size of the data transfer. 0: 16 Bytes, 1: 32 bits, 2: bits, 3: 8 bits."
+    description: "Move data from TDMA register file into flip flops driving actual config signals. Used for certain TDMA configuration signal setting."
+
+LOADIND:
+    op_binary: 0x49
+    instrn_type: TDMA
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Destination data register index"
+        - name: AutoIncSpec
+          field_type: DEC
+          start_bit: 12
+          description: "Autoincrement spec: 0 - no autoinc, 1 - autoinc by 2(B)ytes, 2 - autoinc by 4B, 3 - autoinc by 16B"
+        - name: OffsetIndex
+          field_type: DEC
+          start_bit: 14
+          description: "Offset address register index, in 16b quants (i.e. double the normal R value)"
+        - name: SizeSel
+          field_type: DEC
+          start_bit: 22
+          description: "Select whether the data move is 0 - 16B, 1 - 32b, 2 - 16b, 3 - 8b size"
+    description: "Load indirect from address specified in a TDMA register, with offset specified in TDMA register to a TDMA register. Supports autoincrementing offset"
+
+SETADC:
+    op_binary: 0x50
+    instrn_type: ADDRMOD
+    arguments:
+        - name: Value
+          field_type: DEC
+          start_bit: 0
+          description: Address counter value
+        - name: DimensionIndex
+          field_type: DEC
+          start_bit: 18
+          description: 0 for X, 1 for Y, 2 for Z, 3 for W
+        - name: ChannelIndex
+          field_type: BIN
+          start_bit: 20
+          description: 0 - channel 0, 1 - channel 1
+        - name: CntSetMask
+          field_type: BIN
+          start_bit: 21
+          description: 001 - unpacker0, 010 - unpacker1, 100 - packer0
+    description: "Set address counter for one channel and one dimension, but supports full address counter precision"
+
+SETADCXY:
+    op_binary: 0x51
+    instrn_type: ADDRMOD
+    arguments: &SETADCXY_ARGS
+        - name: BitMask
+          field_type: BIN
+          start_bit: 0
+          description: "bit mask (Ch1_Y,Ch1_X,Ch0_Y,Ch0_X)"
+        - name: Ch0_X
+          field_type: DEC
+          start_bit: 6
+          description: Ch0_X value
+        - name: Ch0_Y
+          field_type: DEC
+          start_bit: 9
+          description: Ch0_Y value
+        - name: Ch1_X
+          field_type: DEC
+          start_bit: 12
+          description: Ch1_X value
+        - name: Ch1_Y
+          field_type: DEC
+          start_bit: 15
+          description: Ch1_Y value
+        - name: CntSetMask
+          field_type: BIN
+          start_bit: 21
+          description: 001 - unpacker0, 010 - unpacker1, 100 - packer0
+    description: "Set address counters for X and Y dimensions. Choose counter set based on hte CntSetMask"
+
+INCADCXY:
+    op_binary: 0x52
+    instrn_type: ADDRMOD
+    arguments: &INCADCXY_ARGS
+        - name: Ch0_X
+          field_type: DEC
+          start_bit: 6
+          description: Channel 0 X value 
+        - name: Ch0_Y
+          field_type: DEC
+          start_bit: 9
+          description: Channel 0 Y value
+        - name: Ch1_X
+          field_type: DEC
+          start_bit: 12
+          description: Channel 1 X value
+        - name: Ch1_Y
+          field_type: DEC
+          start_bit: 15
+          description: Channel 1 Y value
+        - name: CntSetMask
+          field_type: BIN
+          start_bit: 21
+          description: 001 - unpacker0, 010 - unpacker1, 100 - packer0
+    description: "Increment address counters for X and Y dimensions, for both channels (0/1). Channel 0 = src, Channel 1 = dest"
+
+ADDRCRXY:
+    op_binary: 0x53
+    instrn_type: ADDRMOD
+    arguments: *SETADCXY_ARGS
+    description: "Address carriage return"
+
+SETADCZW:
+    op_binary: 0x54
+    instrn_type: ADDRMOD
+    arguments: *SETADCXY_ARGS
+    description: "Set address counters for Z and W dimensions"
+
+INCADCZW:
+    op_binary: 0x55
+    instrn_type: ADDRMOD
+    arguments: *INCADCXY_ARGS
+    description: "Increments address counter, for Z and W dimensions, for both channels (0/1)"
+
+ADDRCRZW:
+    op_binary: 0x56
+    instrn_type: ADDRMOD
+    arguments: *SETADCXY_ARGS
+    description: "Address carriage return"
+
+ADDDMAREG:
+    op_binary: 0x58
+    instrn_type: TDMA
+    arguments: &ADDDMAREG_ARGS
+        - name: OpARegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index for operand A"
+        - name: OpBRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b register index for operand B"
+        - name: ResultRegIndex
+          field_type: DEC
+          start_bit: 12
+          description: "TDMA 32b register index for result"          
+    description: "Adds 32-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex and writes result to register ResultRegIndex"
+
+SUBDMAREG:
+    op_binary: 0x59
+    instrn_type: TDMA
+    arguments: *ADDDMAREG_ARGS
+    description: "Subtracts 32-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex and writes result to register ResultRegIndex"
+
+MULDMAREG:
+    op_binary: 0x5a
+    instrn_type: TDMA
+    arguments: *ADDDMAREG_ARGS
+    description: "Multiplies 16-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex and writes result to register ResultRegIndex"
+
+BITWOPDMAREG:
+    op_binary: 0x5b
+    instrn_type: TDMA
+    arguments:
+        - name: OpARegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index for operand A"
+        - name: OpBRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b register index for operand B"
+        - name: ResultRegIndex
+          field_type: DEC
+          start_bit: 12
+          description: "TDMA 32b register index for result"          
+        - name: OpSel
+          field_type: DEC
+          start_bit: 18
+          description: "0 - AND, 1 - OR, 2 - XOR"          
+    description: "Performs bit-wise operation on 32-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex and writes result to register ResultRegIndex"
+
+SHIFTDMAREG:
+    op_binary: 0x5c
+    instrn_type: TDMA
+    arguments:
+        - name: OpARegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index for operand A"
+        - name: OpBRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b register index for operand B"
+        - name: ResultRegIndex
+          field_type: DEC
+          start_bit: 12
+          description: "TDMA 32b register index for result"          
+        - name: OpSel
+          field_type: DEC
+          start_bit: 18
+          description: "0 - LEFT, 1 - RIGHT"          
+    description: "Shifts OpARegIndex <<|>> OpBRegIndex and writes result to register ResultRegIndex"
+
+CMPDMAREG:
+    op_binary: 0x5d
+    instrn_type: TDMA
+    arguments:
+        - name: OpARegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index for operand A"
+        - name: OpBRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b register index for operand B"
+        - name: ResultRegIndex
+          field_type: DEC
+          start_bit: 12
+          description: "TDMA 32b register index for result"          
+        - name: OpSel
+          field_type: DEC
+          start_bit: 18
+          description: "0 - A>B, 1 - A<B, 2 - A==B"          
+    description: "Compares values in OpARegIndex and OpBRegIndex registers and writes result 0 or 1 to register ResultRegIndex"
+
+SETADCXX:
+    op_binary: 0x5E
+    instrn_type: ADDRMOD
+    arguments: 
+        - name: x_start
+          field_type: DEC
+          start_bit: 0
+          description: x_start set value 
+        - name: x_end2
+          field_type: DEC
+          start_bit: 10
+          description: x_end set value 
+        - name: CntSetMask
+          field_type: BIN
+          start_bit: 21
+          description: 001 - unpacker0, 010 - unpacker1, 100 - packer0
+    description: "Set address counters for Z and W dimensions"
+
+SETADCINC:
+    op_binary: 0x5F
+    instrn_type: ADDRMOD
+    arguments: 
+        - name: prog_inc_value 
+          field_type: DEC
+          start_bit: 0
+          description: programable increment value
+    description: "Set programable increment value for TDMA address counters"
+
+DMANOP:
+    op_binary: 0x60
+    instrn_type: TDMA
+    arguments: 0
+    description: "Do nothing and consume an tdma instruction slot and cycle"
+
+ATINCGET:
+    op_binary: 0x61
+    instrn_type: TDMA
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Destination data register index"
+        - name: Sel32b
+          field_type: DEC
+          start_bit: 12
+          description: "Selects the 32b word within a 16B word to operate on"
+        - name: WrapVal
+          field_type: DEC
+          start_bit: 14
+          description: "Wrap the targetted address value at 1 << WrapVal"
+        - name: IncrVal
+          field_type: DEC
+          start_bit: 18
+          description: "Post-increment by this much"
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+    description: "Atomic increment and get - will read value in targetted memory location and return it to TDMA register and post-increment it atomically"
+
+ATINCGETPTR:
+    op_binary: 0x62
+    instrn_type: TDMA
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Destination data register index"
+        - name: Sel32b
+          field_type: DEC
+          start_bit: 12
+          description: "Selects the 32b word within a 16B word to operate on (i.e. Read/Write select)"
+        - name: WrapVal
+          field_type: DEC
+          start_bit: 14
+          description: "Wrap the targetted address value at 1 << WrapVal"
+        - name: IncrVal
+          field_type: DEC
+          start_bit: 18
+          description: "Post-increment by this much if NoIncr is 0"
+        - name: NoIncr
+          field_type: BIN
+          start_bit: 22
+          description: "Disable pointer increment"
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+    description: "Atomic increment and get pointer - will access a memory location designated as a FIFO pointer location (contains a 32b read pointer and a 32b write pointer), return the pointer value to TDMA register and post-increment it unless the FIFO condition precludes that. For example, write pointer will not be incremented if FIFO is full. Read pointer will not be incremented if FIFO is empty. FIFO full or empty conditions are returned as an unsuccessfull return condition code, so that the thread controller can retry until success (retry reads if FIFO empty, retry writes if FIFO full.) If NoIncr is set to 1 then hardware will not increment the pointers but retry will still occur if FIFO is empty or full"
+
+ATSWAP:
+    op_binary: 0x63
+    instrn_type: TDMA
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Source data register index"
+        - name: SwapMask
+          field_type: DEC
+          start_bit: 14
+          description: "Swap mask at 16b granulatiry (8b of mask for 16B words)"
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+    description: "Atomic unconditional SWAP. Swaps selected 16b chunks of memory location with new ones provided on write data bus."
+
+ATCAS:
+    op_binary: 0x64
+    instrn_type: TDMA
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Destination data register index"
+        - name: Sel32b
+          field_type: DEC
+          start_bit: 12
+          description: "Selects the 32b word within a 16B word to operate on"
+        - name: CmpVal
+          field_type: DEC
+          start_bit: 14
+          description: "Compare value provided as an immediate (4 bits)"
+        - name: SwapVal
+          field_type: DEC
+          start_bit: 18
+          description: "Swap value provided as an immediate (4 bits)"
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+    description: "Atomic compare-and-swap. If value at selected memory location matches that provided by programmer it is swapped to a new one, also provided by programmer. This instruction is implemented for implementations of mutual exclusion between Tensix cores and threads"
+
+GTILEMAP:
+    op_binary: 0x65
+    instrn_type: TDMA
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Destination data register index"
+        - name: OffsetIndex
+          field_type: DEC
+          start_bit: 14
+          description: "Offset address register index"
+        - name: SizeSel
+          field_type: BIN
+          start_bit: 22
+          description: "Select whether the data move is 16B or 32b size"
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+    description: "Get tile mapping. Specialized instruction to obtain the memory location at which a tile with supplied TILE ID resides."
+
+STOREIND:
+    op_binary: 0x66
+    instrn_type: TDMA
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Source data register index"
+        - name: AutoIncSpec
+          field_type: DEC
+          start_bit: 12
+          description: "Autoincrement spec: 0 - no autoinc, 1 - autoinc by 2(B)ytes, 2 - autoinc by 4B, 3 - autoinc by 16B"
+        - name: OffsetIndex
+          field_type: DEC
+          start_bit: 14
+          description: "Offset address register index"
+        - name: RegSizeSel
+          field_type: BIN
+          start_bit: 21
+          description: "If MemHierSel bit is set to 0 (source regfile) then this bit elects between src A and B register file: 0 - SRC A, 1 - SRCB. Supported data move size is 16B and 32b.
+                        If MemHierSel bit is set to 1 (L1) then bits 22:21 are used for setting data move size: 0 - 16B, 1 - 16b, 2 - 32b, 3 - 8b size"
+        - name: SizeSel
+          field_type: BIN
+          start_bit: 22
+          description: "Select whether the data move is 16B (0) or 32b (1) size"
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting source regfile (0) or L1 (1)"
+    description: "Store indirect. Stores data from TDMA register to memory location specified by a combination of base+offset provided in other TDMA registers. Supports auto-increment on offset value."
+
+
+WRCFG:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xb0
+    arguments:
+        - name: GprAddress
+          start_bit: 0
+          field_type: DEC
+          description: "gpr address to read data from"
+        - name: CfgReg  
+          start_bit: 16
+          field_type: DEC
+          description: "configuration register address to write data to"
+    description: "Write configuration register of current thread's state with 32b data read from Gpr file"
+
+RDCFG:
+    instrn_type: LOCAL_CREGS
+    op_binary: 0xb1
+    arguments:
+        - name: GprAddress
+          start_bit: 0
+          field_type: DEC
+          description: "gpr address to write config data to"
+        - name: CfgReg  
+          start_bit: 16
+          field_type: DEC
+          description: "configuration register address to read data from"
+    description: "Read configuration register of current thread's state and write to its from Gpr file"

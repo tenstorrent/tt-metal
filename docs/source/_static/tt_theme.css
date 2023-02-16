@@ -1,0 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=Ubuntu+Mono&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter&display=swap');
+
+:root {
+  --main-bg-color: #26262E;
+  --main-accent-color: #6454a0;
+}
+
+body {
+    font-family: 'Ubuntu Mono', monospace;
+}
+
+.rst-content .toctree-wrapper > p.caption, h1, h2, h3, h4, h5, h6, legend {
+  margin-top: 0;
+  font-weight: 700;
+  font-family: 'Inter', sans-serif;
+}
+
+/* Make it more desktop-friendly */
+.wy-nav-content {
+    max-width: 1200px !important;
+}
+
+.wy-side-nav-search {
+    background-color: var(--main-bg-color);
+}
+
+.wy-side-nav-search a:hover {
+    background-color: var(--main-accent-color);
+}
+
+.wy-nav-side {
+    background-color: var(--main-bg-color);
+    -webkit-box-shadow: 2px 2px 5px 2px rgba(0,0,0,0.7);
+    box-shadow: 2px 2px 5px 2px rgba(0,0,0,0.7);
+}
+
+.wy-menu-vertical header, .wy-menu-vertical p.caption {
+    color: var(--main-accent-color);
+}
+
+
+.toctree-l1 a:hover {
+    background-color: var(--main-accent-color);
+}
