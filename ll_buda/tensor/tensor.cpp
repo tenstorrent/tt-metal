@@ -3,6 +3,9 @@
 #include "common/bfloat16.hpp"
 #include "llrt/llrt.hpp"
 #include "ll_buda/host_api.hpp"
+#include "constants.hpp"
+
+using namespace tt::constants;
 
 namespace tt {
 
@@ -314,6 +317,58 @@ void Tensor::pretty_print(Layout print_layout) const {
         default:
             TT_ASSERT(false && "Unsupported print layout");
     }
+}
+
+const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
+    vector<int> ns{N, C, H, W};
+    int neg_idx = -1;
+    for (int i = 0; i < ns.size(); i++) {
+        if (ns[i] == -1) {
+            TT_ASSERT(neg_idx == -1 && "Only one -1 is allowed in Tensor::reshape");
+            neg_idx = i;
+            continue;
+        }
+    }
+
+    uint32_t old_volume = this->volume();
+    if (neg_idx == -1) {
+        TT_ASSERT(N*C*H*W == old_volume);
+    }
+
+    switch (neg_idx) {
+        case 0:
+            TT_ASSERT(old_volume % C*H*W == 0);
+            N = old_volume/(C*H*W);
+        break;
+        case 1:
+            TT_ASSERT(old_volume % N*H*W == 0);
+            C = old_volume/(N*H*W);
+        break;
+        case 2:
+            TT_ASSERT(old_volume % N*C*W == 0);
+            H = old_volume/(N*C*W);
+            TT_ASSERT(H%32 == 0);
+        break;
+        case 3:
+            TT_ASSERT(old_volume % N*C*H == 0);
+            W = old_volume/(N*C*H);
+            TT_ASSERT(W%32 == 0);
+        break;
+        case -1:
+        break;
+        default:
+            TT_ASSERT(false && "Unexpected neg_idx in Tensor::reshape!");
+    }
+
+    TT_ASSERT(H % 32 == 0 && W % 32 == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
+
+    shape_[0] = N;
+    shape_[1] = C;
+    shape_[2] = H;
+    shape_[3] = W;
+    strides_ = compute_strides();
+
+    return shape_;
 }
 
 }  // namespace ll_buda

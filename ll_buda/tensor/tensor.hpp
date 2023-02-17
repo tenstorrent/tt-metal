@@ -58,6 +58,8 @@ class Tensor
             return d;
         }
 
+        const std::array<uint32_t, 4>& reshape(int N, int C, int H, int W);
+
         const std::array<uint32_t, 4>& shape() const { return this->shape_; }
 
         const std::array<uint32_t, 4>& strides() const { return this->strides_; }

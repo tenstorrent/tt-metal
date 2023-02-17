@@ -13,6 +13,10 @@ namespace tt {
 
 namespace ll_buda {
 
+void reshape(Tensor& a, int N, int C, int H, int W) {
+    a.reshape(N, C, H, W);
+}
+
 void TensorModule(py::module &m_tensor) {
 
     py::class_<Tensor>(m_tensor, "Tensor")
@@ -44,6 +48,10 @@ void TensorModule(py::module &m_tensor) {
     
     // Tensor functions
     // eltwise binary
+    m_tensor.def("reshape", &reshape);
+        //.def("reshape", [](Tensor &self, int N, int C, int H, int W) {
+        //    reshape(self, N, C, H, W);
+        //}, "Sets the shape of the tensor")
     m_tensor.def("add", &add);
     m_tensor.def("sub", &sub);
     m_tensor.def("mul", &mul);
