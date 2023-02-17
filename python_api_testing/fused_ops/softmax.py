@@ -15,29 +15,25 @@ _C.device.InitializeDevice(device)
 host = _C.device.GetHost()
 
 
-def tt_softmax():
-    def tt_softmax_(x, stable=False):
-        #_C.tensor.DataFormat.FLOAT32
-        RMAX = _C.tensor.ReduceOpMath.MAX
-        RSUM = _C.tensor.ReduceOpMath.SUM
-        RW = _C.tensor.ReduceOpDim.W
-        BCW = _C.tensor.BcastOpDim.W
-        BCMUL = _C.tensor.BcastOpMath.MUL
-        BCSUB = _C.tensor.BcastOpMath.MUL
+def softmax(x, stable=False):
+    RMAX = _C.tensor.ReduceOpMath.MAX
+    RSUM = _C.tensor.ReduceOpMath.SUM
+    RW = _C.tensor.ReduceOpDim.W
+    BCW = _C.tensor.BcastOpDim.W
+    BCMUL = _C.tensor.BcastOpMath.MUL
+    BCSUB = _C.tensor.BcastOpMath.MUL
 
-        if stable:
-            sumsW = _C.tensor.reduce(x, RMAX, RW, 1.0)
-            z = _C.tensor.bcast(x, sumsW, BCSUB, BCW) # x-max(x)
-        else:
-            z = x
-        numerator = _C.tensor.exp(z) # exp(z)
-        denom1 = _C.tensor.reduce(numerator, RSUM, RW, 1.0) # torch.sum(x, 3)
-        denom = _C.tensor.recip(denom1)
-        softmax = _C.tensor.bcast(numerator, denom, BCMUL, BCW)
+    if stable:
+        sumsW = _C.tensor.reduce(x, RMAX, RW, 1.0)
+        z = _C.tensor.bcast(x, sumsW, BCSUB, BCW) # x-max(x)
+    else:
+        z = x
+    numerator = _C.tensor.exp(z) # exp(z)
+    denom1 = _C.tensor.reduce(numerator, RSUM, RW, 1.0) # torch.sum(x, 3)
+    denom = _C.tensor.recip(denom1)
+    output = _C.tensor.bcast(numerator, denom, BCMUL, BCW)
 
-        return softmax
-
-    return tt_softmax_
+    return output
 
 def ref_stable_softmax(x):
     """
@@ -61,7 +57,7 @@ if __name__ == "__main__":
 
     x_t = tilize_to_list(x)
     t0 = _C.tensor.Tensor(x_t, [1, 1, H, W], _C.tensor.DataFormat.FLOAT32, _C.tensor.Layout.TILE, device)
-    func = tt_softmax()
+    func = softmax
     t1 = func(t0)
     t2_data = t1.to(host).data()
 

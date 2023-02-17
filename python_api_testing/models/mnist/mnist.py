@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
 
 import torch
 from torch.utils.data import DataLoader
@@ -10,38 +11,12 @@ from torchvision import transforms, datasets
 
 import ll_buda_bindings.ll_buda_bindings._C as _C
 from utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float
+from layers.linear import Linear as TtLinear
 
 # Initialize the device
 device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
 _C.device.InitializeDevice(device)
 host = _C.device.GetHost()
-
-def linear(out_features, in_features, weight, bias):
-
-    weight = _C.tensor.Tensor(
-        weight, 
-        [1, 1, out_features, in_features], 
-        _C.tensor.DataFormat.FLOAT32,
-        _C.tensor.Layout.TILE,
-        device
-    )
-    
-    bias = _C.tensor.Tensor(
-        bias,
-        [1, 1, 32, out_features],
-        _C.tensor.DataFormat.FLOAT32,
-        _C.tensor.Layout.TILE,
-        device
-    )
-
-    def linear_(activation):
-        weight_T = _C.tensor.transpose(weight)
-        output = _C.tensor.matmul(activation, weight_T)
-
-        output_plus_bias = _C.tensor.bcast(output, bias, _C.tensor.BcastOpMath.ADD, _C.tensor.BcastOpDim.H)
-        return output_plus_bias
-
-    return linear_
 
 
 class TtMnistModel(torch.nn.Module):
@@ -75,9 +50,9 @@ class TtMnistModel(torch.nn.Module):
         fc3_weight = tilize_to_list(fc3_weight)
         fc3_bias = tilize_to_list(fc3_bias)
 
-        self.lin1 = linear(*fc1_weight_shape[-2:], fc1_weight, fc1_bias)
-        self.lin2 = linear(*fc2_weight_shape[-2:], fc2_weight, fc2_bias)
-        self.lin3 = linear(*fc3_weight_shape[-2:], fc3_weight, fc3_bias)
+        self.lin1 = TtLinear(*fc1_weight_shape[-2:], fc1_weight, fc1_bias, device)
+        self.lin2 = TtLinear(*fc2_weight_shape[-2:], fc2_weight, fc2_bias, device)
+        self.lin3 = TtLinear(*fc3_weight_shape[-2:], fc3_weight, fc3_bias, device)
 
         # We are doing identity since back to back matmul and activation produces garbage results...
         # probably reading from wrong address

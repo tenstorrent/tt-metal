@@ -2,66 +2,41 @@ from pathlib import Path
 import sys
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
 
 import torch
 from transformers import BertTokenizer, BertForQuestionAnswering
 
 import ll_buda_bindings.ll_buda_bindings._C as _C
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
-
+from fused_ops.linear import Linear as TtLinear
 
 # Initialize the device
 device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
 _C.device.InitializeDevice(device)
 host = _C.device.GetHost()
 
-def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa):
+def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):
 
     # FF1 init
-    ff1_weight = _C.tensor.Tensor(
-        ff1_weighta,
-        [1, 1, ffn_dim, hidden_dim],
-        _C.tensor.DataFormat.FLOAT32,
-        _C.tensor.Layout.TILE,
-        device
+    ff1 = TtLinear(
+        ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, device
     )
-    ff1_bias = _C.tensor.Tensor(
-        ff1_biasa,
-        [1, 1, 32, ffn_dim],
-        _C.tensor.DataFormat.FLOAT32,
-        _C.tensor.Layout.TILE,
-        device
-    )
+
     ff1_out_activation_fn = _C.tensor.gelu
 
     # FF2 init
-    ff2_weight = _C.tensor.Tensor(
-        ff2_weighta,
-        [1, 1, hidden_dim, ffn_dim],
-        _C.tensor.DataFormat.FLOAT32,
-        _C.tensor.Layout.TILE,
-        device
-    )
-    ff2_bias = _C.tensor.Tensor(
-        ff2_biasa,
-        [1, 1, 32, hidden_dim],
-        _C.tensor.DataFormat.FLOAT32,
-        _C.tensor.Layout.TILE,
-        device
+    ff2 = TtLinear(
+        hidden_dim, ffn_dim, ff2_weighta, ff2_biasa, device
     )
 
     def feed_forward_(activation):
         # ff1
-        ff1_weight_T = _C.tensor.transpose(ff1_weight)
-        ff1_output = _C.tensor.matmul(activation, ff1_weight_T)
-        ff1_output_plus_bias = _C.tensor.bcast(ff1_output, ff1_bias, _C.tensor.BcastOpMath.ADD, _C.tensor.BcastOpDim.H)
+        ff1_output_plus_bias = ff1(activation)
         ff1_output_plus_bias_act = ff1_out_activation_fn(ff1_output_plus_bias)
 
         # ff2
-        ff2_weight_T = _C.tensor.transpose(ff2_weight)
-        ff2_output = _C.tensor.matmul(ff1_output_plus_bias_act, ff2_weight_T)
-        ff2_output_plus_bias = _C.tensor.bcast(ff2_output, ff2_bias, _C.tensor.BcastOpMath.ADD, _C.tensor.BcastOpDim.H)
-        
+        ff2_output_plus_bias = ff2(ff1_output_plus_bias_act)        
         return ff2_output_plus_bias
 
     return feed_forward_
@@ -95,7 +70,8 @@ class TtFeedForwardModel(torch.nn.Module):
             encoder0_ff1_weight, 
             encoder0_ff1_bias, 
             encoder0_ff2_weight, 
-            encoder0_ff2_bias
+            encoder0_ff2_bias,
+            device
         )
     
     def forward(self, x):
@@ -152,8 +128,6 @@ def run_ffn_inference():
     summarize_stats(pytorch_out, "pytorch output")
     summarize_stats(tt_out, "tt output")
     summarize_stats(abs(pytorch_out - tt_out), "absolute difference in outputs")
-
-    
     return 
 
 if __name__ == "__main__":
