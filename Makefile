@@ -27,7 +27,7 @@ CONFIG_LDFLAGS =
 ifeq ($(CONFIG), release)
 CONFIG_CFLAGS += -O3 -fno-lto
 else ifeq ($(CONFIG), ci)  # significantly smaller artifacts
-CONFIG_CFLAGS += -O3 -DDEBUG=DEBUG  
+CONFIG_CFLAGS += -O3 -DDEBUG=DEBUG
 else ifeq ($(CONFIG), assert)
 CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG
 else ifeq ($(CONFIG), asan)
@@ -50,6 +50,11 @@ ifeq ($(ENABLE_CODE_TIMERS), 1)
 CONFIG_CFLAGS += -DTT_ENABLE_CODE_TIMERS
 endif
 
+# Gate certain dev env requirements behind this
+ifeq ("$(GPAI_ENV)", "dev")
+GPAI_ENV_IS_DEV = 1
+endif
+
 OBJDIR 		= $(OUT)/obj
 LIBDIR 		= $(OUT)/lib
 BINDIR 		= $(OUT)/bin
@@ -64,7 +69,7 @@ ifeq ("$(ARCH_NAME)", "wormhole_b0")
 	BASE_INCLUDES=-Isrc/firmware/riscv/wormhole -Isrc/firmware/riscv/wormhole/wormhole_b0_defines
 else ifeq ("$(ARCH_NAME)", "wormhole")
 	BASE_INCLUDES=-Isrc/firmware/riscv/wormhole -Isrc/firmware/riscv/wormhole/wormhole_a0_defines
-else 
+else
 	BASE_INCLUDES=-Isrc/firmware/riscv/$(ARCH_NAME)
 endif
 
@@ -121,6 +126,12 @@ LIBS_TO_BUILD = \
 	python_env \
 	ll_buda_bindings
 
+ifdef GPAI_ENV_IS_DEV
+LIBS_TO_BUILD += \
+	python_env/dev \
+	git_hooks
+endif
+
 build: $(LIBS_TO_BUILD)
 
 valgrind: $(VG_EXE)
@@ -175,12 +186,13 @@ include tools/module.mk
 include python_env/module.mk
 include ll_buda_bindings/module.mk
 
-ifeq ("$(GPAI_ENV)", "dev")
-# only include tests in dev environment
+# only include these modules if we're in development
+ifdef GPAI_ENV_IS_DEV
 include build_kernels_for_riscv/tests/module.mk
 include llrt/tests/module.mk
 include ll_buda/tests/module.mk
 include compiler/tests/module.mk
+include git_hooks/module.mk
 endif
 
 # Programming examples for external users
