@@ -18,7 +18,6 @@ def pad_activation(x):
     """
     assert isinstance(x, torch.Tensor), "Input to this function must be an instance of torch.Tensor"
     assert len(x.shape) >= 1 and len(x.shape) <= 4, "Only tensors with dimension 1-4 supported"
-
     if len(x.shape) == 1: # (num_features,)
         padded_tensor = torch.zeros(1, 1, 32, nearest_32(x.shape[0]))
     elif len(x.shape) == 2: # (batch, num features)
@@ -26,7 +25,7 @@ def pad_activation(x):
         padded_tensor[:, 0, 0, :x.shape[1]] = x
     else:
         padded_tensor = torch.zeros(*x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1]))
-        padded_tensor[..., :x.shape[-2], :x.shape[-1]]
+        padded_tensor[..., :x.shape[-2], :x.shape[-1]] = x
 
     return padded_tensor
 
@@ -127,3 +126,30 @@ def print_diff_argmax(a, b):
     print(absdiff.reshape(-1)[argmax], " at ", argmax)
     return
 
+
+def get_oom_of_float(float_lst):
+    """
+    Given a list of floats, returns a list of the order or magnitudes
+    of the floats. Useful when you want to make sure that even if your
+    tt outputs don't match pytorch all that well, they are at least 
+    on the same order of magnitude 
+    """
+    ooms = []
+    for el in float_lst:
+        str_el = str(el)
+        if "e" in str_el:
+            oom = int(str_el.split("e")[1])
+        elif str_el[:2] == "0.":
+            str_el = str_el.split(".")[1]
+
+            oom = -1
+            for e in str_el:
+                if e != "0":
+                    break
+                oom -= 1
+        else:
+            oom = len(str_el.split(".")[0])
+
+        ooms.append(oom)
+
+    return ooms

@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
 import ll_buda_bindings.ll_buda_bindings._C as _C
-from utility_functions import pad_activation, pad_weight, tilize_to_list
+from utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float
 
 # Initialize the device
 device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
@@ -60,13 +60,10 @@ class TtMnistModel(torch.nn.Module):
 
         # Get shapes
         fc1_weight_shape = fc1_weight.shape
-        fc1_bias_shape = fc1_bias.shape
 
         fc2_weight_shape = fc2_weight.shape
-        fc2_bias_shape = fc2_bias.shape
 
         fc3_weight_shape = fc3_weight.shape
-        fc3_bias_shape = fc3_bias.shape
 
         # Tilize params
         fc1_weight = tilize_to_list(fc1_weight)
@@ -150,26 +147,6 @@ class PytorchMnistModel(torch.nn.Module):
         out = torch.nn.functional.softmax(lin3_out_act)
         return out    
 
-def get_oom_of_float(float_lst):
-    ooms = []
-    for el in float_lst:
-        str_el = str(el)
-        if "e" in str_el:
-            oom = int(str_el.split("e")[1])
-        elif str_el[:2] == "0.":
-            str_el = str_el.split(".")[1]
-
-            oom = -1
-            for e in str_el:
-                if e != "0":
-                    break
-                oom -= 1
-        else:
-            oom = len(str_el.split(".")[0])
-
-        ooms.append(oom)
-
-    return ooms
     
 def run_mnist_inference():
     # Data preprocessing/loading
@@ -185,7 +162,7 @@ def run_mnist_inference():
 
     first_input = next(iter(dataloader))
 
-    # # Run one input through the network
+    # Run one input through the network
     tt_out = tt_mnist_model(first_input)
     pytorch_out = pytorch_mnist_model(first_input)
 
