@@ -15,12 +15,6 @@ from utility_functions import pad_activation, pad_weight, tilize_to_list, untili
 from fused_ops.linear import Linear as TtLinear
 from fused_ops.softmax import softmax
 
-
-# Initialize the device
-device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-_C.device.InitializeDevice(device)
-host = _C.device.GetHost()
-
 def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     assert isinstance(num_heads, int) and num_heads > 0
 
@@ -75,7 +69,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     return mha_
 
 class TtMultiHeadAttentionModel(torch.nn.Module):
-    def __init__(self, state_dict):
+    def __init__(self, state_dict, device):
         super().__init__()
         qw = pad_weight(state_dict["bert.encoder.layer.0.attention.self.query.weight"])
         qb = pad_weight(state_dict["bert.encoder.layer.0.attention.self.query.bias"])
@@ -99,10 +93,8 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
 
         self.mha = mha(*parameters, hidden_dim, 1, device)
     
-    def forward(self, x):
-        tilized_x = tilize_to_list(pad_activation(x))
-        inp = _C.tensor.Tensor(tilized_x, x.shape, _C.tensor.DataFormat.FLOAT32,  _C.tensor.Layout.TILE, device)
-        return self.mha(inp)
+    def forward(self, activation):
+        return self.mha(activation)
 
 class PytorchMultiHeadAttentionModel(torch.nn.Module):
     def __init__(self, hugging_face_reference_model):
@@ -119,7 +111,7 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
     
 def run_mha_inference():
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained("prajjwal1/bert-tiny", torchscript=False)
-    tt_mha_model = TtMultiHeadAttentionModel(hugging_face_reference_model.state_dict())
+    tt_mha_model = TtMultiHeadAttentionModel(hugging_face_reference_model.state_dict(), device)
     pytorch_mha_model = PytorchMultiHeadAttentionModel(hugging_face_reference_model)
 
     # Prepare input
@@ -127,11 +119,18 @@ def run_mha_inference():
     mha_input = (torch.rand(1, 1, 128, 128) * 2) - 1
 
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
-    tt_out = tt_mha_model(mha_input).to(host)
+
+    tt_mha_input = tilize_to_list(pad_activation(mha_input))
+    tt_mha_input = _C.tensor.Tensor(tt_mha_input, mha_input.shape, _C.tensor.DataFormat.FLOAT32,  _C.tensor.Layout.TILE, device)
+
+    tt_out = tt_mha_model(tt_mha_input).to(host)
     tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
-    return np.allclose(pytorch_out.detach().numpy(), tt_out.numpy(), 1e-5, 0.17)
+    assert np.allclose(pytorch_out.detach().numpy(), tt_out.numpy(), 1e-5, 0.17)
 
 if __name__ == "__main__":
+    # Initialize the device
+    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
+    _C.device.InitializeDevice(device)
+    host = _C.device.GetHost()
     run_mha_inference()
-
-_C.device.CloseDevice(device)
+    _C.device.CloseDevice(device)

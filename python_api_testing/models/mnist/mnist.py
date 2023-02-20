@@ -11,12 +11,7 @@ from torchvision import transforms, datasets
 
 import ll_buda_bindings.ll_buda_bindings._C as _C
 from utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float
-from layers.linear import Linear as TtLinear
-
-# Initialize the device
-device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-_C.device.InitializeDevice(device)
-host = _C.device.GetHost()
+from python_api_testing.fused_ops.linear import Linear as TtLinear
 
 
 class TtMnistModel(torch.nn.Module):
@@ -150,6 +145,9 @@ def run_mnist_inference():
     assert tt_out_oom == pytorch_out_oom, "The order of magnitudes of the outputs must be the same"
 
 if __name__ == "__main__":
+    # Initialize the device
+    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
+    _C.device.InitializeDevice(device)
+    host = _C.device.GetHost()
     run_mnist_inference()
-
-_C.device.CloseDevice(device)
+    _C.device.CloseDevice(device)

@@ -9,11 +9,6 @@ import torch
 import ll_buda_bindings.ll_buda_bindings._C as _C
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
 
-# Initialize the device
-device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-_C.device.InitializeDevice(device)
-host = _C.device.GetHost()
-
 
 def softmax(x, stable=False):
     RMAX = _C.tensor.ReduceOpMath.MAX
@@ -48,7 +43,9 @@ def ref_stable_softmax(x):
     return softmax
 
 if __name__ == "__main__":
-
+    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
+    _C.device.InitializeDevice(device)
+    host = _C.device.GetHost()
     H, W = 64, 96
     torch.manual_seed(123)
 
@@ -68,8 +65,6 @@ if __name__ == "__main__":
     print_diff_argmax(tt_got_back, ref_sm)
 
     print(t2_data)
-    
-
-_C.device.CloseDevice(device)
+    _C.device.CloseDevice(device)
 
 

@@ -5,16 +5,11 @@ sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
 
 import torch
-from transformers import BertTokenizer, BertForQuestionAnswering
+from transformers import BertForQuestionAnswering
 
 import ll_buda_bindings.ll_buda_bindings._C as _C
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
 from fused_ops.linear import Linear as TtLinear
-
-# Initialize the device
-device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-_C.device.InitializeDevice(device)
-host = _C.device.GetHost()
 
 def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):
 
@@ -42,7 +37,7 @@ def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_b
     return feed_forward_
 
 class TtFeedForwardModel(torch.nn.Module):
-    def __init__(self, state_dict):
+    def __init__(self, state_dict, device):
         super().__init__()
 
         # FF1 params
@@ -74,12 +69,8 @@ class TtFeedForwardModel(torch.nn.Module):
             device
         )
     
-    def forward(self, x):
-        tilized_x = tilize_to_list(pad_activation(x))
-        inp = _C.tensor.Tensor(tilized_x, x.shape, _C.tensor.DataFormat.FLOAT32,  _C.tensor.Layout.TILE, device)
-
-        ffn_output = self.ffn(inp)
-        return ffn_output
+    def forward(self, activation):
+        return self.ffn(activation)
 
 class PytorchFeedForwardModel(torch.nn.Module):
     def __init__(self, hugging_face_reference_model):
@@ -104,7 +95,7 @@ def summarize_stats(t, name):
 
 def run_ffn_inference():
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained("prajjwal1/bert-tiny", torchscript=False)
-    tt_ffn_model = TtFeedForwardModel(hugging_face_reference_model.state_dict())
+    tt_ffn_model = TtFeedForwardModel(hugging_face_reference_model.state_dict(), device)
     pytorch_ffn_model = PytorchFeedForwardModel(hugging_face_reference_model)
 
     # Prepare input
@@ -112,7 +103,11 @@ def run_ffn_inference():
     ffn_input = (torch.rand(1, 1, 128, 128) * 2) - 1
 
     pytorch_out = pytorch_ffn_model(ffn_input)
-    tt_out = tt_ffn_model(ffn_input).to(host)
+
+    tilized_ffn_input = tilize_to_list(pad_activation(ffn_input))
+    tilized_ffn_input = _C.tensor.Tensor(tilized_ffn_input, ffn_input.shape, _C.tensor.DataFormat.FLOAT32,  _C.tensor.Layout.TILE, device)
+
+    tt_out = tt_ffn_model(tilized_ffn_input).to(host)
     tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
 
     # Summarizing weight statistics
@@ -131,6 +126,9 @@ def run_ffn_inference():
     return 
 
 if __name__ == "__main__":
+    # Initialize the device
+    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
+    _C.device.InitializeDevice(device)
+    host = _C.device.GetHost()
     run_ffn_inference()
-
-_C.device.CloseDevice(device)
+    _C.device.CloseDevice(device)
