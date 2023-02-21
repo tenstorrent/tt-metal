@@ -273,12 +273,19 @@ inline std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector
     return result;
 }
 
-inline std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(const std::vector<std::uint32_t>& data) {
+inline bfloat16 bfloat16_identity_transform(const bfloat16 &input) {
+    return input;
+}
+
+inline std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
+    const std::vector<std::uint32_t>& data,
+    std::function<bfloat16(const bfloat16 &)> transform = bfloat16_identity_transform
+) {
     std::vector<bfloat16> result;
     for(auto i = 0 ; i < data.size(); i++) {
         auto unpacked = unpack_two_bfloat16_from_uint32(data[i]);
-        result.push_back(unpacked.first);
-        result.push_back(unpacked.second);
+        result.push_back(transform(unpacked.first));
+        result.push_back(transform(unpacked.second));
     }
     return result;
 }
