@@ -89,7 +89,7 @@ its submodules, create the Python environment, then do a clean build.
 
 ::
 
-    git clone git@github.com:tenstorrent-accel/gp.ai-rel.git
+    git clone <GIT REPO URL, see notes>
     git submodule update --init --recursive
     make clean
     make python_env
@@ -97,7 +97,11 @@ its submodules, create the Python environment, then do a clean build.
     python -m pip install -e .
     make build
 
-**Note**: It's possible that you may have a non-standard Python installation,
+**Note**: If you're an external evaluation customer, please use the Git URL
+``git@github.com:tenstorrent-accel/gp.ai-rel.git``. If you're an internal
+developer, please use ``git@github.com:tenstorrent-accel/gp.ai-rel.git``.
+
+**Note 2**: It's possible that you may have a non-standard Python installation,
 such as using ``pyenv`` or ``conda``. Ultimately, the environment provider
 doesn't matter. We chose to go with ``venv`` with this project because it's
 what we had on hand. As long as you can manage a consistent Python environment
@@ -105,7 +109,7 @@ with the dependencies in ``python_env/requirements.txt``, the Python setup
 doesn't really matter. Please refer to ``python_env/module.mk`` for further
 technical details.
 
-**Note 2**: If you want to be in a development enviroment, especially to run
+**Note 3**: If you want to be in a development enviroment, especially to run
 tests from the repo, then you must tell the current shell what your environment
 is. For example:
 
