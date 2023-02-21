@@ -140,11 +140,12 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 32.0f);
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
+            dram_buffer_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
 
         pass &= WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
 
-        constexpr float val_to_add = 64.0f;
+        constexpr float val_to_add = -1.0f;
         std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_add);
 
         pass &= WriteToDeviceDRAM(device, src1_dram_buffer, src1_vec);
@@ -297,7 +298,7 @@ int main(int argc, char **argv) {
         };
         std::vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
 
-        constexpr float abs_tolerance = 0.0001f;
+        constexpr float abs_tolerance = 0.01f;
         constexpr float rel_tolerance = 0.001f;
         std::function<bool(const float, const float)> comparison_function = [](const float a, const float b) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
