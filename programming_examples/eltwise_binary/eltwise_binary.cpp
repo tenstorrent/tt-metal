@@ -1,0 +1,216 @@
+#include <algorithm>
+#include <functional>
+#include <random>
+
+#include "ll_buda/host_api.hpp"
+#include "common/bfloat16.hpp"
+
+using namespace tt;
+using namespace tt::ll_buda;
+
+namespace eltwise_binary {
+struct hlk_args_t {
+    std::int32_t per_core_block_cnt;
+    std::int32_t per_core_block_size;
+};
+}
+
+enum EltwiseOp : uint32_t {
+    ADD = 0,
+    SUB = 1,
+    MUL = 2,
+};
+
+int main(int argc, char **argv) {
+    bool pass = true;
+
+    const char* op_id_to_op_define[] = {"add_tiles", "sub_tiles", "mul_tiles"};
+
+    EltwiseOp eltwise_op = EltwiseOp::ADD;
+
+    try {
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Grayskull Device Setup
+        ////////////////////////////////////////////////////////////////////////////
+        constexpr int pci_express_slot = 0;
+        Device *device =
+            CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+
+        pass &= InitializeDevice(device);;
+
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Application Setup
+        ////////////////////////////////////////////////////////////////////////////
+        Program *program = new Program();
+
+        constexpr tt_xy_pair core = {0, 0};
+
+        constexpr uint32_t single_tile_size = 2 * 1024;
+        constexpr uint32_t num_tiles = 2048;
+        constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+
+        constexpr uint32_t dram_buffer_src0_addr = 0;
+        constexpr int dram_src0_channel_id = 0;
+        constexpr uint32_t dram_buffer_src1_addr = 256 * 1024 * 1024;
+        constexpr int dram_src1_channel_id = 1;
+        constexpr uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
+        constexpr int dram_dst_channel_id = 0;
+
+        DramBuffer *src0_dram_buffer = CreateDramBuffer(dram_src0_channel_id, dram_buffer_size, dram_buffer_src0_addr);
+        DramBuffer *src1_dram_buffer = CreateDramBuffer(dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
+        DramBuffer *dst_dram_buffer = CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+
+        constexpr uint32_t src0_cb_index = CB::c_in0;
+        constexpr uint32_t src0_cb_addr = 200 * 1024;
+        constexpr uint32_t num_input_tiles = 2;
+        CircularBuffer *cb_src0 = CreateCircularBuffer(
+            program,
+            src0_cb_index,
+            core,
+            num_input_tiles,
+            num_input_tiles * single_tile_size,
+            src0_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        constexpr uint32_t src1_cb_index = CB::c_in1;
+        constexpr uint32_t src1_cb_addr = 300 * 1024;
+        CircularBuffer *cb_src1 = CreateCircularBuffer(
+            program,
+            src1_cb_index,
+            core,
+            num_input_tiles,
+            num_input_tiles * single_tile_size,
+            src1_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        constexpr uint32_t output_cb_index = CB::c_out0;
+        constexpr uint32_t output_cb_addr = 400 * 1024;
+        constexpr uint32_t num_output_tiles = 2;
+        CircularBuffer *cb_output = CreateCircularBuffer(
+            program,
+            output_cb_index,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+        
+        DataMovementKernel *binary_reader_kernel = CreateDataMovementKernel(
+            program,
+            "kernels/dataflow/reader_binary_diff_lengths.cpp",
+            core,
+            DataMovementProcessor::RISCV_1,
+            NOC::RISCV_1_default);
+
+        DataMovementKernel *unary_writer_kernel = CreateDataMovementKernel(
+            program,
+            "kernels/dataflow/writer_unary.cpp",
+            core,
+            DataMovementProcessor::RISCV_0,
+            NOC::RISCV_0_default);
+
+        void *hlk_args = new eltwise_binary::hlk_args_t{
+            .per_core_block_cnt = 2048,
+            .per_core_block_size = 1
+        };
+        ComputeKernelArgs *eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(eltwise_binary::hlk_args_t));
+
+        constexpr bool fp32_dest_acc_en = false;
+        constexpr bool math_approx_mode = false;
+        ComputeKernel *eltwise_binary_kernel = CreateComputeKernel(
+            program,
+            "kernels/compute/eltwise_binary.cpp",
+            core,
+            eltwise_binary_args,
+            MathFidelity::HiFi4,
+            fp32_dest_acc_en,
+            math_approx_mode
+        );
+        eltwise_binary_kernel->add_define("ELTWISE_OP", op_id_to_op_define[eltwise_op]);
+
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Compile Application
+        ////////////////////////////////////////////////////////////////////////////
+        bool skip_hlkc = false;
+        pass &= CompileProgram(device, program, skip_hlkc);
+
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Execute Application
+        ////////////////////////////////////////////////////////////////////////////
+        std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 32.0f);
+
+        pass &= WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
+
+        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 64.0f);
+
+        pass &= WriteToDeviceDRAM(device, src1_dram_buffer, src1_vec);
+
+        pass &= ConfigureDeviceWithProgram(device, program);
+
+        const tt_xy_pair dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
+        const tt_xy_pair dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
+        const tt_xy_pair dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+
+        WriteRuntimeArgsToDevice(
+            device,
+            binary_reader_kernel,
+            core,
+            {dram_buffer_src0_addr,
+            (std::uint32_t)dram_src0_noc_xy.x,
+            (std::uint32_t)dram_src0_noc_xy.y,
+            num_tiles,
+            dram_buffer_src1_addr,
+            (std::uint32_t)dram_src1_noc_xy.x,
+            (std::uint32_t)dram_src1_noc_xy.y,
+            num_tiles, 0});
+
+        WriteRuntimeArgsToDevice(
+            device,
+            unary_writer_kernel,
+            core,
+            {dram_buffer_dst_addr,
+            (std::uint32_t)dram_dst_noc_xy.x,
+            (std::uint32_t)dram_dst_noc_xy.y,
+            num_tiles});
+
+        pass &= LaunchKernels(device, program);
+
+        std::vector<uint32_t> result_vec;
+        ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Validation & Teardown
+        ////////////////////////////////////////////////////////////////////////////
+
+        std::vector<uint32_t> golden_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 96.0f);
+
+        constexpr float abs_tolerance = 0.0001f;
+        constexpr float rel_tolerance = 0.001f;
+        std::function<bool(const float, const float)> comparison_function = [](const float a, const float b) {
+            return is_close(a, b, rel_tolerance, abs_tolerance);
+        };
+
+        pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec, comparison_function);
+
+        pass &= CloseDevice(device);;
+
+    } catch (const std::exception &e) {
+        tt::log_error(tt::LogTest, "Test failed with exception!");
+        tt::log_error(tt::LogTest, "{}", e.what());
+
+        throw;
+    }
+
+    if (pass) {
+        tt::log_info(tt::LogTest, "Test Passed");
+    } else {
+        tt::log_fatal(tt::LogTest, "Test Failed");
+    }
+
+    TT_ASSERT(pass);
+
+    return 0;
+}
