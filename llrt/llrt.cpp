@@ -60,8 +60,8 @@ void assert_reset_for_all_chips(tt_cluster *cluster) {
     TT_ASSERT(cluster->type == tt::TargetDevice::Silicon);
 
     log_debug(tt::LogLLRuntime, "Starting resets for {} chips", cluster->get_num_chips());
-    for (chip_id_t chip = 0 ; chip < cluster->get_num_chips(); chip++) {
-        cluster->broadcast_remote_tensix_risc_reset(chip, TENSIX_ASSERT_SOFT_RESET);
+    for (const chip_id_t& chip_id : cluster->get_all_chips()) {
+        cluster->broadcast_remote_tensix_risc_reset(chip_id, TENSIX_ASSERT_SOFT_RESET);
     }
 }
 
@@ -120,7 +120,7 @@ bool test_load_write_read_risc_binary(tt_cluster *cluster, std::string hex_file_
 
     assert(riscv_id == 0 || riscv_id == 1);
 
-    assert(is_worker_core(cluster, core));
+    assert(is_worker_core(cluster, core, chip_id));
 
     std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id); // 0 = BRISC, 1 = NCRISC  
 
@@ -152,7 +152,7 @@ bool test_load_write_read_trisc_binary(tt_cluster *cluster, std::string hex_file
 
     assert(triscv_id >=0 and triscv_id <=2);
 
-    assert(is_worker_core(cluster, core));
+    assert(is_worker_core(cluster, core, chip_id));
 
     std::vector<uint32_t> hex_vec = get_trisc_binary(hex_file_path, triscv_id); // TRISC 0, 1, 2  
 
