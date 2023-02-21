@@ -17,6 +17,7 @@ the TT drivers.  On other machines, you will need to install the following:
 * GNU ``make`` v4.2+
 * ``ttkmd`` (the TT kernel driver) v1.12
 * Python 3.8.10 with pre-packaged ``venv``
+* ``clang`` v6.0
 * Hugepages with 1GB page mount per GS
 
 along with the following libraries (usually through package manager like ``apt``):
@@ -60,7 +61,7 @@ It's now time to install dependencies.
 ::
 
     sudo apt update
-    sudo apt-get install software-properties-common=0.99.9.8 build-essential=12.8ubuntu1.1 python3.8-venv libgoogle-glog-dev=0.4.0-1build1 ruby libyaml-cpp-dev=0.6.2-4ubuntu1 git git-lfs
+    sudo apt-get install software-properties-common=0.99.9.8 build-essential=12.8ubuntu1.1 python3.8-venv libgoogle-glog-dev=0.4.0-1build1 ruby libyaml-cpp-dev=0.6.2-4ubuntu1 git git-lfs clang-6.0
     sudo apt-add-repository ppa:rosecompiler/rose-development
     sudo apt update
     sudo apt install rose=0.11.67.0.1-0 rose-tools=0.11.67.0.1-0
