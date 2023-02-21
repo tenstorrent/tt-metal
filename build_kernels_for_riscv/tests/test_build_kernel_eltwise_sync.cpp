@@ -31,8 +31,8 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.set_hlk_args_all_cores(hlk_args, sizeof(unary_datacopy::hlk_args_t));
     build_kernel_for_riscv_options.set_hlk_file_name_all_cores("kernels/compute/eltwise_copy.cpp");
 
-    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(HlkOperand::in0, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(HlkOperand::out0, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(tt::HlkOperand::in0, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(tt::HlkOperand::out0, tt::DataFormat::Float16_b);
     // make sure to set this to false on GS (because no FP32 in dst), otherwise pack_src_format will be incorrect
     build_kernel_for_riscv_options.fp32_dest_acc_en = false; 
     

@@ -18,19 +18,19 @@ int main(int argc, char* argv[]) {
 
     log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
 
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::c_in0, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::c_out0, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::c_intermed0, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::c_in0, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::c_out0, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::c_intermed0, tt::DataFormat::Float16_b);
 
     // not all of them may be used in the runtime test, this is to inspect (manually atm) that data formats get compiled correctly
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::dataflow0, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::dataflow1, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::dataflow2, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::dataflow3, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::dataflow4, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::dataflow5, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::dataflow6, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(CB::dataflow7, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::dataflow0, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::dataflow1, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::dataflow2, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::dataflow3, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::dataflow4, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::dataflow5, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::dataflow6, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::dataflow7, tt::DataFormat::Float16_b);
 
     // NCRISC / BRISC config
     build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/reader_cb_test.cpp";

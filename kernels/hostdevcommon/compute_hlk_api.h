@@ -7,6 +7,10 @@
 #include "hlk_defines_generated.h"
 #endif
 
+// For usage in HLKs only
+
+using namespace tt;
+
 // rk: forcefully remove TT_THROW or TT_ASSERT related, not used for now
 // #if defined(HLK_ASSERTIONS_ENABLED) && (HLK_ASSERTIONS_ENABLED == 1)
 // #include "common/assert.hpp"

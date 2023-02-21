@@ -45,9 +45,9 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.set_hlk_math_fidelity_all_cores(MathFidelity::HiFi4);
 
     // matmul: 2 input operands, and 1 output operand (operand == buffer)
-    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(HlkOperand::in0, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(HlkOperand::in1, tt::DataFormat::Float16_b);
-    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(HlkOperand::out0, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(tt::HlkOperand::in0, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(tt::HlkOperand::in1, tt::DataFormat::Float16_b);
+    build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(tt::HlkOperand::out0, tt::DataFormat::Float16_b);
 
     // make sure to set this to false on GS (because no FP32 in dst), otherwise pack_src_format will be incorrect
     build_kernel_for_riscv_options.fp32_dest_acc_en = false; 

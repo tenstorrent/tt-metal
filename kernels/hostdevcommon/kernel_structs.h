@@ -1,5 +1,8 @@
 #pragma once
 #include <cstdint>
+
+namespace tt {
+
 // All CBs can used for dataflow in/out
 // Certain CBs are specifically designed to handle compute input, output, and intermediates.
 enum CB : std::uint8_t
@@ -188,3 +191,5 @@ struct op_info_t {
     int pop1; // Unused for eltwise unary op
     bool unary;
 };
+
+} //  namespace tt
