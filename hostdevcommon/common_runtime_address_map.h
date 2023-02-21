@@ -29,12 +29,6 @@ constexpr static std::uint32_t PRINT_BUFFER_T2 = PRINT_BUFFER_T1 + PRINT_BUFFER_
 constexpr static std::uint32_t PRINT_BUFFER_BR = PRINT_BUFFER_T2 + PRINT_BUFFER_SIZE; // BRISC
 constexpr static std::uint32_t CONSTANT_REGISTER_VALUE = PRINT_BUFFER_BR + PRINT_BUFFER_SIZE + 4; // Producer/consumer sync scratch address
 
-constexpr static std::uint32_t IN0_MCAST_COUNTER = 109600;
-constexpr static std::uint32_t IN1_MCAST_COUNTER = 109632;
-
-constexpr static std::uint32_t IN0_MCAST_RECEIVER_FLAG = 109664;
-constexpr static std::uint32_t IN1_MCAST_RECEIVER_FLAG = 109696;
-
 constexpr static std::uint32_t UNRESERVED_BASE = 200 * 1024; // Start of unreserved space
 
 // Breakpoint regions

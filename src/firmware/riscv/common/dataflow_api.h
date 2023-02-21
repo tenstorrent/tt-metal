@@ -349,6 +349,12 @@ void noc_async_write_multicast(std::uint32_t src_local_l1_addr, std::uint64_t ds
 }
 
 inline __attribute__((always_inline)) 
+void noc_semaphore_set_multicast(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests) {
+        ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, 4 /*size in bytes*/,   
+                            NOC_MULTICAST_WRITE_VC, true, false, num_dests);
+}
+
+inline __attribute__((always_inline)) 
 void noc_async_write_multicast_loopback_src(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t size, std::uint32_t num_dests) {
         ncrisc_noc_fast_write_any_len_loopback_src(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, size,   
                             NOC_MULTICAST_WRITE_VC, true, false, num_dests);
@@ -365,15 +371,23 @@ void noc_async_write_barrier()  {
 }
 
 inline __attribute__((always_inline)) 
-void noc_wait_and_reset(volatile uint32_t* addr, uint32_t val)  {
-    while((*addr) != val);
-    // Reset to zero
-    (*addr) = 0;
+void noc_semaphore_wait(volatile uint32_t* sem_addr, uint32_t val)  {
+    while((*sem_addr) != val);
+}
+
+inline __attribute__((always_inline)) 
+void noc_semaphore_set(volatile uint32_t* sem_addr, uint32_t val)  {
+    // set semaphore value to val
+    (*sem_addr) = val;
 }
 
 inline __attribute__((always_inline))
-void noc_atomic_increment(uint64_t addr, uint32_t incr, uint32_t wrap){
-    noc_fast_atomic_increment(loading_noc, NCRISC_AT_CMD_BUF, addr, incr, wrap, false);
+void noc_semaphore_inc(uint64_t addr, uint32_t incr){
+    /*
+    [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
+    Generic increment with 32-bit wrap.
+  */
+    noc_fast_atomic_increment(loading_noc, NCRISC_AT_CMD_BUF, addr, incr, 31 /*wrap*/, false /*linked*/);
 }
 
 // optimized NOC transfer APIs

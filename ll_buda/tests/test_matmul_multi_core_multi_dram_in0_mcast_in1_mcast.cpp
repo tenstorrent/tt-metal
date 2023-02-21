@@ -319,7 +319,11 @@ bool write_runtime_args_to_device(
     int per_core_N,
     uint32_t in0_dram_addr,
     uint32_t in1_dram_addr,
-    uint32_t out_dram_addr) {
+    uint32_t out_dram_addr,
+    uint32_t in0_mcast_sender_semaphore_addr,
+    uint32_t in1_mcast_sender_semaphore_addr,
+    uint32_t in0_mcast_receiver_semaphore_addr,
+    uint32_t in1_mcast_receiver_semaphore_addr) {
 
     bool pass = true;
     uint32_t single_tile_size = 2 * 1024;
@@ -335,7 +339,7 @@ bool write_runtime_args_to_device(
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             tt_xy_pair core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-            log_info(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
+            // log_info(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
 
             tt_xy_pair left_core    = {(std::size_t) start_core_x, (std::size_t) core.y};
             tt_xy_pair left_core_plus_one    = {(std::size_t) start_core_x + 1, (std::size_t) core.y};
@@ -350,8 +354,6 @@ bool write_runtime_args_to_device(
             auto top_core_physical = device->worker_core_from_logical_core(top_core);
             auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
             auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
-            log_info(LogTest, "right core = {}, {}", right_core_physical.x, right_core_physical.y);
-            log_info(LogTest, "left_core_plus_one = {}, {}", left_core_plus_one_physical.x, left_core_plus_one_physical.y);
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t) in0_dram_addr, // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
@@ -382,6 +384,8 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
                 (std::uint32_t)  left_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  left_core_physical.y, // in0_mcast_sender_noc_y
+                (std::uint32_t)  in0_mcast_sender_semaphore_addr,
+                (std::uint32_t)  in0_mcast_receiver_semaphore_addr,
 
                 (std::uint32_t)  bottom_core_physical.x, // in0_mcast_dest_noc_start_x
                 (std::uint32_t)  bottom_core_physical.y, // in0_mcast_dest_noc_start_y
@@ -389,7 +393,9 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)  top_core_plus_one_physical.y, // in0_mcast_dest_noc_end_y
                 (std::uint32_t)  (num_cores_r - 1), // in0_mcast_num_dests
                 (std::uint32_t)  top_core_physical.x, // in0_mcast_sender_noc_x
-                (std::uint32_t)  top_core_physical.y // in0_mcast_sender_noc_y
+                (std::uint32_t)  top_core_physical.y, // in0_mcast_sender_noc_y
+                (std::uint32_t)  in1_mcast_sender_semaphore_addr,
+                (std::uint32_t)  in1_mcast_receiver_semaphore_addr
             };
             std::vector<uint32_t> writer_args = {
                 (std::uint32_t) out_dram_addr, // out_tensor_addr
@@ -406,19 +412,15 @@ bool write_runtime_args_to_device(
             }; 
 
             if(core_idx_x == 0 and core_idx_y == 0) {
-                log_info(LogTest, "Core being configured for in0 sender & in1 sender");
                 pass &= ll_buda::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_sender_in1_sender, core, mm_reader_args); // RISCV_0_default
                 pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x == 0 and core_idx_y != 0) {
-                log_info(LogTest, "Core being configured for in0 sender & in1 receiver");
                 pass &= ll_buda::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_sender_in1_receiver, core, mm_reader_args); // RISCV_0_default
                 pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x != 0 and core_idx_y == 0) {
-                log_info(LogTest, "Core being configured for in0 receiver & in1 sender");
                 pass &= ll_buda::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_receiver_in1_sender, core, mm_reader_args); // RISCV_1_default
                 pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             } else {
-                log_info(LogTest, "Core being configured for in0 receiver & in1 receiver");
                 pass &= ll_buda::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_receiver_in1_receiver, core, mm_reader_args); // RISCV_1_default
                 pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             }
@@ -488,6 +490,11 @@ int main(int argc, char **argv) {
         uint32_t in0_dram_addr = 0;
         uint32_t in1_dram_addr = 400 * 1024 * 1024;
         uint32_t out_dram_addr = 800 * 1024 * 1024;
+        uint32_t in0_mcast_sender_semaphore_noc_addr = 109600;
+        uint32_t in0_mcast_receiver_semaphore_noc_addr = 109632;
+        uint32_t in1_mcast_sender_semaphore_noc_addr = 109664;
+        uint32_t in1_mcast_receiver_semaphore_noc_addr = 109696;
+
         log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
         log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
         log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
@@ -543,10 +550,8 @@ int main(int argc, char **argv) {
             for(int j = 0; j < num_cores_c; j++) {
                 std::vector<uint32_t> invalid = {INVALID};
                 tt_xy_pair core = {(std::size_t) start_core_x + j, (std::size_t) start_core_y + i};
-                ll_buda::WriteToDeviceL1(device, core, invalid, IN0_MCAST_COUNTER);
-                ll_buda::WriteToDeviceL1(device, core, invalid, IN1_MCAST_COUNTER);
-                ll_buda::WriteToDeviceL1(device, core, invalid, IN0_MCAST_RECEIVER_FLAG);
-                ll_buda::WriteToDeviceL1(device, core, invalid, IN1_MCAST_RECEIVER_FLAG);
+                ll_buda::WriteToDeviceL1(device, core, invalid, in0_mcast_sender_semaphore_noc_addr);
+                ll_buda::WriteToDeviceL1(device, core, invalid, in1_mcast_sender_semaphore_noc_addr);
             }
         }
 
@@ -561,7 +566,8 @@ int main(int argc, char **argv) {
             in0_block_w,
             out_subblock_h, out_subblock_w,
             per_core_M, per_core_N,
-            in0_dram_addr, in1_dram_addr, out_dram_addr
+            in0_dram_addr, in1_dram_addr, out_dram_addr,
+            in0_mcast_sender_semaphore_noc_addr, in1_mcast_sender_semaphore_noc_addr, in0_mcast_receiver_semaphore_noc_addr, in1_mcast_receiver_semaphore_noc_addr
         );
         log_info(LogTest, "Writing kernel runtime args to device complete");
 

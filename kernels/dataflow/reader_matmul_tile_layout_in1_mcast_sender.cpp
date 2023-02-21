@@ -36,6 +36,10 @@ void kernel_main() {
     uint32_t in1_mcast_dest_noc_end_x           = get_arg_val<uint32_t>(19);
     uint32_t in1_mcast_dest_noc_end_y           = get_arg_val<uint32_t>(20);
     uint32_t in1_mcast_num_dests                = get_arg_val<uint32_t>(21);
+    uint32_t in1_mcast_sender_noc_x             = get_arg_val<uint32_t>(22);
+    uint32_t in1_mcast_sender_noc_y             = get_arg_val<uint32_t>(23); 
+    uint32_t in1_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(24);
+    uint32_t in1_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(25);
 
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different
@@ -56,11 +60,11 @@ void kernel_main() {
     uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
 
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    volatile uint32_t* in1_mcast_destination_flag_addr = reinterpret_cast<volatile uint32_t*>(IN1_MCAST_RECEIVER_FLAG);
-    *(in1_mcast_destination_flag_addr) = VALID;
+    volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
+    *(in1_mcast_receiver_semaphore_addr_ptr) = VALID;
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    volatile uint32_t* in1_semaphore_addr = reinterpret_cast<volatile uint32_t*>(IN1_MCAST_COUNTER);
+    volatile uint32_t* in1_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_sender_semaphore_addr);
 
     for(uint32_t b = 0; b < num_blocks; b++) {
         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
@@ -109,9 +113,11 @@ void kernel_main() {
 
         noc_async_read_barrier();
 
-        // wait until all mcast destinations have atomically incremented the semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
+        // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
         // the semaphore_addr value back to zero for the next block
-        noc_wait_and_reset(in1_semaphore_addr, in1_mcast_num_dests);
+        noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
+        noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
+
         
         // Now we have the block in the CB address, we can mcast to dests!
         uint64_t in1_multicast_data_addr = get_noc_multicast_addr(
@@ -124,15 +130,14 @@ void kernel_main() {
         noc_async_write_multicast(in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_dests);
         noc_async_write_barrier();
         // We should also multicast the flag to destinations
-        uint64_t in1_multicast_flag_addr = get_noc_multicast_addr(
+        uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
         in1_mcast_dest_noc_start_x, 
         in1_mcast_dest_noc_start_y, 
         in1_mcast_dest_noc_end_x, 
         in1_mcast_dest_noc_end_y, 
-        IN1_MCAST_RECEIVER_FLAG);
+        in1_mcast_receiver_semaphore_addr);
         // num_dests must not include source, since we are NOT really doing a local copy!
-        noc_async_write_multicast(IN1_MCAST_RECEIVER_FLAG, in1_multicast_flag_addr, 4, in1_mcast_num_dests);
-        noc_async_write_barrier();
+        noc_semaphore_set_multicast(in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_dests);
 
         cb_push_back(cb_id_in0, in0_block_num_tiles);
         cb_push_back(cb_id_in1, in1_block_num_tiles);
