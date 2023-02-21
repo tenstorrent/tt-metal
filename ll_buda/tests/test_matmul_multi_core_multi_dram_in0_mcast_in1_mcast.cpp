@@ -407,6 +407,7 @@ bool write_runtime_args_to_device(
 
                 (std::uint32_t) out_subblock_w, // out_subblock_w
                 (std::uint32_t) out_subblock_h, // out_subblock_h
+                (std::uint32_t) (out_subblock_w * out_subblock_h), // out_subblocks_w * out_subblocks_h
                 (std::uint32_t) (per_core_N / out_subblock_w), // out_num_subblocks_w
                 (std::uint32_t) (per_core_M / out_subblock_h), // out_num_subblocks_h
             }; 
@@ -528,8 +529,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
+        constexpr bool skip_hlkc = false;
+        constexpr bool profile_kernel = true;
+        pass &= ll_buda::CompileProgram(device, program, skip_hlkc, profile_kernel);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -572,7 +574,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Writing kernel runtime args to device complete");
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
-        pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
+        pass &= ll_buda::ConfigureDeviceWithProgram(device, program, profile_kernel);
         pass &= ll_buda::LaunchKernels(device, program);
         log_info(LogTest, "Matmul test done");
 
