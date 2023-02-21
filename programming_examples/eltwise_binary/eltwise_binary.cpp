@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
+        constexpr bool skip_hlkc = false;
         pass &= CompileProgram(device, program, skip_hlkc);
 
         ////////////////////////////////////////////////////////////////////////////
@@ -144,15 +144,16 @@ int main(int argc, char **argv) {
 
         pass &= WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
 
-        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 64.0f);
+        constexpr float val_to_add = 64.0f;
+        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_add);
 
         pass &= WriteToDeviceDRAM(device, src1_dram_buffer, src1_vec);
 
         pass &= ConfigureDeviceWithProgram(device, program);
 
-        const tt_xy_pair dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-        const tt_xy_pair dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
-        const tt_xy_pair dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        tt_xy_pair dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
+        tt_xy_pair dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
+        tt_xy_pair dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
 
         WriteRuntimeArgsToDevice(
             device,
@@ -185,7 +186,116 @@ int main(int argc, char **argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
 
-        std::vector<uint32_t> golden_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 96.0f);
+        /*
+         * Move src data back into DRAM src buffer 0 to do another eltwise calculation
+         * */
+        Program *program_mul = new Program();
+
+        cb_src0 = CreateCircularBuffer(
+            program_mul,
+            src0_cb_index,
+            core,
+            num_input_tiles,
+            num_input_tiles * single_tile_size,
+            src0_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        cb_src1 = CreateCircularBuffer(
+            program_mul,
+            src1_cb_index,
+            core,
+            num_input_tiles,
+            num_input_tiles * single_tile_size,
+            src1_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        cb_output = CreateCircularBuffer(
+            program_mul,
+            output_cb_index,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        binary_reader_kernel = CreateDataMovementKernel(
+            program_mul,
+            "kernels/dataflow/reader_binary_diff_lengths.cpp",
+            core,
+            DataMovementProcessor::RISCV_1,
+            NOC::RISCV_1_default);
+
+        unary_writer_kernel = CreateDataMovementKernel(
+            program_mul,
+            "kernels/dataflow/writer_unary.cpp",
+            core,
+            DataMovementProcessor::RISCV_0,
+            NOC::RISCV_0_default);
+
+        eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(eltwise_binary::hlk_args_t));
+
+        eltwise_binary_kernel = CreateComputeKernel(
+            program_mul,
+            "kernels/compute/eltwise_binary.cpp",
+            core,
+            eltwise_binary_args,
+            MathFidelity::HiFi4,
+            fp32_dest_acc_en,
+            math_approx_mode
+        );
+
+        eltwise_op = EltwiseOp::MUL;
+
+        eltwise_binary_kernel->add_define("ELTWISE_OP", op_id_to_op_define[eltwise_op]);
+
+        pass &= CompileProgram(device, program_mul, skip_hlkc);
+
+        pass &= WriteToDeviceDRAM(device, src0_dram_buffer, result_vec);
+
+        constexpr float val_to_mul = 2.0f;
+        src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_mul);
+
+        pass &= WriteToDeviceDRAM(device, src1_dram_buffer, src1_vec);
+
+        pass &= ConfigureDeviceWithProgram(device, program_mul);
+
+        dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
+        dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
+        dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+
+        WriteRuntimeArgsToDevice(
+            device,
+            binary_reader_kernel,
+            core,
+            {dram_buffer_src0_addr,
+            (std::uint32_t)dram_src0_noc_xy.x,
+            (std::uint32_t)dram_src0_noc_xy.y,
+            num_tiles,
+            dram_buffer_src1_addr,
+            (std::uint32_t)dram_src1_noc_xy.x,
+            (std::uint32_t)dram_src1_noc_xy.y,
+            num_tiles, 0});
+
+        WriteRuntimeArgsToDevice(
+            device,
+            unary_writer_kernel,
+            core,
+            {dram_buffer_dst_addr,
+            (std::uint32_t)dram_dst_noc_xy.x,
+            (std::uint32_t)dram_dst_noc_xy.y,
+            num_tiles});
+
+        pass &= LaunchKernels(device, program_mul);
+
+        ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+
+        std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
+            return bfloat16((a.to_float() + val_to_add) * val_to_mul);
+        };
+        std::vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
 
         constexpr float abs_tolerance = 0.0001f;
         constexpr float rel_tolerance = 0.001f;
@@ -195,7 +305,7 @@ int main(int argc, char **argv) {
 
         pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec, comparison_function);
 
-        pass &= CloseDevice(device);;
+        pass &= CloseDevice(device);
 
     } catch (const std::exception &e) {
         tt::log_error(tt::LogTest, "Test failed with exception!");

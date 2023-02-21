@@ -36,7 +36,7 @@ class bfloat16 {
         uint16_data = (uint16_t)int_data;
     }
 
-    float to_float() {
+    float to_float() const {
         // move lower 16 to upper 16 (of 32)
         uint32_t uint32_data = (uint32_t)uint16_data << 16;
         // return 32 bits as float
