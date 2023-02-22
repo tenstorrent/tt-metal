@@ -7,8 +7,8 @@ namespace tt {
 namespace ll_buda {
 
 // TODO: Accept parallelization
-// TODO(AP): merge with transpose
 Tensor transpose(const Tensor &a);
+Tensor transpose_hc(const Tensor &a);
 
 }  // namespace ll_buda
 

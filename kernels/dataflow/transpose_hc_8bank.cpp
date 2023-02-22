@@ -11,7 +11,7 @@ inline u32 TADDR(u32 ti) {
 }
 
 void kernel_main() {
-    u32 src_addr  = get_arg_val<uint32_t>(0);
+    u32 src0_addr = get_arg_val<uint32_t>(0);
     u32 src_noc_x = get_arg_val<uint32_t>(1);
     u32 src_noc_y = get_arg_val<uint32_t>(2);
     u32 W         = get_arg_val<uint32_t>(3);
@@ -35,7 +35,7 @@ void kernel_main() {
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
-    uint64_t batch_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr);
+    uint64_t batch_addr = src0_addr;
     for (u32 n = 0; n < N; n++) {
         u32 htWT = 0;
         for (u32 h = 0; h < H; h++) {
@@ -45,7 +45,7 @@ void kernel_main() {
                     // what is the source address for the current tile?
                     // c32 = intra-C-tile loop
                     // every 32 C's acquire a new output tile address
-                    //        DPRINT << "h=" << h << " ct=" << ct << " wt=" << wt << " W=" << W << " HW2=" << HW2 << ENDL();
+                    //    DPRINT << "8B h=" << h << " ct=" << ct << " wt=" << wt << " W=" << W << " HW2=" << HW2 << ENDL();
 
                     cb_reserve_back(operand0, onetile);
 
@@ -72,7 +72,9 @@ void kernel_main() {
                             sub_src_offs += (((h32 >> 4) << 1) << 9); // if intra-tile source h is > 16, add 2*512 to subtile offset
                             // below we only use the lower 4 bits out of 5-bit range for h, shift by 5 because 2 bytes per element
                             auto src_offs = ctoffs + c16offs + TADDR(htWT + wt) + sub_src_offs + ((h32&15)<<5); // bytes offset
-                            auto src_addr = batch_addr + src_offs;
+                            auto bsrc_offs = (batch_addr + src_offs)-src0_addr;
+                            uint32_t batch_itile = (bsrc_offs >> 11);
+                            uint32_t rem = (bsrc_offs & 2047);
 
                             //if (h == 0 && ct == 0 && wt == 0) {
                             //    DPRINT << "  Sub=" << sub << " c16=" << c16 << ENDL();
@@ -80,8 +82,11 @@ void kernel_main() {
                             //    DPRINT << "    Writing to   dst_offs=" << dest_tr0_l1-save_dest << ENDL();
                             //}
 
+                            uint64_t banked_addr = get_noc_addr(batch_itile, src0_addr, 8, 3, 11);
+                            banked_addr += rem;
+
                             // this starts async NOC dma from DRAM to TR0_L1 buffer
-                            noc_async_read(src_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                            noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
 
                             //if (h == 0 && ct == 0 && wt == 0)
                             //    DPRINT << U32( reinterpret_cast<uint16_t*>( dest_tr0_l1 )[0] ) << ENDL();

@@ -39,6 +39,30 @@ inline vector<u16> gold_transpose_wh(std::vector<u16> src_vec, vector<uint32_t> 
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
+// TODO(AP) - move to gold header
+inline vector<u16> gold_transpose_hc(std::vector<u16> src_vec, vector<uint32_t> shape) {
+    vector<uint32_t> shapeT{shape[0], shape[2], shape[1], shape[3]};
+    TensAddr addr(shape);
+    TensAddr addrt(shapeT);
+
+    vector<u16> transposed(src_vec.size());
+    for (int n = 0; n < shape[0]; n++)
+    for (int c = 0; c < shape[1]; c++)
+    for (int h = 0; h < shape[2]; h++)
+    for (int w = 0; w < shape[3]; w++) {
+        auto toffs = addrt.offs(n, h, c, w);
+        auto offs = addr.offs(n, c, h, w);
+        TT_ASSERT(toffs < transposed.size() && offs < src_vec.size());
+        transposed[toffs] = src_vec[offs];
+    }
+    //log_info(tt::LogVerif, "Prior size = {}", transposed.size());
+    return transposed;
+};
+
+
+// input shape.x is assumed to have the full number of elements in bfloat16
+// src_vec is expected to be untilized
+// result is also untilized
 inline vector<u16> gold_reduce_hw(vector<u16> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
     vector<uint32_t> shape_dst{shape[0], shape[1], 1, 1};
     if (zeropad) {

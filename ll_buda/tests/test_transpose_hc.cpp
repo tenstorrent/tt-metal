@@ -4,6 +4,7 @@
 
 #include "ll_buda/host_api.hpp"
 #include "common/bfloat16.hpp"
+#include "test_gold_impls.hpp"
 
 #include "test_tiles.hpp"
 
@@ -27,44 +28,13 @@ using u16 = std::uint16_t;
 // Reference CPU implementation of transpose_HC
 //////////////////////////////////////////////////////////////////////////////////////////
 
-// input shape.x is assumed to have the full number of elements in bfloat16
-// src_vec is expected to be untilized
-// result is also untilized
-// TODO(AP) - move to gold header
-inline vector<u16> gold_transpose_hc(std::vector<u16> src_vec, vector<uint32_t> shape) {
-    struct TensLinAddr {
-        vector<uint32_t> sh;
-        TensLinAddr(vector<uint32_t> shape) : sh(shape) {}
-        int offs(int n, int c, int h, int w) {
-            TT_ASSERT(u32(n) < sh[0] && u32(c) < sh[1] && u32(h) < sh[2] && u32(w) < sh[3]);
-            return w + sh[3]*h + sh[2]*sh[3]*c + sh[1]*sh[2]*sh[3]*n;
-        }
-    };
-
-    vector<uint32_t> shapeT{shape[0], shape[2], shape[1], shape[3]};
-    TensLinAddr addr(shape);
-    TensLinAddr addrt(shapeT);
-
-    vector<u16> transposed(src_vec.size());
-    for (int n = 0; n < shape[0]; n++)
-    for (int c = 0; c < shape[1]; c++)
-    for (int h = 0; h < shape[2]; h++)
-    for (int w = 0; w < shape[3]; w++) {
-        auto toffs = addrt.offs(n, h, c, w);
-        auto offs = addr.offs(n, c, h, w);
-        TT_ASSERT(toffs < transposed.size() && offs < src_vec.size());
-        transposed[toffs] = src_vec[offs];
-    }
-    //log_info(tt::LogVerif, "Prior size = {}", transposed.size());
-
-    return transposed;
-};
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: tests transpose kernel for HC dimensions
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
     bool pass = true;
+    bool multibank = true;
 
     try {
         ////////////////////////////////////////////////////////////////////////////
@@ -78,7 +48,7 @@ int main(int argc, char **argv) {
 
         // Also tests that the debug print server terminates cleanly with new ll_buda APIs
         // (it was previously crashing due to different termination sequence)
-        //tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
+        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -87,7 +57,8 @@ int main(int argc, char **argv) {
 
         tt_xy_pair core = {0, 0};
 
-        vector<uint32_t> shape = {1, 96, 32*4, 32*5};
+        //vector<uint32_t> shape = {1, 96, 32*4, 32*5};
+        vector<uint32_t> shape = {2, 32*3, 32*5, 32*2};
         uint32_t num_tensor_tiles = shape.at(0) * shape.at(1) * shape.at(2) * shape.at(3) / (32*32);
 
         uint32_t single_tile_bytes = 2 * 1024;
@@ -130,24 +101,29 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
-        u32 W = shape[3], H = shape[2], C = shape[1];
+        u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
         u32 HW = H*W;        
+        u32 CHW = C*H*W;
         
         auto reader_kernel = ll_buda::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/transpose_hc.cpp",
+            multibank ? 
+                "kernels/dataflow/transpose_hc_8bank.cpp" :
+                "kernels/dataflow/transpose_hc.cpp",
             core,
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
         
         auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary.cpp",
+            multibank ?
+                "kernels/dataflow/writer_unary_8bank.cpp" :
+                "kernels/dataflow/writer_unary.cpp",
             core,
             ll_buda::DataMovementProcessor::RISCV_0,
             ll_buda::NOC::RISCV_0_default);
 
-        void *hlk_args = new hlk_copy_binary::hlk_args_t{ .per_core_tile_cnt = 96*4*5 };
+        void *hlk_args = new hlk_copy_binary::hlk_args_t{ .per_core_tile_cnt = int(num_tensor_tiles) };
         ll_buda::ComputeKernelArgs *kernel_args = ll_buda::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(hlk_copy_binary::hlk_args_t));
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -170,9 +146,12 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
-            dram_buffer_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 100, 0x1234);
+        auto src_4f_16 = u16_from_u32_vector(src0_vec);
+        if (multibank)
+            pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src0_vec, src0_dram_buffer->address());
+        else
+            pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
         
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -184,7 +163,7 @@ int main(int argc, char **argv) {
                 dram_buffer_src0_addr,
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
-                W, H, C, HW
+                W, H, C, HW, N, CHW
             }
         );
 
@@ -203,23 +182,38 @@ int main(int argc, char **argv) {
         pass &= ll_buda::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+        if (multibank)
+            ll_buda::ReadFromDeviceDRAMChannelsInterleavedTiles(
+                device, dst_dram_buffer->address(), result_vec, dst_dram_buffer->size());
+        else
+            ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
+        int argfail = -1;
+        auto comparison_function = [](float a, float b) {
+            const float rtol = 0.001f;
+            const float atol = 1e-3f;
+            float maxabs = fmaxf(fabsf(a), fabsf(b));
+            float absdiff = fabsf(a - b);
+            auto result = (absdiff <= atol) || absdiff < rtol * maxabs;
+            if (!result)
+                absdiff *= 1.0f; // breakpoint spot
+            return result;
+        };
 
-        // untilize input vector for consumption by gold_transpose_hc
-        vector<u16> src_untilized16 = untilize_nchw(u16_from_u32_vector(src0_vec), shape);
-        auto gold_transposed = gold_transpose_hc(src_untilized16, shape); // result is u16 untilized
+        // recover a linear view of input vector for consumption by gold_ function
+        vector<u16> src_linear = convert_layout<u16>(src_4f_16, shape, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
+        vector<u16> gold_reduced = gold_transpose_hc(src_linear, shape); // result is u16 untilized
 
         // Tilize from row major and convert to pairs (u32)
-        vector<uint32_t> shapeT{shape[0], shape[2], shape[1], shape[3]};
-        auto expected32 = u32_from_u16_vector(tilize_nchw(gold_transposed, shapeT));
+        vector<uint32_t> shapeR{shape[0], shape[2], shape[1], shape[3]};
+        auto gold_16_4f = convert_layout<u16>(gold_reduced, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
+        auto gold_4f_u32 = u32_from_u16_vector(gold_16_4f);
+        auto u16_result = u16_from_u32_vector(result_vec);
 
-        auto comparison_function = [](float a, float b) { return a == b; };
-        int argfail = -1;
-        bool pass = packed_uint32_t_vector_comparison(result_vec, expected32, comparison_function, &argfail);
+        pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
         if (!pass)
             log_error(LogTest, "Failure position={}", argfail);
 
