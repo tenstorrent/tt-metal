@@ -133,7 +133,10 @@ void kernel_main() {
         in0_start_address);
         // num_dests must not include source, since we are NOT really doing a local copy!
         noc_async_write_multicast(in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_dests);
-        // noc_async_write_barrier();
+        
+        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+        // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC). 
+
         // We should also multicast the flag to destinations
         uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
         in0_mcast_dest_noc_end_x, 
@@ -187,7 +190,10 @@ void kernel_main() {
         in1_start_address);
         // num_dests must not include source, since we are NOT really doing a local copy!
         noc_async_write_multicast(in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_dests);
-        // noc_async_write_barrier();
+        
+        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+        // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC). 
+
         // We should also multicast the flag to destinations
         uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
         in1_mcast_dest_noc_end_x, 
