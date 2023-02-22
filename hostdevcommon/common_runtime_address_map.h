@@ -29,10 +29,10 @@ constexpr static std::uint32_t PRINT_BUFFER_T2 = PRINT_BUFFER_T1 + PRINT_BUFFER_
 constexpr static std::uint32_t PRINT_BUFFER_BR = PRINT_BUFFER_T2 + PRINT_BUFFER_SIZE; // BRISC
 constexpr static std::uint32_t CONSTANT_REGISTER_VALUE = PRINT_BUFFER_BR + PRINT_BUFFER_SIZE + 4; // Producer/consumer sync scratch address
 
-constexpr static std::uint32_t UNRESERVED_BASE = 200 * 1024; // Start of unreserved space
+constexpr static std::uint32_t UNRESERVED_BASE = 120 * 1024; // Start of unreserved space
 
 // Breakpoint regions
-constexpr static std::uint32_t NCRISC_BREAKPOINT = 109568; 
+constexpr static std::uint32_t NCRISC_BREAKPOINT = 109568;
 constexpr static std::uint32_t TRISC0_BREAKPOINT = 109572;
 constexpr static std::uint32_t TRISC1_BREAKPOINT = 109576;
 constexpr static std::uint32_t TRISC2_BREAKPOINT = 109580;
@@ -53,10 +53,10 @@ constexpr static std::uint32_t BRISC_BREAKPOINT  = 109584;
 #define TRISC2_BP_LNUM_MACRO 109620
 #define BRISC_BP_LNUM_MACRO  109624
 
-constexpr static std::uint32_t NCRISC_SP = NCRISC_SP_MACRO; 
-constexpr static std::uint32_t TRISC0_SP = TRISC0_SP_MACRO; 
+constexpr static std::uint32_t NCRISC_SP = NCRISC_SP_MACRO;
+constexpr static std::uint32_t TRISC0_SP = TRISC0_SP_MACRO;
 constexpr static std::uint32_t TRISC1_SP = TRISC1_SP_MACRO;
-constexpr static std::uint32_t TRISC2_SP = TRISC2_SP_MACRO; 
+constexpr static std::uint32_t TRISC2_SP = TRISC2_SP_MACRO;
 constexpr static std::uint32_t BRISC_SP  = BRISC_SP_MACRO;
 
 constexpr static std::uint32_t NCRISC_BP_LNUM = NCRISC_BP_LNUM_MACRO;

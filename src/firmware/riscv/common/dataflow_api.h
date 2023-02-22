@@ -159,15 +159,20 @@ void setup_cb_read_write_interfaces() {
 
 // replicated from ckernels_defs.h, which are currently not included in BRISC / NCRISC builds
 // TODO: look into ckernels_defs.h included in NCRISC/BRISC builds
+inline __attribute__((always_inline))
 constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
     switch (format&0x1F) {
-        case ((uint8_t)DataFormat::Float32): return ((4096>>4));
-        case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return ((2048>>4));
+        case ((uint8_t)DataFormat::Float16):   return ((2048>>4));
+
         case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp8_b): return ((1024>>4)+(64>>4));
+
+        case ((uint8_t)DataFormat::Float32): return ((4096>>4));
+
         case ((uint8_t)DataFormat::Bfp4):
         case ((uint8_t)DataFormat::Bfp4_b): return ((512>>4)+(64>>4));
+
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((256>>4)+(64>>4));
         default: return ((1024>>4)+(64>>4));
@@ -197,7 +202,8 @@ constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
  * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
-inline void cb_push_back(const std::int32_t operand, const std::int32_t num_tiles) {
+FORCE_INLINE
+void cb_push_back(const std::int32_t operand, const std::int32_t num_tiles) {
 
     const std::uint32_t input = operand;
     std::uint32_t num_words;
@@ -270,7 +276,8 @@ inline std::int32_t get_tile_size(const std::int32_t operand) {
  * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
-inline void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
+FORCE_INLINE
+void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
 
     volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
     tiles_acked_ptr[0] += num_tiles;
@@ -288,17 +295,18 @@ inline void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
         cb_read_interface[output].fifo_rd_ptr -= cb_read_interface[output].fifo_size;
     }
 }
-
 #endif
 
-inline uint32_t get_write_ptr(std::int32_t operand) {
+inline __attribute__((always_inline))
+uint32_t get_write_ptr(std::int32_t operand) {
     std::uint32_t input = operand;
     // return byte address (fifo_wr_ptr is 16B address)
     std::uint32_t wr_ptr_bytes = cb_write_interface[input].fifo_wr_ptr << 4;
     return wr_ptr_bytes;
 }
 
-inline uint32_t get_read_ptr(std::int32_t operand) {
+inline __attribute__((always_inline))
+uint32_t get_read_ptr(std::int32_t operand) {
     std::uint32_t output = operand;
 
     // return byte address (fifo_wr_ptr is 16B address)
@@ -324,7 +332,8 @@ inline void wait_for_sync_register_value(std::uint32_t addr, std::int32_t val) {
  * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of free tiles to wait for | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
  */
-inline void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
+FORCE_INLINE
+void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
     std::uint32_t input = operand;
 
     volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
@@ -354,7 +363,8 @@ inline void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
  * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
  * */
-inline void cb_wait_front(std::int32_t operand, std::int32_t num_tiles) {
+FORCE_INLINE
+void cb_wait_front(std::int32_t operand, std::int32_t num_tiles) {
     //std::uint32_t output = operand_to_output_index(operand);
     std::uint32_t output = operand;
 
@@ -415,6 +425,7 @@ typedef struct {
     uint32_t log_base_2_of_num_used_banks; // WARNING: This can only be used if num banks is a power of 2, so ensure your test has valid num_used_banks
     uint32_t bank_unit_size; // Num bytes in bank unit.
 
+    FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id) const {
         uint32_t bank_id = id & (this->num_used_banks - 1);
 
@@ -436,6 +447,7 @@ typedef struct {
     const uint32_t log_base_2_of_num_used_banks;
     const uint32_t log_base_2_of_bank_unit_size; // WARNING: This struct is used for optimized get_noc_addr in which case you know that bank_unit_size is a power of 2
 
+    FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id) const {
         uint32_t bank_id = id & (this->num_used_banks - 1);
 
@@ -542,6 +554,12 @@ void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr,
 FORCE_INLINE
 void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr,  std::uint32_t size) {
         ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr, size,
+                            NOC_UNICAST_WRITE_VC, false, false, 1);
+}
+
+FORCE_INLINE
+void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr) {
+        ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr, 4 /* size in bytes */,
                             NOC_UNICAST_WRITE_VC, false, false, 1);
 }
 

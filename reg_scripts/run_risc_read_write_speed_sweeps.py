@@ -14,7 +14,7 @@ def extract_float_from_text(text, pattern_before_float):
         m = re.search(pattern_before_float+'[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?', text)
     except:
         raise Exception("Couldn't find the float number I was searching for")
-        
+
     float_num = m.group(1)
 
     return float_num
@@ -22,7 +22,7 @@ def extract_float_from_text(text, pattern_before_float):
 def run_test_with_params_and_extract_floats(test_entry, patterns_before_float):
 
     print(f"RUNNING LLRT TEST - {test_entry}")
-    result = run_single_test_capture_output("llrt", test_entry)
+    result = run_single_test_capture_output("llrt", test_entry, timeout=60)
     assert result.returncode == 0, f"{test_entry} failed"
 
     extracted_floats = ()
@@ -45,7 +45,7 @@ class SweepResult:
 def sweep_transaction_size(test_name, lower_bound, upper_bound, buffer_size, num_repetitions, stats_patterns_to_extract, *extra_params):
     sweep_results = []
     transaction_size = lower_bound
-    
+
     while transaction_size <= upper_bound:
         extra_params_str = " ".join(map(str, extra_params))
         test_entry = TestEntry("llrt/tests/" + test_name, test_name, f'{buffer_size} {num_repetitions} {transaction_size} {extra_params_str}')
@@ -91,7 +91,7 @@ def print_sweep_results(sweep_results, print_extra_params: bool = True):
     print()
 
 def run_sweep(test_name, num_repetitions):
-    sweep_results = sweep_transaction_size(test_name, 32, 8192, 393216, num_repetitions, ["BRISC time: ", "speed GB/s: "], 1, 1)
+    sweep_results = sweep_transaction_size(test_name, 32, 8192*4, 393216, num_repetitions, ["BRISC time: ", "speed GB/s: "], 1, 1)
     print_sweep_results(sweep_results)
 
     sweep_results = sweep_transaction_size(test_name, 32, 8192, 65536, num_repetitions, ["BRISC time: ", "speed GB/s: "], 1, 1)
@@ -186,6 +186,6 @@ if __name__ == "__main__":
 
     run_sweep("test_run_risc_write_speed", 10000)
 
-    run_sweep_banked_single_core("test_run_risc_rw_speed_banked_dram")
+    #run_sweep_banked_single_core("test_run_risc_rw_speed_banked_dram")
 
-    run_sweep_banked_multi_core("test_run_risc_rw_speed_banked_dram")
+    #run_sweep_banked_multi_core("test_run_risc_rw_speed_banked_dram")

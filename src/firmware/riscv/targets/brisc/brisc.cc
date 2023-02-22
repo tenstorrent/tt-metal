@@ -287,6 +287,7 @@ void local_mem_copy() {
 }
 
 int main() {
+  kernel_profiler::mark_time(42);
 
   kernel_profiler::mark_time(CC_MAIN_START);
   RISC_POST_STATUS(0x10000000);
@@ -329,6 +330,7 @@ int main() {
 
   kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
   // Run the BRISC kernel
+  kernel_profiler::mark_time(420);
   kernel_main();
   kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 

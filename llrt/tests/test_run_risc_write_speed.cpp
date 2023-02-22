@@ -23,14 +23,15 @@ bool run_risc_write_speed(tt_cluster *cluster, int chip_id, const tt_xy_pair& co
     std::uint32_t buffer_src_addr = 200 * 1024;
     std::uint32_t buffer_dst_addr = 300 * 1024;
     log_info(tt::LogVerif, "dst_xy = {}", dst_xy.str());
-    
-    TT_ASSERT(buffer_size <= 400*1024);
-    TT_ASSERT(transaction_size <= 8192);
+
+    TT_ASSERT(buffer_size <= 512*1024);
+    TT_ASSERT(buffer_size % transaction_size == 0);
+   // TT_ASSERT(transaction_size <= 8192);
 
     std::uint32_t num_transactions = buffer_size / transaction_size;
 
-    // blast kernel arguments to L1 in one-shot 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
+    // blast kernel arguments to L1 in one-shot
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
         {buffer_src_addr,
 
         buffer_dst_addr,
@@ -63,7 +64,7 @@ bool run_risc_write_speed(tt_cluster *cluster, int chip_id, const tt_xy_pair& co
     log_info(tt::LogVerif, "Bytes written: {}, GB written: {}", total_bytes, total_GB);
     log_info(tt::LogVerif, "Write speed GB/s: {}", total_GB/elapsed_seconds.count());
 
-    vector<std::uint32_t> dst_vec = tt::llrt::read_hex_vec_from_core(cluster, chip_id, dst_xy, buffer_dst_addr, buffer_size);  // read L1 
+    vector<std::uint32_t> dst_vec = tt::llrt::read_hex_vec_from_core(cluster, chip_id, dst_xy, buffer_dst_addr, buffer_size);  // read L1
 
     return src_vec == dst_vec;
 }
@@ -108,13 +109,13 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
 
-        pass = run_risc_write_speed(cluster, 0, {5,4}, buffer_size, num_repetitions, transaction_size, {dst_noc_x,dst_noc_y}); 
+        pass = run_risc_write_speed(cluster, 0, {2,1}, buffer_size, num_repetitions, transaction_size, {dst_noc_x,dst_noc_y});
 
         cluster->close_device();
         delete cluster;
@@ -137,4 +138,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-
