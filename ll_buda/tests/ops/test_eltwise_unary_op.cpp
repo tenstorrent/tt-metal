@@ -33,8 +33,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shape, Initialize::RANDOM, tt::DataFormat::Float16_b, Layout::TILE, device);
-        Tensor b = Tensor(shape, Initialize::ZEROS, tt::DataFormat::Float16_b, Layout::TILE, device);
+        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
+        Tensor b = Tensor(shape, Initialize::ZEROS, DataType::BFLOAT16, Layout::TILE, device);
 
         Tensor dcSqrt = sqrt(a).to(host);
         Tensor dcExp = exp(a).to(host);

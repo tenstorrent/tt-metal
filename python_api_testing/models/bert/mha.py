@@ -33,7 +33,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     reciprocal_of_sqrt_hidden_dim_tensor = gpai.tensor.Tensor(
         [1 / math.sqrt(hidden_dim)] + [0 for _ in range(32 * 32 - 1)],
         [1, 1, 32, 32],
-        gpai.tensor.DataFormat.FLOAT32,
+        gpai.tensor.DataType.FLOAT32,
         gpai.tensor.Layout.TILE,
         device
     )
@@ -164,7 +164,7 @@ def run_mha_inference():
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
 
     tt_mha_input = tilize_to_list(pad_activation(mha_input))
-    tt_mha_input = gpai.tensor.Tensor(tt_mha_input, mha_input.shape, gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
+    tt_mha_input = gpai.tensor.Tensor(tt_mha_input, mha_input.shape, gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
 
     tt_out = tt_mha_model(tt_mha_input).to(host)
     tt_out1 = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))

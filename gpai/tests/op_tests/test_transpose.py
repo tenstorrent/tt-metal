@@ -28,7 +28,7 @@ if __name__ == "__main__":
     torch.manual_seed(123)
     x = (torch.randn((N,C,H,W))+0.05).to(torch.bfloat16).to(torch.float32)
 
-    xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
+    xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
     tt_res = gpai.tensor.transpose(xt)
     assert(tt_res.shape() == [N,C,W,H])
     tt_host_rm = tt_res.to(host).data()

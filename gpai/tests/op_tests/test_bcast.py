@@ -34,10 +34,10 @@ if __name__ == "__main__":
     bhw = torch.randn((N,C,1,1))
 
     for btorch, btype in zip([bw, bh, bhw], [BCW, BCH, BCHW]):
-        xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
+        xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
         btshape = list(btorch.shape)
         bpadded = pad_weight(btorch) # need to zero-pad the bcast tensors to 32 in H,W
-        bt = gpai.tensor.Tensor(tilize_to_list(bpadded), list(bpadded.shape), gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
+        bt = gpai.tensor.Tensor(tilize_to_list(bpadded), list(bpadded.shape), gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
 
         tt_res = gpai.tensor.bcast(xt, bt, BCADD, btype)
         # test that reading back from row major is about the same (+/- BF16 conversion)

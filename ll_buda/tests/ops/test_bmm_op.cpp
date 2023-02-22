@@ -42,9 +42,9 @@ int main(int argc, char **argv) {
         std::array<uint32_t, 4> shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shapea, Initialize::RANDOM, tt::DataFormat::Float16_b, Layout::TILE, device);
-        Tensor b = Tensor(shapeb, Initialize::ZEROS, tt::DataFormat::Float16_b, Layout::TILE, device);
-        Tensor b1 = Tensor(shapeb1, Initialize::ZEROS, tt::DataFormat::Float16_b, Layout::TILE, device);
+        Tensor a = Tensor(shapea, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
+        Tensor b = Tensor(shapeb, Initialize::ZEROS, DataType::BFLOAT16, Layout::TILE, device);
+        Tensor b1 = Tensor(shapeb1, Initialize::ZEROS, DataType::BFLOAT16, Layout::TILE, device);
 
         Tensor mm = bmm(a, b).to(host);
         Tensor mm1 = matmul(a, b1).to(host);

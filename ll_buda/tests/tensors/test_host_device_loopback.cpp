@@ -16,10 +16,12 @@ bool test_single_tile_single_dram_bank_loopback(Device *device, Host *host) {
     bool pass = true;
     std::array<uint32_t, 4> single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
-    Tensor host_a = Tensor(single_tile_shape, Initialize::RANDOM, tt::DataFormat::Float16_b, Layout::TILE);
+    Tensor host_a = Tensor(single_tile_shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE);
     Tensor device_a = host_a.to(device);
     Tensor loopbacked_a = device_a.to(host);
-    pass &= host_a.to_vec() == loopbacked_a.to_vec();
+    auto host_a_data = *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
+    auto loopbacked_a_data = *reinterpret_cast<std::vector<bfloat16>*>(loopbacked_a.data_ptr());
+    pass &=  host_a_data == loopbacked_a_data;
 
     return pass;
 }
@@ -28,10 +30,12 @@ bool test_multi_tile_multi_dram_bank_loopback(Device *device, Host *host) {
     bool pass = true;
     std::array<uint32_t, 4> multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
 
-    Tensor host_a = Tensor(multi_tile_shape, Initialize::RANDOM, tt::DataFormat::Float16_b, Layout::TILE);
+    Tensor host_a = Tensor(multi_tile_shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE);
     Tensor device_a = host_a.to(device);
     Tensor loopbacked_a = device_a.to(host);
-    pass &= host_a.to_vec() == loopbacked_a.to_vec();
+    auto host_a_data = *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
+    auto loopbacked_a_data = *reinterpret_cast<std::vector<bfloat16>*>(loopbacked_a.data_ptr());
+    pass &= host_a_data == loopbacked_a_data;
 
     return pass;
 }

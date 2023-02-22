@@ -26,7 +26,7 @@ Tensor b = Tensor(shape, Initialize::RANDOM, Layout::TILES, device);
 2. device tensor is copied into the new host one
 3. (potentially converts layout) and then prints it
 4. New tensor object is destroyed
-- device Tensor b is unchanged 
+- device Tensor b is unchanged
 */
 b.print() // prints in layout
 
@@ -49,21 +49,21 @@ Tensor e = Tensor(shape, Initialize::RANDOM, Layout::TILES, device);
 Tensor e_new = e.to(host);
 
 
-// Moves tensor f to host and then returns data as nested list 
+// Moves tensor f to host and then returns data as nested list
 Tensor f = Tensor(shape, Initialize::RANDOM, Layout::TILES, device);
-std::vector<...> f_data = f.to_vec(); // get the data in a 1-D vector based on tensor layout 
+std::vector<...> f_data = f.to_vec(); // get the data in a 1-D vector based on tensor layout
 
 
 // Moving host side tensor to device
 Tensor g = Tensor(shape, Initialize::INCREMENT, Layout::TILES);
-Tensor h = g.to(device) // Need to pass in the actual device 
+Tensor h = g.to(device) // Need to pass in the actual device
 
 
 // Data format conversion example - UNSUPPORTED ATM
 /*
-Tensor i = Tensor(shape, Initialize::RANDOM, Layout::TILES, DataFormat::BFloat16, device);
+Tensor i = Tensor(shape, Initialize::RANDOM, Layout::TILES, DataType::BFloat16, device);
 // are i and j the same tensor?
-Tensor j = i.to(DataFormat::Float32)
+Tensor j = i.to(DataType::Float32)
 */
 
 }  // namespace ll_buda

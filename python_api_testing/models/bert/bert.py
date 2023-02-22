@@ -32,7 +32,7 @@ class TtBertShared(torch.nn.Module):
         embeddings = self.embeddings(x)
         # Convert to ll buda tensor
         tt_embeddings = tilize_to_list(pad_activation(embeddings))
-        tt_embeddings = gpai.tensor.Tensor(tt_embeddings, (embeddings.shape[0], 1, embeddings.shape[-2], embeddings.shape[-1]), gpai.tensor.DataFormat.FLOAT32,  gpai.tensor.Layout.TILE, self.device)
+        tt_embeddings = gpai.tensor.Tensor(tt_embeddings, (embeddings.shape[0], 1, embeddings.shape[-2], embeddings.shape[-1]), gpai.tensor.DataType.FLOAT32,  gpai.tensor.Layout.TILE, self.device)
 
         encoder_output = self.encoders(tt_embeddings)
         return encoder_output

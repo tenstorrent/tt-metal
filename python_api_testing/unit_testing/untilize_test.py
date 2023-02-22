@@ -17,7 +17,7 @@ def run_untilize_test(nb, nc, nh, nw):
     a = gpai.tensor.Tensor(
         inp.flatten().tolist(),
         shape,
-        gpai.tensor.DataFormat.FLOAT32,
+        gpai.tensor.DataType.FLOAT32,
         gpai.tensor.Layout.TILE,
         device
     )

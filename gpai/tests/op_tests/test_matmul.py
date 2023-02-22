@@ -21,8 +21,8 @@ def test_matmul():
     A = torch.randn((batch,1,M,K))
     B = torch.randn((1,1,K,N)) - 0.95
 
-    t0 = gpai.tensor.Tensor(tilize_to_list(A), [batch, 1, M, K], gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
-    t1 = gpai.tensor.Tensor(tilize_to_list(B), [1, 1, K, N], gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
+    t0 = gpai.tensor.Tensor(tilize_to_list(A), [batch, 1, M, K], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
+    t1 = gpai.tensor.Tensor(tilize_to_list(B), [1, 1, K, N], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
 
     t2 = gpai.tensor.matmul(t0, t1)
     assert(t2.shape() == [batch, 1, M, N])
@@ -42,8 +42,8 @@ def test_matmul():
     A = torch.randn((batch,C,M,K))
     B = torch.randn((batch,C,K,N)) - 0.95
 
-    t0 = gpai.tensor.Tensor(tilize_to_list(A), [batch, C, M, K], gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
-    t1 = gpai.tensor.Tensor(tilize_to_list(B), [batch, C, K, N], gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
+    t0 = gpai.tensor.Tensor(tilize_to_list(A), [batch, C, M, K], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
+    t1 = gpai.tensor.Tensor(tilize_to_list(B), [batch, C, K, N], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
 
     t2 = gpai.tensor.bmm(t0, t1)
     assert(t2.shape() == [batch, C, M, N])

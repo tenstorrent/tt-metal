@@ -2,6 +2,7 @@
 #include <vector>
 #include <array>
 #include <random>
+#include <tuple>
 
 #include "ll_buda/impl/device/device.hpp"
 #include "ll_buda/impl/device/host.hpp"
@@ -9,8 +10,6 @@
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "common/bfloat16.hpp"
-
-using SHAPE = std::array<std::uint32_t, 4>;
 
 namespace tt {
 
@@ -31,32 +30,44 @@ enum class Layout {
     CHANNELS_LAST = 2 // TODO(abhullar): Rename this to STICKS?
 };
 
-class Tensor
-{
+enum class DataType {
+    BFLOAT16 = 0,
+    FLOAT32 = 1,
+    UINT32 = 2
+};
+
+// Forward declarations
+class Tensor;
+
+namespace tensor_impl {
+    void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
+
+    template <typename T>
+    void initialize_data_helper(Tensor &tensor, Initialize init_type);
+}
+
+class Tensor {
     public:
-        Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout);
+        Tensor(std::vector<bfloat16> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout)
+            : data_(static_cast<void *>(new std::vector<bfloat16>(std::move(data)))), shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout) {}
 
-        Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout, Device *device);
+        Tensor(std::vector<bfloat16> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device);
 
-        Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout);
+        Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout)
+            : data_(static_cast<void *>(new std::vector<uint32_t>(std::move(data)))), shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout) {}
 
-        Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout, Device *device);
+        Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device);
 
-        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataFormat data_type, Layout layout);
+        Tensor(std::vector<float> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout)
+            : data_(static_cast<void *>(new std::vector<float>(std::move(data)))), shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout) {}
 
-        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataFormat data_type, Layout layout, Device *device);
+        Tensor(std::vector<float> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device);
 
-        Tensor(const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout, Device *device);
+        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType data_type, Layout layout);
 
-        const std::vector<bfloat16>& to_vec() const { return this->data_; }
+        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType data_type, Layout layout, Device *device);
 
-        std::vector<float> data() const {
-            std::vector<float> d;
-            for (bfloat16 v: this->to_vec()) {
-                d.push_back(v.to_float());
-            }
-            return d;
-        }
+        Tensor(const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device);
 
         const std::array<uint32_t, 4>& reshape(int N, int C, int H, int W);
 
@@ -66,7 +77,7 @@ class Tensor
 
         uint32_t volume() const { return shape_[0] * shape_[1] * shape_[2] * shape_[3]; }
 
-        DataFormat dtype() const { return data_type_; }
+        DataType dtype() const { return data_type_; }
 
         Layout layout() const { return layout_; }
 
@@ -74,13 +85,15 @@ class Tensor
 
         InterleavedDramBuffer *buffer() const { return interleaved_buffer_; }
 
+        void *data_ptr() const { return data_; }
+
         bool on_host() const { return device_ == nullptr; }
 
         Tensor to(Device *target_device) const;
 
         Tensor to(Host *host) const;
 
-        void print(Layout print_layout = Layout::ROW_MAJOR) const;
+        void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
 
         // Prints like numpy print function to make it more readable. Only supports row major layout.
         void pretty_print(Layout print_layout = Layout::ROW_MAJOR) const;
@@ -90,30 +103,15 @@ class Tensor
             return {shape_[1]*shape_[2]*shape_[3], shape_[2]*shape_[3], shape_[3], 1};
         }
 
-        void allocate_interleaved_buffer_on_device(uint32_t buffer_size_bytes);
+        friend void tensor_impl::allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
-        Tensor copy_to_host() const;
+        template <typename T>
+        friend void tensor_impl::initialize_data_helper(Tensor &tensor, Initialize init_type);
 
-        Tensor copy_to_device(Device *device) const;
-
-        std::vector<bfloat16> initialize_data(const std::array<uint32_t, 4> &shape, Initialize init_type, Layout layout);
-
-        template <class T>
-        std::vector<T> convert_layout_row_major_to_tile(const std::vector<T>& data_to_convert) const {
-            std::vector<uint32_t> shape_vec = {shape_[0], shape_[1], shape_[2], shape_[3]};
-            return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
-        }
-
-        template <class T>
-        std::vector<T> convert_layout_tile_to_row_major(const std::vector<T>& data_to_convert) const {
-            std::vector<uint32_t> shape_vec = {shape_[0], shape_[1], shape_[2], shape_[3]};
-            return convert_layout(data_to_convert, shape_vec, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
-        }
-
-        std::vector<bfloat16> data_;                                // Unpopulated if tensor is on device
-        std::array<uint32_t, 4> shape_;                             // Outer-most dimension first
-        std::array<uint32_t, 4> strides_;                           // Outer-most dimension first
-        DataFormat data_type_;
+        void *data_ = nullptr;                      // Unpopulated if tensor is on device
+        std::array<uint32_t, 4> shape_;             // Outer-most dimension first
+        std::array<uint32_t, 4> strides_;           // Outer-most dimension first
+        DataType data_type_;
         Layout layout_;
         Device *device_ = nullptr;                                  // Set if tensor is allocated on device
         InterleavedDramBuffer *interleaved_buffer_ = nullptr;       // Tensor is stored in multiple DRAM buffers across multiple banks

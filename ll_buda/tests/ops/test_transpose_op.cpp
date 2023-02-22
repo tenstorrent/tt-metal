@@ -31,10 +31,10 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shape, Initialize::RANDOM, tt::DataFormat::Float16_b, Layout::TILE, device);
+        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
 
         ll_buda::Tensor c = ll_buda::transpose(a);
-        
+
         ll_buda::Tensor d = c.to(host);
 
         ////////////////////////////////////////////////////////////////////////////

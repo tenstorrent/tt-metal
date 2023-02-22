@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shape, Initialize::RANDOM, tt::DataFormat::Float16_b, Layout::TILE, device);
+        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
         Tensor host_a = a.to(host); // Move tensor a to host to validate
 
         for (auto op_type: ReduceOpMath::all())

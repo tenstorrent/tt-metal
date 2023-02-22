@@ -32,7 +32,7 @@ if __name__ == "__main__":
     reduce_dims_pyt = [[3], [2], [3,2]]
     reduce_shapes = [[N, C, H, 32], [N, C, 32, W], [N, C, 32, 32]]
     for rtype, expected_shape, rdims_pyt in zip(reduce_dims_tt, reduce_shapes, reduce_dims_pyt):
-        xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
+        xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
         mul = 0.5
         if rtype == RHW:
             mul = 1.0

@@ -20,6 +20,8 @@ LL_BUDA_SRCS = \
 	ll_buda/op_library/tilize/tilize_op.cpp \
 	ll_buda/op_library/untilize/untilize_op.cpp \
 	ll_buda/op_library/reshape/reshape_op.cpp \
+	ll_buda/tensor/tensor_impl_wrapper.cpp \
+	ll_buda/tensor/tensor_impl.cpp \
 	ll_buda/tensor/tensor.cpp \
 	ll_buda/ll_buda.cpp \
 

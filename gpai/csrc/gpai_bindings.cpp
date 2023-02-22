@@ -26,14 +26,14 @@ void TensorModule(py::module &m_tensor) {
     py::class_<Tensor>(m_tensor, "Tensor")
         .def(
             py::init<>(
-                [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout) {
+                [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
                     return Tensor(data, shape, data_type, layout);
                 }
             )
         )
         .def(
             py::init<>(
-                [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout, Device *device) {
+                [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
                     return Tensor(data, shape, data_type, layout, device);
                 }
             )
@@ -47,7 +47,23 @@ void TensorModule(py::module &m_tensor) {
             return self.shape();
         }, "Returns the shape of the tensor")
         .def("data", [](const Tensor &self) {
-            return self.data();
+            std::vector<uint32_t> empty_vec;
+            TT_ASSERT(self.data_ptr() != nullptr);
+            switch (self.dtype()) {
+                case DataType::BFLOAT16:
+                    return py::cast(*reinterpret_cast<std::vector<bfloat16>*>(self.data_ptr()));
+                break;
+                case DataType::FLOAT32:
+                    return py::cast(*reinterpret_cast<std::vector<float>*>(self.data_ptr()));
+                break;
+                case DataType::UINT32:
+                    return py::cast(*reinterpret_cast<std::vector<uint32_t>*>(self.data_ptr()));
+                break;
+                default:
+                    TT_ASSERT(false && "Unsupported data type!");
+                break;
+            }
+            return py::cast(empty_vec);
         }, "Returns the data in the output tensor as a 1D vector")
         .def("layout", [](const Tensor &self) {
             return self.layout();
@@ -126,9 +142,10 @@ void TensorModule(py::module &m_tensor) {
         .value("INCREMENT", Initialize::INCREMENT)
         .value("RANDOM", Initialize::RANDOM);
 
-    py::enum_<DataFormat>(m_tensor, "DataFormat")
-        .value("FLOAT32", DataFormat::Float32)
-        .value("BFLOAT16", DataFormat::Float16_b);
+    py::enum_<DataType>(m_tensor, "DataType")
+        .value("FLOAT32", DataType::FLOAT32)
+        .value("BFLOAT16", DataType::BFLOAT16)
+        .value("UINT32", DataType::UINT32);
 }
 
 void DeviceModule(py::module &m_device) {
