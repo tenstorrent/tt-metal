@@ -31,7 +31,8 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
     'sphinx.ext.napoleon',
-    'sphinxcontrib.email'
+    'sphinxcontrib.email',
+    'breathe',
 ]
 
 # Napoleon settings
