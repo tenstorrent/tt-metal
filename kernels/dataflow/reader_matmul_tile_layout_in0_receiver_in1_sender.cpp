@@ -140,7 +140,7 @@ void kernel_main() {
         in1_start_address);
         // num_dests must not include source, since we are NOT really doing a local copy!
         noc_async_write_multicast(in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_dests);
-        noc_async_write_barrier();
+        // noc_async_write_barrier();
         // We should also multicast the flag to destinations
         uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
         in1_mcast_dest_noc_start_x, 
