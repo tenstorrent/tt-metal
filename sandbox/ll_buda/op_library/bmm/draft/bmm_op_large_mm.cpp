@@ -40,7 +40,7 @@ std::tuple<Program *, DataMovementKernel *, DataMovementKernel *> create_program
     int out_subblock_h,
     int out_subblock_w,
     int per_core_M, int per_core_N) {
-    
+
     Program *program = new Program();
 
     uint32_t single_tile_size = 2 * 1024;
@@ -118,14 +118,14 @@ std::tuple<Program *, DataMovementKernel *, DataMovementKernel *> create_program
             TT_ASSERT(l1_valid_address < 1024 * 1024);
         }
     }
-    
+
     auto mm_reader_kernel = CreateDataMovementKernel(
         program,
         "kernels/dataflow/reader_matmul_tile_layout.cpp",
         all_cores,
         DataMovementProcessor::RISCV_1,
         NOC::RISCV_1_default);
-    
+
     auto unary_writer_kernel = CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_matmul_tile_layout.cpp",
@@ -146,7 +146,7 @@ std::tuple<Program *, DataMovementKernel *, DataMovementKernel *> create_program
     int out_subblock_num_tiles = out_subblock_h*out_subblock_w;
 
     void *hlk_args = new matmul::hlk_args_t{
-        .in0_block_w = in0_block_w, 
+        .in0_block_w = in0_block_w,
         .in0_num_subblocks = in0_num_subblocks,
         .in0_block_num_tiles = in0_block_num_tiles,
         .in0_subblock_num_tiles = in0_subblock_num_tiles,
@@ -155,7 +155,7 @@ std::tuple<Program *, DataMovementKernel *, DataMovementKernel *> create_program
         .in1_block_num_tiles = in1_block_num_tiles,
         .in1_per_core_w = in1_per_core_w,
 
-        .num_blocks = num_blocks, 
+        .num_blocks = num_blocks,
 
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
@@ -184,13 +184,13 @@ bool write_runtime_args_to_device(
     int num_cores_c,
     ll_buda::DataMovementKernel *mm_reader_kernel,
     ll_buda::DataMovementKernel *unary_writer_kernel,
-    int M, 
-    int N, 
-    int K, 
-    int in0_block_w, 
-    int out_subblock_h, 
-    int out_subblock_w, 
-    int per_core_M, 
+    int M,
+    int N,
+    int K,
+    int in0_block_w,
+    int out_subblock_h,
+    int out_subblock_w,
+    int per_core_M,
     int per_core_N,
     uint32_t in0_dram_addr,
     uint32_t in1_dram_addr,
@@ -202,7 +202,7 @@ bool write_runtime_args_to_device(
     uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    
+
     TT_ASSERT(in0_dram_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
     TT_ASSERT(in1_dram_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
     TT_ASSERT(out_dram_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
@@ -248,8 +248,8 @@ bool write_runtime_args_to_device(
                 (std::uint32_t) (out_subblock_w * out_subblock_h), // out_subblocks_w * out_subblocks_h
                 (std::uint32_t) (per_core_N / out_subblock_w), // out_num_subblocks_w
                 (std::uint32_t) (per_core_M / out_subblock_h), // out_num_subblocks_h
-            }; 
-            
+            };
+
             pass &= ll_buda::WriteRuntimeArgsToDevice(device, mm_reader_kernel, core, mm_reader_args);
             pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
         }
@@ -272,7 +272,7 @@ Tensor matmul(const Tensor &a, const Tensor &b) {
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
 
     uint32_t single_tile_size = 2 * 1024;
-    
+
     ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
     ll_buda::DramBuffer *src1_dram_buffer = b.buffer();
     TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
@@ -335,7 +335,7 @@ Tensor matmul(const Tensor &a, const Tensor &b) {
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
         pass &= ll_buda::LaunchKernels(device, program);
     }
-    
+
     TT_ASSERT(pass);
 
     // output does not hold any data, contains pointer to buffer on device with the data
