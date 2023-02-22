@@ -61,6 +61,8 @@ LL_BUDA_TEST_ENTRIES = (
     TestEntry("ll_buda/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"),
 
     TestEntry("ll_buda/tests/tensors/test_host_device_loopback", "tensors/test_host_device_loopback"),
+
+    TestEntry("ll_buda/tests/test_pipeline_across_rows", "test_pipeline_across_rows"),
 )
 
 
