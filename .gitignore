@@ -29,7 +29,7 @@ python_api/*.so
 python_api/test_run_on_device_out
 __pycache__
 
-*.vcd 
+*.vcd
 
 run-log.yaml
 model_unit_tests
@@ -47,6 +47,7 @@ null.d
 
 docs/build
 docs/env
+docs/doxygen_build
 
 **.swp
 **.swo
@@ -67,4 +68,3 @@ ll_buda_bindings/ll_buda_bindings/*.so
 
 # exclude MNIST etc model downloads
 data/
-
