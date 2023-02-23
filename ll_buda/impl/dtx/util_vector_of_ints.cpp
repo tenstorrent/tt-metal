@@ -28,10 +28,10 @@ string s(int num_spaces) {
 //                      VECTOR OF INTS
 // ========================================================
 
-vector<int> vector_addition(vector<int> a, vector<int> b) {
+vector<int> vector_addition(vector<int> a, vector<int> b, int const_value) {
     vector<int> result;
     for (int d=0; d<a.size(); d++) {
-        result.push_back(a[d] + b[d]);
+        result.push_back(a[d] + b[d] + const_value);
     }
     return result;
  }

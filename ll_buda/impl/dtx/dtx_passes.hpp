@@ -32,8 +32,11 @@ bool collapse_transformations(DataTransformations * dtx);               // TO DO
 // WORKS, WELL TESTED, (missing golden check) - Reverse the transformations
 DataTransformations * reverse_transformations(DataTransformations * forward);
 
-// Generates src/dst addresses for data transfers - WORKS?
+// Generates src/dst addresses for data transfers for 1D transformation
 bool generate_transfer_addresses(DataTransformations * dtx);
+
+// Generates src/dst addresses for data transfers for tiled data transformations
+bool generate_transfer_addresses_tiled_data(DataTransformations * dtx);
 
 // ========================================================
 //                 PART 2: TENSOR LAYOUTs

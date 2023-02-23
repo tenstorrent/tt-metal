@@ -27,7 +27,7 @@ string s(int);
 //                      VECTOR MATH AND MANIPULATION
 // ========================================================
 vector<int> vector_subtraction(vector<int> a, vector<int> b);
-vector<int> vector_addition(vector<int> a, vector<int> b);
+vector<int> vector_addition(vector<int> a, vector<int> b, int const_value = 0);
 vector<int> vector_division(vector<int> a, vector<int> b);
 vector<int> vector_multiplication(vector<int> a, vector<int> b);
 int vector_product(vector<int> a);

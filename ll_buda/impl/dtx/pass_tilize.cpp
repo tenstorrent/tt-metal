@@ -77,8 +77,9 @@ bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order) {
         vector<int> tile_shape = vector_pad_on_left(TILE_SHAPE, rank-2, 1);
         vector<int> shape_tiled = vector_division(shape, tile_shape);
         vector<vector<int>> list_of_counted_dims = dim_order_counting(shape_tiled,   dim_order);
+        
         vector<int> consumer_str = zeros(rank);
-        vector<int> consumer_end = vector_addition(consumer_str, tile_shape);
+        vector<int> consumer_end = vector_addition(consumer_str, tile_shape, -1);
         cout << s(4) << "tile shape      = " << v2s(tile_shape) << endl;
         
         if (shape.size() != dim_order.size()) throw std::runtime_error("shape and dim_order dont have the same rank!");
@@ -88,14 +89,17 @@ bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order) {
 
         cout << s(4) << "Tensor Pairs: " << list_of_counted_dims.size() << endl;
         for (int i=0; i< list_of_counted_dims.size(); i++) {
-            
+            std::cout <<  std::endl;
+            for(int j = 0; j < list_of_counted_dims[i].size(); j++) {
+                
+                std::cout << "dim " << list_of_counted_dims[i][j] << std::endl;
+            }
+            std::cout <<  std::endl;
             // Source Tensor: within the ND tensor from producer
             vector<int> str;
             vector<int> end;
             str = vector_multiplication(list_of_counted_dims[i], tile_shape);
-            end = vector_addition(str, tile_shape);
-            end[rank-1]--;
-            end[rank-2]--;
+            end = vector_addition(str, tile_shape, -1);
 
             TensorPair * tp = new TensorPair(new Tensor({str}, {end}), 
                                             group_idx, 
@@ -105,8 +109,8 @@ bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order) {
             cout << s(6) << i << ".  " << tp->get_string() << endl;
 
             // Prepare for the next itteration
-            consumer_str.back() = ((i+1) * 32) - 1;
-            consumer_end = vector_addition(consumer_str, tile_shape);
+            consumer_str.back() = (i+1) * 32;
+            consumer_end = vector_addition(consumer_str, tile_shape, -1);
         }
     }
     return true;

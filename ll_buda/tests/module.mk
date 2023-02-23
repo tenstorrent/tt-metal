@@ -44,6 +44,8 @@ LL_BUDA_TESTS += \
 		 ll_buda/tests/test_interleaved_layouts \
 		 ll_buda/tests/test_3x3conv_as_matmul_large_block \
 		 ll_buda/tests/test_generic_binary_reader_matmul_large_block \
+		 ll_buda/tests/test_dtx \
+		 ll_buda/tests/test_dtx_tilized_row_to_col_major \
 
 LL_BUDA_TESTS_SRCS = $(addsuffix .cpp, $(LL_BUDA_TESTS))
 

@@ -11,7 +11,8 @@ int Tensor::volume() {
     
     int volume = 1;
     for (int d=0; d<this->rank; d++) {
-        int dim_size = this->end[d] - this->str[d];
+        assert(this->end[d] >= this->str[d]);
+        int dim_size = this->end[d] - this->str[d] + 1;
         volume = volume * dim_size;
     }
     return volume;
