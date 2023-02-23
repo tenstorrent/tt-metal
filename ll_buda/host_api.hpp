@@ -18,6 +18,18 @@
 #include "ll_buda/impl/program.hpp"
 #include "llrt/llrt.hpp"
 
+/** @file */
+
+/** \mainpage gp.ai Internal C++ Documentation
+ *
+ * Welcome. Please navigate using the Files menu. All APIs are documented
+ * under the files listed in the Files menu.
+ *
+ * If you want to contribute to the documentation and are looking for a good
+ * resource for generating Markdown tables, refer to
+ * https://www.tablesgenerator.com/markdown_tables.
+ * */
+
 namespace tt {
 
 namespace ll_buda {
@@ -37,6 +49,11 @@ void stopPrintfServer();
 // ==================================================
 Host *GetHost();
 
+/**
+ * CreateDevice docs.
+ *
+ * Detailed CreateDevice docs.
+ * */
 Device *CreateDevice(tt::ARCH arch, int pcie_slot);
 
 bool InitializeDevice(Device *device);
@@ -231,7 +248,7 @@ bool WriteToDeviceL1(
     uint32_t buffer_addess);              // Address within L1
 
 bool WriteToDeviceL1(
-    Device *device,            
+    Device *device,
     const tt_xy_pair &core,
     llrt::op_info_t op_info,
     int op_idx);

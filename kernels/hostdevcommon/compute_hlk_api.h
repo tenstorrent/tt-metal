@@ -20,6 +20,8 @@
 // #endif
 // #endif
 
+/** @file */
+
   //////////////////////
  // user facing APIs //
 //////////////////////
@@ -45,6 +47,25 @@
 #define matmul_load_partial(in_cb_id, in_tile_index, dst_tile_index)                               hlk_load_mm_partial_to_dst(nullptr, in_cb_id, in_tile_index, dst_tile_index)
 
 #define copy_tile_init()                                                                           hlk_copy_tile_to_dst_init(nullptr)
+
+/**
+ * Copies a single tile from the specified input CB and writes the result to
+ * DST at a specified index. For the in_tile_index to be valid for this call,
+ * cb_wait_front(n) had to be previously called to ensure that at least some
+ * number n>0 of tiles are available in the input CB. The CB index 0 then
+ * references the first tile in the received section of the CB, up to index n-1
+ * (in a FIFO order). The DST register buffer must be in acquired state via
+ * acquire_dst call. This call is blocking and is only available on the compute
+ * engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                       | Data type | Valid range                                         | required |
+ * |----------------|---------------------------------------------------|-----------|-----------------------------------------------------|----------|
+ * | in_cb_id       | The identifier of the source circular buffer (CB) | uint32_t  | 0 to 31                                             | Yes      |
+ * | in_tile_index  | The index of the tile to copy from the input CB   | uint32_t  | Must be less than the size of the CB                | Yes      |
+ * | dst_tile_index | The index of the tile in the DST register         | uint32_t  | Must be less than the size of the DST register (16) | Yes      |
+ * */
 #define copy_tile(in0_cb_id, in0_tile_index, dst_tile_index)                                       hlk_copy_tile_to_dst(nullptr, in0_cb_id, in0_tile_index, dst_tile_index)
 #define pack_tile(dst_index, cb_id)                                                                hlk_pack_tile_to_stream(nullptr, dst_index, cb_id)
 

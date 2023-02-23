@@ -10,6 +10,26 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "circular_buffer.h"
 
+/*
+ * This is a trick with Doxygen to force it to not expand the always_inline
+ * attribute property. We turn on predefine-only expansion with MACRO_EXPANSION
+ * and EXPAND_ONLY_PREDEF set to YES. Then, we send in __DOXYGEN__ and
+ * FORCE_INLINE to remove it from the source entirely when fed in Doxygen.
+ *
+ * However, this should not affect what the actual source code declaration,
+ * and functions that were declared such will still be alwyas_inline.
+ */
+#if __DOXYGEN__
+    #define FORCE_INLINE
+#else
+    #define FORCE_INLINE inline __attribute__((always_inline))
+#endif
+
+/** @file */
+
+/**
+ * \private
+ */
 CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
 CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
 
@@ -35,7 +55,7 @@ constexpr static uint32_t get_arg_addr(int arg_idx) {
 }
 
 template <typename T>
-inline __attribute__((always_inline)) T get_arg_val(int arg_idx) {
+FORCE_INLINE T get_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
     return *((volatile T*)(get_arg_addr(arg_idx)));
@@ -67,12 +87,12 @@ void init_dram_channel_to_noc_coord_lookup_tables() {
 
 // only BRISC to call this
 void init_sync_registers() {
-    
+
     volatile std::uint32_t* tiles_received_ptr;
     volatile std::uint32_t* tiles_acked_ptr;
 
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
-      tiles_received_ptr = get_cb_tiles_received_ptr(operand); 
+      tiles_received_ptr = get_cb_tiles_received_ptr(operand);
       tiles_received_ptr[0] = 0;
       tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
       tiles_acked_ptr[0] = 0;
@@ -83,11 +103,11 @@ void init_sync_registers() {
 void setup_cb_read_write_interfaces() {
 
   volatile std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
-  
+
   for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
 
     // write_to_local_mem_barrier are needed on GS because of the RTL bug
-    // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words! 
+    // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
     std::uint32_t fifo_addr = circular_buffer_config_addr[0];
     std::uint32_t fifo_size = circular_buffer_config_addr[1];
     std::uint32_t fifo_size_tiles = circular_buffer_config_addr[2];
@@ -105,11 +125,11 @@ void setup_cb_read_write_interfaces() {
 
   for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
 
-    // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words! 
+    // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
     std::uint32_t fifo_addr = circular_buffer_config_addr[0];
     std::uint32_t fifo_size = circular_buffer_config_addr[1];
     //std::uint32_t fifo_size_tiles = circular_buffer_config_addr[2]; // unused
-    write_to_local_mem_barrier(fifo_size);  
+    write_to_local_mem_barrier(fifo_size);
 
     cb_read_interface[cb_id].fifo_limit = fifo_addr + fifo_size - 1;  // to check if we need to wrap
     cb_read_interface[cb_id].fifo_rd_ptr = fifo_addr;
@@ -120,7 +140,7 @@ void setup_cb_read_write_interfaces() {
 }
 
 // replicated from ckernels_defs.h, which are currently not included in BRISC / NCRISC builds
-// TODO: look into ckernels_defs.h included in NCRISC/BRISC builds 
+// TODO: look into ckernels_defs.h included in NCRISC/BRISC builds
 constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
     switch (format&0x1F) {
         case ((uint8_t)DataFormat::Float32): return ((4096>>4));
@@ -141,8 +161,8 @@ inline void cb_push_back(const std::int32_t operand, const std::int32_t num_tile
 
     const std::uint32_t input = operand;
     std::uint32_t num_words;
-    
-    // FIXME: indexing into the array via "input" var doesn't work, it seems only this function is broken 
+
+    // FIXME: indexing into the array via "input" var doesn't work, it seems only this function is broken
     // on NCRISC, it may work on BRISC (tbd by running the reader on BRISC)
     // However, indexing via constants 0,1,2 works
     #if 1
@@ -162,7 +182,7 @@ inline void cb_push_back(const std::int32_t operand, const std::int32_t num_tile
     }
     #endif
 
-    volatile std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand); 
+    volatile std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     tiles_received_ptr[0] += num_tiles;
 
     cb_write_interface[input].fifo_wr_ptr += num_words;
@@ -170,18 +190,18 @@ inline void cb_push_back(const std::int32_t operand, const std::int32_t num_tile
     // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
     // producer always writes into contiguous memory, it cannot wrap
     if (cb_write_interface[input].fifo_wr_ptr > cb_write_interface[input].fifo_limit) {
-        // TODO: change this to fifo_wr_ptr 
-        cb_write_interface[input].fifo_wr_ptr -= cb_write_interface[input].fifo_size; 
+        // TODO: change this to fifo_wr_ptr
+        cb_write_interface[input].fifo_wr_ptr -= cb_write_interface[input].fifo_size;
     }
 }
 
 // this API is used by both the reader and writer side of the CB
-// it uses unpack_src_format, but because unpack_src_format == pack_dst_format, we can use either 
+// it uses unpack_src_format, but because unpack_src_format == pack_dst_format, we can use either
 // TODO: this can be made constexpr?
 inline std::int32_t get_tile_size(const std::int32_t operand) {
     std::uint32_t input = operand;
 
-    // L1 16B words 
+    // L1 16B words
     std::uint32_t num_words = GET_L1_TILE_SIZE((uint)unpack_src_format[input]);
 
     // return bytes
@@ -190,20 +210,20 @@ inline std::int32_t get_tile_size(const std::int32_t operand) {
 
 inline void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
 
-    volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand); 
+    volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
     tiles_acked_ptr[0] += num_tiles;
 
     std::uint32_t output = operand;
 
-    std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE((uint)pack_dst_format[output]); 
+    std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE((uint)pack_dst_format[output]);
 
     cb_read_interface[output].fifo_rd_ptr += num_words;
 
     // this will basically reset fifo_rd_ptr to fifo_addr -- no other wrap is legal
     // consumer always reads from contiguous memory, it cannot wrap
     if (cb_read_interface[output].fifo_rd_ptr > cb_read_interface[output].fifo_limit) {
-        // TODO: change this to fifo_wr_ptr 
-        cb_read_interface[output].fifo_rd_ptr -= cb_read_interface[output].fifo_size; 
+        // TODO: change this to fifo_wr_ptr
+        cb_read_interface[output].fifo_rd_ptr -= cb_read_interface[output].fifo_size;
     }
 }
 
@@ -212,15 +232,15 @@ inline void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
 inline uint32_t get_write_ptr(std::int32_t operand) {
     std::uint32_t input = operand;
     // return byte address (fifo_wr_ptr is 16B address)
-    std::uint32_t wr_ptr_bytes = cb_write_interface[input].fifo_wr_ptr << 4; 
+    std::uint32_t wr_ptr_bytes = cb_write_interface[input].fifo_wr_ptr << 4;
     return wr_ptr_bytes;
 }
 
 inline uint32_t get_read_ptr(std::int32_t operand) {
     std::uint32_t output = operand;
-    
+
     // return byte address (fifo_wr_ptr is 16B address)
-    std::uint32_t rd_ptr_bytes = cb_read_interface[output].fifo_rd_ptr << 4; 
+    std::uint32_t rd_ptr_bytes = cb_read_interface[output].fifo_rd_ptr << 4;
     return rd_ptr_bytes;
 }
 
@@ -240,7 +260,7 @@ inline void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
-    uint32_t tiles_received = tiles_received_ptr[0]; 
+    uint32_t tiles_received = tiles_received_ptr[0];
 
     std::int32_t free_space_tiles;
     do {
@@ -259,7 +279,7 @@ inline void cb_wait_front(std::int32_t operand, std::int32_t num_tiles) {
     volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
     volatile std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
 
-    // "tiles_poppped" doesn't change while we wait for tiles to be pushed to CB 
+    // "tiles_poppped" doesn't change while we wait for tiles to be pushed to CB
     std::uint16_t tiles_acked = tiles_acked_ptr[0];
 
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
@@ -267,7 +287,7 @@ inline void cb_wait_front(std::int32_t operand, std::int32_t num_tiles) {
     std::uint16_t num_tiles_recv;
 
     do {
-        tiles_received = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_received_ptr); 
+        tiles_received = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 }
@@ -276,31 +296,31 @@ inline void cb_wait_front(std::int32_t operand, std::int32_t num_tiles) {
 
 // simple APIs
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 std::uint64_t get_noc_multicast_addr(std::uint32_t noc_x_start, std::uint32_t noc_y_start, std::uint32_t noc_x_end, std::uint32_t noc_y_end, std::uint32_t addr) {
     /*
-        Get an encoding which contains tensix core and address you want to 
+        Get an encoding which contains tensix core and address you want to
         read from/write to via the noc
     */
     return NOC_MULTICAST_ADDR(NOC_X(noc_x_start), NOC_Y(noc_y_start), NOC_X(noc_x_end), NOC_Y(noc_y_end), addr);
 }
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32_t addr) {
     /*
-        Get an encoding which contains tensix core and address you want to 
+        Get an encoding which contains tensix core and address you want to
         write to via the noc multicast
     */
     return NOC_XY_ADDR(NOC_X(noc_x), NOC_Y(noc_y), addr);
 }
 
-inline __attribute__((always_inline))
+FORCE_INLINE
 std::uint64_t get_noc_addr(
-    uint32_t id, uint32_t bank_base_address, uint32_t num_used_banks, 
+    uint32_t id, uint32_t bank_base_address, uint32_t num_used_banks,
     uint32_t log_base_2_of_num_used_banks, uint32_t log_base_2_of_bank_unit_size) {
     /*
         Alternative API for getting the noc address when we are reading using a swizzled
-        layout. 
+        layout.
 
         id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
         bank for this unit of data.
@@ -319,16 +339,22 @@ std::uint64_t get_noc_addr(
     return noc_addr;
 }
 
-inline __attribute__((always_inline))
+FORCE_INLINE
 std::uint64_t get_noc_addr(std::uint32_t addr) {
     /*
-        Get an encoding which contains the address in L1 on the current core that you want to 
+        Get an encoding which contains the address in L1 on the current core that you want to
         read from/write to via the noc
     */
     return NOC_XY_ADDR(my_x[loading_noc], my_y[loading_noc], addr);
 }
 
-inline __attribute__((always_inline)) 
+/**
+ * This is the large detailed description that's why. Note these blocks start with two *s rather than 1.
+ *
+ * What the heck is going on.
+ *
+ */
+FORCE_INLINE
 void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size) {
     ncrisc_noc_fast_read_any_len(loading_noc, NCRISC_RD_CMD_BUF,
                                         src_noc_addr,
@@ -336,52 +362,52 @@ void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr,
                                         size);
 }
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr,  std::uint32_t size) {
-        ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr, size,   
+        ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr, size,
                             NOC_UNICAST_WRITE_VC, false, false, 1);
 }
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 void noc_async_write_multicast(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t size, std::uint32_t num_dests) {
-        ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, size,   
+        ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, size,
                             NOC_MULTICAST_WRITE_VC, true, false, num_dests);
 }
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 void noc_semaphore_set_multicast(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests) {
-        ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, 4 /*size in bytes*/,   
+        ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, 4 /*size in bytes*/,
                             NOC_MULTICAST_WRITE_VC, true, false, num_dests);
 }
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 void noc_async_write_multicast_loopback_src(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t size, std::uint32_t num_dests) {
-        ncrisc_noc_fast_write_any_len_loopback_src(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, size,   
+        ncrisc_noc_fast_write_any_len_loopback_src(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, size,
                             NOC_MULTICAST_WRITE_VC, true, false, num_dests);
 }
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 void noc_async_read_barrier() {
     while (!ncrisc_noc_reads_flushed(loading_noc));
 }
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 void noc_async_write_barrier()  {
     while (!ncrisc_noc_nonposted_writes_flushed(loading_noc));
 }
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 void noc_semaphore_wait(volatile uint32_t* sem_addr, uint32_t val)  {
     while((*sem_addr) != val);
 }
 
-inline __attribute__((always_inline)) 
+FORCE_INLINE
 void noc_semaphore_set(volatile uint32_t* sem_addr, uint32_t val)  {
     // set semaphore value to val
     (*sem_addr) = val;
 }
 
-inline __attribute__((always_inline))
+FORCE_INLINE
 void noc_semaphore_inc(uint64_t addr, uint32_t incr){
     /*
     [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
@@ -392,24 +418,24 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr){
 
 // optimized NOC transfer APIs
 inline void noc_fast_read(uint32_t src_addr, uint32_t dest_addr) {
-    while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));  
+    while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));
     NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
 inline void noc_fast_read_set_src_xy(uint64_t src_addr) {
-    while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));  
+    while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));
     NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_addr >> 32);
 }
 
 inline void noc_fast_read_set_len(uint32_t len_bytes) {
-    while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));  
+    while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));
     NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, len_bytes);
 }
 
 inline void noc_fast_read_inc_num_issued(uint32_t num_issued) {
-    // while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));  
+    // while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));
     noc_reads_num_issued[loading_noc] += num_issued;
 }
 
