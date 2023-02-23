@@ -61,8 +61,28 @@ Host *GetHost();
  * */
 Device *CreateDevice(tt::ARCH arch, int pcie_slot);
 
+/**
+ * Initializes a device by creating a tt_cluster object and memory manager. Puts device into reset.
+ *
+ * Currently device has a 1:1 mapping with tt_cluster and memory manager only allocates DRAM addresses.
+ *
+ * Return value: bool
+ *
+ * | Argument | Description                | Type     | Valid Range | Required |
+ * |----------|----------------------------|----------|-------------|----------|
+ * | device   | Pointer to a device object | Device * |             | True     |
+ */
 bool InitializeDevice(Device *device);
 
+/**
+ * Resets device and closes device
+ *
+ * Return value: bool
+ *
+ * | Argument | Description                | Type     | Valid Range | Required |
+ * |----------|----------------------------|----------|-------------|----------|
+ * | device   | Pointer to a device object | Device * |             | True     |
+ */
 bool CloseDevice(Device *device);
 
 void StartDebugPrintServer(Device *device);
@@ -300,6 +320,21 @@ std::vector<DramBuffer *> CreateInterleavedDramBuffers(
 
 L1Buffer *CreateL1Buffer(Program *program, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address);
 
+/**
+ * Creates a Circular Buffer (CB) in L1 memory and adds it to the program.
+ *
+ * Return value: CircularBuffer *
+ *
+ * | Argument      | Description                                                                    | Type               | Valid Range                             | Required |
+ * |---------------|--------------------------------------------------------------------------------|--------------------|-----------------------------------------|----------|
+ * | program       | The program to which buffer will be added to.                                  | Program *          |                                         | True     |
+ * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 TODO: specify more detail here. | True     |
+ * | core          | The location of the Tensix core on which the CB will reside (SoC co-ordinates) | const tt_xy_pair & | TODO: { , } –> { , }                    | True     |
+ * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | TODO: range?                            | True     |
+ * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (TODO: in Bytes)              | True     |
+ * | l1_address    | Address at which the CB buffer will reside                                     | uint32_t           | 200 kB to 1MB (TODO: in bytes)          | True     |
+ * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
+ */
 CircularBuffer *CreateCircularBuffer(
     Program *program,
     uint32_t buffer_index,
