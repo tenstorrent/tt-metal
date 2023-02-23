@@ -338,20 +338,54 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 // All kernels on a given Tensix core must be launched.
 bool LaunchKernels(Device *device, Program *program);
 
-// Copy data from a device DRAM channel to a host buffer
+//
+/**
+ * Copy data from a device DRAM channel to a host buffer
+ *
+ * Returns: bool
+ *
+ * | Argument    | Description                                     | Data type             | Valid range                               | required |
+ * |-------------|-------------------------------------------------|-----------------------|-------------------------------------------|----------|
+ * | device      | The device whose DRAM to read data from         | Device *              |                                           | Yes      |
+ * | dram_buffer | Pointer of the DRAM buffer to read from         | DramBuffer *          |                                           | Yes      |
+ * | host_buffer | Pointer of the buffer on host to copy data into | std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
+ * | size        | Size of buffer to read in bytes                 | uint32_t              |                                           |          |
+ */
 bool ReadFromDeviceDRAM(
     Device *device,                      // Device
     DramBuffer *dram_buffer,             // DRAM buffer on device
     std::vector<uint32_t> &host_buffer,  // Source buffer on host
     uint32_t size);                      // Size of copy in Bytes
 
-// Copies data from a host buffer into a buffer within the device DRAM channel
+/**
+* Copies data from a host buffer into a buffer within the device DRAM channel
+*
+* Return value: bool
+*
+* | Argument    | Description                                     | Data type             | Valid range                                      | required |
+* |-------------|-------------------------------------------------|-----------------------|--------------------------------------------------|----------|
+* | device      | The device whose DRAM to send data to           | Device *              |                                                  | Yes      |
+* | dram_buffer | Pointer of the DRAM buffer to send data to      | DramBuffer *          |                                                  | Yes      |
+* | host_buffer | Pointer of the buffer on host to copy data form | std::vector<uint32_t> | Host buffer must be fully fit inside DRAM buffer | Yes      |
+*/
 bool WriteToDeviceDRAM(
     Device *device,                       // Device
     DramBuffer *dram_buffer,              // DRAM buffer on device
     std::vector<uint32_t> &host_buffer);  // Source buffer on host)
 
-// Copy data from a device DRAM channel to a host buffer
+/**
+ * Copy data from a device DRAM channel to a host buffer
+ *
+ * Return value: bool
+ *
+ * | Argument     | Description                                                  | Data type             | Valid range                    | required |
+ * |--------------|--------------------------------------------------------------|-----------------------|--------------------------------|----------|
+ * | device       | The device whose DRAM to read data from                      | Device *              |                                | Yes      |
+ * | dram_channel | Channel index of DRAM to read from                           | int                   | On Grayskull, [0, 7] inclusive | Yes      |
+ * | dram_address | Starting address on DRAM channel from which to begin reading | uint32_t              |                                | Yes      |
+ * | host_buffer  | Buffer on host to copy data into                             | std::vector<uint32_t> |                                | Yes      |
+ * | size         | Size of buffer to read from device in bytes                  | uint32_t              |                                | Yes      |
+ */
 bool ReadFromDeviceDRAMChannel(
     Device *device,                      // Device
     int dram_channel,                    // DRAM channel on the device
@@ -359,7 +393,18 @@ bool ReadFromDeviceDRAMChannel(
     std::vector<uint32_t> &host_buffer,  // Source buffer on host
     uint32_t size);                      // Size of copy in Bytes
 
-// Copies data from a host buffer into a buffer within the device DRAM channel
+/**
+ * Copies data from a host buffer into a buffer within the device DRAM channel
+ *
+ * Return value: bool
+ *
+ * | Argument     | Description                                            | Data type             | Valid range                               | required |
+ * |--------------|--------------------------------------------------------|-----------------------|-------------------------------------------|----------|
+ * | device       | The device whose DRAM to write data into               | Device *              |                                           | Yes      |
+ * | dram_channel | Channel index of DRAM to write into                    | int                   | On Grayskull, [0, 7] inclusive            | Yes      |
+ * | host_buffer  | Buffer on host to copy data from                       | std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
+ * | dram_address | Starting address on DRAM channel to begin writing data | uint32_t              |                                           | Yes      |
+ */
 bool WriteToDeviceDRAMChannel(
     Device *device,                      // Device
     int dram_channel,                    // DRAM channel on the device
@@ -400,7 +445,18 @@ bool WriteToDeviceDRAMChannelsInterleavedTiles(
     std::vector<uint32_t> &host_buffer,
     uint32_t dram_address);
 
-// Copy data from a host buffer into an L1 buffer. (Note: Current Can not be a CircularBuffer.)
+/**
+ * Copy data from a host buffer into an L1 buffer. (Note: Current Can not be a CircularBuffer.)
+ *
+ * Return value: bool
+ *
+ * | Argument      | Description                                     | Data type             | Valid range                                         | required |
+ * |---------------|-------------------------------------------------|-----------------------|-----------------------------------------------------|----------|
+ * | device        | The device whose DRAM to write data into        | Device *              |                                                     | Yes      |
+ * | core          | Logical coordinate of core whose L1 to write to | tt_xy_pair            | On Grayskull, any valid logical worker coordinate   | Yes      |
+ * | host_buffer   | Buffer on host whose data to copy from          | std::vector<uint32_t> | Buffer must fit into L1                             | Yes      |
+ * | buffer_addess | Starting address in L1 to write into            | uint32_t              | Any non-reserved address in L1 that fits for buffer | Yes      |
+ */
 bool WriteToDeviceL1(
     Device *device,                       // Device
     const tt_xy_pair &core,               // Tensix core
@@ -413,7 +469,19 @@ bool WriteToDeviceL1(
     llrt::op_info_t op_info,
     int op_idx);
 
-// Copy data from an L1 buffer into a host buffer. (Note: Current Can not be a CircularBuffer.)
+/**
+ * Copy data from an L1 buffer into a host buffer. Must be a buffer, and not a CB.
+ *
+ * Return value: bool
+ *
+ * | Argument             | Description                                 | Data type             | Valid range                                       | required |
+ * |----------------------|---------------------------------------------|-----------------------|---------------------------------------------------|----------|
+ * | device               | The device whose DRAM to read data from     | Device *              |                                                   | Yes      |
+ * | core                 | Logical coordinate of core whose L1 to read | tt_xy_pair            | On Grayskull, any valid logical worker coordinate | Yes      |
+ * | device_buffer_addess | Starting address in L1 to read from         | int                   |                                                   | Yes      |
+ * | host_buffer          | Buffer on host to copy data into            | std::vector<uint32_t> | Buffer must fit L1 buffer                         | Yes      |
+ * | size                 | Size of L1 buffer in bytes                  | int                   |                                                   | Yes      |
+ */
 bool ReadFromDeviceL1(
     Device *device,                      // Device
     const tt_xy_pair &core,              // Logical Tensix core
