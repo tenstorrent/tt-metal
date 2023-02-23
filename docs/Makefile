@@ -33,6 +33,9 @@ server:
 	@echo "Navigate to: \033[4;33mlocalhost:$(PORT)/index.html\033[0m"
 	@cd $(HTMLDIR) && python -m http.server $(PORT)
 
+# This will need to updated to
+# - Use proper branch name for main
+# - Upload doxygen XML assets with build
 publish:
 ifeq ($(BRANCH), master)
 	@echo "Publishing docs to server"
@@ -42,4 +45,3 @@ else
 	@echo "Publishing docs to server failed, only supported on master branch"
 	@echo "You are currently on branch: $(BRANCH)"
 endif
-
