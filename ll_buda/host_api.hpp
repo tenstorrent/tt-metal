@@ -65,6 +65,8 @@ bool InitializeDevice(Device *device);
 
 bool CloseDevice(Device *device);
 
+void StartDebugPrintServer(Device *device);
+
 // ==================================================
 //                  HOST API: program & kernels
 // ==================================================

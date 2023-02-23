@@ -49,8 +49,8 @@ std::vector<bfloat16> initialize_row_major_tensor_data(const std::array<uint32_t
 
 // Checks that there is only one DRAM buffer per DRAM bank and all buffers share the same address
 void validate_interleaved_buffers_address(const std::vector<DramBuffer *> buffers) {
-    if (buffers.empty()) { 
-        return; 
+    if (buffers.empty()) {
+        return;
     }
     std::unordered_set<int> dram_channels;
     for (auto buffer : buffers) {
@@ -63,13 +63,19 @@ void validate_interleaved_buffers_address(const std::vector<DramBuffer *> buffer
     }
 }
 
-std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataFormat data_type, Layout layout, uint32_t total_size_bytes) {
+std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(
+    DataFormat data_type, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape) {
+
+    uint32_t W = shape[3];
     int num_bank_units;
     int num_entries_per_bank_unit;
     int num_bytes_per_entry;
     switch (layout) {
-        case Layout::ROW_MAJOR:
-            TT_ASSERT(false && "Writing in ROW_MAJOR layout to device is currently unsupported");
+        case Layout::ROW_MAJOR: {
+            num_bank_units = total_size_bytes / (W*2);
+            num_entries_per_bank_unit = W/2; // num elements in tile packed as uint32
+            num_bytes_per_entry = 4;
+        }
         break;
         case Layout::TILE: {
             int tile_size = 32 * 32 * sizeof(bfloat16); // TODO: Update to be generic for data type
@@ -89,9 +95,8 @@ std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataFormat da
 }
 
 void Tensor::allocate_buffers_on_device(uint32_t buffer_size_bytes) {
-    TT_ASSERT(layout_ == Layout::TILE);
 
-    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type_, layout_, buffer_size_bytes);
+    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type_, layout_, buffer_size_bytes, shape());
     buffers_ = CreateInterleavedDramBuffers(device_, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
     if (buffers_.empty()) {
         TT_THROW("Not enough memory to create buffers with total size " + std::to_string(buffer_size_bytes) + " bytes on device!");
@@ -112,12 +117,12 @@ Tensor::Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape,
     : data_(unpack_uint32_vec_into_bfloat16_vec(data)), shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout) {
 }
 
-Tensor::Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout, Device *device) 
-    : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout), device_(device) {   
+Tensor::Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout, Device *device)
+    : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout), device_(device) {
     TT_ASSERT(device != nullptr);
     uint32_t size_in_bytes = data.size() * sizeof(uint32_t); // TODO: Update to be generic for data type
     allocate_buffers_on_device(size_in_bytes);
-    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type, layout, size_in_bytes);
+    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type, layout, size_in_bytes, shape_);
     WriteToDeviceDRAMChannelsInterleaved(device, data, buffers_.at(0)->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
 }
 
@@ -138,10 +143,10 @@ std::vector<uint32_t> convert_float_data_to_uint32_data(std::vector<float> &floa
     return uint32_data;
 }
 
-Tensor::Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout) 
+Tensor::Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout)
     : Tensor(convert_float_data_to_uint32_data(data), shape, data_type, layout) {}
 
-Tensor::Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout, Device *device) 
+Tensor::Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout, Device *device)
     : Tensor(convert_float_data_to_uint32_data(data), shape, data_type, layout, device) {}
 
 Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataFormat data_type, Layout layout)
@@ -150,14 +155,14 @@ Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataF
     data_ = initialize_data(shape, init_type, layout);
 }
 
-Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataFormat data_type, Layout layout, Device *device) 
+Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataFormat data_type, Layout layout, Device *device)
     : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout), device_(device) {
     TT_ASSERT(device != nullptr);
     TT_ASSERT(data_type == DataFormat::Float16_b);
     auto bfloat16_data = initialize_data(shape, init_type, layout);
     uint32_t size_in_bytes = bfloat16_data.size() * sizeof(bfloat16); // TODO: Update to be generic for data type
     allocate_buffers_on_device(size_in_bytes);
-    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type, layout, size_in_bytes);
+    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type, layout, size_in_bytes, shape_);
     auto uint32_data = pack_bfloat16_vec_into_uint32_vec(bfloat16_data);
     WriteToDeviceDRAMChannelsInterleaved(device, uint32_data, buffers_.at(0)->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
 }
@@ -178,9 +183,9 @@ Tensor Tensor::copy_to_host() const {
     for (auto buffer : buffers_) {
         size_in_bytes += buffer->size();
     }
-    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type_, layout_, size_in_bytes);
+    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type_, layout_, size_in_bytes, shape());
     ReadFromDeviceDRAMChannelsInterleaved(device_, device_data, buffers_.at(0)->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-    return Tensor(device_data, shape_, data_type_, layout_);  
+    return Tensor(device_data, shape_, data_type_, layout_);
 }
 
 Tensor Tensor::copy_to_device(Device *device) const {
@@ -324,43 +329,44 @@ const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
     int neg_idx = -1;
     for (int i = 0; i < ns.size(); i++) {
         if (ns[i] == -1) {
-            TT_ASSERT(neg_idx == -1 && "Only one -1 is allowed in Tensor::reshape");
+            TT_ASSERT(neg_idx == -1, "Only one -1 is allowed in Tensor::reshape");
             neg_idx = i;
-            continue;
+        } else {
+            TT_ASSERT(ns[i] > 0, "New shape entries can only have -1 or positive values");
         }
     }
 
     uint32_t old_volume = this->volume();
-    if (neg_idx == -1) {
-        TT_ASSERT(N*C*H*W == old_volume);
-    }
 
     switch (neg_idx) {
         case 0:
             TT_ASSERT(old_volume % C*H*W == 0);
             N = old_volume/(C*H*W);
-        break;
+            break;
         case 1:
             TT_ASSERT(old_volume % N*H*W == 0);
             C = old_volume/(N*H*W);
-        break;
+            break;
         case 2:
             TT_ASSERT(old_volume % N*C*W == 0);
             H = old_volume/(N*C*W);
             TT_ASSERT(H%32 == 0);
-        break;
+            break;
         case 3:
             TT_ASSERT(old_volume % N*C*H == 0);
             W = old_volume/(N*C*H);
             TT_ASSERT(W%32 == 0);
-        break;
-        case -1:
-        break;
+            break;
+        case -1: // In case where there is no negative value in ns
+            TT_ASSERT(N*C*H*W == old_volume);
+            break;
         default:
             TT_ASSERT(false && "Unexpected neg_idx in Tensor::reshape!");
     }
 
-    TT_ASSERT(H % 32 == 0 && W % 32 == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
+    if (this->layout() == Layout::TILE) {
+        TT_ASSERT(H % 32 == 0 && W % 32 == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
+    }
 
     shape_[0] = N;
     shape_[1] = C;

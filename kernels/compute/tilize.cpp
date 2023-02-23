@@ -2,13 +2,12 @@
 
 #include "compute_hlk_api.h"
 
-struct hlk_args_t 
+struct hlk_args_t
 {
-int32_t per_core_tile_cnt; // Total number of tiles produced at the output per core
 int32_t per_core_block_cnt; // Number of blocks of size 1xN tiles (1 rows and N cols)
 int32_t per_core_block_tile_cnt; // Block tile count = (1xN)
 };
-  
+
 void compute_main(const hlk_args_t *args) {
 
     for(int b=0;b<args->per_core_block_cnt;++b)

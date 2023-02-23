@@ -3,18 +3,19 @@ import math
 import torch
 import numpy as np
 
+import ll_buda_bindings.ll_buda_bindings._C as _C
 
 def nearest_32(x):
     return math.ceil(x / 32) * 32
 
 def pad_activation(x):
     """
-    This function pads an activation with 0s as a pre-preprocessing step to tilization. 
-    
+    This function pads an activation with 0s as a pre-preprocessing step to tilization.
+
     In the 2d case, it pads a vector to the right with 0s, and in the 2+d case,
     it pads the bottom and right corners of the last two dimensions.
 
-    WARNING: This function should eventually be retired in favour of padding on device 
+    WARNING: This function should eventually be retired in favour of padding on device
     """
     assert isinstance(x, torch.Tensor), "Input to this function must be an instance of torch.Tensor"
     assert len(x.shape) >= 1 and len(x.shape) <= 4, "Only tensors with dimension 1-4 supported"
@@ -23,20 +24,22 @@ def pad_activation(x):
     elif len(x.shape) == 2: # (batch, num features)
         padded_tensor = torch.zeros(x.shape[0], 1, 32, nearest_32(x.shape[1]))
         padded_tensor[:, 0, 0, :x.shape[1]] = x
-    else:
+    elif len(x.shape) == 3: # (batch, num features y, num features x)
+        padded_tensor = torch.zeros(x.shape[0], 1, nearest_32(x.shape[-2]), nearest_32(x.shape[-1]))
+        padded_tensor[..., 0, :x.shape[-2], :x.shape[-1]] = x
+    else: # (batch, num channels, num features y, num features x)
         padded_tensor = torch.zeros(*x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1]))
         padded_tensor[..., :x.shape[-2], :x.shape[-1]] = x
-
     return padded_tensor
 
 def pad_weight(x):
     """
-    This function pads a weight/bias with 0s as a pre-preprocessing step to tilization. 
-    
+    This function pads a weight/bias with 0s as a pre-preprocessing step to tilization.
+
     In the 2d case, it pads a vector to the right with 0s, and in the 2+d case,
     it pads the bottom and right corners of the last two dimensions.
 
-    WARNING: This function should eventually be retired in favour of padding on device 
+    WARNING: This function should eventually be retired in favour of padding on device
     """
     assert isinstance(x, torch.Tensor), "Input to this function must be an instance of torch.Tensor"
     assert len(x.shape) >= 1 and len(x.shape) <= 4, "Only tensors with dimension 1-4 supported"
@@ -131,8 +134,8 @@ def get_oom_of_float(float_lst):
     """
     Given a list of floats, returns a list of the order or magnitudes
     of the floats. Useful when you want to make sure that even if your
-    tt outputs don't match pytorch all that well, they are at least 
-    on the same order of magnitude 
+    tt outputs don't match pytorch all that well, they are at least
+    on the same order of magnitude
     """
     ooms = []
     for el in float_lst:
@@ -153,3 +156,29 @@ def get_oom_of_float(float_lst):
         ooms.append(oom)
 
     return ooms
+
+def get_FR():
+    # TODO(AP): (ultra-)hacky workflow where we manually set force recompile counter before every kernel from python
+    return _C.device.GetForceRecompiles()
+
+def set_FR(new_val):
+    # TODO(AP): (ultra-)hacky workflow where we manually set force recompile counter before every kernel from python
+    host = _C.device.SetForceRecompiles(new_val)
+    print("Force recompiles=", get_FR())
+
+
+def tt2torch(ttx):
+    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
+    host = _C.device.GetHost()
+    shp = ttx.shape()
+    tt_out = ttx.to(host)
+    torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
+    return torch_out
+
+def tt2torch_rm(ttx):
+    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
+    host = _C.device.GetHost()
+    shp = ttx.shape()
+    tt_out = ttx.to(host)
+    torch_out = torch.Tensor(tt_out.data()).reshape(shp)
+    return torch_out

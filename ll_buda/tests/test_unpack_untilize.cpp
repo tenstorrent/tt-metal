@@ -17,7 +17,6 @@ namespace unary_datacopy {
 //#include "hlks/eltwise_copy.cpp"
 // FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
 struct hlk_args_t {
-    int32_t per_core_tile_cnt; // Total number of tiles produced at the output per core
     int32_t per_core_block_cnt; // Number of blocks of size 1xN tiles (1 rows and N cols)
     int32_t per_core_block_tile_cnt; // Block tile count = (1xN)
 };
@@ -61,7 +60,7 @@ inline vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_vec, ve
 
                     // Right face row copy
                     for (int k = 0; k < 8; k++) {
-                        int idx = physical_start_for_tile_row + i * 8 + k + face_size + j * tile_size; 
+                        int idx = physical_start_for_tile_row + i * 8 + k + face_size + j * tile_size;
                         dst_vec.push_back(src_vec.at(idx));
                     }
                 }
@@ -101,7 +100,7 @@ int main(int argc, char **argv) {
         uint32_t num_tiles = num_tiles_r * num_tiles_c;
 
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src_addr = 0;
         int dram_src_channel_id = 0;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
@@ -147,7 +146,7 @@ int main(int argc, char **argv) {
             core,
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
-        
+
         auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
             program,
             "kernels/dataflow/writer_unary.cpp",
@@ -156,12 +155,11 @@ int main(int argc, char **argv) {
             ll_buda::NOC::RISCV_0_default);
 
         void *hlk_args = new unary_datacopy::hlk_args_t{
-            .per_core_tile_cnt = (int) num_tiles,
             .per_core_block_cnt = 1,
             .per_core_block_tile_cnt = (int) num_tiles_c
         };
         ll_buda::ComputeKernelArgs *eltwise_unary_args = ll_buda::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(unary_datacopy::hlk_args_t));
-        
+
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = ll_buda::CreateComputeKernel(

@@ -14,7 +14,7 @@ device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
 _C.device.InitializeDevice(device)
 host = _C.device.GetHost()
 
-if __name__ == "__main__":
+def tile_major_reshape():
     N = 3
     C = 5
     H = 64
@@ -45,6 +45,21 @@ if __name__ == "__main__":
     print("reshape() max absdiff=")
     print_diff_argmax(tt_got_back, x)
 
+def row_major_reshape():
+    N = 1
+    C = 1
+    H = 128
+    W = 128
+    x = torch.arange(N*C*H*W).reshape(N, C, H, W).float()
+    xp = pad_weight(x).view(-1).tolist()
+
+    xtt = _C.tensor.Tensor(xp, [N, C, H, W], _C.tensor.DataFormat.FLOAT32, _C.tensor.Layout.ROW_MAJOR, device)
+    reshaped = _C.tensor.reshape(xtt, 1, 128, 2, 64).to(host).data()
+    reshaped_tensor = torch.Tensor(reshaped).reshape(1, 128, 2, 64)
+    return
+
+if __name__ == "__main__":
+    # tile_major_reshape()
+    row_major_reshape()
+
 _C.device.CloseDevice(device)
-
-

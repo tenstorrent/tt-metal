@@ -11,10 +11,15 @@ include ll_buda/impl/module.mk
 LL_BUDA_SRCS = \
 	ll_buda/op_library/eltwise_binary/eltwise_binary_op.cpp \
 	ll_buda/op_library/eltwise_unary/eltwise_unary_op.cpp \
+	ll_buda/op_library/pad_h_rm/pad_h_rm_op.cpp \
 	ll_buda/op_library/transpose/transpose_op.cpp \
+	ll_buda/op_library/transpose_rm/transpose_rm_op.cpp \
 	ll_buda/op_library/reduce/reduce_op.cpp \
 	ll_buda/op_library/bcast/bcast_op.cpp \
 	ll_buda/op_library/bmm/bmm_op.cpp \
+	ll_buda/op_library/tilize/tilize_op.cpp \
+	ll_buda/op_library/untilize/untilize_op.cpp \
+	ll_buda/op_library/reshape/reshape_op.cpp \
 	ll_buda/tensor/tensor.cpp \
 	ll_buda/ll_buda.cpp \
 
@@ -30,6 +35,6 @@ $(LL_BUDA_LIB): $(COMMON_LIB) $(LL_BUDA_OBJS) $(LL_BUDA_IMPL_LIB) $(LLRT_LIB)
 	@mkdir -p $(LIBDIR)
 	$(CXX) $(LL_BUDA_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(LDFLAGS) $(LL_BUDA_LDFLAGS)
 
-$(OBJDIR)/ll_buda/%.o: ll_buda/%.cpp 
+$(OBJDIR)/ll_buda/%.o: ll_buda/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(LL_BUDA_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(LL_BUDA_INCLUDES) $(LL_BUDA_DEFINES) -c -o $@ $<

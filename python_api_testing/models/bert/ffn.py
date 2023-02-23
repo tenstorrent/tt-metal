@@ -31,19 +31,19 @@ def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_b
         ff1_output_plus_bias_act = ff1_out_activation_fn(ff1_output_plus_bias)
 
         # ff2
-        ff2_output_plus_bias = ff2(ff1_output_plus_bias_act)        
+        ff2_output_plus_bias = ff2(ff1_output_plus_bias_act)
         return ff2_output_plus_bias
 
     return feed_forward_
 
 class TtFeedForwardModel(torch.nn.Module):
-    def __init__(self, state_dict, device):
+    def __init__(self, encoder_idx, state_dict, device):
         super().__init__()
 
         # FF1 params
-        encoder0_ff1_weight = pad_weight(state_dict["bert.encoder.layer.0.intermediate.dense.weight"])
-        encoder0_ff1_bias = pad_weight(state_dict["bert.encoder.layer.0.intermediate.dense.bias"])
-        
+        encoder0_ff1_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"])
+        encoder0_ff1_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.bias"])
+
         encoder0_ff1_weight_shape = encoder0_ff1_weight.shape
         encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
 
@@ -51,9 +51,9 @@ class TtFeedForwardModel(torch.nn.Module):
         encoder0_ff1_bias = tilize_to_list(encoder0_ff1_bias)
 
         # FF2 params
-        encoder0_ff2_weight = pad_weight(state_dict["bert.encoder.layer.0.output.dense.weight"])
-        encoder0_ff2_bias = pad_weight(state_dict["bert.encoder.layer.0.output.dense.bias"])
-    
+        encoder0_ff2_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.weight"])
+        encoder0_ff2_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.bias"])
+
         encoder0_ff2_weight_shape = encoder0_ff2_weight.shape
         encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
 
@@ -61,14 +61,14 @@ class TtFeedForwardModel(torch.nn.Module):
         encoder0_ff2_bias = tilize_to_list(encoder0_ff2_bias)
 
         self.ffn = feed_forward(
-            *encoder0_ff1_weight_shape[-2:], 
-            encoder0_ff1_weight, 
-            encoder0_ff1_bias, 
-            encoder0_ff2_weight, 
+            *encoder0_ff1_weight_shape[-2:],
+            encoder0_ff1_weight,
+            encoder0_ff1_bias,
+            encoder0_ff2_weight,
             encoder0_ff2_bias,
             device
         )
-    
+
     def forward(self, activation):
         return self.ffn(activation)
 
@@ -77,7 +77,7 @@ class PytorchFeedForwardModel(torch.nn.Module):
         super().__init__()
         self.ff1 = hugging_face_reference_model.bert.encoder.layer[0].intermediate
         self.ff2 = hugging_face_reference_model.bert.encoder.layer[0].output.dense
-        
+
     def forward(self, x):
         return self.ff2(self.ff1(x))
 
@@ -95,7 +95,7 @@ def summarize_stats(t, name):
 
 def run_ffn_inference():
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained("prajjwal1/bert-tiny", torchscript=False)
-    tt_ffn_model = TtFeedForwardModel(hugging_face_reference_model.state_dict(), device)
+    tt_ffn_model = TtFeedForwardModel(0, hugging_face_reference_model.state_dict(), device)
     pytorch_ffn_model = PytorchFeedForwardModel(hugging_face_reference_model)
 
     # Prepare input
@@ -113,6 +113,7 @@ def run_ffn_inference():
     # Summarizing weight statistics
     print("Summarizing stats for weights")
     state_dict = hugging_face_reference_model.state_dict()
+
     summarize_stats(state_dict["bert.encoder.layer.0.intermediate.dense.weight"], "ff1 weight")
     summarize_stats(state_dict["bert.encoder.layer.0.intermediate.dense.bias"], "ff1 bias")
     summarize_stats(state_dict["bert.encoder.layer.0.output.dense.weight"], "ff2 weight")
@@ -123,7 +124,7 @@ def run_ffn_inference():
     summarize_stats(pytorch_out, "pytorch output")
     summarize_stats(tt_out, "tt output")
     summarize_stats(abs(pytorch_out - tt_out), "absolute difference in outputs")
-    return 
+    return
 
 if __name__ == "__main__":
     # Initialize the device
