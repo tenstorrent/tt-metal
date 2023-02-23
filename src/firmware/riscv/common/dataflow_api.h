@@ -366,6 +366,10 @@ std::uint64_t get_noc_addr(std::uint32_t addr) {
  */
 FORCE_INLINE
 void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size) {
+    /*
+        Read requests - use static VC
+        Read responses - assigned VCs dynamically
+    */
     ncrisc_noc_fast_read_any_len(loading_noc, NCRISC_RD_CMD_BUF,
                                         src_noc_addr,
                                         dst_local_l1_addr,
