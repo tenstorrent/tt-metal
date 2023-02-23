@@ -309,6 +309,17 @@ ComputeKernel *CreateComputeKernel(
 // ==================================================
 DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes);
 
+/**
+ * Creates a DRAM Buffer object. DRAM buffers exist independently from a program
+ *
+ * Return value: Buffer *
+ *
+ * | Argument      | Description                                  | Type     | Valid Range                                       | Required |
+ * |---------------|----------------------------------------------|----------|---------------------------------------------------|----------|
+ * | dram_channel  | DRAM channel ID                              | int      | [0, 7]                                            | True     |
+ * | size_in_bytes | Size of DRAM buffer in Bytes                 | uint32_t | TODO: valid range? 0 to 2 GB (expressed in Bytes) | True     |
+ * | address       | Address at which the DRAM buffer will reside | uint32_t | TODO: fix range. 0 to 2 GB??                      | True     |
+ */
 DramBuffer *CreateDramBuffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
 
 // Allocates multiple DRAM buffers across multiple banks to store interleaved data
@@ -318,6 +329,18 @@ std::vector<DramBuffer *> CreateInterleavedDramBuffers(
     int num_entries_per_bank_unit,              // Number of entries in single unit, e.g. tile has 512 entries because a single tile has 1024 values packed as uint32_t
     int num_bytes_per_entry);                   // Size of single entry in DRAM bank in bytes
 
+/**
+ * Creates an L1 buffer and adds it to the program.
+ *
+ * Return value: Buffer *
+ *
+ * | Argument      | Description                                       | Type       | Valid Range                                            | Required |
+ * |---------------|---------------------------------------------------|------------|--------------------------------------------------------|----------|
+ * | program       | The program to which buffer will be added to.     | Program *  |                                                        | True     |
+ * | core          | Logical core coordinate of L1 to create buffer on | tt_xy_pair | Any logical worker core on Grayskull                   | True     |
+ * | size_in_bytes | Size of DRAM buffer in Bytes                      | uint32_t   | TODO: valid range? 0 to 800 KB ?? (expressed in Bytes) | True     |
+ * | address       | Address at which the DRAM buffer will reside      | uint32_t   | TODO: fix range. 200KB to 1MB ??? (expressed in Bytes) | True     |
+ */
 L1Buffer *CreateL1Buffer(Program *program, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address);
 
 /**
