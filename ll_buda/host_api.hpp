@@ -50,9 +50,14 @@ void stopPrintfServer();
 Host *GetHost();
 
 /**
- * CreateDevice docs.
+ * Instantiates a device object.
  *
- * Detailed CreateDevice docs.
+ * Return value: Device *
+ *
+ * | Argument       | Description                                                      | Data type | Valid range                                         | required |
+ * |----------------|------------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
+ * | device_type    | Type of Tenstorrent device to be used                            | ARCH enum | “tt::ARCH::GRAYSKULL”                               | Yes      |
+ * | pcie_slot      | The number of the PCIexpress slot in which the device is located | int       | 0 to 7                                              | Yes      |
  * */
 Device *CreateDevice(tt::ARCH arch, int pcie_slot);
 
