@@ -165,15 +165,6 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc);
 
-ComputeKernel *CreateComputeKernel(
-    Program *program,
-    const std::string &file_name,
-    const tt_xy_pair &core,
-    ComputeKernelArgs *kernel_args,
-    MathFidelity math_fidelity,
-    bool fp32_dest_acc_en,
-    bool math_approx_mode);
-
 DataMovementKernel *CreateDataMovementKernel(
     Program *program,
     const std::string &file_name,
@@ -189,6 +180,45 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc);
 
+/**
+ * Creates a single core compute kernel object, and adds it to the program.
+ *
+ * Return value: ComputeKernel *
+ *
+ * |     Argument     |                                       Description                                       |      Data type      |      Valid range      | required |
+ * |:----------------:|:---------------------------------------------------------------------------------------:|:-------------------:|:---------------------:|----------|
+ * | program          | The program to which this kernel will be added to                                       | Program *           |                       | Yes      |
+ * | file_name        | Name of file containing the kernel                                                      | const std::string   |                       | Yes      |
+ * | core             | The location of the Tensix core on which the kernel will execute (Logical co-ordinates) | const tt_xy_pair &  | {0, 0} –> {9, 11}     | Yes      |
+ * | kernel_args      | Kernel arguments, passed at compile time                                                | ComputeKernelArgs * |                       | Yes      |
+ * | math_fidelity    | The percision of the matrix compute engine                                              | enum                | MathFidelity::HiFi4   | Yes      |
+ * | fp32_dest_acc_en | Specifies the type of accumulation performed in the matrix compute engine.              | bool                | false (for Grayskull) | Yes      |
+ * | math_approx_mode | Used by the vector compute engine. (will be depricated)                                 | bool                | true, false           | Yes      |
+ */
+ComputeKernel *CreateComputeKernel(
+    Program *program,
+    const std::string &file_name,
+    const tt_xy_pair &core,
+    ComputeKernelArgs *kernel_args,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    bool math_approx_mode);
+
+/**
+ * Creates a multi-core compute kernel object, and adds it to the program.
+ *
+ * Return value: ComputeKernel *
+ *
+ * | Argument         | Description                                                                                  | Data type           | Valid range                                            | required |
+ * |------------------|----------------------------------------------------------------------------------------------|---------------------|--------------------------------------------------------|----------|
+ * | program          | The program to which this kernel will be added to                                            | Program *           |                                                        | Yes      |
+ * | file_name        | Name of file containing the kernel                                                           | const std::string   |                                                        | Yes      |
+ * | core_range       | The range of the Tensix co-ordinates on which the kernel will execute (Logical co-ordinates) | const CoreRange &   | Any range encompassing cores within {0 , 0} –> {9, 11} | Yes      |
+ * | kernel_args      | Kernel arguments, passed at compile time                                                     | ComputeKernelArgs * |                                                        | Yes      |
+ * | math_fidelity    | The percision of the matrix compute engine                                                   | enum                | MathFidelity::HiFi4                                    | Yes      |
+ * | fp32_dest_acc_en | Specifies the type of accumulation performed in the matrix compute engine.                   | bool                | false (for Grayskull)                                  | Yes      |
+ * | math_approx_mode | Used by the vector compute engine. (will be depricated)                                      | bool                | true, false                                            | Yes      |
+ */
 ComputeKernel *CreateComputeKernel(
     Program *program,
     const std::string &file_name,
