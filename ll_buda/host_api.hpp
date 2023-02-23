@@ -150,6 +150,20 @@ ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreRange &core_
  */
 ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<void *> &compile_time_args, size_t compile_time_args_size);
 
+/**
+ * Creates a single core data movement kernel and adds it to the program.
+ *
+ * Return value: DataMovementKernel *
+ *
+ * | Argument       | Description                                                                                                  | Data type                | Valid range                                                    | required |
+ * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
+ * | program        | The program to which this kernel will be added to                                                            | Program *                |                                                                | Yes      |
+ * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
+ * | core           | The location of the Tensix core on which the kernel will execute (Logical co-ordinates)                      | const tt_xy_pair &       | {0, 0} –> {9, 11}                                              | Yes      |
+ * | kernel_args    | Compile and runtime kernel arguments passed at compile time and runtime respectively                         | DataMovementKernelArgs * |                                                                | Yes      |
+ * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
+ * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
+ */
 DataMovementKernel *CreateDataMovementKernel(
     Program *program,
     const std::string &file_name,
@@ -158,6 +172,20 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc);
 
+/**
+ * Creates a single core data movement kernel with no default arguments and
+ * adds it to the program.
+ *
+ * Return value: DataMovementKernel *
+ *
+ * | Argument       | Description                                                                                                  | Data type                | Valid range                                                    | required |
+ * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
+ * | program        | The program to which this kernel will be added to                                                            | Program *                |                                                                | Yes      |
+ * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
+ * | core           | The location of the Tensix core on which the kernel will execute (Logical co-ordinates)                      | const tt_xy_pair &       | {0, 0} –> {9, 11}                                              | Yes      |
+ * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
+ * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
+ */
 DataMovementKernel *CreateDataMovementKernel(
     Program *program,
     const std::string &file_name,
@@ -165,6 +193,20 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc);
 
+/**
+ * Creates a multi-core data movement kernel and adds it to the program.
+ *
+ * Return value: DataMovementKernel *
+ *
+ * | Argument       | Description                                                                                                  | Data type                | Valid range                                                    | required |
+ * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
+ * | program        | The program to which this kernel will be added to                                                            | Program *                |                                                                | Yes      |
+ * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
+ * | core_range     | The range of the Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)                 | const CoreRange &        | Any range encompassing cores within {0 , 0} –> {9, 11}         | Yes      |
+ * | kernel_args    | Compile and runtime kernel arguments passed at compile time and runtime respectively                         | DataMovementKernelArgs * |                                                                | Yes      |
+ * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
+ * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
+ */
 DataMovementKernel *CreateDataMovementKernel(
     Program *program,
     const std::string &file_name,
@@ -173,6 +215,20 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc);
 
+/**
+ * Creates a multi-core data movement kernel with no default arguments and adds
+ * it to the program.
+ *
+ * Return value: DataMovementKernel *
+ *
+ * | Argument       | Description                                                                                                  | Data type                | Valid range                                                    | required |
+ * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
+ * | program        | The program to which this kernel will be added to                                                            | Program *                |                                                                | Yes      |
+ * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
+ * | core_range     | The range of the Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)                 | const CoreRange &        | Any range encompassing cores within {0 , 0} –> {9, 11}         | Yes      |
+ * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
+ * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
+ */
 DataMovementKernel *CreateDataMovementKernel(
     Program *program,
     const std::string &file_name,
