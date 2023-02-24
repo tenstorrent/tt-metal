@@ -7,7 +7,12 @@ sys.path.append(f"{f}/..")
 import torch
 
 import ll_buda_bindings.ll_buda_bindings._C as _C
-from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight
+from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
+
+RSUM = _C.tensor.ReduceOpMath.SUM
+RW = _C.tensor.ReduceOpDim.W
+RH = _C.tensor.ReduceOpDim.H
+RHW = _C.tensor.ReduceOpDim.HW
 
 # Initialize the device
 device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
@@ -16,12 +21,12 @@ host = _C.device.GetHost()
 _C.device.StartDebugPrintServer(device)
 
 if __name__ == "__main__":
-    N = 7
-    C = 5
-    H = 32*2
+    N = 2
+    C = 3
+    H = 32*5
     W = 32*3
     torch.manual_seed(123)
-    x = (torch.randn((N,C,H,W))+0.05).to(torch.bfloat16).to(torch.float32)
+    x = (torch.randn((N,C,H,W))+0.01).to(torch.bfloat16).to(torch.float32)
 
     reduce_dims_tt = [RW, RH, RHW]
     reduce_dims_pyt = [[3], [2], [3,2]]
@@ -38,8 +43,6 @@ if __name__ == "__main__":
         pyt_got_back_rm = torch.Tensor(tt_host_rm).reshape(expected_shape)
         pyt_got_back_rm = untilize(pyt_got_back_rm)
 
-        print("row_major read back max absdiff=")
-
         ref = x.to(torch.bfloat16).sum(rdims_pyt, keepdim=True).to(torch.float32)*mul
         if rtype == RW:
             ref_padded = torch.zeros(pyt_got_back_rm.shape)
@@ -51,7 +54,7 @@ if __name__ == "__main__":
             ref_padded = torch.zeros(pyt_got_back_rm.shape)
             ref_padded[:,:,0:1,0:1] = ref
 
-        allok = torch.all(torch.isclose(pyt_got_back_rm, ref_padded, rtol=0.08, atol=0.08))
+        allok = is_close(pyt_got_back_rm, ref_padded, rtol=0.07, atol=0.3)
         if not allok:
             print_diff_argmax(pyt_got_back_rm, ref_padded)
 

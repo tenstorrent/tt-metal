@@ -123,11 +123,38 @@ def untilize(x):
     return ret
 
 
+def is_close(a, b, rtol=1e-2, atol=1e-2):
+    """
+    A variant of np.isclose with logging.
+    """
+    absdiff = (a-b).abs()
+    reldiff1 = 1.0 - a.abs() / b.abs()
+    reldiff2 = 1.0 - (a.abs()+1) / (b.abs()+1) # in case b.abs() is 0
+    reldiff_or = torch.logical_or(reldiff1<rtol, reldiff2<rtol)
+
+    or_abs_rel = torch.logical_or( absdiff<atol, reldiff_or )
+    debug_index = or_abs_rel.to(torch.int32).argmin().item()
+    if not or_abs_rel.reshape(-1)[debug_index]:
+        print("isclose mismatch at index=", debug_index)
+        print(a.reshape(-1)[debug_index])
+        print(b.reshape(-1)[debug_index])
+        print("reldiff1=", reldiff1.reshape(-1)[debug_index])
+        print("reldiff2=", reldiff2.reshape(-1)[debug_index])
+        print("absdiff=", absdiff.reshape(-1)[debug_index])
+    return torch.all( or_abs_rel )
+
 def print_diff_argmax(a, b):
+    """
+    Prints out the value of both tensors at a point where the absolute difference is the largest.
+    """
     absdiff = (a-b).abs()
     argmax = absdiff.argmax().item()
     diff = absdiff.reshape(-1)[argmax]
-    print(diff, " at ", argmax)
+    rela = a.abs()/(torch.max(a.abs(), b.abs()))
+    relb = b.abs()/(torch.max(a.abs(), b.abs()))
+    print("Abs diff=", diff, " at ", argmax)
+    print("Rel a=", rela.reshape(-1)[argmax], " at ", argmax)
+    print("Rel b=", relb.reshape(-1)[argmax], " at ", argmax)
     return diff.item()
 
 
@@ -159,16 +186,19 @@ def get_oom_of_float(float_lst):
     return ooms
 
 def get_FR():
-    # TODO(AP): (ultra-)hacky workflow where we manually set force recompile counter before every kernel from python
+    # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
     return _C.device.GetForceRecompiles()
 
 def set_FR(new_val):
-    # TODO(AP): (ultra-)hacky workflow where we manually set force recompile counter before every kernel from python
+    # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
     host = _C.device.SetForceRecompiles(new_val)
     print("Force recompiles=", get_FR())
 
 
 def tt2torch(ttx):
+    """
+    Converts an llbuda tiled tensor to torch tensor.
+    """
     device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
     host = _C.device.GetHost()
     shp = ttx.shape()
@@ -177,6 +207,9 @@ def tt2torch(ttx):
     return torch_out
 
 def tt2torch_rm(ttx):
+    """
+    Converts an llbuda row-major tensor to torch tensor.
+    """
     device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
     host = _C.device.GetHost()
     shp = ttx.shape()

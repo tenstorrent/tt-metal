@@ -15,9 +15,6 @@ _C.device.InitializeDevice(device)
 host = _C.device.GetHost()
 _C.device.StartDebugPrintServer(device)
 
-RSUM = _C.tensor.ReduceOpMath.SUM
-RW = _C.tensor.ReduceOpDim.W
-RH = _C.tensor.ReduceOpDim.H
 BCW = _C.tensor.BcastOpDim.W
 BCH = _C.tensor.BcastOpDim.H
 BCHW = _C.tensor.BcastOpDim.HW
