@@ -192,24 +192,25 @@ inline vector<u16> gold_bcast_op(
     BcastDim::Enum bcast_dim,
     BcastOp::Enum bcast_op
 ) {
-    TT_ASSERT(bcast_dim == BcastDim::W ? bcast_vals.size() == shape[2] : true);
-    TT_ASSERT(bcast_dim == BcastDim::H ? bcast_vals.size() == shape[3] : true);
-    TT_ASSERT(bcast_dim == BcastDim::HW ? bcast_vals.size() == 1 : true);
+    uint32_t N = shape[0], C = shape[1], H = shape[2], W = shape[3];
+    TT_ASSERT(bcast_dim == BcastDim::W ? bcast_vals.size() == N*C*H : true);
+    TT_ASSERT(bcast_dim == BcastDim::H ? bcast_vals.size() == N*C*W : true);
+    TT_ASSERT(bcast_dim == BcastDim::HW ? bcast_vals.size() == N*C : true);
 
-    vector<uint32_t> shape_dst{shape[0], shape[1], shape[2], shape[3]};
+    vector<uint32_t> shape_dst{N, C, H, W};
     TensAddr addr(shape);
     vector<u16> result(addr.numel());
     std::fill(result.begin(), result.end(), 0);
-    for (int n = 0; n < shape[0]; n++)
-    for (int c = 0; c < shape[1]; c++)
-    for (int h = 0; h < shape[2]; h++)
-    for (int w = 0; w < shape[3]; w++) {
+    for (int n = 0; n < N; n++)
+    for (int c = 0; c < C; c++)
+    for (int h = 0; h < H; h++)
+    for (int w = 0; w < W; w++) {
         auto offs = addr.offs(n, c, h, w);
         int b_index = 0;
         switch (bcast_dim) {
-            case BcastDim::H:  b_index = w; break;
-            case BcastDim::W:  b_index = h; break;
-            case BcastDim::HW: b_index = 0; break;
+            case BcastDim::H:  b_index = w + c*W + n*C*W; break; // bcast tensor is ncw
+            case BcastDim::W:  b_index = h + c*H + n*C*H; break; // bcast tensor is nch
+            case BcastDim::HW: b_index = c + n*C; break; // bcast tensor is nc
             default:
             TT_ASSERT(false && "Unexpected broadcast mode in gold_bcast_op");
         }

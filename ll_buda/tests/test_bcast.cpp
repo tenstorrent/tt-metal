@@ -23,6 +23,7 @@ using std::vector;
 
 namespace {
 const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
+    TT_ASSERT(multibank && "Only multibank is supported correctly.");
     if (bcast_dim == BcastDim::H) {
         return multibank ?
             "kernels/dataflow/reader_bcast_h_8bank.cpp" :
@@ -33,7 +34,7 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
             "kernels/dataflow/reader_bcast_w.cpp";
     } if (bcast_dim == BcastDim::HW) {
         return multibank ?
-            "kernels/dataflow/reader_dual_8bank.cpp" :
+            "kernels/dataflow/reader_bcast_hw_8bank.cpp" :
             "kernels/dataflow/reader_binary_diff_lengths.cpp";
     }
     TT_ASSERT(false && "Unexpected bcast_dim!");
@@ -63,7 +64,7 @@ int main(int argc, char **argv) {
     const char* bdim_to_log_string[] = { "", "BCAST_H", "BCAST_W", "", "BCAST_HW" };
     const char* op_id_to_op_define[] = {"add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast"};
     const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
-    bool multibank = false;
+    bool multibank = true;
 
     auto bdims = BcastDim::all();
     auto ops = BcastOp::all();
@@ -93,7 +94,7 @@ int main(int argc, char **argv) {
         tt_xy_pair core = {0, 0};
 
         vector<uint32_t> shape = {1, 4, 2*TILE_HEIGHT, 3*TILE_WIDTH};
-        u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
+        u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0], N = shape[0], C = shape[1];
         u32 HW = H*W;
         TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
         TT_ASSERT(H > 0 && W > 0 && NC > 0);
@@ -103,7 +104,7 @@ int main(int argc, char **argv) {
 
         uint32_t single_tile_bytes = 2 * 1024;
         uint32_t dram_buffer_bytes = single_tile_bytes * num_tensor_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src0_addr = 0;
         int dram_src0_channel_id = 0;
         uint32_t dram_buffer_src1_addr = 256 * 1024 * 1024; // needs to be at a different address for multi-bank
@@ -158,22 +159,24 @@ int main(int argc, char **argv) {
 
         vector<uint16_t> tiled_bcast_values;
         vector<uint16_t> ref_bcast_values;
-        vector<uint32_t> ref_bcast_shape = {1,1,1,1};
+        vector<uint32_t> ref_bcast_shape = {N,C,1,1};
         float bcast_1value = 10.0f;
         uint16_t bcast_1value16 = bfloat16(bcast_1value).to_uint16();
         unsigned num_bcast_tiles = 0;
         // build the constant tiles to be broadcast
         if (bcast_dim == BcastDim::HW) {
-            num_bcast_tiles = 1;
-            ref_bcast_values.resize(1, 0);
-            ref_bcast_values[0] = bcast_1value16;
+            num_bcast_tiles = NC;
+            ref_bcast_values.resize(NC, 0);
+            for (int j = 0; j < NC; j++)
+                // add something not too large but different between tiles
+                ref_bcast_values[j] = bfloat16(bcast_1value+(j%7)).to_uint16();
             // convert the reference broadcast tensor to tiled format
             tiled_bcast_values = convert_layout<u16>(
                 ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
             TT_ASSERT(tiled_bcast_values[0] == bcast_1value16);
             // restore ref values and shape to 1
-            ref_bcast_values.resize(1);
             ref_bcast_shape[3] = 1;
+            ref_bcast_shape[4] = 1;
         } else if (bcast_dim == BcastDim::H) {
             // For bcast_h a.k.a. Dim::R we broadcast _over_ H, meaning we take a W vector and += it over each element in the H dimension
             // At least that's the behavior i've seen from a single tile bcast-H
@@ -183,25 +186,25 @@ int main(int argc, char **argv) {
             // pad values and shape with extra 32 values because the reader kernel expects it
             // generate broadcast values along the W axis with one extra tile (needed by the kernel I believe)
             // TODO(AP): need to figure out why the extra tile in broadcast inputs is expected by the kernel
-            ref_bcast_values.resize(W, 0);
+            ref_bcast_values.resize(NC*W, 0);
             ref_bcast_shape[3] = W;
-            for (int j = 0; j < W; j++)
+            for (int j = 0; j < NC*W; j++)
                 // add something not too large but different between tiles
                 ref_bcast_values[j] = bfloat16(bcast_1value+(j%7)).to_uint16();
             tiled_bcast_values = convert_layout<u16>(
                 ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
-            num_bcast_tiles = Wt;
+            num_bcast_tiles = NC*Wt;
             // restore values and shape to W
         } else if (bcast_dim == BcastDim::W) {
             // see the comments above for BCAST_H
-            ref_bcast_values.resize(H, 0);
+            ref_bcast_values.resize(NC*H, 0);
             ref_bcast_shape[2] = H;
-            for (int j = 0; j < H; j++)
+            for (int j = 0; j < NC*H; j++)
                 // add something not too large but different between tiles
                 ref_bcast_values[j] = bfloat16(bcast_1value+(j%7)).to_uint16();
             tiled_bcast_values = convert_layout<u16>(
                 ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
-            num_bcast_tiles = Ht;
+            num_bcast_tiles = NC*Ht;
         }
 
         auto bcast_tiled_u32 = u32_from_u16_vector(tiled_bcast_values);
@@ -221,7 +224,7 @@ int main(int argc, char **argv) {
             core,
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
-        
+
         auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
             program,
             multibank ? "kernels/dataflow/writer_unary_8bank.cpp"
@@ -243,7 +246,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_src1_noc_xy.x, // 5
             (std::uint32_t)dram_src1_noc_xy.y, // 6
             num_bcast_tiles, NC*Ht*Wt, NC, Ht, Wt}); // 7 8 9 10 11
-        
+
         ll_buda::WriteRuntimeArgsToDevice(
             device,
             unary_writer_kernel,
@@ -299,7 +302,6 @@ int main(int argc, char **argv) {
         else
             ll_buda::ReadFromDeviceDRAMChannel(
                 device, dram_dst_channel_id, dst_dram_buffer->address(), result_vec, dst_dram_buffer->size());
-        TT_ASSERT(result_vec.size() == NC*W*H/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

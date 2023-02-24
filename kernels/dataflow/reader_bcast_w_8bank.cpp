@@ -17,23 +17,25 @@ void kernel_main() {
 
     // single-tile ublocks
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    
+
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
 
     uint32_t num_tiles = src0_num_tiles;
     uint32_t i = 0;
+    uint32_t i_bcast = 0;
     for (uint32_t nc = 0; nc < NC; nc ++ ) {
         for (uint32_t ht = 0; ht < Ht; ht++ ) {
             {
                 // only read one tile in H per W-line of tiles
                 // So we push a total of NC*H tiles from src1
                 cb_reserve_back(cb_id_in1, onetile);
-                uint64_t src1_noc_addr = get_noc_addr(ht, src1_addr, 8, 3, 11);
+                uint64_t src1_noc_addr = get_noc_addr(i_bcast, src1_addr, 8, 3, 11);
                 l1_write_addr_in1 = get_write_ptr(cb_id_in1);
                 noc_async_read(src1_noc_addr, l1_write_addr_in1, tile_bytes);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
+                i_bcast++;
             }
 
             for (uint32_t wt = 0; wt < Wt; wt++) {

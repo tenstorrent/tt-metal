@@ -17,9 +17,9 @@ _C.device.StartDebugPrintServer(device)
 
 if __name__ == "__main__":
     torch.manual_seed(123)
-    N = 1
-    C = 2
-    H = 3
+    N = 3
+    C = 4
+    H = 5
     HP = 64
     W = 32*5
     x = torch.randn((N,C,H,W))

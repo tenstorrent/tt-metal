@@ -126,8 +126,9 @@ def untilize(x):
 def print_diff_argmax(a, b):
     absdiff = (a-b).abs()
     argmax = absdiff.argmax().item()
-    print(absdiff.reshape(-1)[argmax], " at ", argmax)
-    return
+    diff = absdiff.reshape(-1)[argmax]
+    print(diff, " at ", argmax)
+    return diff.item()
 
 
 def get_oom_of_float(float_lst):

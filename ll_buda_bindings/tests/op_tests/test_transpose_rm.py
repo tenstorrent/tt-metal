@@ -17,11 +17,11 @@ _C.device.StartDebugPrintServer(device)
 
 if __name__ == "__main__":
     torch.manual_seed(123)
-    N = 1
+    N = 3
     C = 128 # 2
     H = 2 # 128
     W = 64
-    x = torch.randn((N,C,H,W))
+    x = torch.randn((N,C,H,W)).to(torch.float16).to(torch.float32)
 
     xt = _C.tensor.Tensor(x.reshape(-1).tolist(), [N, C, H, W], _C.tensor.DataFormat.FLOAT32, _C.tensor.Layout.ROW_MAJOR, device)
 

@@ -37,6 +37,8 @@ Tensor reduce(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum r
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
+    if (reduce_dim == ReduceOpDim::HW)
+        TT_ASSERT(scaler == 1.0f && "Reduce_HW currently only works correctly with scaler == 1.0f!");
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 
@@ -48,7 +50,7 @@ Tensor reduce(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum r
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
 
     uint32_t single_tile_size = 2 * 1024;
-    
+
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume()/TILE_HW;
 
@@ -97,7 +99,7 @@ Tensor reduce(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum r
         core,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     ll_buda::DataMovementKernel *writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_unary_8bank.cpp",

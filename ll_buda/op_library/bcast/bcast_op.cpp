@@ -26,7 +26,7 @@ const char* get_reader_name(BcastOpDim::Enum bcast_dim) {
     } else if (bcast_dim == BcastOpDim::W) {
         return "kernels/dataflow/reader_bcast_w_8bank.cpp";
     } if (bcast_dim == BcastOpDim::HW) {
-        return "kernels/dataflow/reader_dual_8bank.cpp";
+        return "kernels/dataflow/reader_bcast_hw_8bank.cpp";
     }
     TT_ASSERT(false && "Unexpected bcast_dim!");
     return "";
@@ -55,28 +55,28 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
 
     const auto ashape = a.shape();
     const auto bshape = b.shape();
-
-    u32 W = ashape[3], H = ashape[2], NC = ashape[1]*ashape[0];
+    u32 N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
+    u32 bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
+    u32 NC = N*C;
     u32 HW = H*W;
+
     TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
-    TT_ASSERT(bshape[0] == 1 && bshape[1] == 1 && "Only single-batch, single-channel broadcast is supported.");
     TT_ASSERT(a.volume() % TILE_HW == 0);
 
     // validate input dimensions
     if (bcast_dim == BcastOpDim::W)
-        TT_ASSERT(bshape[2] == ashape[2] && bshape[3] == TILE_WIDTH);
+        TT_ASSERT(N == bN && C == bC && H == bH && bW == TILE_WIDTH);
     if (bcast_dim == BcastOpDim::H)
-        TT_ASSERT(bshape[3] == ashape[3] && bshape[2] == TILE_HEIGHT);
+        TT_ASSERT(N == bN && C == bC && W == bW && bH == TILE_HEIGHT);
     if (bcast_dim == BcastOpDim::HW)
-        TT_ASSERT(bshape[3] == TILE_WIDTH && bshape[2] == TILE_HEIGHT);
+        TT_ASSERT(N == bN && C == bC && bW == TILE_WIDTH && bH == TILE_HEIGHT);
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
-    u32 bW = bshape[3], bH = bshape[2];
     uint32_t num_tensor_tiles = NC*Ht*Wt;
-    uint32_t num_btensor_tiles = bH*bW / TILE_HW;
+    uint32_t num_btensor_tiles = NC*bH*bW / TILE_HW;
 
     ll_buda::Program *program = new ll_buda::Program();
 
@@ -88,7 +88,7 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
 
     uint32_t single_tile_size = 2 * 1024;
-    
+
     // This should allocate a DRAM buffer on the device
     ll_buda::Device *device = a.device();
     ll_buda::Tensor output = Tensor(a.shape(), a.dtype(), tt::ll_buda::Layout::TILE, device);
@@ -138,7 +138,7 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
         core,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     ll_buda::DataMovementKernel *unary_writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_unary_8bank.cpp",
@@ -173,7 +173,7 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    
+
         ll_buda::WriteRuntimeArgsToDevice(
             device,
             binary_reader_kernel,
@@ -186,7 +186,7 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
             0, // 5
             0, // 6
             num_btensor_tiles, NC*Ht*Wt, NC, Ht, Wt}); // 7 8 9 10 11
-        
+
         ll_buda::WriteRuntimeArgsToDevice(
             device,
             unary_writer_kernel,
