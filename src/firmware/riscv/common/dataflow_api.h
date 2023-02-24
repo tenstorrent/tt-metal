@@ -434,7 +434,7 @@ std::uint64_t get_noc_addr(std::uint32_t addr) {
  * Initiates an asynchronous read from a specified source node located at NOC
  * coordinates (x,y) at a local address (encoded as a uint64_t using \a
  * get_noc_addr function). The destination is in L1 memory on the Tensix core
- * executing this function call. Also, \a see noc_async_read_barrier.
+ * executing this function call. Also, see \a noc_async_read_barrier.
  *
  * The source node can be either a DRAM bank, a Tensix core or a PCIe controller.
  *
@@ -463,7 +463,7 @@ void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr,
  * Tensix core executing this function call. The destination is specified using
  * a uint64_t encoding referencing an on-chip node located at NOC coordinates
  * (x,y) and a local address created using get_noc_addr function. Also, see
- * noc_async_write_barrier.
+ * \a noc_async_write_barrier.
  *
  * The destination node can be either a DRAM bank, Tensix core+L1 memory
  * address or a PCIe controller.
@@ -482,12 +482,62 @@ void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr
                             NOC_UNICAST_WRITE_VC, false, false, 1);
 }
 
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to a rectangular destination grid.
+ * The destinations are specified using a uint64_t encoding referencing an
+ * on-chip grid of nodes located at NOC coordinate range
+ * (x_start,y_start,x_end,y_end) and a local address created using
+ * *get_noc_multicast_addr* function. Also, *see noc_async_write_barrier*.
+ *
+ * The destination nodes can only be a set of Tensix cores + L1 memory address.
+ * The destination nodes must form a rectangular grid. The destination L1
+ * memory address must be the same on all destination nodes.
+ *
+ * With this API, the multicast sender cannot be part of the multicast
+ * destinations. If the multicast sender has to be in the multicast
+ * destinations (i.e. must perform a local L1 write), the other API variant
+ * *noc_async_write_multicast_loopback_src* can be used.
+ *
+ * Note: there is no restriction on the number of destinations, i.e. the
+ * multicast destinations can span the full chip. However, as mentioned
+ * previosuly, the multicast source cannot be part of the destinations. So, the
+ * maximum number of destinations is 119.
+ *
+ * Return value: None
+ *
+ * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
+ * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | size                   | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                                        | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..119                                                        | True     |
+ */
 FORCE_INLINE
 void noc_async_write_multicast(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t size, std::uint32_t num_dests) {
         ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, size,
                             NOC_MULTICAST_WRITE_VC, true, false, num_dests);
 }
 
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to a rectangular destination grid.
+ * The destinations are specified using a uint64_t encoding referencing an
+ * on-chip grid of nodes located at NOC coordinate range
+ * (x_start,y_start,x_end,y_end) and a local address created using
+ * *get_noc_multicast_addr* function. The size of data that is sent is 4 Bytes.
+ * This is usually used to set a semaphore value at the destination nodes, as a
+ * way of a synchronization mechanism. The same as *noc_async_write_multicast*
+ * with preset size of 4 Bytes.
+ *
+ * Return value: None
+ *
+ * | Argument               | Description                                                              | Type     | Valid Range                                               | Required |
+ * |------------------------|--------------------------------------------------------------------------|----------|-----------------------------------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                    | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..119                                                    | True     |
+ */
 FORCE_INLINE
 void noc_semaphore_set_multicast(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests) {
         ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr_multicast, 4 /*size in bytes*/,
@@ -501,9 +551,9 @@ void noc_async_write_multicast_loopback_src(std::uint32_t src_local_l1_addr, std
 }
 
 /**
- * This blocking call waits for all the outstanding enqueued noc_async_read
+ * This blocking call waits for all the outstanding enqueued *noc_async_read*
  * calls issued on the current Tensix core to complete. After returning from
- * this call the noc_async_read queue will be empty for the current Tensix
+ * this call the *noc_async_read* queue will be empty for the current Tensix
  * core.
  *
  * Return value: None
@@ -514,9 +564,9 @@ void noc_async_read_barrier() {
 }
 
 /**
- * This blocking call waits for all the outstanding enqueued noc_async_write
+ * This blocking call waits for all the outstanding enqueued *noc_async_writ*e
  * calls issued on the current Tensix core to complete. After returning from
- * this call the noc_async_write queue will be empty for the current Tensix
+ * this call the *noc_async_write* queue will be empty for the current Tensix
  * core.
  *
  * Return value: None
@@ -526,17 +576,56 @@ void noc_async_write_barrier()  {
     while (!ncrisc_noc_nonposted_writes_flushed(loading_noc));
 }
 
+/**
+ * A blocking call that waits until the value of a local L1 memory address on
+ * the Tensix core executing this function becomes equal to a target value.
+ * This L1 memory address is used as a semaphore of size 4 Bytes, as a
+ * synchronization mechanism. Also, see *noc_semaphore_set*.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                                                    | Type     | Valid Range        | Required |
+ * |-----------|----------------------------------------------------------------|----------|--------------------|----------|
+ * | sem_addr  | Semaphore address in local L1 memory                           | uint32_t | 0..1MB             | True     |
+ * | val       | The target value of the semaphore                              | uint32_t | Any uint32_t value | True     |
+ */
 FORCE_INLINE
 void noc_semaphore_wait(volatile uint32_t* sem_addr, uint32_t val)  {
     while((*sem_addr) != val);
 }
 
+/**
+ * Sets the value of a local L1 memory address on the Tensix core executing
+ * this function to a specific value. This L1 memory address is used as a
+ * semaphore of size 4 Bytes, as a synchronization mechanism. Also, see
+ * *noc_semaphore_wait*.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                                                    | Type     | Valid Range        | Required |
+ * |-----------|----------------------------------------------------------------|----------|--------------------|----------|
+ * | sem_addr  | Semaphore address in local L1 memory                           | uint32_t | 0..1MB             | True     |
+ * | val       | Value to set the semaphore to                                  | uint32_t | Any uint32_t value | True     |
+ */
 FORCE_INLINE
 void noc_semaphore_set(volatile uint32_t* sem_addr, uint32_t val)  {
     // set semaphore value to val
     (*sem_addr) = val;
 }
 
+/**
+ * The Tensix core executing this function call initiates an atomic increment
+ * (with 32-bit wrap) of a remote Tensix core L1 memory address. This L1 memory
+ * address is used as a semaphore of size 4 Bytes, as a synchronization
+ * mechanism.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                                                    | Type     | Valid Range                                               | Required |
+ * |-----------|----------------------------------------------------------------|----------|-----------------------------------------------------------|----------|
+ * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                        | True     |
+ */
 FORCE_INLINE
 void noc_semaphore_inc(uint64_t addr, uint32_t incr){
     /*
