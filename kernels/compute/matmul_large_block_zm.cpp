@@ -95,7 +95,7 @@ void compute_main(const hlk_args_t *args) {
             }
             in0_index_subblock_offset += in0_subblock_num_tiles;
         }
-        
+
         if (spill) enable_reload = true;
 
         cb_pop_front(CB::c_in0, in0_block_num_tiles);
@@ -104,5 +104,3 @@ void compute_main(const hlk_args_t *args) {
     }
 
 }
-
-

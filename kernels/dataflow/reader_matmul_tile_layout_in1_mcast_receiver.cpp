@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     kernel_profiler::mark_time(16);
@@ -104,5 +103,4 @@ void kernel_main() {
         cb_push_back(cb_id_in1, in1_block_num_tiles);
         kernel_profiler::mark_time_once(18, &one_time_cb_push);
     }
-    kernel_profiler::mark_time(19);
 }

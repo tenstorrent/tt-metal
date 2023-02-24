@@ -13,6 +13,7 @@
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "ckernel_globals.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 // TODO: commonize this w/ the runtime -- it's the same configs
 // these consts must be constexprs
@@ -48,7 +49,7 @@ uint8_t noc_size_y;
 
 // to reduce the amount of code changes, both BRISC and NRISCS instatiate these counter for both NOCs (ie NUM_NOCS)
 // however, atm NCRISC uses only NOC-1 and BRISC uses only NOC-0
-// this way we achieve full separation of counters / cmd_buffers etc. 
+// this way we achieve full separation of counters / cmd_buffers etc.
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_acked[NUM_NOCS];
@@ -85,7 +86,7 @@ void enable_power_management() {
   {
     // Important: program hyteresis first then enable, otherwise the en_pulse will fail to latch the value
     uint32_t hyst_val = pm_hyst & 0x7f;
-    
+
     // Program slightly off values for each CG
     uint32_t hyst0_reg_data = ((hyst_val) << 24) | ((hyst_val) << 16) | ((hyst_val) << 8) | hyst_val;
     uint32_t hyst1_reg_data = ((hyst_val) << 24) | ((hyst_val) << 16) | ((hyst_val) << 8) | hyst_val;
@@ -99,7 +100,7 @@ void enable_power_management() {
     WRITE_REG(RISCV_DEBUG_REG_CG_CTRL_HYST1, hyst1_reg_data);
     WRITE_REG(RISCV_DEBUG_REG_CG_CTRL_HYST2, hyst2_reg_data);
   }
-  
+
   // core.ex_setc16(CG_CTRL_EN_Hyst_ADDR32, command_data[1] >> 16, instrn_buf[0]);
   core.ex_setc16(CG_CTRL_EN_Regblocks_ADDR32, pm_mask, instrn_buf[0]);
 
@@ -136,7 +137,7 @@ void enable_power_management() {
     NOC_WRITE_REG(NOC1_REGS_START_ADDR+0x104, oldval);
 
   }
-  
+
 }
 
 void set_trisc_address(){
@@ -169,7 +170,7 @@ void l1_to_ncrisc_iram_copy() {
   // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
   // NOTE: NCRISC_L1_SCRATCH_BASE (part of NCRISC_FIRMWARE_BASE) is used as NCRISC scratch after NCRISC is loaded
   tdma_xmov(TDMA_MOVER0, (l1_mem::address_map::NCRISC_FIRMWARE_BASE)>>4, (0x4<<12), (l1_mem::address_map::NCRISC_IRAM_CODE_SIZE)>>4, XMOV_L1_TO_L0);
-  // Wait for DMA to finish  
+  // Wait for DMA to finish
   wait_tdma_movers_done(RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK);
 }
 
@@ -225,7 +226,7 @@ void device_setup() {
 
   // Clear destination registers
   core.ex_zeroacc(instrn_buf[0]);
-  
+
   // Enable CC stack
   core.ex_encc(instrn_buf[0]);
 
@@ -271,7 +272,7 @@ void local_mem_copy() {
    volatile uint *local_mem_start_addr = (volatile uint*) LOCAL_MEM_BASE_ADDR;
 
    // Removed gating conditional here since getting maybe-unitialized error under
-   // 'DEBUG_MODE=1' compilation. It should have been an assert anyway. 
+   // 'DEBUG_MODE=1' compilation. It should have been an assert anyway.
    // TODO(agrebenisan and/or apokrovsky): Can we use print server for assertions?
    l1_local_mem_start_addr = (volatile uint*)l1_mem::address_map::RISC_LOCAL_MEM_BASE; // TODO(AP) - is this correct?
 
@@ -287,6 +288,7 @@ void local_mem_copy() {
 
 int main() {
 
+  kernel_profiler::mark_time(CC_MAIN_START);
   RISC_POST_STATUS(0x10000000);
 
   // note: BRISC uses NOC0, NCRISC uses NOC1
@@ -313,31 +315,33 @@ int main() {
     // FIXME: this is not sufficient to bring Trisc / Tensix out of a bad state
     // do we need do more than just assert_trisc_reset() ?
     // for now need to call /device/bin/silicon/tensix-reset from host when TRISCs/Tensix get into a bad state
-    assert_trisc_reset();  
-    
+    assert_trisc_reset();
+
     // Bring TRISCs out of reset
     deassert_trisc_reset();
   }
 
-  if ((uint)l1_mem::address_map::RISC_LOCAL_MEM_BASE == 
+  if ((uint)l1_mem::address_map::RISC_LOCAL_MEM_BASE ==
           ((uint)__local_mem_rodata_end_addr&0xfff00000))
   {
       local_mem_copy();
-  }  
+  }
 
+  kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
   // Run the BRISC kernel
   kernel_main();
+  kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 
    if (*use_triscs) {
     // Wait for all the TRISCs to finish (it assumes all 3 TRISCs have been launched and will finish)
     while (! (*((volatile uint32_t*)trisc_mailbox_addresses[0]) == 1 &&
-              *((volatile uint32_t*)trisc_mailbox_addresses[1]) == 1 && 
+              *((volatile uint32_t*)trisc_mailbox_addresses[1]) == 1 &&
               *((volatile uint32_t*)trisc_mailbox_addresses[2]) == 1
-             ) 
+             )
           ) {}
-            
+
     // One all 3 have finished, assert reset on all of them
-    assert_trisc_reset();  
+    assert_trisc_reset();
   }
 
   volatile uint32_t* test_mailbox_ptr = (volatile uint32_t*)(l1_mem::address_map::FIRMWARE_BASE + TEST_MAILBOX_ADDRESS);
@@ -347,6 +351,7 @@ int main() {
   // disable core once we're done
   enable_core_mailbox_ptr[0] = 0x0;
 
+  kernel_profiler::mark_time(CC_MAIN_END);
   while (true)
   {
     risc_reset_check();

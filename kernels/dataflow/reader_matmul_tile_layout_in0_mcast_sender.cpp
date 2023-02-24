@@ -1,10 +1,9 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
-    kernel_profiler::mark_time(11);
+    kernel_profiler::mark_time(10);
     // in0 tensor args
     uint32_t in0_tensor_addr                    = get_arg_val<uint32_t>(0);
     uint32_t in0_tensor_start_tile_id           = get_arg_val<uint32_t>(1);
@@ -114,7 +113,7 @@ void kernel_main() {
         noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
         noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
-        kernel_profiler::mark_time_once(12, &one_time_multicast);
+        kernel_profiler::mark_time_once(11, &one_time_multicast);
 
         // Now we have the block in the CB address, we can mcast to dests!
         uint64_t in0_multicast_data_addr = get_noc_multicast_addr(
@@ -157,7 +156,6 @@ void kernel_main() {
 
         cb_push_back(cb_id_in0, in0_block_num_tiles);
         cb_push_back(cb_id_in1, in1_block_num_tiles);
-        kernel_profiler::mark_time_once(13, &one_time_cb_push);
+        kernel_profiler::mark_time_once(12, &one_time_cb_push);
     }
-    kernel_profiler::mark_time(14);
 }

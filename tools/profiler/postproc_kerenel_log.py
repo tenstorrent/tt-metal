@@ -39,12 +39,20 @@ def print_help():
         "Please choose a plot setup class that matches your test kernel profile data."
     )
     print("e.g. : psotproc_kernel_log.py test_add_two_ints")
+    print("Or run default by providing no args")
+    print("e.g. : psotproc_kernel_log.py")
 
 
 def main(args):
     if len(args) == 1:
         try:
-            setup = getattr(plot_setup, args[0])
+            setup = getattr(plot_setup, args[0])()
+        except Exception:
+            print_help()
+            return
+    elif len(args) == 0:
+        try:
+            setup = getattr(plot_setup, "test_base")()
         except Exception:
             print_help()
             return

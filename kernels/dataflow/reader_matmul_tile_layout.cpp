@@ -1,10 +1,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
 
-    kernel_profiler::mark_time(1);
 
     bool one_time_profile = true;
 
@@ -107,7 +105,6 @@ void kernel_main() {
         cb_push_back(cb_id_in0, in0_block_num_tiles);
         cb_push_back(cb_id_in1, in1_block_num_tiles);
 
-        kernel_profiler::mark_time_once(2, &one_time_profile);
+        kernel_profiler::mark_time_once(6, &one_time_profile);
     }
-    kernel_profiler::mark_time(3);
 }

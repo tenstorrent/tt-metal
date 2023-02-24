@@ -44,7 +44,7 @@ DISABLE_FWLOG ?= 1
 
 # provide in command line or kernel makefile
 RISCV_TOOLCHAIN_DIR = $(BUDA_HOME)/src/firmware/riscv/toolchain
-SOURCES ?= 
+SOURCES ?=
 SOURCES += $(wildcard src/*.cc)
 OUTPUT_DIR ?= out
 

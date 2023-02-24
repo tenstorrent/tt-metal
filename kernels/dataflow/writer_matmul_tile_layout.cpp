@@ -1,9 +1,7 @@
 #include "dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
 
-    kernel_profiler::mark_time(4);
 
     // out tensor args
     uint32_t out_tensor_addr                         = get_arg_val<uint32_t>(0);
@@ -70,5 +68,4 @@ void kernel_main() {
         }
         out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
     }
-    kernel_profiler::mark_time(6);
 }

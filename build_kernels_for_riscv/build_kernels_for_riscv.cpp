@@ -38,8 +38,8 @@ void generate_binary_for_brisc(tt::build_kernel_for_riscv_options_t* build_kerne
     stringstream make_clean_cmd;
     stringstream make_cmd;
     std::string make_flags = " OUTPUT_DIR=" + fs::absolute(out_dir_path).string() + "/brisc ";
-    
-    // this is in the top-level outdir because "/brisc" is deleted by make clean, but we log the output of make clean as well    
+
+    // this is in the top-level outdir because "/brisc" is deleted by make clean, but we log the output of make clean as well
     string log_file = fs::absolute(out_dir_path).string() + "/brisc_build.log";
     utils::create_file(log_file);
 
@@ -108,7 +108,7 @@ void generate_binary_for_ncrisc(tt::build_kernel_for_riscv_options_t* build_kern
     stringstream make_cmd;
     std::string make_flags = " OUTPUT_DIR=" + fs::absolute(out_dir_path).string() + "/ncrisc ";
 
-    // this is in the top-level outdir because "/ncrisc" is deleted by make clean, but we log the output of make clean as well    
+    // this is in the top-level outdir because "/ncrisc" is deleted by make clean, but we log the output of make clean as well
     string log_file = fs::absolute(out_dir_path).string() + "/ncrisc_build.log";
     utils::create_file(log_file);
 
@@ -134,7 +134,7 @@ void generate_binary_for_ncrisc(tt::build_kernel_for_riscv_options_t* build_kern
     make_cmd << " PERF_DUMP=" << to_string(is_perf_dump_en);
     make_cmd << " INTERMED_DUMP=" << to_string(is_perf_spill_dram);
     make_cmd << " PERF_DUMP_LEVEL=" << to_string(perf_dump_level);
-    
+
     // Make a directory "ncrisc_kernel" in the out_dir_path
     std::string kernel_dir = out_dir_path + "/ncrisc_kernel";
     fs::create_directories(kernel_dir);
@@ -199,12 +199,12 @@ void generate_binaries_for_triscs(tt::build_kernel_for_riscv_options_t* build_ke
     auto hlk_defines = build_kernel_for_riscv_options->hlk_defines;
 
     // we have a directory per op in the output directory
-    string op_path = out_dir_path; 
+    string op_path = out_dir_path;
     fs::create_directories(op_path);
 
     log_debug(tt::LogBuildKernels, "build_kernel_for_riscv_options->fp32_dest_acc_en = {}", build_kernel_for_riscv_options->fp32_dest_acc_en);
 
-    if (not skip_hlkc) {    
+    if (not skip_hlkc) {
         // hlkc_api
         hlk_file_name = compile_hlk(
             hlk_file_name,
@@ -212,7 +212,7 @@ void generate_binaries_for_triscs(tt::build_kernel_for_riscv_options_t* build_ke
             arch_name,
             hlk_defines,
             false, // is_perf_dump_en,
-            false, // untilize 
+            false, // untilize
             false, // enable_cache,
             false,  // pack_microblocks -- not supported
             build_kernel_for_riscv_options->fp32_dest_acc_en,
@@ -309,7 +309,7 @@ void compile_ckernels_for_trisc(string chlkc_src_dir, string output_dir, string 
     make_src_cmd << " MAILBOX_ADDR=" << trisc_mailbox_addr;
     make_src_cmd << " HLKC_INC=" << fs::absolute(chlkc_src_dir).string();
     make_src_cmd << " OUTPUT_DIR=" << common_output_dir;
-    
+
     // std::cout is not thread-safe
     // cout << "    Make compile cmd: " << make_src_cmd.str() << "\n";
     if (!tt::utils::run_command(make_src_cmd.str(), log_file, false)) {
@@ -339,7 +339,7 @@ void compile_ckernels_for_trisc(string chlkc_src_dir, string output_dir, string 
 }
 
 std::pair<vector<DataFormat>,vector<DataFormat>> extend_unpack_data_format_vectors_to_all_cbs(const vector<DataFormat> &src_formats, const vector<DataFormat> &dst_formats) {
-    // for the purposes of consistency and brevity of the LLK code that uses these arrays, 
+    // for the purposes of consistency and brevity of the LLK code that uses these arrays,
     // extend unpack data formats to all 32 CBs
     // [out0...out7] is missing from the vector, insert invalid (not used by the unpacker)
 
@@ -368,7 +368,7 @@ std::pair<vector<DataFormat>,vector<DataFormat>> extend_unpack_data_format_vecto
 }
 
 std::pair<vector<DataFormat>,vector<DataFormat>> extend_pack_data_format_vectors_to_all_cbs(const vector<DataFormat> &src_formats, const vector<DataFormat> &dst_formats) {
-    // for the purposes of consistency and brevity of the LLK code that uses these arrays, 
+    // for the purposes of consistency and brevity of the LLK code that uses these arrays,
     // extend pack data formats to all 32 CBs
     // [in0...in7, param0...param7] are missing from the vector, insert invalid (not used by the unpacker)
 
@@ -408,7 +408,7 @@ std::string create_formats_array_string(std::string array_type, std::string arra
     return str_stream.str();
 }
 
-std::pair<std::vector<DataFormat>, std::vector<DataFormat>>  
+std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
 generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en) {
 
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(
@@ -420,7 +420,7 @@ generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_ds
 
     TT_ASSERT(src_formats.size() == 24 && dst_formats.size() == 24,
         "There must be 8 unpack src/dst formats for each input, param, and intermediate operands.");
-    
+
     vector<DataFormat> src_formats_all_cbs;
     vector<DataFormat> dst_formats_all_cbs;
     tie(src_formats_all_cbs, dst_formats_all_cbs) = extend_unpack_data_format_vectors_to_all_cbs(src_formats, dst_formats);
@@ -432,7 +432,7 @@ generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_ds
 }
 
 void emit_unpack_data_formats(std::string unpack_data_format_descs, std::vector<DataFormat> src_formats_all_cbs, std::vector<DataFormat> dst_formats_all_cbs) {
-    // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format 
+    // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
     ofstream file_stream;
     file_stream.open(unpack_data_format_descs);
     file_stream << create_formats_array_string("const std::int32_t", "unpack_src_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(src_formats_all_cbs));
@@ -440,7 +440,7 @@ void emit_unpack_data_formats(std::string unpack_data_format_descs, std::vector<
     file_stream.close();
 }
 
-std::pair<std::vector<DataFormat>, std::vector<DataFormat>>  
+std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
 generate_pack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr,
@@ -458,14 +458,14 @@ generate_pack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_
 
     TT_ASSERT(src_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
     TT_ASSERT(dst_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
-   
+
     return std::make_pair(src_formats_all_cbs, dst_formats_all_cbs);
 }
 
 void emit_pack_data_formats(std::string pack_data_format_descs, std::vector<DataFormat> src_formats_all_cbs, std::vector<DataFormat> dst_formats_all_cbs) {
     ofstream file_stream;
     file_stream.open(pack_data_format_descs);
-    // TODO: we should be emitting "unsigned char", no reason to use 4B per data format 
+    // TODO: we should be emitting "unsigned char", no reason to use 4B per data format
     file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(src_formats_all_cbs));
     file_stream << create_formats_array_string("const std::int32_t", "pack_dst_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(dst_formats_all_cbs));
 
@@ -549,10 +549,10 @@ void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_ke
 
     // equalize "upack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
-    // in order to allow any CB to be read and written to/from L1, these formats should be the same (one cannot be DataFromat::Invalid if the other is set)   
+    // in order to allow any CB to be read and written to/from L1, these formats should be the same (one cannot be DataFromat::Invalid if the other is set)
     // if both formats are DataFormat::Invalid then this CB is not used
     // this allows any CB to be used as both in & out in non-compute kernels (readers/writers)
-    // TODO: for any CB to be used as both in & out of compute kernels (ie intermediate), additional work is required to propagate formats to "unpack dst (SRCA/B REG)" / "pack src (DST REG)" 
+    // TODO: for any CB to be used as both in & out of compute kernels (ie intermediate), additional work is required to propagate formats to "unpack dst (SRCA/B REG)" / "pack src (DST REG)"
     equalize_data_format_vectors(unpack_src_formats_all_cbs, pack_dst_formats_all_cbs);
 
     emit_unpack_data_formats(unpack_data_format_descs, unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs);

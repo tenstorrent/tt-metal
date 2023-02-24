@@ -8,6 +8,7 @@
 #include "risc_perf.h"
 #endif
 #include "ckernel_globals.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 volatile uint32_t local_mem_barrier;
 volatile uint32_t* test_mailbox_ptr = (volatile uint32_t*)(l1_mem::address_map::NCRISC_FIRMWARE_BASE + 0x4);
@@ -93,25 +94,29 @@ void local_mem_copy() {
 
 int main(int argc, char *argv[]) {
 
+  kernel_profiler::mark_time(CC_MAIN_START);
   init_riscv_context();
   allocate_debug_mailbox_buffer();
 
-  if ((uint)l1_mem::address_map::RISC_LOCAL_MEM_BASE == 
+  if ((uint)l1_mem::address_map::RISC_LOCAL_MEM_BASE ==
           ((uint)__local_mem_rodata_end_addr&0xfff00000))
   {
       local_mem_copy();
-  }  
+  }
 
-  noc_init(loading_noc); // NCRISC uses NOC-1 
+  noc_init(loading_noc); // NCRISC uses NOC-1
   risc_init();
 
-  setup_cb_read_write_interfaces(); 
+  setup_cb_read_write_interfaces();
   init_dram_channel_to_noc_coord_lookup_tables();
 
+  kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
   kernel_main();
+  kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 
   test_mailbox_ptr[0] = 0x1;
 
+  kernel_profiler::mark_time(CC_MAIN_END);
   while (true);
   return 0;
 }
