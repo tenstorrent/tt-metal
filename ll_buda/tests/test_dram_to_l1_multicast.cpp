@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_addr = 0;
         int dram_channel_id = 0;
         uint32_t local_buffer_addr = 200 * 1024;
@@ -41,11 +41,11 @@ int main(int argc, char **argv) {
         // same address as local_buffer
         // Note: src will NOT write into its dst buffer address
         // since we are not setting NOC_CMD_BRCST_SRC_INCLUDE
-        uint32_t dest_buffer_addr = 200 * 1024; 
+        uint32_t dest_buffer_addr = 200 * 1024;
 
-        auto dram_buffer = ll_buda::CreateDramBuffer(dram_channel_id, dram_buffer_size, dram_buffer_addr);
-        auto dram_noc_xy = dram_buffer->noc_coordinates(device);
-        
+        auto dram_buffer = ll_buda::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_addr);
+        auto dram_noc_xy = dram_buffer->noc_coordinates();
+
         tt_xy_pair core_start = {0, 0};
         std::size_t num_cores_x = 12;
         std::size_t num_cores_y = 10;
@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)core_start_physical.x,
             (std::uint32_t)core_start_physical.y,
             (std::uint32_t)(num_cores_x * num_cores_y) - 1}; // Note: exclude src from acks, since we are not setting NOC_CMD_BRCST_SRC_INCLUDE
-        
+
         log_info(LogTest, "Start = {}, {}", core_start_physical.x, core_start_physical.y);
         log_info(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
         auto mcast_reader_kernel = ll_buda::CreateDataMovementKernel(
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Launching kernels");
         pass &= ll_buda::LaunchKernels(device, program);
         log_info(LogTest, "Kernels done");
-        
+
         for(int i = 0 ; i < num_cores_y; i++) {
             for(int j = 0 ; j < num_cores_x; j++) {
                 tt_xy_pair dest_core = {(std::size_t) core_start.x + j, (std::size_t) core_start.y + i};

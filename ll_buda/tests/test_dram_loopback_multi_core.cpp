@@ -68,16 +68,16 @@ int main(int argc, char **argv) {
 
         TT_ASSERT(num_output_tiles % transient_buffer_size_tiles == 0);
 
-        auto input_dram_buffer = ll_buda::CreateDramBuffer(dram_channel_id, dram_buffer_size, dram_buffer_src_addr);
+        auto input_dram_buffer = ll_buda::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_src_addr);
 
         auto l1_b0 = ll_buda::CreateL1Buffer(program, loader_logical_core, transient_buffer_size_bytes, loader_buffer_address);
 
         auto l1_b1 = ll_buda::CreateL1Buffer(program, writer_logical_core, transient_buffer_size_bytes, writer_buffer_address);
 
-        auto output_dram_buffer = ll_buda::CreateDramBuffer(dram_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        auto output_dram_buffer = ll_buda::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates(device);
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates(device);
+        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
+        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
         // Loader (producer kernel) running on BRISC on logical core {0, 0}
         auto producer_kernel = ll_buda::CreateDataMovementKernel(

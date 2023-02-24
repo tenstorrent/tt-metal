@@ -44,14 +44,14 @@ Tensor transpose_wh(const Tensor &a) {
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
 
     uint32_t single_tile_size = 2 * 1024;
-    
+
     ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
 
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume()/TILE_HW;
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(a.device());
-    
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+
 
     // This should allocate a DRAM buffer on the device
     ll_buda::Device *device = a.device();
@@ -61,7 +61,7 @@ Tensor transpose_wh(const Tensor &a) {
 
     ll_buda::DramBuffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(output.device());
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;
@@ -95,7 +95,7 @@ Tensor transpose_wh(const Tensor &a) {
         core,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     ll_buda::DataMovementKernel *writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_unary_8bank.cpp",
@@ -187,11 +187,11 @@ Tensor transpose_hc(const Tensor &a) {
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
 
     uint32_t single_tile_size = 2 * 1024;
-    
+
     ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(a.device());
-    
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+
     // This should allocate a DRAM buffer on the device
     ll_buda::Device *device = a.device();
 
@@ -200,7 +200,7 @@ Tensor transpose_hc(const Tensor &a) {
 
     ll_buda::DramBuffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(output.device());
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;
@@ -234,7 +234,7 @@ Tensor transpose_hc(const Tensor &a) {
         core,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     ll_buda::DataMovementKernel *writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_unary_8bank.cpp",

@@ -78,7 +78,7 @@ ll_buda::Program *create_program(
         all_cores,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-        
+
     auto writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_unary.cpp",
@@ -122,9 +122,9 @@ void compile_and_configure_program(
 
 void write_same_runtime_args_to_device(
     ll_buda::Device *device, ll_buda::Program *program, const ll_buda::CoreRange &core_range, int32_t num_tiles, ll_buda::DramBuffer *src_dram_buffer, ll_buda::DramBuffer *dst_dram_buffer) {
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates(device);
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
-    
+    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+
     std::vector<uint32_t> unary_reader_args{
     (std::uint32_t)src_dram_buffer->address(),
     (std::uint32_t)dram_src_noc_xy.x,
@@ -157,9 +157,9 @@ void write_unique_writer_runtime_args_to_device(
     ll_buda::DramBuffer *dst_dram_buffer_2,
     ll_buda::DramBuffer *dst_dram_buffer_3
 ) {
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates(device);
+    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
     // All dst buffers use the same DRAM channel
-    auto dram_dst_noc_xy = dst_dram_buffer_1->noc_coordinates(device);
+    auto dram_dst_noc_xy = dst_dram_buffer_1->noc_coordinates();
 
     // Same readers args because all kernels read from same src
     std::vector<uint32_t> unary_reader_args{
@@ -207,9 +207,9 @@ void write_unique_reader_writer_runtime_args_to_device(
     ll_buda::DramBuffer *dst_dram_buffer_2,
     ll_buda::DramBuffer *dst_dram_buffer_3
 ) {
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates(device);
+    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
     // All dst buffers use the same DRAM channel
-    auto dram_dst_noc_xy = dst_dram_buffer_1->noc_coordinates(device);
+    auto dram_dst_noc_xy = dst_dram_buffer_1->noc_coordinates();
 
     // Data movement kernels across core groups read and write different number of tiles
     std::vector<uint32_t> unary_reader_args_1{
@@ -217,7 +217,7 @@ void write_unique_reader_writer_runtime_args_to_device(
         (std::uint32_t)dram_src_noc_xy.x,
         (std::uint32_t)dram_src_noc_xy.y,
         (std::uint32_t)num_tiles_1};
-    
+
     std::vector<uint32_t> unary_reader_args_2{
         src_dram_buffer->address(),
         (std::uint32_t)dram_src_noc_xy.x,
@@ -270,16 +270,16 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(ll_buda::Device 
     uint32_t single_tile_size = 2 * 1024;
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    
+
     uint32_t dram_buffer_src_addr = 0;
     int dram_src_channel_id = 0;
 
     uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
     int dram_dst_channel_id = 0;
 
-    auto src_dram_buffer = ll_buda::CreateDramBuffer(dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-    auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
-    
+    auto src_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
+    auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -296,20 +296,20 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(ll_buda::Device 
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
-    
+
     compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
     write_same_runtime_args_to_device(device, program, all_cores, num_tiles, src_dram_buffer, dst_dram_buffer);
 
     ll_buda::LaunchKernels(device, program);
-    
+
     std::vector<uint32_t> result_vec;
     ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
 
     ////////////////////////////////////////////////////////////////////////////
     //                          Validation
     ////////////////////////////////////////////////////////////////////////////
-    pass &= (src_vec == result_vec);  
+    pass &= (src_vec == result_vec);
 
     return pass;
 }
@@ -329,7 +329,7 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(ll_buda::Devic
     uint32_t single_tile_size = 2 * 1024;
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    
+
     uint32_t dram_buffer_src_addr = 0;
     int dram_src_channel_id = 0;
 
@@ -338,15 +338,15 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(ll_buda::Devic
     uint32_t dram_buffer_dst_addr_3 = dram_buffer_dst_addr_2 + dram_buffer_size;
     int dram_dst_channel_id = 0;
 
-    auto src_dram_buffer = ll_buda::CreateDramBuffer(dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-    auto dst_dram_buffer_1 = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr_1);
-    auto dst_dram_buffer_2 = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr_2);
-    auto dst_dram_buffer_3 = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr_3);
-    
+    auto src_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
+    auto dst_dram_buffer_1 = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr_1);
+    auto dst_dram_buffer_2 = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr_2);
+    auto dst_dram_buffer_3 = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr_3);
+
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
     ////////////////////////////////////////////////////////////////////////////
-    
+
     void *hlk_args = new unary_datacopy::hlk_args_t{
         .per_core_tile_cnt = num_tiles,
     };
@@ -359,14 +359,14 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(ll_buda::Devic
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
-    
+
     compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
     write_unique_writer_runtime_args_to_device(
         device, program, all_cores, core_blocks, num_tiles, src_dram_buffer, dst_dram_buffer_1, dst_dram_buffer_2, dst_dram_buffer_3);
 
     ll_buda::LaunchKernels(device, program);
-    
+
     std::vector<uint32_t> result_vec_1;
     ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer_1, result_vec_1, dst_dram_buffer_1->size());
 
@@ -407,7 +407,7 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(ll_buda::Dev
     uint32_t dram_buffer_size_1 = single_tile_size * num_tiles_1; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_2 = single_tile_size * num_tiles_2; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_3 = single_tile_size * num_tiles_3; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    
+
     uint32_t dram_buffer_src_addr = 0;
     int dram_src_channel_id = 0;
 
@@ -416,15 +416,15 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(ll_buda::Dev
     uint32_t dram_buffer_dst_addr_3 = dram_buffer_dst_addr_2 + dram_buffer_size_2;
     int dram_dst_channel_id = 0;
 
-    auto src_dram_buffer = ll_buda::CreateDramBuffer(dram_src_channel_id, dram_buffer_size_1, dram_buffer_src_addr);
-    auto dst_dram_buffer_1 = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size_1, dram_buffer_dst_addr_1);
-    auto dst_dram_buffer_2 = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size_2, dram_buffer_dst_addr_2);
-    auto dst_dram_buffer_3 = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size_3, dram_buffer_dst_addr_3);
+    auto src_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size_1, dram_buffer_src_addr);
+    auto dst_dram_buffer_1 = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_1, dram_buffer_dst_addr_1);
+    auto dst_dram_buffer_2 = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_2, dram_buffer_dst_addr_2);
+    auto dst_dram_buffer_3 = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_3, dram_buffer_dst_addr_3);
 
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
-    ////////////////////////////////////////////////////////////////////////////    
+    ////////////////////////////////////////////////////////////////////////////
     void *hlk_args_1 = new unary_datacopy::hlk_args_t{
         .per_core_tile_cnt = num_tiles_1,
     };
@@ -451,7 +451,7 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(ll_buda::Dev
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
-    
+
     compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
     write_unique_reader_writer_runtime_args_to_device(
@@ -459,7 +459,7 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(ll_buda::Dev
     );
 
     ll_buda::LaunchKernels(device, program);
-    
+
     std::vector<uint32_t> result_vec_1;
     ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer_1, result_vec_1, dst_dram_buffer_1->size());
 
@@ -474,7 +474,7 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(ll_buda::Dev
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> src_vec_2(src_vec.begin(), src_vec.begin() + (src_vec.size() / 2));
     std::vector<uint32_t> src_vec_3(src_vec.begin(), src_vec.begin() + (src_vec.size() / 4));
-    
+
     pass &= (src_vec == result_vec_1);
     pass &= (src_vec_2 == result_vec_2);
     pass &= (src_vec_3 == result_vec_3);

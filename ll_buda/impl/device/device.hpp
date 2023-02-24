@@ -27,7 +27,7 @@ class Device {
 
     int pcie_slot() const { return pcie_slot_; }
 
-    tt_cluster *cluster() const { return cluster_; }  // Need to access cluster in llrt APIs
+    tt_cluster *cluster() const;  // Need to access cluster in llrt APIs
 
     int num_dram_banks() const;
 
@@ -49,7 +49,7 @@ class Device {
     friend bool InitializeDevice(Device *device);
     void initialize_cluster();
     void initialize_banked_dram_manager();
-    
+
     // Puts device into reset
     bool close();
     friend bool CloseDevice(Device *device);

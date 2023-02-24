@@ -26,13 +26,14 @@ class Buffer {
 
 class DramBuffer : public Buffer {
    public:
-    DramBuffer(int dram_channel, uint32_t size_in_bytes, uint32_t address) : dram_channel_(dram_channel), Buffer(size_in_bytes, address) {}
+    DramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address) : device_(device), dram_channel_(dram_channel), Buffer(size_in_bytes, address) {}
 
     int dram_channel() const { return dram_channel_; }
 
-    tt_xy_pair noc_coordinates(Device *device) const;
+    tt_xy_pair noc_coordinates() const;
 
    private:
+    Device *device_;
     int dram_channel_;          // Logical core
 };
 

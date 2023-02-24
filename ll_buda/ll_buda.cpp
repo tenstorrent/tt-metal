@@ -160,13 +160,13 @@ ComputeKernel *CreateComputeKernel(
 
 DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes) {
     uint32_t buffer_address = device->allocate_buffer(dram_channel, size_in_bytes);
-    DramBuffer *buffer = new DramBuffer(dram_channel, size_in_bytes, buffer_address);
+    DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes, buffer_address);
     return buffer;
 }
 
-DramBuffer *CreateDramBuffer(int dram_channel, uint32_t size_in_bytes, uint32_t address) {
+DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address) {
     TT_ASSERT(dram_channel >= 0 and dram_channel <= 7, "Valid range for DRAM channel is [0, 7]");
-    DramBuffer *buffer = new DramBuffer(dram_channel, size_in_bytes, address);
+    DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes, address);
     return buffer;
 }
 
@@ -191,7 +191,7 @@ std::vector<DramBuffer *> CreateInterleavedDramBuffers(Device *device, int num_b
         }
         uint32_t buffer_size = num_units_in_bank * (num_entries_per_bank_unit * num_bytes_per_entry);
         device->allocate_buffer(dram_bank, buffer_size, starting_address);
-        auto dram_buffer = CreateDramBuffer(dram_bank, buffer_size, starting_address);
+        auto dram_buffer = CreateDramBuffer(device, dram_bank, buffer_size, starting_address);
         dram_buffers.push_back(dram_buffer);
         total_allocated += buffer_size;
         if (total_allocated == total_units_bytes) {

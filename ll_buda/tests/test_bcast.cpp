@@ -112,10 +112,10 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = ll_buda::CreateDramBuffer(dram_src0_channel_id, dram_buffer_bytes, dram_buffer_src0_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_bytes, dram_buffer_dst_addr);
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        auto src0_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_bytes, dram_buffer_src0_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_bytes, dram_buffer_dst_addr);
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
@@ -210,8 +210,8 @@ int main(int argc, char **argv) {
         auto bcast_tiled_u32 = u32_from_u16_vector(tiled_bcast_values);
         auto bcast_vals_nbytes = bcast_tiled_u32.size()*sizeof(bcast_tiled_u32[0]);
         auto src1_dram_buffer = ll_buda::CreateDramBuffer(
-            dram_src1_channel_id, bcast_vals_nbytes, dram_buffer_src1_addr);
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
+            device, dram_src1_channel_id, bcast_vals_nbytes, dram_buffer_src1_addr);
+        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
         if (multibank)
             pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, bcast_tiled_u32, src1_dram_buffer->address());
         else

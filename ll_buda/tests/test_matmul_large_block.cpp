@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
         int out_subblock_h = 4;
         int out_subblock_w = 2;
         int in0_block_w = 2;
-        
+
         uint32_t single_tile_size = 2 * 1024;
         TT_ASSERT(M * in0_block_w * single_tile_size * 2 <= 100*1024);
         TT_ASSERT(N * in0_block_w * single_tile_size * 2 <= 100*1024);
@@ -170,7 +170,7 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src0_addr = 0;
         int dram_src0_channel_id = 0;
         uint32_t dram_buffer_src1_addr = 0;
@@ -178,13 +178,13 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = ll_buda::CreateDramBuffer(dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
-        auto src1_dram_buffer = ll_buda::CreateDramBuffer(dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size_out, dram_buffer_dst_addr);
+        auto src0_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
+        auto src1_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_out, dram_buffer_dst_addr);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
@@ -250,7 +250,7 @@ int main(int argc, char **argv) {
             N * in0_block_w, // input 1 block num tiles
             M * in0_block_w * single_tile_size, // input 0 block bytes
             N * in0_block_w * single_tile_size}; // input 1 block bytes
-        
+
         std::vector<uint32_t> writer_rt_args{
             dram_buffer_dst_addr,
             (std::uint32_t)dram_dst_noc_xy.x,
@@ -269,7 +269,7 @@ int main(int argc, char **argv) {
             core,
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
-        
+
         auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
             program,
             "kernels/dataflow/writer_unswizzle.cpp",
@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
         int out_subblock_num_tiles = out_subblock_h*out_subblock_w;
 
         void *hlk_args = new matmul::hlk_args_t{
-            .in0_block_w = in0_block_w, 
+            .in0_block_w = in0_block_w,
             .in0_num_subblocks = in0_num_subblocks,
             .in0_block_num_tiles = in0_block_num_tiles,
             .in0_subblock_num_tiles = in0_subblock_num_tiles,
@@ -299,7 +299,7 @@ int main(int argc, char **argv) {
             .in1_block_num_tiles = in1_block_num_tiles,
             .in1_per_core_w = in1_per_core_w,
 
-            .num_blocks = num_blocks, 
+            .num_blocks = num_blocks,
 
             .out_subblock_h = out_subblock_h,
             .out_subblock_w = out_subblock_w,
@@ -350,7 +350,7 @@ int main(int argc, char **argv) {
             mm_reader_kernel,
             core,
             mm_reader_rt_args);
-        
+
         ll_buda::WriteRuntimeArgsToDevice(
             device,
             unary_writer_kernel,

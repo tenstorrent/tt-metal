@@ -152,11 +152,11 @@ bool run_chained_sfpu_test(int chain_length) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src_dram_buffer = ll_buda::CreateDramBuffer(dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        auto src_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates(device);
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
@@ -383,13 +383,13 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = ll_buda::CreateDramBuffer(dram_src0_channel_id, dram_buffer_size, dram_buffer_src0_addr);
-        auto src1_dram_buffer = ll_buda::CreateDramBuffer(dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        auto src0_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size, dram_buffer_src0_addr);
+        auto src1_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
@@ -668,10 +668,10 @@ bool run_forked_binary_test() {
         int dram_dst_channel_id = 0;
         uint32_t num_dram_channels = 5;
 
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
 
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         std::vector<ll_buda::DramBuffer *> src_dram_buffers;
 
@@ -679,7 +679,7 @@ bool run_forked_binary_test() {
         uint32_t src_cb_index = 0;
         uint32_t src_cb_addr = 200 * 1024;
         for (uint32_t i = 0; i < num_dram_channels; i++){
-            auto src_dram_buffer = ll_buda::CreateDramBuffer(i, dram_buffer_size, dram_buffer_src_addr);
+            auto src_dram_buffer = ll_buda::CreateDramBuffer(device, i, dram_buffer_size, dram_buffer_src_addr);
             src_dram_buffers.push_back(src_dram_buffer);
             auto src_cb = ll_buda::CreateCircularBuffer(
                 program,
@@ -728,7 +728,7 @@ bool run_forked_binary_test() {
 
         std::vector<uint32_t> nary_reader_args {num_dram_channels, num_tiles};
         for (uint32_t i = 0; i < num_dram_channels; i++){
-            auto dram_src_noc_xy = src_dram_buffers[i]->noc_coordinates(device);
+            auto dram_src_noc_xy = src_dram_buffers[i]->noc_coordinates();
             nary_reader_args.insert(nary_reader_args.end(),
             {
                 src_dram_buffers[i]->address(),

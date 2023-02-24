@@ -46,7 +46,7 @@ Tensor tilize(const Tensor &a) {
     uint32_t stick_size = a.shape()[3] * 2; // Assuming bfloat16 dataformat
     TT_ASSERT((stick_size % 2) == 0, "Stick size must be divisible by 2");
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(a.device());
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
     // This should allocate a DRAM buffer on the device
     ll_buda::Device *device = a.device();
@@ -54,7 +54,7 @@ Tensor tilize(const Tensor &a) {
 
     ll_buda::DramBuffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(output.device());
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;

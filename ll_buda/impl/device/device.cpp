@@ -48,6 +48,13 @@ bool Device::close() {
     return true;
 }
 
+tt_cluster *Device::cluster() const {
+    if (not cluster_is_initialized()) {
+        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
+    }
+    return cluster_;
+}
+
 int Device::num_dram_banks() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");

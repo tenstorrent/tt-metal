@@ -58,9 +58,9 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_src1_addr = 256 * 1024 * 1024;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
 
-        auto src0_dram_buffer = ll_buda::CreateDramBuffer(0, bytesA, dram_buffer_src0_addr);
-        auto src1_dram_buffer = ll_buda::CreateDramBuffer(0, bytesB, dram_buffer_src1_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(0, bytesC, dram_buffer_dst_addr);
+        auto src0_dram_buffer = ll_buda::CreateDramBuffer(device, 0, bytesA, dram_buffer_src0_addr);
+        auto src1_dram_buffer = ll_buda::CreateDramBuffer(device, 0, bytesB, dram_buffer_src1_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, 0, bytesC, dram_buffer_dst_addr);
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;

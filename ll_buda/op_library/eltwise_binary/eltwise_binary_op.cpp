@@ -28,7 +28,7 @@ Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_ty
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
 
     uint32_t single_tile_size = 2 * TILE_HW;
-    
+
     ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
     ll_buda::DramBuffer *src1_dram_buffer = b.buffer();
 
@@ -37,8 +37,8 @@ Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_ty
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume() / TILE_HW;
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(a.device());
-    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(b.device());
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
 
     // This should allocate a DRAM buffer on the device
     ll_buda::Device *device = a.device();
@@ -46,7 +46,7 @@ Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_ty
 
     ll_buda::DramBuffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(output.device());
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;
@@ -93,7 +93,7 @@ Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_ty
         core,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     ll_buda::DataMovementKernel *unary_writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         //"kernels/dataflow/writer_unary.cpp",
@@ -139,7 +139,7 @@ Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_ty
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     ll_buda::ConfigureDeviceWithProgram(device, program);
-    
+
     ll_buda::WriteRuntimeArgsToDevice(
         device,
         binary_reader_kernel,
@@ -152,7 +152,7 @@ Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_ty
         (std::uint32_t)dram_src1_noc_xy.x,
         (std::uint32_t)dram_src1_noc_xy.y,
         (std::uint32_t)num_tiles});
-    
+
     ll_buda::WriteRuntimeArgsToDevice(
         device,
         unary_writer_kernel,
@@ -161,7 +161,7 @@ Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_ty
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,
         (std::uint32_t)num_tiles});
-    
+
     ll_buda::LaunchKernels(device, program);
 
     delete program;

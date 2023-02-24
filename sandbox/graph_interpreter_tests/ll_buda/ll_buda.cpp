@@ -152,9 +152,9 @@ DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_
     return buffer;
 }
 
-DramBuffer *CreateDramBuffer(int dram_channel, uint32_t size_in_bytes, uint32_t address) {
+DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address) {
     TT_ASSERT(dram_channel >= 0 and dram_channel <= 7, "Valid range for DRAM channle is [0, 7]");
-    DramBuffer *buffer = new DramBuffer(dram_channel, size_in_bytes, address);
+    DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes, address);
     return buffer;
 }
 

@@ -77,7 +77,7 @@ ll_buda::Program *setup_program_one(ll_buda::Device *device, const tt_xy_pair &c
         core,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_unary.cpp",
@@ -153,7 +153,7 @@ ll_buda::Program *setup_program_two(ll_buda::Device *device, const tt_xy_pair &c
         core,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_unary.cpp",
@@ -195,10 +195,10 @@ void write_program_runtime_args_to_device(
     ll_buda::DramBuffer *src1_dram_buffer,
     ll_buda::DramBuffer *dst_dram_buffer) {
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
-    
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+
     for (auto dm_kernel : program->data_movement_kernels()) {
         if (dm_kernel->name() == "reader_binary" or dm_kernel->name() == "reader_matmul_small_block") {
             ll_buda::WriteRuntimeArgsToDevice(
@@ -246,7 +246,7 @@ int main(int argc, char **argv) {
         uint32_t num_tiles = 1;
 
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    
+
         uint32_t dram_buffer_src0_addr = 0;
         int dram_src0_channel_id = 0;
         uint32_t dram_buffer_src1_addr = 0;
@@ -254,9 +254,9 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = ll_buda::CreateDramBuffer(dram_src0_channel_id, dram_buffer_size, dram_buffer_src0_addr);
-        auto src1_dram_buffer = ll_buda::CreateDramBuffer(dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        auto src0_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size, dram_buffer_src0_addr);
+        auto src1_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
         ll_buda::Program *program1 = setup_program_one(device, core, single_tile_size);
 
@@ -280,7 +280,7 @@ int main(int argc, char **argv) {
         auto src0_activations_tile_layout = convert_to_tile_layout(src0_tensor.get_values());
         auto src0_activations = pack_bfloat16_vec_into_uint32_vec(src0_activations_tile_layout);
         pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, src0_activations);
-        
+
         tt::Tensor<bfloat16> src1_tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto src1_activations_tile_layout = convert_to_tile_layout(src1_tensor.get_values());
         auto src1_activations = pack_bfloat16_vec_into_uint32_vec(src1_activations_tile_layout);

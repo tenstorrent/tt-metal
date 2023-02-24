@@ -33,17 +33,17 @@ int main(int argc, char **argv) {
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 2048;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src_addr = 0;
         int dram_src_channel_id = 0;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src_dram_buffer = ll_buda::CreateDramBuffer(dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        auto src_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates(device);
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         int num_cbs = 1; // works at the moment
         assert(num_tiles % num_cbs == 0);
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
             cb3_addr,
             tt::DataFormat::Float16_b
         );
-        
+
         auto reader_cb_kernel_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {8, 2});
         auto writer_cb_kernel_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {8, 4});
 

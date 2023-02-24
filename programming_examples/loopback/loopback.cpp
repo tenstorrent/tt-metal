@@ -47,10 +47,10 @@ int main(int argc, char **argv) {
 
         constexpr uint32_t input_dram_buffer_addr = 0;
         constexpr int dram_channel = 0;
-        DramBuffer *input_dram_buffer = CreateDramBuffer(dram_channel, dram_buffer_size, input_dram_buffer_addr);
+        DramBuffer *input_dram_buffer = CreateDramBuffer(device, dram_channel, dram_buffer_size, input_dram_buffer_addr);
 
         constexpr uint32_t output_dram_buffer_addr = 512 * 1024;
-        DramBuffer *output_dram_buffer = CreateDramBuffer(dram_channel, dram_buffer_size, output_dram_buffer_addr);
+        DramBuffer *output_dram_buffer = CreateDramBuffer(device, dram_channel, dram_buffer_size, output_dram_buffer_addr);
 
         /*
         * Compile kernels used during execution

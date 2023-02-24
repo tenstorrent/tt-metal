@@ -332,7 +332,7 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
 
         std::vector<ll_buda::DramBuffer *> src_dram_buffers;
         for (uint32_t i = 0; i < num_dram_channels; i++){
-            auto src_dram_buffer = ll_buda::CreateDramBuffer(i, src_dram_buffer_size, src_dram_buffer_base_addr);
+            auto src_dram_buffer = ll_buda::CreateDramBuffer(device, i, src_dram_buffer_size, src_dram_buffer_base_addr);
             src_dram_buffers.push_back(src_dram_buffer);
         }
 
@@ -343,7 +343,7 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
 
             //Output DRAM Loc is fixed per core
             uint32_t dst_dram_channel_id = core_idx % num_dram_channels;
-            auto dst_dram_buffer = ll_buda::CreateDramBuffer(dst_dram_channel_id, dst_dram_buffer_size, dst_dram_buffer_base_addr + dst_dram_buffer_size * (core_idx / num_dram_channels));
+            auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dst_dram_channel_id, dst_dram_buffer_size, dst_dram_buffer_base_addr + dst_dram_buffer_size * (core_idx / num_dram_channels));
 
             dst_dram_buffer_per_core.push_back(dst_dram_buffer);
 
@@ -507,7 +507,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
 
         std::vector<ll_buda::DramBuffer *> src_dram_buffers;
         for (uint32_t i = 0; i < num_dram_channels; i++){
-            auto src_dram_buffer = ll_buda::CreateDramBuffer(i, src_dram_buffer_size, src_dram_buffer_base_addr);
+            auto src_dram_buffer = ll_buda::CreateDramBuffer(device, i, src_dram_buffer_size, src_dram_buffer_base_addr);
             src_dram_buffers.push_back(src_dram_buffer);
         }
 
@@ -519,7 +519,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
             tt_xy_pair core = {core_idx % 12, core_idx / 12};
 
             uint32_t dst_dram_channel_id = core_idx % num_dram_channels;
-            auto dst_dram_buffer = ll_buda::CreateDramBuffer(dst_dram_channel_id, dst_dram_buffer_size, dst_dram_buffer_base_addr + dst_dram_buffer_size * (core_idx / num_dram_channels));
+            auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dst_dram_channel_id, dst_dram_buffer_size, dst_dram_buffer_base_addr + dst_dram_buffer_size * (core_idx / num_dram_channels));
 
             dst_dram_buffer_per_core.push_back(dst_dram_buffer);
 

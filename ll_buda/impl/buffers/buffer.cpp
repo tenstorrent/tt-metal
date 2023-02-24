@@ -6,8 +6,8 @@ namespace tt {
 
 namespace ll_buda {
 
-tt_xy_pair DramBuffer::noc_coordinates(Device *device) const {
-    return llrt::get_core_for_dram_channel(device->cluster(), dram_channel_, device->pcie_slot());
+tt_xy_pair DramBuffer::noc_coordinates() const {
+    return llrt::get_core_for_dram_channel(device_->cluster(), dram_channel_, device_->pcie_slot());
 }
 
 }  // namespace ll_buda

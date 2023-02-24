@@ -41,14 +41,14 @@ int main(int argc, char **argv) {
         uint32_t output_dram_buffer_addr = 512 * 1024;
         int dram_channel = 0;
 
-        auto input_dram_buffer = ll_buda::CreateDramBuffer(dram_channel, dram_buffer_size, input_dram_buffer_addr);
+        auto input_dram_buffer = ll_buda::CreateDramBuffer(device, dram_channel, dram_buffer_size, input_dram_buffer_addr);
 
         auto l1_b0 = ll_buda::CreateL1Buffer(program, core, dram_buffer_size, l1_buffer_addr);
 
-        auto output_dram_buffer = ll_buda::CreateDramBuffer(dram_channel, dram_buffer_size, output_dram_buffer_addr);
+        auto output_dram_buffer = ll_buda::CreateDramBuffer(device, dram_channel, dram_buffer_size, output_dram_buffer_addr);
 
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates(device);
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates(device);
+        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
+        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
         auto dram_copy_kernel = ll_buda::CreateDataMovementKernel(
             program,
@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
 
         std::vector<uint32_t> result_vec;
         ll_buda::ReadFromDeviceDRAM(device, output_dram_buffer, result_vec, output_dram_buffer->size());
-        
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

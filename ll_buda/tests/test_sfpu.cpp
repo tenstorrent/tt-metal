@@ -18,7 +18,7 @@ namespace unary_datacopy {
 //#include "hlks/eltwise_copy.cpp"
 // FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
 struct hlk_args_t {
-    std::uint32_t per_core_block_cnt;    
+    std::uint32_t per_core_block_cnt;
     std::uint32_t per_core_block_dim;
 
 };
@@ -47,17 +47,17 @@ bool run_sfpu_test(string sfpu_name) {
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 2048;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src_addr = 0;
         int dram_src_channel_id = 0;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src_dram_buffer = ll_buda::CreateDramBuffer(dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        auto src_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates(device);
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
@@ -89,13 +89,13 @@ bool run_sfpu_test(string sfpu_name) {
 
         auto unary_reader_kernel = ll_buda::CreateDataMovementKernel(
             program,
-            multibank ? 
+            multibank ?
                 "kernels/dataflow/reader_unary_8bank.cpp" :
                 "kernels/dataflow/reader_unary_push_4.cpp",
             core,
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
-        
+
         auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
             program,
             multibank ?
@@ -139,7 +139,7 @@ bool run_sfpu_test(string sfpu_name) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = sfpu_op_to_init_func.at(sfpu_name)(
             dram_buffer_size, std::chrono::system_clock::now().time_since_epoch().count());
-        
+
         if (multibank)
             pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src_vec, src_dram_buffer->address());
         else
@@ -170,7 +170,7 @@ bool run_sfpu_test(string sfpu_name) {
                 num_tiles
             }
         );
-        
+
         // tt::ll_buda::tt_gdb(device, 0, program->cores(), program->cores_to_ops());
         pass &= ll_buda::LaunchKernels(device, program);
 
@@ -210,7 +210,7 @@ bool run_sfpu_test(string sfpu_name) {
 }
 
 int main(int argc, char **argv) {
-    
+
     bool pass = true;
     for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
         log_info(LogTest, "Running {}", op_name);

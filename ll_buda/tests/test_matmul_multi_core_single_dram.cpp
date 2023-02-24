@@ -160,7 +160,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
             }
         }
     }
-    
+
     return result;
 }
 
@@ -186,7 +186,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             int core_index = i * num_cores_c + j;
             tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
             uint32_t l1_valid_address = 200 * 1024;
-            
+
             uint32_t src0_cb_index = 0;
             uint32_t src0_cb_addr = l1_valid_address;
             l1_valid_address += in0_CB_size;
@@ -249,7 +249,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
         all_cores,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_unswizzle.cpp",
@@ -270,7 +270,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
     int out_subblock_num_tiles = out_subblock_h*out_subblock_w;
 
     void *hlk_args = new matmul::hlk_args_t{
-        .in0_block_w = in0_block_w, 
+        .in0_block_w = in0_block_w,
         .in0_num_subblocks = in0_num_subblocks,
         .in0_block_num_tiles = in0_block_num_tiles,
         .in0_subblock_num_tiles = in0_subblock_num_tiles,
@@ -279,7 +279,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
         .in1_block_num_tiles = in1_block_num_tiles,
         .in1_per_core_w = in1_per_core_w,
 
-        .num_blocks = num_blocks, 
+        .num_blocks = num_blocks,
 
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
@@ -387,24 +387,24 @@ int main(int argc, char **argv) {
                 uint32_t dram_buffer_size_weights = single_tile_size * K * per_core_N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
                 uint32_t dram_buffer_size_out = single_tile_size * per_core_M * per_core_N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-                auto src0_dram_buffer = ll_buda::CreateDramBuffer(dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
-                auto src1_dram_buffer = ll_buda::CreateDramBuffer(dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
-                auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size_out, dram_buffer_dst_addr);
+                auto src0_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
+                auto src1_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
+                auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_out, dram_buffer_dst_addr);
 
                 TT_ASSERT(dram_buffer_src0_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
                 TT_ASSERT(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
                 TT_ASSERT(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
 
-                auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-                auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
-                auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+                auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+                auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+                auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
                 auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
                 auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 auto activations_tile_transposed = transpose_tiles(activations, per_core_M, K, in0_block_w);
                 pass &= ll_buda::WriteToDeviceDRAMChannel(device, dram_src0_channel_id, activations_tile_transposed, dram_buffer_src0_addr);
-                
+
                 auto identity_tilized = tilize(weights_slice, K * 32, per_core_N * 32);
                 auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
@@ -440,7 +440,7 @@ int main(int argc, char **argv) {
             }
         }
         log_info(LogTest, "Copying inputs to dram and runtime args to cores complete");
-        
+
         log_info(LogTest, "Running Matmul 120 core test");
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
         pass &= ll_buda::LaunchKernels(device, program);

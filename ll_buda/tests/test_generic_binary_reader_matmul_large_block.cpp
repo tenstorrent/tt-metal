@@ -8,7 +8,7 @@
 #include "test_tiles.hpp"
 #include "common/constants.hpp"
 //////////////////////////////////////////////////////////////////////////////////////////
-// This test is similar to test_matmul_large_block.  
+// This test is similar to test_matmul_large_block.
 // The only difference is that it uses generic_binary_reader_kernel instead of reader_matmul_blocked kernel.
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
         int out_subblock_h = 2;
         int out_subblock_w = 3;
         int in0_block_w = 1;
-        
+
         uint32_t single_tile_size = 2 * 1024;
         TT_ASSERT(M * in0_block_w * single_tile_size * 2 <= 100*1024);
         TT_ASSERT(N * in0_block_w * single_tile_size * 2 <= 100*1024);
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src0_addr = 0;
         int dram_src0_channel_id = 0;
         uint32_t dram_buffer_src1_addr = 0;
@@ -179,13 +179,13 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = ll_buda::CreateDramBuffer(dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
-        auto src1_dram_buffer = ll_buda::CreateDramBuffer(dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size_out, dram_buffer_dst_addr);
+        auto src0_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
+        auto src1_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_out, dram_buffer_dst_addr);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
@@ -239,7 +239,7 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
-        // create source addresses        
+        // create source addresses
         uint32_t face_width = 16;
         uint32_t face_height = 16;
         uint32_t num_faces = 4;
@@ -259,8 +259,8 @@ int main(int argc, char **argv) {
         uint32_t src0_num_reads_per_block = src0_num_tiles_per_block * num_addresses_per_tile;
         uint32_t src0_num_bytes_per_block = src0_num_tiles_per_block * single_tile_size;
         uint32_t src1_num_bytes_per_block = src1_num_tiles_per_block * single_tile_size;
-        TT_ASSERT(source_addresses.size() == num_blocks * src0_num_reads_per_block); 
-        
+        TT_ASSERT(source_addresses.size() == num_blocks * src0_num_reads_per_block);
+
         std::vector<uint32_t> generic_binary_reader_args {
             dram_buffer_src0_addr,
             (uint32_t)dram_src0_noc_xy.x,
@@ -283,7 +283,7 @@ int main(int argc, char **argv) {
             core,
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
-        
+
         std::vector<uint32_t> writer_rt_args{
             dram_buffer_dst_addr,
             (std::uint32_t)dram_dst_noc_xy.x,
@@ -295,7 +295,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row within sub-block
             (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row of sub-blocks
             (std::uint32_t)out_subblock_w*single_tile_size}; // bytes offset to next sub-block
-        
+
         auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
             program,
             "kernels/dataflow/writer_unswizzle.cpp",
@@ -314,7 +314,7 @@ int main(int argc, char **argv) {
         int out_subblock_num_tiles = out_subblock_h*out_subblock_w;
 
         void *hlk_args = new matmul::hlk_args_t{
-            .in0_block_w = in0_block_w, 
+            .in0_block_w = in0_block_w,
             .in0_num_subblocks = in0_num_subblocks,
             .in0_block_num_tiles = in0_block_num_tiles,
             .in0_subblock_num_tiles = in0_subblock_num_tiles,
@@ -323,7 +323,7 @@ int main(int argc, char **argv) {
             .in1_block_num_tiles = in1_block_num_tiles,
             .in1_per_core_w = in1_per_core_w,
 
-            .num_blocks = num_blocks, 
+            .num_blocks = num_blocks,
 
             .out_subblock_h = out_subblock_h,
             .out_subblock_w = out_subblock_w,
@@ -373,7 +373,7 @@ int main(int argc, char **argv) {
             generic_binary_reader_kernel,
             core,
             generic_binary_reader_args);
-        
+
         ll_buda::WriteRuntimeArgsToDevice(
             device,
             unary_writer_kernel,
@@ -398,7 +398,7 @@ int main(int argc, char **argv) {
         // print_vec_of_uint32_as_packed_bfloat16(weights, 16, "weights tile transposed");
         // print_vec(result_untilized, M*32, N*32, "Result");
         // print_vec(tensor.get_values(), 128, 128, "Golden");
-        
+
         pass &= (tensor.get_values() == result_untilized);
         pass &= ll_buda::CloseDevice(device);;
 

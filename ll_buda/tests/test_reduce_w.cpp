@@ -61,16 +61,16 @@ int main(int argc, char **argv) {
 
         uint32_t single_tile_bytes = 2 * 1024;
         uint32_t dram_buffer_bytes = single_tile_bytes * num_tensor_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src0_addr = 0;
         int dram_src0_channel_id = 0;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = ll_buda::CreateDramBuffer(dram_src0_channel_id, dram_buffer_bytes, dram_buffer_src0_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_bytes/Wt, dram_buffer_dst_addr);
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        auto src0_dram_buffer = ll_buda::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_bytes, dram_buffer_src0_addr);
+        auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_bytes/Wt, dram_buffer_dst_addr);
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
@@ -99,9 +99,9 @@ int main(int argc, char **argv) {
             output_cb_addr,
             tt::DataFormat::Float16_b
         );
-        
+
         TT_ASSERT(num_tensor_tiles%Wt == 0);
-        
+
         auto unary_reader_kernel = ll_buda::CreateDataMovementKernel(
             program,
             multibank ? "kernels/dataflow/reader_unary_8bank.cpp"
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
             core,
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
-        
+
         auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
             program,
             multibank ? "kernels/dataflow/writer_unary_8bank.cpp"
@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
             pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src0_vec, src0_dram_buffer->address());
         else
             pass &= ll_buda::WriteToDeviceDRAMChannel(device, dram_src0_channel_id, src0_vec, src0_dram_buffer->address());
-        
+
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
         ll_buda::WriteRuntimeArgsToDevice(

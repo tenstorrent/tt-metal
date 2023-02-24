@@ -27,13 +27,13 @@ Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
     TT_ASSERT(a.buffer() != nullptr, "Operand to eltwise unary needs to be allocated in a buffer on device!");
 
     uint32_t single_tile_size = 2 * TILE_HW;
-    
+
     ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
 
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume() / TILE_HW;
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(a.device());
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
     // This should allocate a DRAM buffer on the device
     ll_buda::Device *device = a.device();
@@ -41,7 +41,7 @@ Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
 
     ll_buda::DramBuffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(output.device());
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;
@@ -87,7 +87,7 @@ Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
         core,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     ll_buda::DataMovementKernel *unary_writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_unary_8bank.cpp",
@@ -139,7 +139,7 @@ Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     ll_buda::ConfigureDeviceWithProgram(device, program);
-    
+
     ll_buda::WriteRuntimeArgsToDevice(
         device,
         binary_reader_kernel,
@@ -149,7 +149,7 @@ Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
         uint32_t(dram_src0_noc_xy.y),
         uint32_t(num_tiles) }
     );
-    
+
     ll_buda::WriteRuntimeArgsToDevice(
         device,
         unary_writer_kernel,
@@ -159,7 +159,7 @@ Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
         uint32_t(dram_dst_noc_xy.y),
         uint32_t(num_tiles)}
     );
-    
+
     ll_buda::LaunchKernels(device, program);
 
     delete program;

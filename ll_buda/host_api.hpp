@@ -313,14 +313,14 @@ DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_
  * Creates a DRAM Buffer object. DRAM buffers exist independently from a program
  *
  * Return value: Buffer *
- *
- * | Argument      | Description                                  | Type     | Valid Range                                       | Required |
- * |---------------|----------------------------------------------|----------|---------------------------------------------------|----------|
- * | dram_channel  | DRAM channel ID                              | int      | [0, 7]                                            | True     |
- * | size_in_bytes | Size of DRAM buffer in Bytes                 | uint32_t | DOX-TODO: valid range? 0 to 2 GB (expressed in Bytes) | True     |
- * | address       | Address at which the DRAM buffer will reside | uint32_t | DOX-TODO: fix range. 0 to 2 GB??                      | True     |
+ * | Argument      | Description                                  | Type     | Valid Range                                           | Required |
+ * |---------------|----------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | device        | The device where the DRAM buffer is created  | Device * |                                                       | Yes      |
+ * | dram_channel  | DRAM channel ID                              | int      | [0, 7]                                                | Yes      |
+ * | size_in_bytes | Size of DRAM buffer in bytes                 | uint32_t | DOX-TODO: valid range? 0 to 2 GB (expressed in Bytes) | Yes      |
+ * | address       | Address at which the DRAM buffer will reside | uint32_t | DOX-TODO:fix range. 0 to 2 GB??                       | Yes      |
  */
-DramBuffer *CreateDramBuffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
+DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address);
 
 // Allocates multiple DRAM buffers across multiple banks to store interleaved data
 std::vector<DramBuffer *> CreateInterleavedDramBuffers(
