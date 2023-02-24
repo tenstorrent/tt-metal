@@ -87,10 +87,15 @@ Getting the source and building
 To clone and build the libraries and tests, we have to checkout the repo with
 its submodules, create the Python environment, then do a clean build.
 
+If you have followed instruction in README to build and view the docs, skip the next three commands and just naviagte to `gp.ai` folder.
 ::
 
     git clone <GIT REPO URL, see notes>
+    cd gp.ai
     git submodule update --init --recursive
+    
+::
+
     make clean
     make python_env
     source build/python_env/bin/activate
