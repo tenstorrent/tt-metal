@@ -54,6 +54,15 @@ constexpr static uint32_t get_arg_addr(int arg_idx) {
     return L1_ARG_BASE + (arg_idx<<2);
 }
 
+/**
+ * Returns the value of an argument from kernel_args array provided during
+ * kernel creation using CreateDataMovementKernel, CreateComputeKernel calls.
+ *
+ * | Argument              | Description                        | Type                  | Valid Range | Required |
+ * |-----------------------|------------------------------------|-----------------------|-------------|----------|
+ * | arg_idx               | The index of the argument          | uint32_t              | 0 to 255    | True     |
+ * | T (template argument) | Data type of the returned argument | Any 4-byte sized type | N/A         | True     |
+ */
 template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
@@ -61,6 +70,15 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
     return *((volatile T*)(get_arg_addr(arg_idx)));
 }
 
+/**
+ * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using CreateDataMovementKernel, CreateComputeKernel calls.
+ *
+ * Return value: constexpr uint32_t
+ *
+ * | Argument              | Description                        | Type                  | Valid Range | Required |
+ * |-----------------------|------------------------------------|-----------------------|-------------|----------|
+ * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
+ */
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_ ## arg_idx
 
 void init_dram_channel_to_noc_coord_lookup_tables() {
@@ -157,6 +175,28 @@ constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
 }
 
 #ifdef DATA_FORMATS_DEFINED
+/**
+ * Pushes a given number of tiles in the back of the specified CB’s queue.
+ * Decreases the available space in the circular buffer by this number of
+ * tiles. This call is used by the producer to make the tiles visible to the
+ * consumer of the CB.
+ *
+ * We use the convention that the producer pushes tiles into the “back” of the
+ * CB queue and the consumer consumes tiles from the “front” of the CB queue.
+ *
+ * Note that the act of writing the tile data into the CB does not make the
+ * tiles visible to the consumer. Writing of the tiles and pushing is separated
+ * to allow the producer to: 1) write the tile data to the CB via multiple
+ * writes of sub-tiles 2) modify tiles (or sub-tiles) by random access of the
+ * valid section of the CB
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
+ * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | num_tiles | The number of tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
+ */
 inline void cb_push_back(const std::int32_t operand, const std::int32_t num_tiles) {
 
     const std::uint32_t input = operand;
@@ -208,6 +248,28 @@ inline std::int32_t get_tile_size(const std::int32_t operand) {
     return num_words << 4;
 }
 
+/**
+ * Pops a specified number of tiles from the front of the specified CB. This
+ * also frees this number of tiles in the circular buffer. This call is used by
+ * the consumer to free up the space in the CB.
+ *
+ * We use the convention that the producer pushes tiles into the “back” of the
+ * CB queue and the consumer consumes tiles from the “front” of the CB queue.
+ *
+ * Note that the act of reading of the tile data from the CB does not free up
+ * the space in the CB. Waiting on available tiles and popping them is
+ * separated in order to allow the consumer to: 1) read the tile data from the
+ * CB via multiple reads of sub-tiles 2) access the tiles (or their sub-tiles)
+ * that are visible to the consumer by random access of the valid section of
+ * the CB
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
+ * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | num_tiles | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
+ */
 inline void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
 
     volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
@@ -252,6 +314,16 @@ inline void wait_for_sync_register_value(std::uint32_t addr, std::int32_t val) {
     } while (reg_value != val);
 }
 
+/**
+ * A blocking call that waits for the specified number of tiles to be free in the specified circular buffer. This call is used by the producer to wait for the consumer to consume (ie. free up) the specified number of tiles.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
+ * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | num_tiles | The number of free tiles to wait for | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
+ */
 inline void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
     std::uint32_t input = operand;
 
@@ -272,6 +344,16 @@ inline void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
     } while (free_space_tiles < num_tiles);
 }
 
+/**
+ * A blocking call that waits for the specified number of tiles to be available in the specified circular buffer (CB). This call is used by the consumer of the CB to wait for the producer to fill the CB with at least the specfied number of tiles.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
+ * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | num_tiles | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
+ * */
 inline void cb_wait_front(std::int32_t operand, std::int32_t num_tiles) {
     //std::uint32_t output = operand_to_output_index(operand);
     std::uint32_t output = operand;
@@ -376,6 +458,24 @@ void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr,
                                         size);
 }
 
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call. The destination is specified using
+ * a uint64_t encoding referencing an on-chip node located at NOC coordinates
+ * (x,y) and a local address created using get_noc_addr function. Also, see
+ * noc_async_write_barrier.
+ *
+ * The destination node can be either a DRAM bank, Tensix core+L1 memory
+ * address or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument          | Description                                             | Type     | Valid Range                                               | Required |
+ * |-------------------|---------------------------------------------------------|----------|-----------------------------------------------------------|----------|
+ * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB                                                    | True     |
+ * | dst_noc_addr      | Encoding of the destination DRAM location (x,y)+address | uint64_t | TODO(insert a reference to what constitutes valid coords) | True     |
+ * | size              | Size of data transfer in bytes                          | uint32_t | 0..1MB                                                    | True     |
+ */
 FORCE_INLINE
 void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr,  std::uint32_t size) {
         ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr, size,
@@ -400,11 +500,27 @@ void noc_async_write_multicast_loopback_src(std::uint32_t src_local_l1_addr, std
                             NOC_MULTICAST_WRITE_VC, true, false, num_dests);
 }
 
+/**
+ * This blocking call waits for all the outstanding enqueued noc_async_read
+ * calls issued on the current Tensix core to complete. After returning from
+ * this call the noc_async_read queue will be empty for the current Tensix
+ * core.
+ *
+ * Return value: None
+ */
 FORCE_INLINE
 void noc_async_read_barrier() {
     while (!ncrisc_noc_reads_flushed(loading_noc));
 }
 
+/**
+ * This blocking call waits for all the outstanding enqueued noc_async_write
+ * calls issued on the current Tensix core to complete. After returning from
+ * this call the noc_async_write queue will be empty for the current Tensix
+ * core.
+ *
+ * Return value: None
+ */
 FORCE_INLINE
 void noc_async_write_barrier()  {
     while (!ncrisc_noc_nonposted_writes_flushed(loading_noc));
