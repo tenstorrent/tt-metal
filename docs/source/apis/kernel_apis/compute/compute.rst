@@ -8,7 +8,7 @@ Compute APIs
 
   acquire_dst
   release_dst
-  
+
   init_functions
 
   add_tiles
@@ -24,8 +24,8 @@ Compute APIs
   exp_tile
   gelu_tile
   recip_tile
+  sqrt_tile
 
   reduce_tile
   tilize_and_copy
   transpose_wh_tile
-

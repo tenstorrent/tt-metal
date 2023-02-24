@@ -1,7 +1,4 @@
-
-
 sub_tiles_bcast
 ===============
 
-Please refer to documentation for `add_tiles_bcast`.
-
+.. doxygendefine:: sub_tiles_bcast

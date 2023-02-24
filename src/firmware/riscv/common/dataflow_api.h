@@ -442,7 +442,7 @@ std::uint64_t get_noc_addr(std::uint32_t addr) {
  *
  * | Argument          | Description                                        | Data type | Valid range                              | required |
  * |-------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
- * | src_noc_addr      | Encoding of the source DRAM location (x,y)+address | uint64_t  | TODO(insert ref to explain valid coords) | Yes      |
+ * | src_noc_addr      | Encoding of the source DRAM location (x,y)+address | uint64_t  | DOX-TODO(insert ref to explain valid coords) | Yes      |
  * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | Yes      |
  * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | Yes      |
  */
@@ -473,7 +473,7 @@ void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr,
  * | Argument          | Description                                             | Type     | Valid Range                                               | Required |
  * |-------------------|---------------------------------------------------------|----------|-----------------------------------------------------------|----------|
  * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB                                                    | True     |
- * | dst_noc_addr      | Encoding of the destination DRAM location (x,y)+address | uint64_t | TODO(insert a reference to what constitutes valid coords) | True     |
+ * | dst_noc_addr      | Encoding of the destination DRAM location (x,y)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | size              | Size of data transfer in bytes                          | uint32_t | 0..1MB                                                    | True     |
  */
 FORCE_INLINE
