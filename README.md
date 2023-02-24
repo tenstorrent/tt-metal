@@ -8,7 +8,7 @@ doxygen
 cd docs
 python3 -m venv env
 source env/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements-docs.txt
 PORT=<port> make all
 ```
 This will build HTML pages for the docs and launch a web server on the port `<port>`.
