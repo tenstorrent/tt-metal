@@ -7,6 +7,11 @@
 #include "ll_buda/host_api.hpp"
 #include "llrt/tt_debug_print_server.hpp"
 
+#include "tools/cpuprof/cpuprof.h"
+
+namespace tt { namespace llrt {
+extern bool llrt_enable_binary_cache;
+} }
 namespace tt {
 
 namespace ll_buda {
@@ -18,10 +23,14 @@ void dumpProfilerResults(std::string name_append)
     ll_buda_profiler.dumpResults(name_append);
 }
 
-bool enable_force_recompiles = false;
+bool enable_compile_cache = false;
 int force_recompiles = 0;
-void SetForceRecompiles(int newval) { enable_force_recompiles = true; force_recompiles = newval; }
+void EnableCompileCache() { enable_compile_cache = true; }
+void DisableCompileCache() { enable_compile_cache = false; }
+void SetForceRecompiles(int newval) { enable_compile_cache = true; force_recompiles = newval; }
 int  GetForceRecompiles() { return force_recompiles; }
+void EnableBinaryCache() { tt::llrt::llrt_enable_binary_cache = true; }
+void DisableBinaryCache() { tt::llrt::llrt_enable_binary_cache = false; }
 
 Host *GetHost() {
     return new Host();
@@ -403,16 +412,16 @@ bool CompileProgram(Device *device, Program *program, bool skip_hlkc, bool profi
 
         // TODO(AP): this is a hack to speed up the debugging process
         bool path_exists = false;
-        if (enable_force_recompiles)
+        if (enable_compile_cache)
             path_exists = std::filesystem::exists(op_path);
         if (!path_exists || force_recompiles > 0) {
-            if (enable_force_recompiles)
-                cout << "======= Compiling" << std::endl;
+            //if (enable_compile_cache)
+            //    cout << "======= Compiling" << std::endl;
             GenerateBinaries(device, &dummy_op, op_path, skip_hlkc, profile_kernel, kernel_group, logical_core);
             force_recompiles = std::max(0, force_recompiles-1);
         } else {
-            if (enable_force_recompiles)
-                cout << "======= Skipping compiling..." << std::endl;
+            //if (enable_compile_cache)
+            //    cout << "======= Skipping compiling..." << std::endl;
         }
         compiled_hashes.insert(kernel_group_hash);
     }
@@ -431,6 +440,8 @@ void ConfigureKernelGroup(const KernelGroup &kernel_group, Device *device, const
     kernel_group.riscv_0->configure(device, logical_core);
 }
 
+
+
 bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPrintfServer) {
     bool pass = true;
 
@@ -447,17 +458,17 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPr
         llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
 
         // Load firmware into L1 of worker core
-        llrt::disable_ncrisc(cluster, pcie_slot, worker_core);
-        llrt::disable_triscs(cluster, pcie_slot, worker_core);
+        llrt::disable_ncrisc(cluster, pcie_slot, worker_core); // PROF_BEGIN("CONF_DISABLE_NCTR")
+        llrt::disable_triscs(cluster, pcie_slot, worker_core); // PROF_END("CONF_DISABLE_NCTR")
 
-        ConfigureKernelGroup(kernel_group, device, logical_core);
+        ConfigureKernelGroup(kernel_group, device, logical_core); // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
 
         // Initialize registers to INVALID
-        constexpr static uint32_t INVALID = 0x4321;
+        constexpr static uint32_t INVALID = 0x4321; // PROF_BEGIN("WRITE_HEX")
         uint32_t stream_register_address = STREAM_REG_ADDR(0, 24);
-        llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, {INVALID}, stream_register_address);
+        llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, {INVALID}, stream_register_address); // PROF_END("WRITE_HEX")
 
-        auto cbs_on_core = program->circular_buffers_on_core(logical_core);
+        auto cbs_on_core = program->circular_buffers_on_core(logical_core); // PROF_BEGIN("CBS")
         for (auto circular_buffer : cbs_on_core) {
             llrt::set_config_for_circular_buffer(
                 circular_buffer_config_vec,
@@ -465,9 +476,9 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPr
                 circular_buffer->address(),
                 circular_buffer->size(),
                 circular_buffer->num_tiles());
-        }
+        } // PROF_END("CBS")
 
-        llrt::write_circular_buffer_config_vector_to_core(cluster, pcie_slot, worker_core, circular_buffer_config_vec);
+        llrt::write_circular_buffer_config_vector_to_core(cluster, pcie_slot, worker_core, circular_buffer_config_vec); // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
     }
 
     // Setup printf host server
@@ -480,9 +491,9 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPr
     }
 
     // Take device out of reset
-    const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS;
+    const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS; // PROF_BEGIN("LOAD_BLANK")
     llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(
-        cluster, pcie_slot, riscs_options, worker_cores);
+        cluster, pcie_slot, riscs_options, worker_cores);                               // PROF_END("LOAD_BLANK")
 
     ll_buda_profiler.markStop("ConfigureDeviceWithProgram");
     return pass;

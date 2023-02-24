@@ -1,6 +1,8 @@
 #include "llrt.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 
+#include "tools/cpuprof/cpuprof.h"
+
 namespace tt {
 
 // llrt = lower-level runtime
@@ -12,9 +14,22 @@ using std::to_string;
 using std::uint32_t;
 
 
+bool llrt_enable_binary_cache = false; // TODO(AP): temporary
+std::map<string, std::vector<uint32_t>> risc_binary_cache; // TODO(AP): temporary optimization
+
+void EnableBinaryCache() { llrt_enable_binary_cache = true; }
+void DisableBinaryCache() { llrt_enable_binary_cache = false; }
+
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
 vector <uint32_t> get_risc_binary(string path, uint32_t id) {
+
+    if (llrt_enable_binary_cache && risc_binary_cache.find(path) != risc_binary_cache.end()) {
+        //std::cout << "-- RISC CACHE HIT FOR " << path << std::endl;
+        return risc_binary_cache[path];
+    } else {
+        //std::cout << "-- RISC CACHE MISS FOR " << path << std::endl;
+    }
 
     string path_to_bin = path;
     fs::path bin_file(path_to_bin);
@@ -24,6 +39,10 @@ vector <uint32_t> get_risc_binary(string path, uint32_t id) {
     }
     std::ifstream hex_istream(path_to_bin);
     ll_api::memory mem = ll_api::memory::from_discontiguous_risc_hex(hex_istream, id==1 ? ll_api::memory::NCRISC: ll_api::memory::BRISC);
+
+    if (llrt_enable_binary_cache)
+        risc_binary_cache[path] = mem.get_content(); // TODO(AP): temporary optimization
+
     return mem.get_content();
 }
 
@@ -31,6 +50,13 @@ vector<uint32_t> get_trisc_binary(string path, uint32_t trisc_id) {
 
     //string path_to_bin = path + "/tensix_thread" + to_string(id) +
     //    "/tensix_thread" + to_string(id) + ".hex";
+    if (llrt_enable_binary_cache && risc_binary_cache.find(path) != risc_binary_cache.end()) {
+        //std::cout << "-- TRISC CACHE HIT FOR " << path << std::endl;
+        return risc_binary_cache[path];
+    } else {
+        //std::cout << "-- TRISC CACHE MISS FOR " << path << std::endl;
+    }
+
     string path_to_bin = path;
 
     fs::path bin_file(path_to_bin);
@@ -40,6 +66,10 @@ vector<uint32_t> get_trisc_binary(string path, uint32_t trisc_id) {
     }
     std::ifstream hex_istream(path_to_bin);
     ll_api::memory mem = ll_api::memory::from_discontiguous_risc_hex(hex_istream, (ll_api::memory::risc_type_t)((int)ll_api::memory::TRISC0+trisc_id));
+
+    if (llrt_enable_binary_cache)
+        risc_binary_cache[path] = mem.get_content(); // TODO(AP): temporary optimization
+
     return mem.get_content();
 }
 
@@ -115,17 +145,52 @@ void write_graph_interpreter_op_info_to_core(tt_cluster *cluster, int chip, cons
     write_hex_vec_to_core(cluster, chip, core, op_info_vec, OP_INFO_BASE_ADDR + offset);
 }
 
+
+struct RiscCacheMapKey {
+    int chip_id;
+    tt_xy_pair core;
+    int riscv_id;
+    RiscCacheMapKey(int ch, tt_xy_pair cr, int risc) : chip_id(ch), core(cr), riscv_id(risc) {}
+    bool operator== (const RiscCacheMapKey& rhs) const {
+        return (chip_id == rhs.chip_id) && (core == rhs.core) && (riscv_id == rhs.riscv_id);
+    }
+};
+struct RiscCacheMapHash
+{
+    std::size_t operator() (const RiscCacheMapKey &k) const
+    {
+        using std::hash;
+        return (hash<int>()(k.chip_id)
+                ^ hash<uint64_t>()(k.core.x)
+                ^ hash<uint64_t>()(k.core.y)
+                ^ hash<uint64_t>()(k.riscv_id));
+    }
+};
+std::unordered_map<RiscCacheMapKey, std::string, RiscCacheMapHash> last_loaded_cache; // cache what was last loaded to a specific risc
+
 // for BRISC and NCRISC
 bool test_load_write_read_risc_binary(tt_cluster *cluster, std::string hex_file_path, int chip_id, const tt_xy_pair& core, int riscv_id) {
 
+    // PROF_BEGIN("get_risc")
     assert(riscv_id == 0 || riscv_id == 1);
 
     assert(is_worker_core(cluster, core, chip_id));
+
+    // TODO(AP): temporary cache, need a proper implementation
+    RiscCacheMapKey cache_key{.chip_id = chip_id, .core = core, .riscv_id = riscv_id};
+    if (llrt_enable_binary_cache && last_loaded_cache.find(cache_key) != last_loaded_cache.end() && last_loaded_cache[cache_key] == hex_file_path) {
+        //std::cout << "Skipping loading of " << hex_file_path << " to core " << core.x << "," << core.y << std::endl;
+        return true;
+    }
+    if (llrt_enable_binary_cache)
+        last_loaded_cache[cache_key] = hex_file_path;
+    //std::cout << "Loading " << hex_file_path << " to core " << core.x << "," << core.y << std::endl;
 
     std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id); // 0 = BRISC, 1 = NCRISC
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
+    // PROF_END("get_risc")
 
     uint64_t addr = 0;
     if (riscv_id == 0) {
@@ -137,12 +202,12 @@ bool test_load_write_read_risc_binary(tt_cluster *cluster, std::string hex_file_
         exit(1);
     }
 
-    write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr);
-    log_debug(tt::LogLLRuntime, "wrote hex to the core");
+    write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr); // PROF_BEGIN("write_risc")
+    log_debug(tt::LogLLRuntime, "wrote hex to the core"); // PROF_END("write_risc")
 
-    std::vector<uint32_t> read_hex_vec;
+    std::vector<uint32_t> read_hex_vec; // PROF_BEGIN("read_risc")
     read_hex_vec = read_hex_vec_from_core(cluster, chip_id, core, addr, hex_vec.size()*sizeof(uint32_t));  // size to read in Bytes
-    log_debug(tt::LogLLRuntime, "read hex back from the core");
+    log_debug(tt::LogLLRuntime, "read hex back from the core"); // PROF_END("read_risc")
 
     return hex_vec == read_hex_vec;
 }
@@ -154,7 +219,19 @@ bool test_load_write_read_trisc_binary(tt_cluster *cluster, std::string hex_file
 
     assert(is_worker_core(cluster, core, chip_id));
 
+    // TODO(AP): temporary cache, need a proper implementation
+    RiscCacheMapKey cache_key{.chip_id = chip_id, .core = core, .riscv_id = triscv_id+2}; // +2 to separate from NC/BR
+    if (llrt_enable_binary_cache && last_loaded_cache.find(cache_key) != last_loaded_cache.end() && last_loaded_cache[cache_key] == hex_file_path) {
+        //std::cout << "Skipping loading of " << hex_file_path << " to core " << core.x << "," << core.y << std::endl;
+        return true;
+    }
+    if (llrt_enable_binary_cache)
+        last_loaded_cache[cache_key] = hex_file_path;
+    //std::cout << "Loading " << hex_file_path << " to core " << core.x << "," << core.y << std::endl;
+
+    // PROF_BEGIN("trisc_get")
     std::vector<uint32_t> hex_vec = get_trisc_binary(hex_file_path, triscv_id); // TRISC 0, 1, 2
+    // PROF_END("trisc_get")
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
@@ -171,12 +248,12 @@ bool test_load_write_read_trisc_binary(tt_cluster *cluster, std::string hex_file
         exit(1);
     }
 
-    write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr);
-    log_debug(tt::LogLLRuntime, "wrote trisc binary hex to the core");
+    write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr); // PROF_BEGIN("trisc_write")
+    log_debug(tt::LogLLRuntime, "wrote trisc binary hex to the core"); // PROF_END("trisc_write")
 
-    std::vector<uint32_t> read_hex_vec;
+    std::vector<uint32_t> read_hex_vec; // PROF_BEGIN("trisc_read_back")
     read_hex_vec = read_hex_vec_from_core(cluster, chip_id, core, addr, hex_vec.size()*sizeof(uint32_t));  // size to read in Bytes
-    log_debug(tt::LogLLRuntime, "read trisc binary hex back from the core");
+    log_debug(tt::LogLLRuntime, "read trisc binary hex back from the core"); // PROF_END("trisc_read_back")
 
     return hex_vec == read_hex_vec;
 }
@@ -244,19 +321,20 @@ namespace internal_ {
         for (const tt_xy_pair& core : cores) {
             bool pass  = true;
 
+            // PROF_BEGIN("write_brisc")
             pass = test_load_write_read_risc_binary(cluster, "built_kernels/blank_op/brisc/brisc.hex", chip_id, core, 0);
             if (!pass) {
                 throw std::runtime_error("Initial testing read/write of brisc to core failed");
-            }
+            } // PROF_END("write_brisc")
 
-            if (deduce_if_involves_ncrisc(riscs_to_load)) {
+            if (deduce_if_involves_ncrisc(riscs_to_load)) { // PROF_BEGIN("ncrisc")
                 pass = test_load_write_read_risc_binary(cluster, "built_kernels/blank_op/ncrisc/ncrisc.hex", chip_id, core, 1);
                 if (!pass) {
                     throw std::runtime_error("Initial testing read/write of ncrisc to core failed");
                 }
-            }
+            } // PROF_END("ncrisc")
 
-            if (deduce_if_involves_triscs(riscs_to_load)) {
+            if (deduce_if_involves_triscs(riscs_to_load)) { // PROF_BEGIN("trisc")
                 string op_path = "built_kernels/blank_op";
                 pass &= test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread0/tensix_thread0.hex", chip_id, core, 0);
                 pass &= test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread1/tensix_thread1.hex", chip_id, core, 1);
@@ -264,17 +342,18 @@ namespace internal_ {
                 if (!pass) {
                     throw std::runtime_error("Initial testing read/write of blank to trisc to core failed");
                 }
-            }
+            } // PROF_END("trisc")
         }
     }
 
     void load_blank_kernel_to_all_worker_cores_with_exceptions(tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<tt_xy_pair> exceptions) {
-        std::vector<tt_xy_pair> cores_to_load_with_blanks;
+        std::vector<tt_xy_pair> cores_to_load_with_blanks; // PROF_BEGIN("set_diff")
         std::set_difference(cluster->get_soc_desc(chip_id).workers.begin(), cluster->get_soc_desc(chip_id).workers.end(), exceptions.begin(), exceptions.end(), std::inserter(cores_to_load_with_blanks, cores_to_load_with_blanks.begin()));
+        // PROF_END("set_diff")
 
-        for (const tt_xy_pair &core : cores_to_load_with_blanks) {
+        for (const tt_xy_pair &core : cores_to_load_with_blanks) { // PROF_BEGIN("log_blank")
             log_debug(tt::LogLLRuntime, "loading blank to core - {}", core.str());
-        }
+        } // PROF_END("log_blank")
 
         load_blank_kernel_to_cores(cluster, chip_id, riscs_to_load, cores_to_load_with_blanks);
     }

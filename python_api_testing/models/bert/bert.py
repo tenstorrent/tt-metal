@@ -11,6 +11,7 @@ from python_api_testing.fused_ops.layernorm import Layernorm
 from python_api_testing.fused_ops.add_and_norm import AddAndNorm
 from python_api_testing.fused_ops.linear import Linear
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
+from utility_functions import enable_binary_cache, enable_compile_cache
 
 class TtBertShared(torch.nn.Module):
     @abstractmethod
@@ -64,7 +65,13 @@ def run_bert_question_and_answering_inference():
 
     batch = 5
     seq_len = 128
-    bert_input = torch.arange(seq_len*batch).reshape(batch, seq_len)
+    if 1:
+        bert_input = torch.arange(seq_len*batch).reshape(batch, seq_len)
+    else:
+        # batch identical sequences for debugging
+        oneseq = [torch.arange(seq_len)]*batch
+        bert_input = torch.stack(oneseq)
+        bert_input = bert_input.reshape(batch, seq_len)
 
     # tt_bert_input = tilize_to_list(pad_activation(bert_input))
 
@@ -91,7 +98,11 @@ def run_bert_question_and_answering_inference():
     assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
 if __name__ == "__main__":
+    # TODO(AP): currently necessary, otherwise get bit discrepancies
+    torch.manual_seed(1234)
     # Initialize the device
+    #enable_binary_cache()
+    #enable_compile_cache()
     device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
     gpai.device.InitializeDevice(device)
     host = gpai.device.GetHost()

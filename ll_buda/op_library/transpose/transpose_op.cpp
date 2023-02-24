@@ -3,6 +3,8 @@
 #include "ll_buda/host_api.hpp"
 #include "constants.hpp"
 
+#include "tools/cpuprof/cpuprof.h"
+
 namespace hlk_copy_binary {
 // FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
 struct hlk_args_t {

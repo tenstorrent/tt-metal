@@ -224,3 +224,27 @@ def tt2torch_rm(ttx):
     tt_out = ttx.to(host)
     torch_out = torch.Tensor(tt_out.data()).reshape(shp)
     return torch_out
+
+def enable_compile_cache():
+    """
+    Enables the compiler caching.
+    """
+    gpai.device.EnableCompileCache()
+
+def disable_compile_cache():
+    """
+    Disables the compiler caching.
+    """
+    gpai.device.DisableCompileCache()
+
+def enable_binary_cache():
+    """
+    Enables the binary loading cache.
+    """
+    gpai.device.EnableBinaryCache()
+
+def disable_binary_cache():
+    """
+    Disables the binary loading cache.
+    """
+    gpai.device.DisableBinaryCache()
