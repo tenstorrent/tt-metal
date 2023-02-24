@@ -33,8 +33,8 @@ Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
 
     uint32_t single_tile_size = 2 * 1024;
-    ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
-    ll_buda::DramBuffer *src1_dram_buffer = b.buffer();
+    ll_buda::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
+    ll_buda::InterleavedDramBuffer *src1_dram_buffer = b.buffer();
     if (bcast_batch)
         TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     else {
@@ -50,18 +50,23 @@ Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
     ll_buda::Tensor output = ll_buda::Tensor(cshape, a.dtype(), tt::ll_buda::Layout::TILE, device);
 
-    ll_buda::DramBuffer *dst_dram_buffer = output.buffer();
+    ll_buda::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool pass = true;
     {
         // C = A*B
         // MN = MK*KN
+<<<<<<< HEAD
         if (bcast_batch)
             TT_ASSERT(ashape[0] > 0 && bshape[0] == 1);
         else {
             TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0] && "Channel and batch dimensions must match in bmm op (non-bcast)");
         }
+=======
+        TT_ASSERT(ashape[0] == bshape[0] && ashape[0] == 1);
+        TT_ASSERT(ashape[1] == bshape[1] && "Batch dimension 1 must match for A and B in bmm_op");
+>>>>>>> #34: Adding InterleavedDramBuffer
         TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
         TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
         TT_ASSERT(ashape[3] % TILE_WIDTH == 0);

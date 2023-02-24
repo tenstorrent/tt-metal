@@ -12,6 +12,7 @@
 #include "hostdevcommon/registers.hpp"
 #include "ll_buda/impl/buffers/buffer.hpp"
 #include "ll_buda/impl/buffers/circular_buffer.hpp"
+#include "ll_buda/impl/buffers/interleaved_buffer.hpp"
 #include "ll_buda/impl/device/device.hpp"
 #include "ll_buda/impl/device/host.hpp"
 #include "ll_buda/impl/kernels/kernel.hpp"
@@ -323,7 +324,7 @@ DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_
 DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address);
 
 // Allocates multiple DRAM buffers across multiple banks to store interleaved data
-std::vector<DramBuffer *> CreateInterleavedDramBuffers(
+InterleavedDramBuffer *CreateInterleavedDramBuffer(
     Device *device,                        // Device
     int num_bank_units,                         // Single bank unit is read at a given time, unit can be tile, stick, etc
     int num_entries_per_bank_unit,              // Number of entries in single unit, e.g. tile has 512 entries because a single tile has 1024 values packed as uint32_t

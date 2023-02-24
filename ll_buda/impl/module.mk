@@ -9,6 +9,7 @@ LL_BUDA_IMPL_SRCS = \
 	ll_buda/impl/device/device.cpp \
 	ll_buda/impl/device/memory_manager.cpp \
 	ll_buda/impl/buffers/buffer.cpp \
+	ll_buda/impl/buffers/interleaved_buffer.cpp \
 	ll_buda/impl/kernels/kernel_args.cpp \
 	ll_buda/impl/kernels/kernel.cpp \
 	ll_buda/impl/program.cpp \
@@ -37,6 +38,6 @@ $(LL_BUDA_IMPL_LIB): $(COMMON_LIB) $(LL_BUDA_IMPL_OBJS)
 	@mkdir -p $(@D)
 	ar rcs -o $@ $(LL_BUDA_IMPL_OBJS)
 
-$(OBJDIR)/ll_buda/impl/%.o: ll_buda/impl/%.cpp 
+$(OBJDIR)/ll_buda/impl/%.o: ll_buda/impl/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(LL_BUDA_IMPL_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(LL_BUDA_IMPL_INCLUDES) $(LL_BUDA_IMPL_DEFINES) -c -o $@ $<

@@ -5,7 +5,7 @@
 
 #include "ll_buda/impl/device/device.hpp"
 #include "ll_buda/impl/device/host.hpp"
-#include "ll_buda/impl/buffers/buffer.hpp"
+#include "ll_buda/impl/buffers/interleaved_buffer.hpp"
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "common/bfloat16.hpp"
@@ -17,9 +17,9 @@ namespace tt {
 namespace ll_buda {
 
 // TODO: this is duplicated
-enum class Initialize 
-{    
-    ZEROS = 0, 
+enum class Initialize
+{
+    ZEROS = 0,
     ONES = 1,
     INCREMENT = 2,
     RANDOM = 3
@@ -67,13 +67,12 @@ class Tensor
         uint32_t volume() const { return shape_[0] * shape_[1] * shape_[2] * shape_[3]; }
 
         DataFormat dtype() const { return data_type_; }
-    
+
         Layout layout() const { return layout_; }
 
         Device *device() const { return device_; }
 
-        // Returns the first buffer that holds the tensor data
-        DramBuffer *buffer() const { return buffers_.at(0); }
+        InterleavedDramBuffer *buffer() const { return interleaved_buffer_; }
 
         bool on_host() const { return device_ == nullptr; }
 
@@ -91,7 +90,7 @@ class Tensor
             return {shape_[1]*shape_[2]*shape_[3], shape_[2]*shape_[3], shape_[3], 1};
         }
 
-        void allocate_buffers_on_device(uint32_t buffer_size_bytes);
+        void allocate_interleaved_buffer_on_device(uint32_t buffer_size_bytes);
 
         Tensor copy_to_host() const;
 
@@ -112,14 +111,12 @@ class Tensor
         }
 
         std::vector<bfloat16> data_;                                // Unpopulated if tensor is on device
-        std::array<uint32_t, 4> shape_;             // Outer-most dimension first
-        std::array<uint32_t, 4> strides_;           // Outer-most dimension first
+        std::array<uint32_t, 4> shape_;                             // Outer-most dimension first
+        std::array<uint32_t, 4> strides_;                           // Outer-most dimension first
         DataFormat data_type_;
         Layout layout_;
-        Device *device_ = nullptr;             // Set if tensor is allocated on device
-        // Tensor can be stored in multiple DRAM buffers across multiple banks
-        // Order corresponds to order in which tensor was split up and written
-        std::vector<DramBuffer *> buffers_;
+        Device *device_ = nullptr;                                  // Set if tensor is allocated on device
+        InterleavedDramBuffer *interleaved_buffer_ = nullptr;       // Tensor is stored in multiple DRAM buffers across multiple banks
 };
 
 }  // namespace ll_buda

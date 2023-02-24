@@ -47,22 +47,6 @@ std::vector<bfloat16> initialize_row_major_tensor_data(const std::array<uint32_t
     return values;
 }
 
-// Checks that there is only one DRAM buffer per DRAM bank and all buffers share the same address
-void validate_interleaved_buffers_address(const std::vector<DramBuffer *> buffers) {
-    if (buffers.empty()) {
-        return;
-    }
-    std::unordered_set<int> dram_channels;
-    for (auto buffer : buffers) {
-        if (buffer->address() != buffers.at(0)->address()) {
-            TT_THROW("Expected interleaved buffers to share the same base address!");
-        }
-        if (dram_channels.find(buffer->dram_channel()) != dram_channels.end()) {
-            TT_THROW("Expected only one DRAM buffer per DRAM bank!");
-        }
-    }
-}
-
 std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(
     DataFormat data_type, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape) {
 
@@ -94,14 +78,9 @@ std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(
     return {num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry};
 }
 
-void Tensor::allocate_buffers_on_device(uint32_t buffer_size_bytes) {
-
+void Tensor::allocate_interleaved_buffer_on_device(uint32_t buffer_size_bytes) {
     auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type_, layout_, buffer_size_bytes, shape());
-    buffers_ = CreateInterleavedDramBuffers(device_, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-    if (buffers_.empty()) {
-        TT_THROW("Not enough memory to create buffers with total size " + std::to_string(buffer_size_bytes) + " bytes on device!");
-    }
-    validate_interleaved_buffers_address(buffers_);
+    this->interleaved_buffer_ = CreateInterleavedDramBuffer(device_, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
 }
 
 std::vector<bfloat16> Tensor::initialize_data(const std::array<uint32_t, 4> &shape, Initialize init_type, Layout layout) {
@@ -121,9 +100,9 @@ Tensor::Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape,
     : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout), device_(device) {
     TT_ASSERT(device != nullptr);
     uint32_t size_in_bytes = data.size() * sizeof(uint32_t); // TODO: Update to be generic for data type
-    allocate_buffers_on_device(size_in_bytes);
+    allocate_interleaved_buffer_on_device(size_in_bytes);
     auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type, layout, size_in_bytes, shape_);
-    WriteToDeviceDRAMChannelsInterleaved(device, data, buffers_.at(0)->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    WriteToDeviceDRAMChannelsInterleaved(device, data, this->interleaved_buffer_->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
 }
 
 /*
@@ -161,10 +140,10 @@ Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataF
     TT_ASSERT(data_type == DataFormat::Float16_b);
     auto bfloat16_data = initialize_data(shape, init_type, layout);
     uint32_t size_in_bytes = bfloat16_data.size() * sizeof(bfloat16); // TODO: Update to be generic for data type
-    allocate_buffers_on_device(size_in_bytes);
+    allocate_interleaved_buffer_on_device(size_in_bytes);
     auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type, layout, size_in_bytes, shape_);
     auto uint32_data = pack_bfloat16_vec_into_uint32_vec(bfloat16_data);
-    WriteToDeviceDRAMChannelsInterleaved(device, uint32_data, buffers_.at(0)->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    WriteToDeviceDRAMChannelsInterleaved(device, uint32_data, this->interleaved_buffer_->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
 }
 
 Tensor::Tensor(const std::array<uint32_t, 4> &shape, DataFormat data_type, Layout layout, Device *device)
@@ -172,19 +151,16 @@ Tensor::Tensor(const std::array<uint32_t, 4> &shape, DataFormat data_type, Layou
     TT_ASSERT(device != nullptr);
     TT_ASSERT(layout == Layout::ROW_MAJOR or layout == Layout::TILE, "Only ROW_MAJOR or TILE layout is supported!");
     uint32_t size_in_bytes = volume() * sizeof(bfloat16); // TODO: Update to be generic for data type
-    allocate_buffers_on_device(size_in_bytes);
+    allocate_interleaved_buffer_on_device(size_in_bytes);
 }
 
 Tensor Tensor::copy_to_host() const {
-    TT_ASSERT(device_ != nullptr, "Need device to be set copy data from device to host!");
-    TT_ASSERT(not buffers_.empty(), "Need DRAM buffers on device to exist to copy data to host!");
+    TT_ASSERT(this->device_ != nullptr, "Need device to be set copy data from device to host!");
+    TT_ASSERT(this->interleaved_buffer_ != nullptr, "Need DRAM buffers on device to exist to copy data to host!");
     std::vector<uint32_t> device_data;
-    uint32_t size_in_bytes = 0;
-    for (auto buffer : buffers_) {
-        size_in_bytes += buffer->size();
-    }
+    uint32_t size_in_bytes = this->interleaved_buffer_->size();
     auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(data_type_, layout_, size_in_bytes, shape());
-    ReadFromDeviceDRAMChannelsInterleaved(device_, device_data, buffers_.at(0)->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    ReadFromDeviceDRAMChannelsInterleaved(device_, device_data, this->interleaved_buffer_->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
     return Tensor(device_data, shape_, data_type_, layout_);
 }
 

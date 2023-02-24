@@ -34,7 +34,7 @@ class DramBuffer : public Buffer {
 
    private:
     Device *device_;
-    int dram_channel_;          // Logical core
+    int dram_channel_;          // DRAM channel ID
 };
 
 class L1Buffer : public Buffer {

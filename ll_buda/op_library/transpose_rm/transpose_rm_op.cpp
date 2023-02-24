@@ -29,7 +29,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
     TT_ASSERT(a.buffer() != nullptr, "Operand to eltwise unary needs to be allocated in a buffer on device!");
 
     uint32_t single_tile_size = 2 * TILE_HW;
-    ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
+    ll_buda::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
     auto ashape = a.shape();
     int N = ashape[0], C = ashape[1], H = ashape[2], W = ashape[3];
 
@@ -40,7 +40,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
     TT_ASSERT(a.layout() == tt::ll_buda::Layout::ROW_MAJOR, "This transpose assumes that the data layout is row major!");
 
     ll_buda::Tensor output = ll_buda::Tensor(bshape, a.dtype(), tt::ll_buda::Layout::ROW_MAJOR, device);
-    ll_buda::DramBuffer *dst_dram_buffer = output.buffer();
+    ll_buda::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t num_cb_tiles = 16;

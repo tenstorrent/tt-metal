@@ -48,8 +48,8 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
      // This should allocate a DRAM buffer on the device
     ll_buda::Device *device = a.device();
     ll_buda::Tensor output = ll_buda::Tensor(a.shape(), a.dtype(), tt::ll_buda::Layout::ROW_MAJOR, device);
-    ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
-    ll_buda::DramBuffer *dst_dram_buffer = output.buffer();
+    ll_buda::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
+    ll_buda::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
 
     uint32_t single_tile_size = 2 * TILE_HW; // Assuming bfloat16 dataformat
     uint32_t src0_cb_index = 0;

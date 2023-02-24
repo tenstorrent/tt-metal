@@ -170,35 +170,9 @@ DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_
     return buffer;
 }
 
-std::vector<DramBuffer *> CreateInterleavedDramBuffers(Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
-    std::vector<DramBuffer *> dram_buffers;
-
-    uint32_t starting_address = 0;
-    for (int dram_bank = 0; dram_bank < device->num_dram_banks(); dram_bank++) {
-        starting_address = std::max(starting_address, device->banked_dram_manager_.at(dram_bank)->peak());
-    }
-
-    int num_equally_distributed_units = num_bank_units / device->num_dram_banks();
-    int remaining_units_after_equally_distributing = num_bank_units % device->num_dram_banks();
-
-    uint32_t total_units_bytes = num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry;
-    uint32_t total_allocated = 0;
-    for (int dram_bank = 0; dram_bank < device->num_dram_banks(); dram_bank++) {
-        int num_units_in_bank = num_equally_distributed_units;
-        if (remaining_units_after_equally_distributing > 0) {
-            num_units_in_bank += 1;
-            remaining_units_after_equally_distributing -= 1;
-        }
-        uint32_t buffer_size = num_units_in_bank * (num_entries_per_bank_unit * num_bytes_per_entry);
-        device->allocate_buffer(dram_bank, buffer_size, starting_address);
-        auto dram_buffer = CreateDramBuffer(device, dram_bank, buffer_size, starting_address);
-        dram_buffers.push_back(dram_buffer);
-        total_allocated += buffer_size;
-        if (total_allocated == total_units_bytes) {
-            break;
-        }
-    }
-    return dram_buffers;
+InterleavedDramBuffer *CreateInterleavedDramBuffer(Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
+    InterleavedDramBuffer *interleaved_buffer = new InterleavedDramBuffer(device, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    return interleaved_buffer;
 }
 
 L1Buffer *CreateL1Buffer(Program *program, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address) {

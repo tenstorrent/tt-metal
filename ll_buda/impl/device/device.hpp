@@ -15,6 +15,7 @@ template<class... Ts> struct overloaded_core : Ts... { using Ts::operator()...; 
 template<class... Ts> overloaded_core(Ts...) -> overloaded_core<Ts...>;
 
 class DramBuffer;
+class InterleavedDramBuffer;
 
 // A physical PCIexpress Tenstorrent device
 class Device {
@@ -54,8 +55,7 @@ class Device {
     bool close();
     friend bool CloseDevice(Device *device);
 
-    friend std::vector<DramBuffer *> CreateInterleavedDramBuffers(
-        Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
+    friend class InterleavedDramBuffer;
 
     static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
     tt::ARCH arch_;
