@@ -37,15 +37,18 @@ int main(int argc, char **argv) {
         uint32_t Kt = 2;
         uint32_t Nt = 4;
         uint32_t B = 5;
-        std::array<uint32_t, 4> shapea = {1, B, Mt*TILE_HEIGHT, Kt*TILE_WIDTH};
-        std::array<uint32_t, 4> shapeb = {1, B, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
+        std::array<uint32_t, 4> shapea = {B, 1, Mt*TILE_HEIGHT, Kt*TILE_WIDTH};
+        std::array<uint32_t, 4> shapeb = {B, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
+        std::array<uint32_t, 4> shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = Tensor(shapea, Initialize::RANDOM, tt::DataFormat::Float16_b, Layout::TILE, device);
         Tensor b = Tensor(shapeb, Initialize::ZEROS, tt::DataFormat::Float16_b, Layout::TILE, device);
+        Tensor b1 = Tensor(shapeb1, Initialize::ZEROS, tt::DataFormat::Float16_b, Layout::TILE, device);
 
-        Tensor mm = matmul(a, b).to(host);
-        
+        Tensor mm = bmm(a, b).to(host);
+        Tensor mm1 = matmul(a, b1).to(host);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

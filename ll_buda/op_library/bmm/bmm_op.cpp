@@ -58,8 +58,8 @@ Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         if (bcast_batch)
             TT_ASSERT(ashape[0] > 0 && bshape[0] == 1);
         else {
-            TT_ASSERT(ashape[0] == bshape[0] && ashape[0] == 1);
-            TT_ASSERT(ashape[1] == bshape[1] && "Batch dimension 1 must match for A and B in bmm_op");
+            TT_ASSERT(ashape[0] == bshape[0] && "Batch dimensions for A and B must match for non-broadcast bmm op.");
+            TT_ASSERT(ashape[1] == bshape[1] && ashape[1] == 1 && "Channel dimension must be 1 in bmm op for batch!=1.");
         }
         TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
         TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
