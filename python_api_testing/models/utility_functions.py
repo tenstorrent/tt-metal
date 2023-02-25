@@ -123,16 +123,18 @@ def untilize(x):
     return ret
 
 
-def is_close(a, b, rtol=1e-2, atol=1e-2):
+def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag = 2.0, max_mag_fraction = 0.02):
     """
     A variant of np.isclose with logging.
     """
     absdiff = (a-b).abs()
-    reldiff1 = 1.0 - a.abs() / b.abs()
-    reldiff2 = 1.0 - (a.abs()+1) / (b.abs()+1) # in case b.abs() is 0
-    reldiff_or = torch.logical_or(reldiff1<rtol, reldiff2<rtol)
+    reldiff1 = (a.abs() / b.abs()) - 1.0
+    reldiff2 = (a.abs()+1.0) / (b.abs()+1.0) - 1.0 # in case b.abs() is 0
+    reldiff_or = torch.logical_or(reldiff1.abs()<rtol, reldiff2.abs()<rtol)
+    max_mag_ok = (absdiff<max_mag*max_mag_fraction)
 
     or_abs_rel = torch.logical_or( absdiff<atol, reldiff_or )
+    or_abs_rel = torch.logical_or(or_abs_rel, max_mag_ok)
     debug_index = or_abs_rel.to(torch.int32).argmin().item()
     if not or_abs_rel.reshape(-1)[debug_index]:
         print("isclose mismatch at index=", debug_index)

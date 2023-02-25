@@ -62,8 +62,9 @@ def run_bert_question_and_answering_inference():
     hugging_face_reference_model.eval()
     tt_bert_model = TtBertForQuestionAnswering(2, 2, hugging_face_reference_model, device)
 
+    batch = 2
     seq_len = 128
-    bert_input = torch.arange(seq_len).reshape(1, seq_len)
+    bert_input = torch.arange(seq_len*batch).reshape(batch, seq_len)
 
     # tt_bert_input = tilize_to_list(pad_activation(bert_input))
 

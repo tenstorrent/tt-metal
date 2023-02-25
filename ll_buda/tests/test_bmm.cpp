@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
         uint32_t bytesA = single_tile_size * num_tilesA;
         uint32_t bytesB = single_tile_size * num_tilesB;
         uint32_t bytesC = single_tile_size * num_tilesC;
-        
+
         uint32_t dram_buffer_src0_addr = 0;
         uint32_t dram_buffer_src1_addr = 256 * 1024 * 1024;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
@@ -99,12 +99,12 @@ int main(int argc, char **argv) {
             output_cb_addr,
             tt::DataFormat::Float16_b
         );
-        
+
         auto reader = ll_buda::CreateDataMovementKernel(
             program,
             "kernels/dataflow/reader_bmm_8bank.cpp",
             core, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
-        
+
         auto writer = ll_buda::CreateDataMovementKernel(
             program,
             "kernels/dataflow/writer_bmm_8bank.cpp",
@@ -133,9 +133,10 @@ int main(int argc, char **argv) {
         pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src0_vec, src0_dram_buffer->address());
         pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src1_vec, src1_dram_buffer->address());
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
+        uint32_t do_bcast = 0;
         ll_buda::WriteRuntimeArgsToDevice(
             device, reader, core,
-            {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
+            {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, do_bcast}
         );
         ll_buda::WriteRuntimeArgsToDevice(
             device, writer, core,

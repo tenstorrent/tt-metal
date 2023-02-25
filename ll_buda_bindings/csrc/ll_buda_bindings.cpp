@@ -66,6 +66,7 @@ void TensorModule(py::module &m_tensor) {
 
     // matrix multiplication
     m_tensor.def("matmul", &matmul);
+    m_tensor.def("bmm", &bmm);
 
     // broadcast math
     m_tensor.def("bcast", &bcast);

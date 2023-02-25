@@ -11,7 +11,8 @@ from transformers import BertTokenizer, BertForQuestionAnswering
 import numpy as np
 
 import ll_buda_bindings.ll_buda_bindings._C as _C
-from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, get_FR, set_FR, tt2torch_rm
+from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
+#from utility_functions import get_FR, set_FR
 from fused_ops.linear import Linear as TtLinear
 from fused_ops.softmax import softmax
 
@@ -159,7 +160,7 @@ def run_mha_inference():
 
     # Prepare input
     torch.manual_seed(0)
-    mha_input = (torch.rand(1, 1, 128, 128) * 2) - 1
+    mha_input = (torch.rand(2, 1, 128, 128) * 2) - 1
 
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
 

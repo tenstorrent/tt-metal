@@ -19,7 +19,8 @@ namespace tt {
 
 namespace ll_buda {
 
-Tensor matmul(const Tensor &a, const Tensor &b) {
+
+Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
 
     ll_buda::Program *program = new ll_buda::Program();
     tt_xy_pair core = {0, 0};
@@ -34,12 +35,17 @@ Tensor matmul(const Tensor &a, const Tensor &b) {
     uint32_t single_tile_size = 2 * 1024;
     ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
     ll_buda::DramBuffer *src1_dram_buffer = b.buffer();
+    if (bcast_batch)
+        TT_ASSERT(ashape[1] == bshape[1] && ashape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes B1MK*11KN=B1MN"); // always require 1 for second dim to be consistent with NCHW
+    else
+        // same condition as above, different message
+        TT_ASSERT(ashape[1] == bshape[1] && ashape[1] == 1 && "bmm (non-bcast matmul) expects input tensors of shapes B1MK*11KN=B1MN"); // always require 1 for second dim to be consistent with NCHW
     TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0);
 
     // This should allocate a DRAM buffer on the device
     ll_buda::Device *device = a.device();
-    std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, 1BMK*1BKN->1BMN
+    std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
     ll_buda::Tensor output = ll_buda::Tensor(cshape, a.dtype(), tt::ll_buda::Layout::TILE, device);
 
     ll_buda::DramBuffer *dst_dram_buffer = output.buffer();
@@ -49,14 +55,18 @@ Tensor matmul(const Tensor &a, const Tensor &b) {
     {
         // C = A*B
         // MN = MK*KN
-        TT_ASSERT(ashape[0] == bshape[0] && ashape[0] == 1);
-        TT_ASSERT(ashape[1] == bshape[1] && "Batch dimension 1 must match for A and B in bmm_op"); 
+        if (bcast_batch)
+            TT_ASSERT(ashape[0] > 0 && bshape[0] == 1);
+        else {
+            TT_ASSERT(ashape[0] == bshape[0] && ashape[0] == 1);
+            TT_ASSERT(ashape[1] == bshape[1] && "Batch dimension 1 must match for A and B in bmm_op");
+        }
         TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
         TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
         TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
         TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
         TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
-        uint32_t B = ashape[1];
+        uint32_t B = ashape[0];
         uint32_t Mt = ashape[2]/TILE_HEIGHT;
         uint32_t Kt = ashape[3]/TILE_WIDTH;
         uint32_t Nt = bshape[3]/TILE_WIDTH;
@@ -103,12 +113,12 @@ Tensor matmul(const Tensor &a, const Tensor &b) {
                 output_cb_addr,
                 tt::DataFormat::Float16_b
             );
-            
+
             auto reader = ll_buda::CreateDataMovementKernel(
                 program,
                 "kernels/dataflow/reader_bmm_8bank.cpp",
                 core, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
-            
+
             auto writer = ll_buda::CreateDataMovementKernel(
                 program,
                 "kernels/dataflow/writer_bmm_8bank.cpp",
@@ -131,7 +141,7 @@ Tensor matmul(const Tensor &a, const Tensor &b) {
 
             ll_buda::WriteRuntimeArgsToDevice(
                 device, reader, core,
-                {in0_dram_addr, in1_dram_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
+                {in0_dram_addr, in1_dram_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, uint32_t(bcast_batch ? 1 : 0)}
             );
             ll_buda::WriteRuntimeArgsToDevice(
                 device, writer, core,
@@ -139,16 +149,24 @@ Tensor matmul(const Tensor &a, const Tensor &b) {
             );
 
             bool skip_hlkc = false;
-            pass &= ll_buda::CompileProgram(device, program, skip_hlkc);       
+            pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
             pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
         }
         pass &= ll_buda::LaunchKernels(device, program);
     }
-    
+
     TT_ASSERT(pass);
 
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;
+}
+
+Tensor matmul(const Tensor& a, const Tensor& b) {
+    return matmul_(a, b, true);
+}
+
+Tensor bmm(const Tensor& a, const Tensor& b) {
+    return matmul_(a, b, false);
 }
 
 }  // namespace ll_buda
