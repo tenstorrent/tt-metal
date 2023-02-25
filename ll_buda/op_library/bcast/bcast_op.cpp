@@ -64,13 +64,14 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
     TT_ASSERT(a.volume() % TILE_HW == 0);
 
+    TT_ASSERT((bN*bC == 1 || (bN == N && bC == C)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
     // validate input dimensions
     if (bcast_dim == BcastOpDim::W)
-        TT_ASSERT(N == bN && C == bC && H == bH && bW == TILE_WIDTH);
+        TT_ASSERT(H == bH && bW == TILE_WIDTH);
     if (bcast_dim == BcastOpDim::H)
-        TT_ASSERT(N == bN && C == bC && W == bW && bH == TILE_HEIGHT);
+        TT_ASSERT(W == bW && bH == TILE_HEIGHT);
     if (bcast_dim == BcastOpDim::HW)
-        TT_ASSERT(N == bN && C == bC && bW == TILE_WIDTH && bH == TILE_HEIGHT);
+        TT_ASSERT(bW == TILE_WIDTH && bH == TILE_HEIGHT);
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
@@ -174,6 +175,7 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
+        uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
         ll_buda::WriteRuntimeArgsToDevice(
             device,
             binary_reader_kernel,
@@ -185,7 +187,7 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
             b.buffer()->address(), // 4
             0, // 5
             0, // 6
-            num_btensor_tiles, NC*Ht*Wt, NC, Ht, Wt}); // 7 8 9 10 11
+            num_btensor_tiles, NC*Ht*Wt, NC, Ht, Wt, bnc1}); // 7 8 9 10 11 12
 
         ll_buda::WriteRuntimeArgsToDevice(
             device,

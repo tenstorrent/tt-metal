@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
 
         tt_xy_pair core = {0, 0};
 
-        vector<uint32_t> shape = {1, 4, 2*TILE_HEIGHT, 3*TILE_WIDTH};
+        vector<uint32_t> shape = {2, 4, 2*TILE_HEIGHT, 3*TILE_WIDTH};
         u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0], N = shape[0], C = shape[1];
         u32 HW = H*W;
         TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
@@ -234,6 +234,7 @@ int main(int argc, char **argv) {
             ll_buda::NOC::RISCV_0_default);
 
 
+        uint32_t nc1 = 0;
         ll_buda::WriteRuntimeArgsToDevice(
             device,
             binary_reader_kernel,
@@ -245,7 +246,7 @@ int main(int argc, char **argv) {
             dram_buffer_src1_addr, // 4
             (std::uint32_t)dram_src1_noc_xy.x, // 5
             (std::uint32_t)dram_src1_noc_xy.y, // 6
-            num_bcast_tiles, NC*Ht*Wt, NC, Ht, Wt}); // 7 8 9 10 11
+            num_bcast_tiles, NC*Ht*Wt, NC, Ht, Wt, nc1}); // 7 8 9 10 11 12
 
         ll_buda::WriteRuntimeArgsToDevice(
             device,

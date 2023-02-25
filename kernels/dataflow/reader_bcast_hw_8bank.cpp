@@ -10,6 +10,7 @@ void kernel_main() {
     uint32_t NC         = get_arg_val<uint32_t>(9);
     uint32_t Ht         = get_arg_val<uint32_t>(10);
     uint32_t Wt         = get_arg_val<uint32_t>(11);
+    uint32_t nc1        = get_arg_val<uint32_t>(12); // if 1 we expect the bcast tensor to have NC=1 and wrap around in NC
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -46,6 +47,7 @@ void kernel_main() {
             i ++; // input tile iterates over NC Ht Wt
         } // wt loop
         } // ht loop
-        i1 ++; // bcast-HW tile iterates only for nc loop
+        if (nc1 == 0)
+            i1 ++; // bcast-HW tile iterates only for nc loop and only if NC>1
     } // nc loop
 }

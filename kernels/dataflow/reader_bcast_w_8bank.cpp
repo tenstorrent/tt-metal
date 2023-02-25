@@ -10,6 +10,7 @@ void kernel_main() {
     uint32_t NC         = get_arg_val<uint32_t>(9);
     uint32_t Ht         = get_arg_val<uint32_t>(10);
     uint32_t Wt         = get_arg_val<uint32_t>(11);
+    uint32_t nc1        = get_arg_val<uint32_t>(12); // if 1 we expect the bcast tensor to have NC=1
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -48,5 +49,8 @@ void kernel_main() {
                 i++;
             } // Wt loop
         } // Ht loop
+
+        if (nc1) // if we also bcast from NC=1, go back Ht tiles on bcasted tensor
+            i_bcast -= Ht;
     } // NC loop
 }

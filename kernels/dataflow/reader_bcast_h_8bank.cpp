@@ -10,6 +10,7 @@ void kernel_main() {
     uint32_t NC         = get_arg_val<uint32_t>(9);
     uint32_t Ht         = get_arg_val<uint32_t>(10);
     uint32_t Wt         = get_arg_val<uint32_t>(11);
+    uint32_t nc1        = get_arg_val<uint32_t>(12); // if 1 we expect the bcast tensor to have NC=1
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -51,6 +52,7 @@ void kernel_main() {
             i1 -= Wt;
         }
         // we reused Wt tiles out of NCWt bcast tensor Ht times, now advance for next NC
-        i1 += Wt;
+        if (nc1 == 0) // if bcast NC==1 we don't advance but reuse the tensor
+            i1 += Wt;
     }
 }
