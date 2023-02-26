@@ -8,7 +8,7 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-import ll_buda_bindings.ll_buda_bindings._C as _C
+from gpai import gpai
 from python_api_testing.fused_ops.add_and_norm import AddAndNorm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
 
@@ -26,7 +26,7 @@ class TtAddAndNormModel(torch.nn.Module):
             assert False, "Invalid lnorm_type"
 
         self.add_and_norm = AddAndNorm(gamma, beta, 1e-12, 128, 128, device)
-    
+
     def forward(self, a, b):
         return self.add_and_norm(a, b)
 
@@ -57,9 +57,9 @@ def run_add_and_norm_inference():
     pytorch_out = pytorch_add_and_norm_model(add_and_norm_inputa, add_and_norm_inputb)
 
     tt_add_and_norm_input_a = tilize_to_list(pad_activation(add_and_norm_inputa))
-    tt_add_and_norm_input_a = _C.tensor.Tensor(tt_add_and_norm_input_a, add_and_norm_inputa.shape, _C.tensor.DataFormat.FLOAT32,  _C.tensor.Layout.TILE, device)
+    tt_add_and_norm_input_a = gpai.tensor.Tensor(tt_add_and_norm_input_a, add_and_norm_inputa.shape, gpai.tensor.DataFormat.FLOAT32,  gpai.tensor.Layout.TILE, device)
     tt_add_and_norm_input_b = tilize_to_list(pad_activation(add_and_norm_inputb))
-    tt_add_and_norm_input_b = _C.tensor.Tensor(tt_add_and_norm_input_b, add_and_norm_inputb.shape, _C.tensor.DataFormat.FLOAT32,  _C.tensor.Layout.TILE, device)
+    tt_add_and_norm_input_b = gpai.tensor.Tensor(tt_add_and_norm_input_b, add_and_norm_inputb.shape, gpai.tensor.DataFormat.FLOAT32,  gpai.tensor.Layout.TILE, device)
 
     tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).to(host)
     tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
@@ -67,8 +67,8 @@ def run_add_and_norm_inference():
 
 if __name__ == "__main__":
     # Initialize the device
-    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-    _C.device.InitializeDevice(device)
-    host = _C.device.GetHost()
+    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
+    gpai.device.InitializeDevice(device)
+    host = gpai.device.GetHost()
     run_add_and_norm_inference()
-    _C.device.CloseDevice(device)
+    gpai.device.CloseDevice(device)

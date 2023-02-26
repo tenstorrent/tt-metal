@@ -124,7 +124,7 @@ LIBS_TO_BUILD = \
 	compiler \
 	tools \
 	python_env \
-	ll_buda_bindings
+	gpai
 
 ifdef GPAI_ENV_IS_DEV
 LIBS_TO_BUILD += \
@@ -184,7 +184,7 @@ include tensor/module.mk
 include compiler/module.mk
 include tools/module.mk
 include python_env/module.mk
-include ll_buda_bindings/module.mk
+include gpai/module.mk
 
 # only include these modules if we're in development
 ifdef GPAI_ENV_IS_DEV

@@ -10,9 +10,7 @@
 #include "ll_buda/op_library/untilize/untilize_op.hpp"
 #include "ll_buda/op_library/reshape/reshape_op.hpp"
 
-#include "ll_buda_bindings.hpp"
-
-
+#include "gpai_bindings.hpp"
 
 namespace py = pybind11;
 
@@ -168,8 +166,8 @@ void DeviceModule(py::module &m_device) {
 
 PYBIND11_MODULE(_C, m) {
 
-    m.attr("__name__") = "ll_buda_bindings._C";
-    m.doc() = "ll_buda python bindings";
+    m.attr("__name__") = "gpai._C";
+    m.doc() = "General purpose AI python bindings";
 
     py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an ll_buda tensor");
     tt::ll_buda::TensorModule(m_tensor);

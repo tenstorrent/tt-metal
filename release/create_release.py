@@ -35,7 +35,7 @@ class ReleaseConstants:
                 "llrt/tests/",
                 "ll_buda/tests/",
                 "build_kernels_for_riscv/tests/",
-                "ll_buda_bindings/tests/",
+                "gpai/tests/",
                 "release/",
                 "reg_scripts/",
                 "kernels/compute/draft/",

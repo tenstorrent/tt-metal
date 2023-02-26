@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
-import ll_buda_bindings.ll_buda_bindings._C as _C
+from gpai import gpai
 from utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 
@@ -24,7 +24,7 @@ class TtMnistModel(torch.nn.Module):
 
         fc2_weight = pad_weight(state_dict["fc2.weight"])
         fc2_bias = pad_weight(state_dict["fc2.bias"])
- 
+
         fc3_weight = pad_weight(state_dict["fc3.weight"])
         fc3_bias = pad_weight(state_dict["fc3.bias"])
 
@@ -38,10 +38,10 @@ class TtMnistModel(torch.nn.Module):
         # Tilize params
         fc1_weight = tilize_to_list(fc1_weight)
         fc1_bias = tilize_to_list(fc1_bias)
-        
+
         fc2_weight = tilize_to_list(fc2_weight)
         fc2_bias = tilize_to_list(fc2_bias)
-        
+
         fc3_weight = tilize_to_list(fc3_weight)
         fc3_bias = tilize_to_list(fc3_bias)
 
@@ -51,38 +51,38 @@ class TtMnistModel(torch.nn.Module):
 
         # We are doing identity since back to back matmul and activation produces garbage results...
         # probably reading from wrong address
-        self.act = _C.tensor.relu
-        
+        self.act = gpai.tensor.relu
+
 
     def forward(self, X):
 
         x, labels = X
 
         # Flatten tensor
-        x = x.view(x.shape[0], -1) 
+        x = x.view(x.shape[0], -1)
 
         # Pad to tile
         x = pad_activation(x)
         x_ = tilize_to_list(x)
 
         # x is a pytorch tensor,... need to convert to a buda tensor
-        inp = _C.tensor.Tensor(x_, x.shape, _C.tensor.DataFormat.FLOAT32, _C.tensor.Layout.TILE, device)
-        
+        inp = gpai.tensor.Tensor(x_, x.shape, gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
+
         lin1_out = self.lin1(inp)
         lin1_out_act = self.act(lin1_out)
-    
+
         lin2_out = self.lin2(lin1_out_act)
-        
+
         lin2_out_act = self.act(lin2_out)
-    
+
         lin3_out = self.lin3(lin2_out_act)
         lin3_out_act = self.act(lin3_out)
-    
+
         # Softmax on CPU
         lin3_out_cpu = lin3_out_act.to(host)
 
         # Make pytorch tensor... since we had to pad the output, we need
-        # to only retrieve the 10 values that represent actual classes 
+        # to only retrieve the 10 values that represent actual classes
         lin3_out_cpu_pytorch = torch.Tensor(lin3_out_cpu.data()).reshape(lin3_out_cpu.shape())[:, 0, 0, :10]
         out = torch.nn.functional.softmax(lin3_out_cpu_pytorch)
 
@@ -91,7 +91,7 @@ class TtMnistModel(torch.nn.Module):
 class PytorchMnistModel(torch.nn.Module):
     def __init__(self, state_dict):
         super().__init__()
-    
+
         self.fc1 = torch.nn.Linear(784, 120)
         self.fc2 = torch.nn.Linear(120, 84)
         self.fc3 = torch.nn.Linear(84, 10)
@@ -99,7 +99,7 @@ class PytorchMnistModel(torch.nn.Module):
         # Doing identity for same reason as above
         self.act = torch.nn.functional.relu
         self.load_state_dict(state_dict)
-    
+
     def forward(self, X):
         x, labels = X
 
@@ -107,7 +107,7 @@ class PytorchMnistModel(torch.nn.Module):
 
         lin1_out = self.fc1(x)
         lin1_out_act = self.act(lin1_out)
-        
+
         lin2_out = self.fc2(lin1_out_act)
         lin2_out_act = self.act(lin2_out)
 
@@ -115,9 +115,9 @@ class PytorchMnistModel(torch.nn.Module):
         lin3_out_act = self.act(lin3_out)
 
         out = torch.nn.functional.softmax(lin3_out_act)
-        return out    
+        return out
 
-    
+
 def run_mnist_inference():
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
@@ -141,13 +141,13 @@ def run_mnist_inference():
     # Check that the scale of each output is the same
     tt_out_oom = get_oom_of_float(tt_out.tolist()[0])
     pytorch_out_oom = get_oom_of_float(pytorch_out.tolist())
-    
+
     assert tt_out_oom == pytorch_out_oom, "The order of magnitudes of the outputs must be the same"
 
 if __name__ == "__main__":
     # Initialize the device
-    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-    _C.device.InitializeDevice(device)
-    host = _C.device.GetHost()
+    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
+    gpai.device.InitializeDevice(device)
+    host = gpai.device.GetHost()
     run_mnist_inference()
-    _C.device.CloseDevice(device)
+    gpai.device.CloseDevice(device)

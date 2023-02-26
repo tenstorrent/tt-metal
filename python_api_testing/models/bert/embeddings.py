@@ -20,11 +20,3 @@ class PytorchEmbeddings(torch.nn.Module):
 
 def run_embeddings_inference():
     return
-
-if __name__ == "__main__":
-    # Initialize the device
-    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-    _C.device.InitializeDevice(device)
-    host = _C.device.GetHost()
-    run_embeddings_inference()
-    _C.device.CloseDevice(device)

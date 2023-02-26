@@ -3,7 +3,7 @@ import math
 import torch
 import numpy as np
 
-import ll_buda_bindings.ll_buda_bindings._C as _C
+from gpai import gpai
 
 def nearest_32(x):
     return math.ceil(x / 32) * 32
@@ -195,11 +195,11 @@ def get_oom_of_float(float_lst):
 
 def get_FR():
     # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    return _C.device.GetForceRecompiles()
+    return gpai.device.GetForceRecompiles()
 
 def set_FR(new_val):
     # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    host = _C.device.SetForceRecompiles(new_val)
+    host = gpai.device.SetForceRecompiles(new_val)
     print("Force recompiles=", get_FR())
 
 
@@ -207,8 +207,8 @@ def tt2torch(ttx):
     """
     Converts an llbuda tiled tensor to torch tensor.
     """
-    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-    host = _C.device.GetHost()
+    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
+    host = gpai.device.GetHost()
     shp = ttx.shape()
     tt_out = ttx.to(host)
     torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
@@ -218,8 +218,8 @@ def tt2torch_rm(ttx):
     """
     Converts an llbuda row-major tensor to torch tensor.
     """
-    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-    host = _C.device.GetHost()
+    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
+    host = gpai.device.GetHost()
     shp = ttx.shape()
     tt_out = ttx.to(host)
     torch_out = torch.Tensor(tt_out.data()).reshape(shp)

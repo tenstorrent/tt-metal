@@ -63,7 +63,7 @@ release_build/
 
 # PyBind extensions and wheel setup
 *.egg-info/
-ll_buda_bindings/ll_buda_bindings/*.so
+gpai/gpai/*.so
 .installed.cfg
 *.egg
 

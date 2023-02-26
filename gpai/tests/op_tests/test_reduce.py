@@ -6,19 +6,19 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-import ll_buda_bindings.ll_buda_bindings._C as _C
+from gpai import gpai
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
-RSUM = _C.tensor.ReduceOpMath.SUM
-RW = _C.tensor.ReduceOpDim.W
-RH = _C.tensor.ReduceOpDim.H
-RHW = _C.tensor.ReduceOpDim.HW
+RSUM = gpai.tensor.ReduceOpMath.SUM
+RW = gpai.tensor.ReduceOpDim.W
+RH = gpai.tensor.ReduceOpDim.H
+RHW = gpai.tensor.ReduceOpDim.HW
 
 # Initialize the device
-device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-_C.device.InitializeDevice(device)
-host = _C.device.GetHost()
-_C.device.StartDebugPrintServer(device)
+device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
+gpai.device.InitializeDevice(device)
+host = gpai.device.GetHost()
+gpai.device.StartDebugPrintServer(device)
 
 if __name__ == "__main__":
     N = 2
@@ -32,11 +32,11 @@ if __name__ == "__main__":
     reduce_dims_pyt = [[3], [2], [3,2]]
     reduce_shapes = [[N, C, H, 32], [N, C, 32, W], [N, C, 32, 32]]
     for rtype, expected_shape, rdims_pyt in zip(reduce_dims_tt, reduce_shapes, reduce_dims_pyt):
-        xt = _C.tensor.Tensor(tilize_to_list(x), [N, C, H, W], _C.tensor.DataFormat.FLOAT32, _C.tensor.Layout.TILE, device)
+        xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataFormat.FLOAT32, gpai.tensor.Layout.TILE, device)
         mul = 0.5
         if rtype == RHW:
             mul = 1.0
-        tt_res = _C.tensor.reduce(xt, RSUM, rtype, mul)
+        tt_res = gpai.tensor.reduce(xt, RSUM, rtype, mul)
         assert(tt_res.shape() == expected_shape)
         tt_host_rm = tt_res.to(host).data()
 
@@ -60,4 +60,4 @@ if __name__ == "__main__":
 
         assert(allok)
 
-_C.device.CloseDevice(device)
+gpai.device.CloseDevice(device)
