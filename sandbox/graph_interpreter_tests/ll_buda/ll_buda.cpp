@@ -18,9 +18,9 @@ void dumpProfilerResults(std::string name_append)
     ll_buda_profiler.dumpResults(name_append);
 }
 
-Device *CreateDevice(tt::ARCH device_type, int pcie_slot) { 
+Device *CreateDevice(tt::ARCH device_type, int pcie_slot) {
     TT_ASSERT(device_type == tt::ARCH::GRAYSKULL, "Only Grayskull is supported!");
-    return new Device(device_type, pcie_slot); 
+    return new Device(device_type, pcie_slot);
 }
 
 bool InitializeDevice(Device *device) { return device->initialize(); }
@@ -35,7 +35,7 @@ DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const tt_xy_
 DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const CoreRange &core_range, const std::vector<uint32_t> &compile_time_args) {
     CoreBlocks core_blocks = {core_range};
     DataMovementKernelArgs *kernel_args = new DataMovementKernelArgs(core_blocks, {compile_time_args});
-    return kernel_args; 
+    return kernel_args;
 }
 
 DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args_spec) {
@@ -72,7 +72,7 @@ DataMovementKernel *CreateDataMovementKernel(
 }
 
 DataMovementKernel *CreateDataMovementKernel(
-    Program *program, 
+    Program *program,
     const std::string &file_name,
     const tt_xy_pair &core,
     DataMovementProcessor processor_type,
@@ -289,7 +289,7 @@ void PopulateKernelGroupWithDataMovementKernels(Program *program, KernelGroup &k
         }
         return default_noc;
     };
-    
+
     DataMovementKernelArgs *empty_kernel_args = new DataMovementKernelArgs();
     if (kernel_group.riscv_0 == nullptr) {
         NOC riscv_0_noc = get_noc_id(kernel_group.riscv_1, NOC::RISCV_0_default);
@@ -358,7 +358,7 @@ bool CompileProgram(Device *device, Program *program, bool skip_hlkc) {
     auto op_idx = 0;
     for (auto &[logical_core, kernel_group] : program->core_to_kernel_group()) {
         ValidateL1Buffers(device, program, logical_core);
-        
+
         ValidateKernelGroup(kernel_group, logical_core);
 
         // Modifies kernel_group to have blank data movement kernels if they are not present
@@ -378,8 +378,8 @@ bool CompileProgram(Device *device, Program *program, bool skip_hlkc) {
 
         if (compiled_hashes.find(kernel_group_hash) != compiled_hashes.end()) {
             continue;
-        } 
-        
+        }
+
         GenerateBinaries(device, &dummy_op, op_path, skip_hlkc, kernel_group, logical_core);
         compiled_hashes.insert(kernel_group_hash);
     }
@@ -389,7 +389,7 @@ bool CompileProgram(Device *device, Program *program, bool skip_hlkc) {
 }
 
 void ConfigureKernelGroup(const KernelGroup &kernel_group, Device *device, const tt_xy_pair &logical_core) {
-    // No need to check if kernel_group.riscv_0 and kernel_group.riscv_1 are null because compilation 
+    // No need to check if kernel_group.riscv_0 and kernel_group.riscv_1 are null because compilation
     // creates blank data movement kernels for riscs0/1 if there is no kernel on them
     if (kernel_group.compute != nullptr) {
         kernel_group.compute->configure(device, logical_core);
@@ -622,7 +622,7 @@ bool ReadFromDeviceDRAMChannel(
 }
 
 bool WriteToDeviceL1(
-    Device *device,            
+    Device *device,
     const tt_xy_pair &core,
     std::vector<uint32_t> &host_buffer,
     uint32_t buffer_address) {
@@ -636,9 +636,9 @@ bool WriteToDeviceL1(
 }
 
 bool WriteToDeviceL1(
-    Device *device,            
+    Device *device,
     const tt_xy_pair &core,
-    llrt::op_info_t op_info,
+    op_info_t op_info,
     int op_idx) {
     ll_buda_profiler.markStart("WriteToDeviceL1");
     bool pass = true;

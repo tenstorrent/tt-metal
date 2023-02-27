@@ -70,28 +70,6 @@ using WorkerCores = std::vector<WorkerCore>;
 using CircularBufferConfigVec = std::vector<uint32_t>;
 
 
-// Used for graph interpreter api
-enum class OpCode : uint8_t
-{
-    Exponential = 0,
-    Reciprocal  = 1,
-    Gelu        = 2,
-    Add         = 3,
-    Subtract    = 4,
-    Multiply    = 5
-
-};
-
-struct op_info_t {
-    uint32_t op_code;
-    uint32_t cb_in0_id;
-    uint32_t cb_in1_id; // Unused for eltwise unary op
-    uint32_t cb_out_id;
-    uint32_t pop0;
-    uint32_t pop1;
-    uint32_t unary;
-};
-
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
 vector <uint32_t> get_risc_binary(string path, uint32_t id);
@@ -193,7 +171,7 @@ namespace internal_ {
 
     void cleanup_risc_on_specified_core(tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const tt_xy_pair &core);
 
-    void run_riscs_on_specified_cores(tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, 
+    void run_riscs_on_specified_cores(tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option,
                                         const std::vector<tt_xy_pair> &cores);
 
     void run_briscs_on_specified_cores(tt_cluster *cluster, int chip_id, const std::vector<tt_xy_pair> &cores);

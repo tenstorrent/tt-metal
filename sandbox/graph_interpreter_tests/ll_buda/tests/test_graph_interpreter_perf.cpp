@@ -24,7 +24,7 @@ struct hlk_args_t {
 void run_compile_blank() {
     std::string root_dir = tt::utils::get_root_dir();
 
-    // Create and config an OP 
+    // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("dummy_type","blank_op");
     std::string out_dir_path = root_dir + "/built_kernels/" + build_kernel_for_riscv_options.name;
 
@@ -51,16 +51,16 @@ struct hlk_args_t {
 };
 }
 
-const map<string, tt::llrt::OpCode> sfpu_name_to_op_code = {
-    {"exponential", tt::llrt::OpCode::Exponential},
-    {"reciprocal",  tt::llrt::OpCode::Reciprocal},
-    {"gelu",        tt::llrt::OpCode::Gelu}
+const map<string, tt::OpCode> sfpu_name_to_op_code = {
+    {"exponential", tt::OpCode::Exponential},
+    {"reciprocal",  tt::OpCode::Reciprocal},
+    {"gelu",        tt::OpCode::Gelu}
 };
 
-const map<string, tt::llrt::OpCode> binary_name_to_op_code = {
-    {"add", tt::llrt::OpCode::Add},
-    {"subtract", tt::llrt::OpCode::Subtract},
-    {"multiply", tt::llrt::OpCode::Multiply}
+const map<string, tt::OpCode> binary_name_to_op_code = {
+    {"add", tt::OpCode::Add},
+    {"subtract", tt::OpCode::Subtract},
+    {"multiply", tt::OpCode::Multiply}
 };
 
 float add(float x, float y) {
@@ -251,8 +251,8 @@ void write_op_info_to_l1(
         std::vector<string> sfpu_chain = sfpu_chain_per_core[core_idx];
         uint32_t chain_length = sfpu_chain.size();
         for (int idx = 0; idx < chain_length; idx++) {
-   
-            llrt::OpCode op_code = sfpu_name_to_op_code.at(sfpu_chain.at(idx));
+
+            OpCode op_code = sfpu_name_to_op_code.at(sfpu_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -274,13 +274,13 @@ void write_op_info_to_l1(
 
             uint32_t pop_input = 1;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input, 
-                .pop1 = pop_input, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input,
+                .pop1 = pop_input,
                 .unary = 1
             };
 
@@ -290,7 +290,7 @@ void write_op_info_to_l1(
 }
 
 
-// This test just runs a chain of eltwise unary sfpu ops, and it's a good baseline test for the 
+// This test just runs a chain of eltwise unary sfpu ops, and it's a good baseline test for the
 // graph interpreter since there is no branching
 bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t num_graphs, uint32_t num_repetitions) {
 
@@ -320,9 +320,9 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
         uint32_t num_tiles = 1;
 
         uint32_t num_tiles_input = 120;
-        uint32_t src_dram_buffer_size = single_tile_size * num_tiles_input; 
-        uint32_t dst_dram_buffer_size = single_tile_size * num_tiles; 
-        
+        uint32_t src_dram_buffer_size = single_tile_size * num_tiles_input;
+        uint32_t dst_dram_buffer_size = single_tile_size * num_tiles;
+
         uint32_t src_dram_buffer_base_addr = 0;
         uint32_t dst_dram_buffer_base_addr = 512 * 1024 * 1024; // 512 MB (upper half)
 
@@ -335,7 +335,7 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
             auto src_dram_buffer = ll_buda::CreateDramBuffer(i, src_dram_buffer_size, src_dram_buffer_base_addr);
             src_dram_buffers.push_back(src_dram_buffer);
         }
-        
+
         vector<ll_buda::DramBuffer *> dst_dram_buffer_per_core;
         vector<ll_buda::ComputeKernelArgs *> graph_interpreter_kernel_args_per_core;
         for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
@@ -377,20 +377,20 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
             pass &= ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, src_vec);
             src_vecs.push_back(src_vec);
         }
-        
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////        
+        ////////////////////////////////////////////////////////////////////////////
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
         for (uint32_t graph_idx = 0; graph_idx < num_graphs; graph_idx++){
             vector<vector<string> > sfpu_chain_per_core;
             vector<std::pair<uint32_t, uint32_t> > input_locs_per_core;
-            
+
             for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
                 tt_xy_pair core = {core_idx % 12, core_idx / 12};
                 vector<string> sfpu_chain;
-                
+
                 // Create random chain of sfpu ops
                 for (int _ = 0; _ < chain_length; _++) {
                     int idx = rand() % sfpu_names.size();
@@ -461,9 +461,9 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
     }
 
     return pass;
-}   
+}
 
-// This test just runs a chain of eltwise binary ops, and it's a good baseline test for the 
+// This test just runs a chain of eltwise binary ops, and it's a good baseline test for the
 // graph interpreter since there is no branching
 bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t num_graphs, uint32_t num_repetitions) {
 
@@ -473,7 +473,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
     bool pass = true;
 
     vector<string> binary_names = {"add", "subtract", "multiply"};
-    
+
 
     try {
         ////////////////////////////////////////////////////////////////////////////
@@ -490,15 +490,15 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
         ////////////////////////////////////////////////////////////////////////////
         ll_buda::Program *program = new ll_buda::Program();
 
-        
+
 
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
 
         uint32_t num_tiles_input = 120;
-        uint32_t src_dram_buffer_size = single_tile_size * num_tiles_input; 
-        uint32_t dst_dram_buffer_size = single_tile_size * num_tiles; 
-        
+        uint32_t src_dram_buffer_size = single_tile_size * num_tiles_input;
+        uint32_t dst_dram_buffer_size = single_tile_size * num_tiles;
+
         uint32_t src_dram_buffer_base_addr = 0;
         uint32_t dst_dram_buffer_base_addr = 512 * 1024 * 1024; // 512 MB (upper half)
 
@@ -517,7 +517,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
 
         for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
             tt_xy_pair core = {core_idx % 12, core_idx / 12};
-            
+
             uint32_t dst_dram_channel_id = core_idx % num_dram_channels;
             auto dst_dram_buffer = ll_buda::CreateDramBuffer(dst_dram_channel_id, dst_dram_buffer_size, dst_dram_buffer_base_addr + dst_dram_buffer_size * (core_idx / num_dram_channels));
 
@@ -570,15 +570,15 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
                 core,
                 ll_buda::DataMovementProcessor::RISCV_1,
                 ll_buda::NOC::RISCV_1_default);
-            reader_kernel_per_core.push_back(nary_reader_kernel);   
-            
+            reader_kernel_per_core.push_back(nary_reader_kernel);
+
             auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
                 program,
                 "kernels/dataflow/writer_unary_loop.cpp",
                 core,
                 ll_buda::DataMovementProcessor::RISCV_0,
                 ll_buda::NOC::RISCV_0_default);
-            writer_kernel_per_core.push_back(unary_writer_kernel);   
+            writer_kernel_per_core.push_back(unary_writer_kernel);
 
             void *hlk_args = new graph_interpreter::hlk_args_t{
                 .per_core_tile_cnt = (int) num_tiles,
@@ -616,10 +616,10 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
             pass &= ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, src_vec);
             src_vecs.push_back(src_vec);
         }
-        
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////        
+        ////////////////////////////////////////////////////////////////////////////
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -629,7 +629,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
             for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
                 tt_xy_pair core = {core_idx % 12, core_idx / 12};
                 vector<string> binary_chain;
-                
+
                 // Create random chain of binary ops
                 for (int _ = 0; _ < chain_length; _++) {
                     int idx = rand() % binary_names.size();
@@ -688,7 +688,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
                 //                      Write op info to L1
                 ////////////////////////////////////////////////////////////////////////////
                 for (uint32_t idx = 0; idx < chain_length; idx++) {
-                    llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+                    OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
                     uint32_t in0;
                     uint32_t in1;
@@ -710,13 +710,13 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
 
                     uint32_t pop_input = 1;
 
-                    llrt::op_info_t op_info = {
-                        .op_code = (uint32_t) op_code, 
-                        .cb_in0_id = in0, 
-                        .cb_in1_id = in1, 
-                        .cb_out_id = out, 
-                        .pop0 = pop_input, 
-                        .pop1 = pop_input, 
+                    op_info_t op_info = {
+                        .op_code = (uint32_t) op_code,
+                        .cb_in0_id = in0,
+                        .cb_in1_id = in1,
+                        .cb_out_id = out,
+                        .pop0 = pop_input,
+                        .pop1 = pop_input,
                         .unary = 0
                     };
 
@@ -764,7 +764,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
                 }
             }
         }
-        
+
 
         pass &= ll_buda::CloseDevice(device);
         delete device;
@@ -779,17 +779,17 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
     }
 
     return pass;
-}   
+}
 
 
 int main(int argc, char **argv) {
 
     srand(std::chrono::system_clock::now().time_since_epoch().count());
-    
+
     // Run compile blank kernel here so that HACK_FOR_GRAPH_INTERPRETER doesn't
     // meddle with the compilation
     run_compile_blank();
-    
+
     char env[] = "HACK_FOR_GRAPH_INTERPRETER=1";
     putenv(env);
 
@@ -803,8 +803,6 @@ int main(int argc, char **argv) {
     ll_buda::dumpProfilerResults("binary");
 
     TT_ASSERT(pass, "Graph interpreter perf test failed");
-    
+
     return 0;
 }
-
-

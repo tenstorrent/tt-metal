@@ -72,12 +72,12 @@ enum class SfpuOp : std::uint8_t
     GeluDerivative,
     Reciprocal,
     Sigmoid,
-    Dropout, 
+    Dropout,
     Datacopy, // This just means passthrough and no sfpu
     Transpose, // datacopy + math transpose
     Invalid,
 };
-      
+
 enum class BinaryOp : std::uint8_t
 {
     Add,
@@ -89,7 +89,7 @@ enum class BinaryOp : std::uint8_t
     Invalid,
 };
 
-enum class TmOp : std::uint8_t 
+enum class TmOp : std::uint8_t
 {
     rBroadcast,
     cBroadcast,
@@ -183,13 +183,13 @@ constexpr std::uint32_t NUM_MAX_INTERMED_BUFFERS_PER_CORE = HlkOperand::intermed
 
 // API for getting op_info for graph_interpreter kernel
 struct op_info_t {
-    int op_code;
-    int cb_in0_id;
-    int cb_in1_id; // Unused for eltwise unary op
-    int cb_out_id;
-    int pop0;
-    int pop1; // Unused for eltwise unary op
-    bool unary;
+    uint32_t op_code; // this maps to either an eltwise unary or binary op
+    uint32_t cb_in0_id; // Id of operand0
+    uint32_t cb_in1_id; // Id of operand1, unused for eltwise unary op
+    uint32_t cb_out_id; // Id of output
+    uint32_t pop0; // Whether to pop operand0
+    uint32_t pop1; // Whether to pop operand1, unused for eltwise unary op
+    uint32_t unary; // Whether or not this is a unary op
 };
 
 } //  namespace tt

@@ -24,7 +24,7 @@ struct hlk_args_t {
 void run_compile_blank() {
     std::string root_dir = tt::utils::get_root_dir();
 
-    // Create and config an OP 
+    // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("dummy_type","blank_op");
     std::string out_dir_path = root_dir + "/built_kernels/" + build_kernel_for_riscv_options.name;
 
@@ -44,21 +44,21 @@ void run_compile_blank() {
 
 namespace graph_interpreter {
 struct hlk_args_t {
-    std::int32_t per_core_tile_cnt;    
+    std::int32_t per_core_tile_cnt;
     std::int32_t num_ops;
 };
 }
 
-const map<string, tt::llrt::OpCode> sfpu_name_to_op_code = {
-    {"exponential", tt::llrt::OpCode::Exponential},
-    {"reciprocal",  tt::llrt::OpCode::Reciprocal},
-    {"gelu",        tt::llrt::OpCode::Gelu}
+const map<string, tt::OpCode> sfpu_name_to_op_code = {
+    {"exponential", tt::OpCode::Exponential},
+    {"reciprocal",  tt::OpCode::Reciprocal},
+    {"gelu",        tt::OpCode::Gelu}
 };
 
-const map<string, tt::llrt::OpCode> binary_name_to_op_code = {
-    {"add", tt::llrt::OpCode::Add},
-    {"subtract", tt::llrt::OpCode::Subtract},
-    {"multiply", tt::llrt::OpCode::Multiply}
+const map<string, tt::OpCode> binary_name_to_op_code = {
+    {"add", tt::OpCode::Add},
+    {"subtract", tt::OpCode::Subtract},
+    {"multiply", tt::OpCode::Multiply}
 };
 
 float add(float x, float y) {
@@ -108,7 +108,7 @@ const map<string, std::function<float(float, float)>> binary_op_to_function = {
 
 
 
-// This test just runs a chain of eltwise unary sfpu ops, and it's a good baseline test for the 
+// This test just runs a chain of eltwise unary sfpu ops, and it's a good baseline test for the
 // graph interpreter since there is no branching
 bool run_chained_sfpu_test(int chain_length) {
 
@@ -146,7 +146,7 @@ bool run_chained_sfpu_test(int chain_length) {
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src_addr = 0;
         int dram_src_channel_id = 0;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
@@ -203,7 +203,7 @@ bool run_chained_sfpu_test(int chain_length) {
             (std::uint32_t)dram_src_noc_xy.y,
             num_tiles
         };
-        
+
         std::vector<uint32_t> unary_writer_args = {
             dram_buffer_dst_addr,
             (std::uint32_t)dram_dst_noc_xy.x,
@@ -217,7 +217,7 @@ bool run_chained_sfpu_test(int chain_length) {
             core,
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
-        
+
         auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
             program,
             "kernels/dataflow/writer_unary.cpp",
@@ -230,7 +230,7 @@ bool run_chained_sfpu_test(int chain_length) {
             .num_ops = (int) chain_length
         };
         ll_buda::ComputeKernelArgs *graph_interpreter_args = ll_buda::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(graph_interpreter::hlk_args_t));
-        
+
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto graph_interpreter_kernel = ll_buda::CreateComputeKernel(
@@ -255,9 +255,9 @@ bool run_chained_sfpu_test(int chain_length) {
         //                      Write op info to L1
         ////////////////////////////////////////////////////////////////////////////
         for (int idx = 0; idx < chain_length; idx++) {
-            
 
-            llrt::OpCode op_code = sfpu_name_to_op_code.at(sfpu_chain.at(idx));
+
+            OpCode op_code = sfpu_name_to_op_code.at(sfpu_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -279,13 +279,13 @@ bool run_chained_sfpu_test(int chain_length) {
 
             uint32_t pop_input = 1;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input, 
-                .pop1 = pop_input, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input,
+                .pop1 = pop_input,
                 .unary = 1
             };
 
@@ -299,17 +299,17 @@ bool run_chained_sfpu_test(int chain_length) {
         ////////////////////////////////////////////////////////////////////////////
         vector<uint32_t> src_vec = create_random_ones_and_twos_vector_of_bfloat16(
             dram_buffer_size,  std::chrono::system_clock::now().time_since_epoch().count());
-        
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////        
+        ////////////////////////////////////////////////////////////////////////////
         pass &= ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, src_vec);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
         pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_reader_kernel, core, unary_reader_args);
         pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, unary_writer_args);
-        
+
         // TT_ASSERT(false);
         pass &= ll_buda::LaunchKernels(device, program);
 
@@ -347,7 +347,7 @@ bool run_chained_sfpu_test(int chain_length) {
     }
 
     return pass;
-}   
+}
 
 // This test just runs an add followed by gelu
 bool run_binary_add_and_then_eltwise_gelu_test() {
@@ -375,7 +375,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src0_addr = 0;
         int dram_src0_channel_id = 0;
         uint32_t dram_buffer_src1_addr = 0;
@@ -464,7 +464,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
             (std::uint32_t)dram_src1_noc_xy.y,
             num_tiles
         };
-        
+
         std::vector<uint32_t> unary_writer_args = {
             dram_buffer_dst_addr,
             (std::uint32_t)dram_dst_noc_xy.x,
@@ -478,7 +478,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
             core,
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
-        
+
         auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
             program,
             "kernels/dataflow/writer_unary.cpp",
@@ -491,7 +491,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
             .num_ops = (int) chain_length
         };
         ll_buda::ComputeKernelArgs *graph_interpreter_args = ll_buda::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(graph_interpreter::hlk_args_t));
-        
+
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto graph_interpreter_kernel = ll_buda::CreateComputeKernel(
@@ -518,7 +518,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
         // Add Op reads from src cb 0 and 1, and writes to interm cb 0
         {
-            llrt::OpCode op_code = tt::llrt::OpCode::Add;
+            OpCode op_code = tt::OpCode::Add;
 
             uint32_t in0 = cb_src0->buffer_index();
             uint32_t in1 = cb_src1->buffer_index();
@@ -526,13 +526,13 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
             uint32_t pop_input = 1;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input, 
-                .pop1 = pop_input, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input,
+                .pop1 = pop_input,
                 .unary = 0
             };
 
@@ -541,7 +541,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
         // Gelu Op reads from interm cb 0, and writes to output cb
         {
-            llrt::OpCode op_code = tt::llrt::OpCode::Gelu;
+            OpCode op_code = tt::OpCode::Gelu;
 
             uint32_t in0 = cb_interm0->buffer_index();
             uint32_t in1 = cb_interm1->buffer_index();
@@ -549,13 +549,13 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
             uint32_t pop_input = 1;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input, 
-                .pop1 = pop_input, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input,
+                .pop1 = pop_input,
                 .unary = 1
             };
 
@@ -570,10 +570,10 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
         vector<uint32_t> src1_vec = create_random_ones_and_twos_vector_of_bfloat16(
             dram_buffer_size,  std::chrono::system_clock::now().time_since_epoch().count());
-        
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////        
+        ////////////////////////////////////////////////////////////////////////////
         pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
         pass &= ll_buda::WriteToDeviceDRAM(device, src1_dram_buffer, src1_vec);
 
@@ -581,7 +581,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
         pass &= ll_buda::WriteRuntimeArgsToDevice(device, binary_reader_kernel, core, binary_reader_args);
         pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, unary_writer_args);
-        
+
         // TT_ASSERT(false);
         pass &= ll_buda::LaunchKernels(device, program);
 
@@ -619,7 +619,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
     }
 
     return pass;
-}   
+}
 
 
 // This test just runs a chain of eltwise binary ops, with branching
@@ -660,7 +660,7 @@ bool run_forked_binary_test() {
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        
+
         uint32_t dram_buffer_src_addr = 0;
 
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
@@ -673,7 +673,7 @@ bool run_forked_binary_test() {
         auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
 
         std::vector<ll_buda::DramBuffer *> src_dram_buffers;
-        
+
         std::vector<ll_buda::CircularBuffer *> src_cb_buffers;
         uint32_t src_cb_index = 0;
         uint32_t src_cb_addr = 200 * 1024;
@@ -728,7 +728,7 @@ bool run_forked_binary_test() {
         std::vector<uint32_t> nary_reader_args {num_dram_channels, num_tiles};
         for (uint32_t i = 0; i < num_dram_channels; i++){
             auto dram_src_noc_xy = src_dram_buffers[i]->noc_coordinates(device);
-            nary_reader_args.insert(nary_reader_args.end(), 
+            nary_reader_args.insert(nary_reader_args.end(),
             {
                 src_dram_buffers[i]->address(),
                 (std::uint32_t)dram_src_noc_xy.x,
@@ -736,7 +736,7 @@ bool run_forked_binary_test() {
                 i
             });
         }
-        
+
         std::vector<uint32_t> unary_writer_args = {
             dram_buffer_dst_addr,
             (std::uint32_t)dram_dst_noc_xy.x,
@@ -792,7 +792,7 @@ bool run_forked_binary_test() {
         // Op 0
         {
             uint32_t idx = 0;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -804,13 +804,13 @@ bool run_forked_binary_test() {
             uint32_t pop_input0 = 0;
             uint32_t pop_input1 = 1;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
@@ -820,7 +820,7 @@ bool run_forked_binary_test() {
         // Op 1
         {
             uint32_t idx = 1;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -832,13 +832,13 @@ bool run_forked_binary_test() {
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
@@ -848,7 +848,7 @@ bool run_forked_binary_test() {
         // Op 2
         {
             uint32_t idx = 2;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -858,13 +858,13 @@ bool run_forked_binary_test() {
             out = interm_cb_buffers[2]->buffer_index();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
@@ -874,7 +874,7 @@ bool run_forked_binary_test() {
         // Op 3
         {
             uint32_t idx = 3;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -886,13 +886,13 @@ bool run_forked_binary_test() {
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
@@ -902,7 +902,7 @@ bool run_forked_binary_test() {
         // Op 4
         {
             uint32_t idx = 4;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -914,23 +914,23 @@ bool run_forked_binary_test() {
             uint32_t pop_input0 = 0;
             uint32_t pop_input1 = 1;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
             ll_buda::WriteToDeviceL1(device, core, op_info, idx);
         }
-        
+
         // Op 5
         {
             uint32_t idx = 5;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -942,13 +942,13 @@ bool run_forked_binary_test() {
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
@@ -958,7 +958,7 @@ bool run_forked_binary_test() {
         // Op 6
         {
             uint32_t idx = 6;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -970,13 +970,13 @@ bool run_forked_binary_test() {
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
@@ -986,7 +986,7 @@ bool run_forked_binary_test() {
         // Op 7
         {
             uint32_t idx = 7;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -998,13 +998,13 @@ bool run_forked_binary_test() {
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
@@ -1014,7 +1014,7 @@ bool run_forked_binary_test() {
         // Op 8
         {
             uint32_t idx = 8;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -1026,13 +1026,13 @@ bool run_forked_binary_test() {
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
@@ -1042,7 +1042,7 @@ bool run_forked_binary_test() {
         // Op 9
         {
             uint32_t idx = 9;
-            llrt::OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
+            OpCode op_code = binary_name_to_op_code.at(binary_chain.at(idx));
 
             uint32_t in0;
             uint32_t in1;
@@ -1054,13 +1054,13 @@ bool run_forked_binary_test() {
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 
-            llrt::op_info_t op_info = {
-                .op_code = (uint32_t) op_code, 
-                .cb_in0_id = in0, 
-                .cb_in1_id = in1, 
-                .cb_out_id = out, 
-                .pop0 = pop_input0, 
-                .pop1 = pop_input1, 
+            op_info_t op_info = {
+                .op_code = (uint32_t) op_code,
+                .cb_in0_id = in0,
+                .cb_in1_id = in1,
+                .cb_out_id = out,
+                .pop0 = pop_input0,
+                .pop1 = pop_input1,
                 .unary = 0
             };
 
@@ -1081,14 +1081,14 @@ bool run_forked_binary_test() {
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////        
-        
+        ////////////////////////////////////////////////////////////////////////////
+
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
         pass &= ll_buda::WriteRuntimeArgsToDevice(device, nary_reader_kernel, core, nary_reader_args);
         pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, unary_writer_args);
-        
+
         pass &= ll_buda::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -1098,7 +1098,7 @@ bool run_forked_binary_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        
+
         vector<uint32_t> interm0 = eltwise_binary(src_vecs[0], src_vecs[1], binary_op_to_function.at(binary_chain.at(0)));
         vector<uint32_t> interm1 = eltwise_binary(src_vecs[2], src_vecs[3], binary_op_to_function.at(binary_chain.at(1)));
         vector<uint32_t> interm2 = eltwise_binary(src_vecs[3], src_vecs[4], binary_op_to_function.at(binary_chain.at(2)));
@@ -1132,7 +1132,7 @@ bool run_forked_binary_test() {
     }
 
     return pass;
-}   
+}
 
 
 int main(int argc, char **argv) {
@@ -1158,4 +1158,3 @@ int main(int argc, char **argv) {
     TT_ASSERT(pass, "Graph interpreter test failed");
     return 0;
 }
-

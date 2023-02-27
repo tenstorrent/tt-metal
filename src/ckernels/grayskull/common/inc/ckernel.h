@@ -229,7 +229,7 @@ inline uint reg_read_barrier(uint32_t addr)
 }
 
 
-// Same as above. Input address targets l1 
+// Same as above. Input address targets l1
 inline uint l1_read_barrier(volatile uint *addr)
 {
     uint data = addr[0];
@@ -265,12 +265,12 @@ inline void wait(uint32_t cycles) {
     do {
        wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0]<<32);
     }
-    while (wall_clock < (wall_clock_timestamp+cycles));     
+    while (wall_clock < (wall_clock_timestamp+cycles));
 }
 
 // Clear dest
 inline void zeroacc() {
-    // Clear dest	
+    // Clear dest
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -391,27 +391,17 @@ inline void clear_mailbox_values(uint16_t value = 0) {
 
 inline void debug_dump(uint8_t *data, uint32_t byte_size) {
   for (uint32_t i = 0; i < byte_size; i++) {
-    if ((((uint32_t) debug_buffer)&(l1_mem::address_map::DEBUG_BUFFER_SIZE-1)) == 
+    if ((((uint32_t) debug_buffer)&(l1_mem::address_map::DEBUG_BUFFER_SIZE-1)) ==
          l1_mem::address_map::DEBUG_BUFFER_SIZE-1) {
        *(debug_buffer) = 0xff; //overflow detected
     } else {
        *debug_buffer = data[i];
        debug_buffer++;
     }
-  }  
+  }
 }
 
-struct op_info_t {
-    uint32_t op_code; // this maps to either an eltwise unary or binary op
-    uint32_t cb_in0_id; // Id of operand0
-    uint32_t cb_in1_id; // Id of operand1, unused for eltwise unary op
-    uint32_t cb_out_id; // Id of output
-    uint32_t pop0; // Whether to pop operand0
-    uint32_t pop1; // Whether to pop operand1, unused for eltwise unary op
-    uint32_t unary; // Whether or not this is a unary op
-};
-
-inline void llk_get_next_op_info(op_info_t& op_info_struct) {
+inline void llk_get_next_op_info(tt::op_info_t& op_info_struct) {
 
     uint32_t* op_info_ptr = reinterpret_cast<uint32_t*>(OP_INFO_BASE_ADDR + op_info_offset);
     static constexpr uint32_t op_info_num_items = 7;

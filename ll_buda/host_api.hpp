@@ -524,7 +524,7 @@ bool WriteToDeviceL1(
 bool WriteToDeviceL1(
     Device *device,
     const tt_xy_pair &core,
-    llrt::op_info_t op_info,
+    op_info_t op_info,
     int op_idx);
 
 /**
