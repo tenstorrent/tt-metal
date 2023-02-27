@@ -165,6 +165,7 @@ bool run_chained_sfpu_test(int chain_length) {
 
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_tiles,
@@ -177,6 +178,7 @@ bool run_chained_sfpu_test(int chain_length) {
         uint32_t output_cb_addr = 300 * 1024;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_tiles,
@@ -189,6 +191,7 @@ bool run_chained_sfpu_test(int chain_length) {
         uint32_t interm0_cb_addr = 400 * 1024;
         auto cb_interm0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             interm0_cb_index,
             core,
             num_tiles,
@@ -398,6 +401,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_tiles,
@@ -411,6 +415,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
         auto cb_src1 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src1_cb_index,
             core,
             num_tiles,
@@ -423,6 +428,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         uint32_t output_cb_addr = 400 * 1024;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_tiles,
@@ -435,6 +441,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         uint32_t interm0_cb_addr = 500 * 1024;
         auto cb_interm0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             interm0_cb_index,
             core,
             num_tiles,
@@ -447,6 +454,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         uint32_t interm1_cb_addr = 600 * 1024;
         auto cb_interm1 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             interm1_cb_index,
             core,
             num_tiles,
@@ -683,6 +691,7 @@ bool run_forked_binary_test() {
             src_dram_buffers.push_back(src_dram_buffer);
             auto src_cb = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 src_cb_index,
                 core,
                 num_tiles,
@@ -700,6 +709,7 @@ bool run_forked_binary_test() {
         uint32_t output_cb_addr = 600 * 1024;
         auto output_cb_buffer = ll_buda::CreateCircularBuffer(
             program,
+            device,
             output_cb_index,
             core,
             num_tiles,
@@ -714,6 +724,7 @@ bool run_forked_binary_test() {
         for (uint32_t i = 0; i < 3; i++){
             auto interm_cb = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 interm_cb_index,
                 core,
                 num_tiles,

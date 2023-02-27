@@ -78,6 +78,7 @@ int main(int argc, char **argv) {
         // this buffer is used in transpose_hc.cpp NCRISC kernel
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_buffer_tiles,
@@ -92,6 +93,7 @@ int main(int argc, char **argv) {
         // this buffer is used in writer_unary.cpp BRISC kernel
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_output_buffer_tiles,

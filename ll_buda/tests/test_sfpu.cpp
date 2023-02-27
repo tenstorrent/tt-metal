@@ -66,6 +66,7 @@ bool run_sfpu_test(string sfpu_name) {
         uint32_t num_input_tiles = 8;
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -79,6 +80,7 @@ bool run_sfpu_test(string sfpu_name) {
         uint32_t num_output_tiles = 1;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_output_tiles,
@@ -143,7 +145,7 @@ bool run_sfpu_test(string sfpu_name) {
         if (multibank)
             pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src_vec, src_dram_buffer->address());
         else
-            pass &= ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, src_vec);
+            pass &= ll_buda::WriteToDeviceDRAM(src_dram_buffer, src_vec);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -179,7 +181,7 @@ bool run_sfpu_test(string sfpu_name) {
             ll_buda::ReadFromDeviceDRAMChannelsInterleavedTiles(
                 device, dst_dram_buffer->address(), result_vec, dst_dram_buffer->size());
         else
-            ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+            ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

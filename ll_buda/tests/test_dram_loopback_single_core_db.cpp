@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
 
         auto input_dram_buffer = ll_buda::CreateDramBuffer(device, dram_channel, dram_buffer_size_bytes, input_dram_buffer_addr);
 
-        auto l1_b0 = ll_buda::CreateL1Buffer(program, core, total_l1_buffer_size_bytes, l1_buffer_addr);
+        auto l1_b0 = ll_buda::CreateL1Buffer(program, device, core, total_l1_buffer_size_bytes, l1_buffer_addr);
 
         auto output_dram_buffer = ll_buda::CreateDramBuffer(device, dram_channel, dram_buffer_size_bytes, output_dram_buffer_addr);
 
@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             dram_buffer_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= ll_buda::WriteToDeviceDRAM(device, input_dram_buffer, input_vec);
+        pass &= ll_buda::WriteToDeviceDRAM(input_dram_buffer, input_vec);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
         pass &= ll_buda::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, output_dram_buffer, result_vec, output_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(output_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

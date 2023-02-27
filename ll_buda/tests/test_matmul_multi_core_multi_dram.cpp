@@ -92,11 +92,12 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
             }
         }
     }
-    
+
     return result;
 }
 
 std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovementKernel *> create_program(
+    ll_buda::Device *device,
     int num_cores_r,
     int num_cores_c,
     int M, int N, int K,
@@ -104,7 +105,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
     int out_subblock_h,
     int out_subblock_w,
     int per_core_M, int per_core_N) {
-    
+
     ll_buda::Program *program = new ll_buda::Program();
 
     uint32_t single_tile_size = 2 * 1024;
@@ -133,6 +134,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src0 = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 src0_cb_index,
                 core,
                 cb0_tiles,
@@ -147,6 +149,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             auto cb_src1 = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 src1_cb_index,
                 core,
                 cb1_tiles,
@@ -160,6 +163,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             l1_valid_address += out_CB_size;
             auto cb_output = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 ouput_cb_index,
                 core,
                 out_CB_tiles,
@@ -171,6 +175,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             uint32_t interm0_cb_index = 24;
             auto cb_interm0 = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 interm0_cb_index,
                 core,
                 out_CB_tiles,
@@ -182,14 +187,14 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             TT_ASSERT(l1_valid_address < 1024 * 1024);
         }
     }
-    
+
     auto mm_reader_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/reader_matmul_tile_layout.cpp",
         all_cores,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_matmul_tile_layout.cpp",
@@ -210,7 +215,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
     int out_subblock_num_tiles = out_subblock_h*out_subblock_w;
 
     void *hlk_args = new matmul::hlk_args_t{
-        .in0_block_w = in0_block_w, 
+        .in0_block_w = in0_block_w,
         .in0_num_subblocks = in0_num_subblocks,
         .in0_block_num_tiles = in0_block_num_tiles,
         .in0_subblock_num_tiles = in0_subblock_num_tiles,
@@ -219,7 +224,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
         .in1_block_num_tiles = in1_block_num_tiles,
         .in1_per_core_w = in1_per_core_w,
 
-        .num_blocks = num_blocks, 
+        .num_blocks = num_blocks,
 
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
@@ -248,13 +253,13 @@ bool write_runtime_args_to_device(
     int num_cores_c,
     ll_buda::DataMovementKernel *mm_reader_kernel,
     ll_buda::DataMovementKernel *unary_writer_kernel,
-    int M, 
-    int N, 
-    int K, 
-    int in0_block_w, 
-    int out_subblock_h, 
-    int out_subblock_w, 
-    int per_core_M, 
+    int M,
+    int N,
+    int K,
+    int in0_block_w,
+    int out_subblock_h,
+    int out_subblock_w,
+    int per_core_M,
     int per_core_N,
     uint32_t in0_dram_addr,
     uint32_t in1_dram_addr,
@@ -266,7 +271,7 @@ bool write_runtime_args_to_device(
     uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    
+
     TT_ASSERT(in0_dram_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
     TT_ASSERT(in1_dram_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
     TT_ASSERT(out_dram_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
@@ -312,8 +317,8 @@ bool write_runtime_args_to_device(
                 (std::uint32_t) (out_subblock_w * out_subblock_h), // out_subblocks_w * out_subblocks_h
                 (std::uint32_t) (per_core_N / out_subblock_w), // out_num_subblocks_w
                 (std::uint32_t) (per_core_M / out_subblock_h), // out_num_subblocks_h
-            }; 
-            
+            };
+
             pass &= ll_buda::WriteRuntimeArgsToDevice(device, mm_reader_kernel, core, mm_reader_args);
             pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
         }
@@ -401,7 +406,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, mm_reader_kernel, unary_writer_kernel]  = create_program(num_cores_r, num_cores_c, M, N, K, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N);
+        auto [program, mm_reader_kernel, unary_writer_kernel]  = create_program(device, num_cores_r, num_cores_c, M, N, K, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
@@ -418,7 +423,7 @@ int main(int argc, char **argv) {
         auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         pass &= move_tiles_to_dram(device, activations, M, K, in0_dram_addr);
-        
+
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
@@ -437,7 +442,7 @@ int main(int argc, char **argv) {
             in0_dram_addr, in1_dram_addr, out_dram_addr
         );
         log_info(LogTest, "Writing kernel runtime args to device complete");
-        
+
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program, profile_kernel);
         pass &= ll_buda::LaunchKernels(device, program);
@@ -447,7 +452,7 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");
-        
+
         for(int i = 0; i < M; i++) {
             auto row = get_row_slice(golden, M, i, M * 32, N * 32);
             for(int j = 0; j < N; j++) {
@@ -461,14 +466,14 @@ int main(int argc, char **argv) {
                 ll_buda::dumpProfilerResults("ReadFromDeviceDRAM_" + std::to_string(i) + "_" + std::to_string(j));
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 auto result_flat_layout = convert_to_flat_layout(result_bfp16);
-                
+
                 // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
                 // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
                 pass &= (golden_tile == result_flat_layout);
             }
         }
         log_info(LogTest, "Golden check complete");
-        
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

@@ -123,6 +123,7 @@ int main(int argc, char **argv) {
         // this buffer is used in transpose_hc.cpp NCRISC kernel
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_buffer_tiles,
@@ -135,6 +136,7 @@ int main(int argc, char **argv) {
         uint32_t src1_cb_addr = 300 * 1024;
         auto cb_src1 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src1_cb_index,
             core,
             num_buffer_tiles,
@@ -149,6 +151,7 @@ int main(int argc, char **argv) {
         // this buffer is used in writer_unary.cpp BRISC kernel
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_output_buffer_tiles,
@@ -215,7 +218,7 @@ int main(int argc, char **argv) {
         if (multibank)
             pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, bcast_tiled_u32, src1_dram_buffer->address());
         else
-            pass &= ll_buda::WriteToDeviceDRAM(device, src1_dram_buffer, bcast_tiled_u32);
+            pass &= ll_buda::WriteToDeviceDRAM(src1_dram_buffer, bcast_tiled_u32);
 
         const char* reader_name = get_reader_name(multibank, bcast_dim);
         auto binary_reader_kernel = ll_buda::CreateDataMovementKernel(
@@ -289,7 +292,7 @@ int main(int argc, char **argv) {
         if (multibank)
             pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src0_vec, src0_dram_buffer->address());
         else
-            pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
+            pass &= ll_buda::WriteToDeviceDRAM(src0_dram_buffer, src0_vec);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 

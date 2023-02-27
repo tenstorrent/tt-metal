@@ -89,7 +89,7 @@ std::vector<std::string> Program::cores_to_ops() const {
 std::vector<CircularBuffer *> Program::circular_buffers_on_core(const tt_xy_pair &core) const {
     std::vector<CircularBuffer *> cbs_on_core;
     for (auto circular_buffer : circular_buffers_) {
-        if (circular_buffer->core() == core) {
+        if (circular_buffer->logical_core() == core) {
             cbs_on_core.push_back(circular_buffer);
         }
     }
@@ -99,7 +99,7 @@ std::vector<CircularBuffer *> Program::circular_buffers_on_core(const tt_xy_pair
 std::vector<L1Buffer *> Program::l1_buffers_on_core(const tt_xy_pair &core) const {
     std::vector<L1Buffer *> l1_buffers_on_core;
     for (auto l1_buffer : l1_buffers_) {
-        if (l1_buffer->core() == core) {
+        if (l1_buffer->logical_core() == core) {
             l1_buffers_on_core.push_back(l1_buffer);
         }
     }

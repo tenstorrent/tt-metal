@@ -57,6 +57,7 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     uint32_t num_input_tiles = (a.shape()[1] * a.shape()[2] * a.shape()[3] / TILE_HW);
     auto cb_src0 = ll_buda::CreateCircularBuffer(
         program,
+        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -70,6 +71,7 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     uint32_t num_output_tiles = (C * H * W / TILE_HW);
     auto cb_output = ll_buda::CreateCircularBuffer(
         program,
+        device,
         ouput_cb_index,
         core,
         num_output_tiles,

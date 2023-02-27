@@ -192,6 +192,7 @@ int main(int argc, char **argv) {
         uint32_t cb0_tiles = M * in0_block_w * 2;
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             cb0_tiles,
@@ -205,6 +206,7 @@ int main(int argc, char **argv) {
         uint32_t cb1_tiles = N * in0_block_w * 2;
         auto cb_src1 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src1_cb_index,
             core,
             cb1_tiles,
@@ -218,6 +220,7 @@ int main(int argc, char **argv) {
         uint32_t num_output_tiles = M * N;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_output_tiles,
@@ -231,6 +234,7 @@ int main(int argc, char **argv) {
         uint32_t interm0_cb_tiles = M * N;
         auto cb_interm0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             interm0_cb_index,
             core,
             interm0_cb_tiles,
@@ -358,13 +362,13 @@ int main(int argc, char **argv) {
         auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
-        pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, activations_tile_transposed);
+        pass &= ll_buda::WriteToDeviceDRAM(src0_dram_buffer, activations_tile_transposed);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 32x32 identity
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        pass &= ll_buda::WriteToDeviceDRAM(device, src1_dram_buffer, weights);
+        pass &= ll_buda::WriteToDeviceDRAM(src1_dram_buffer, weights);
         ll_buda::WriteToDeviceL1(device, core, source_addresses, source_addresses_in_l1_addr);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
@@ -382,7 +386,7 @@ int main(int argc, char **argv) {
         pass &= ll_buda::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

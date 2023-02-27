@@ -32,6 +32,7 @@ ll_buda::Device *initialize_device() {
 }
 
 ll_buda::Program *create_program(
+    ll_buda::Device *device,
     uint32_t single_tile_size,
     const ll_buda::CoreRange &all_cores,
     ll_buda::ComputeKernelArgs *eltwise_unary_args) {
@@ -49,6 +50,7 @@ ll_buda::Program *create_program(
             uint32_t num_input_tiles = 8;
             auto cb_src0 = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 src0_cb_index,
                 core,
                 num_input_tiles,
@@ -62,6 +64,7 @@ ll_buda::Program *create_program(
             uint32_t num_output_tiles = 1;
             auto cb_output = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 ouput_cb_index,
                 core,
                 num_output_tiles,
@@ -115,7 +118,7 @@ void compile_and_configure_program(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, src_vec);
+    ll_buda::WriteToDeviceDRAM(src_dram_buffer, src_vec);
 
     ll_buda::ConfigureDeviceWithProgram(device, program);
 }
@@ -292,7 +295,7 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(ll_buda::Device 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile and Execute Program
     ////////////////////////////////////////////////////////////////////////////
-    ll_buda::Program *program = create_program(single_tile_size, all_cores, eltwise_unary_args);
+    ll_buda::Program *program = create_program(device, single_tile_size, all_cores, eltwise_unary_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -304,7 +307,7 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(ll_buda::Device 
     ll_buda::LaunchKernels(device, program);
 
     std::vector<uint32_t> result_vec;
-    ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+    ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
     ////////////////////////////////////////////////////////////////////////////
     //                          Validation
@@ -355,7 +358,7 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(ll_buda::Devic
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile and Execute Program
     ////////////////////////////////////////////////////////////////////////////
-    ll_buda::Program *program = create_program(single_tile_size, all_cores, eltwise_unary_args);
+    ll_buda::Program *program = create_program(device, single_tile_size, all_cores, eltwise_unary_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -368,13 +371,13 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(ll_buda::Devic
     ll_buda::LaunchKernels(device, program);
 
     std::vector<uint32_t> result_vec_1;
-    ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer_1, result_vec_1, dst_dram_buffer_1->size());
+    ll_buda::ReadFromDeviceDRAM(dst_dram_buffer_1, result_vec_1);
 
     std::vector<uint32_t> result_vec_2;
-    ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer_2, result_vec_2, dst_dram_buffer_2->size());
+    ll_buda::ReadFromDeviceDRAM(dst_dram_buffer_2, result_vec_2);
 
     std::vector<uint32_t> result_vec_3;
-    ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer_3, result_vec_3, dst_dram_buffer_3->size());
+    ll_buda::ReadFromDeviceDRAM(dst_dram_buffer_3, result_vec_3);
 
 
     ////////////////////////////////////////////////////////////////////////////
@@ -447,7 +450,7 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(ll_buda::Dev
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile and Execute Program
     ////////////////////////////////////////////////////////////////////////////
-    ll_buda::Program *program = create_program(single_tile_size, all_cores, eltwise_unary_args);
+    ll_buda::Program *program = create_program(device, single_tile_size, all_cores, eltwise_unary_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -461,13 +464,13 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(ll_buda::Dev
     ll_buda::LaunchKernels(device, program);
 
     std::vector<uint32_t> result_vec_1;
-    ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer_1, result_vec_1, dst_dram_buffer_1->size());
+    ll_buda::ReadFromDeviceDRAM(dst_dram_buffer_1, result_vec_1);
 
     std::vector<uint32_t> result_vec_2;
-    ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer_2, result_vec_2, dst_dram_buffer_2->size());
+    ll_buda::ReadFromDeviceDRAM(dst_dram_buffer_2, result_vec_2);
 
     std::vector<uint32_t> result_vec_3;
-    ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer_3, result_vec_3, dst_dram_buffer_3->size());
+    ll_buda::ReadFromDeviceDRAM(dst_dram_buffer_3, result_vec_3);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation

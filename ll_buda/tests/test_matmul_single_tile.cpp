@@ -69,6 +69,7 @@ int main(int argc, char **argv) {
         uint32_t num_input_tiles = 2;
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -81,6 +82,7 @@ int main(int argc, char **argv) {
         uint32_t src1_cb_addr = 300 * 1024;
         auto cb_src1 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src1_cb_index,
             core,
             num_input_tiles,
@@ -94,6 +96,7 @@ int main(int argc, char **argv) {
         uint32_t num_output_tiles = 2;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_output_tiles,
@@ -151,12 +154,12 @@ int main(int argc, char **argv) {
         tt::Tensor<bfloat16> tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto activations_tile_layout = convert_to_tile_layout(tensor.get_values());
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-        pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, activations);
+        pass &= ll_buda::WriteToDeviceDRAM(src0_dram_buffer, activations);
 
         auto identity = create_identity_matrix(32, 32, 32); //bflaot16 32x32 identity
         auto weights_tile_layout = convert_to_tile_layout(identity);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        pass &= ll_buda::WriteToDeviceDRAM(device, src1_dram_buffer, weights);
+        pass &= ll_buda::WriteToDeviceDRAM(src1_dram_buffer, weights);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -188,7 +191,7 @@ int main(int argc, char **argv) {
         pass &= ll_buda::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

@@ -170,6 +170,7 @@ int main(int argc, char **argv) {
         uint32_t source_addresses_in_l1_addr = cb0_addr + cb0_size;
         auto cb0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             cb0_index,
             core,
             num_cb0_tiles,
@@ -184,6 +185,7 @@ int main(int argc, char **argv) {
         uint32_t cb1_size = num_cb1_tiles * single_tile_size;
         auto cb1 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             cb1_index,
             core,
             num_cb1_tiles,
@@ -198,6 +200,7 @@ int main(int argc, char **argv) {
         uint32_t cb_output_size = num_output_tiles * single_tile_size;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_output_tiles,
@@ -211,6 +214,7 @@ int main(int argc, char **argv) {
         uint32_t interm0_cb_tiles = M * N;
         auto cb_interm0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             interm0_cb_index,
             core,
             interm0_cb_tiles,
@@ -312,9 +316,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
 
         auto activations = pack_bfloat16_vec_into_uint32_vec(src_vec);
-        pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, activations);
+        pass &= ll_buda::WriteToDeviceDRAM(src0_dram_buffer, activations);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tilized);
-        pass &= ll_buda::WriteToDeviceDRAM(device, src1_dram_buffer, weights);
+        pass &= ll_buda::WriteToDeviceDRAM(src1_dram_buffer, weights);
         std::cout << "DONE WRITING TO DEVICE. GOING TO CONFIGURE DEVICE WITH PROGRAM" << std::endl;
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
         ll_buda::WriteRuntimeArgsToDevice(
@@ -343,7 +347,7 @@ int main(int argc, char **argv) {
         std::cout << "DONE KERNELS. GOING TO READ FROM DRAM." << std::endl;
 
         std::vector<uint32_t> result_uint32;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_uint32, dst_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_uint32);
         auto result_vec_tilized = unpack_uint32_vec_into_bfloat16_vec(result_uint32);
         assert(golden_act_matrix_tilized.size() == result_vec_tilized.size());
         auto result_vec = untilize(result_vec_tilized, act_rows, weight_cols);

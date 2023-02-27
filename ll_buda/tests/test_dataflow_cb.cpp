@@ -54,6 +54,7 @@ int main(int argc, char **argv) {
         uint32_t num_cb_tiles = 8;
         auto cb0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             cb0_index,
             core,
             num_cb_tiles,
@@ -66,6 +67,7 @@ int main(int argc, char **argv) {
         uint32_t cb1_addr = 250 * 1024;
         auto cb1 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             cb1_index,
             core,
             num_cb_tiles,
@@ -78,6 +80,7 @@ int main(int argc, char **argv) {
         uint32_t cb2_addr = 300 * 1024;
         auto cb2 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             cb2_index,
             core,
             num_cb_tiles,
@@ -90,6 +93,7 @@ int main(int argc, char **argv) {
         uint32_t cb3_addr = 350 * 1024;
         auto cb3 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             cb3_index,
             core,
             num_cb_tiles,
@@ -128,7 +132,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, src_vec);
+        pass &= ll_buda::WriteToDeviceDRAM(src_dram_buffer, src_vec);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -153,7 +157,7 @@ int main(int argc, char **argv) {
         pass &= ll_buda::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

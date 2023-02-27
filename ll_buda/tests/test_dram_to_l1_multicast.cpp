@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
         SHAPE shape = {1, 1, 32, 32};
         tt::Tensor<bfloat16> tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto activations = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
-        pass &= ll_buda::WriteToDeviceDRAM(device, dram_buffer, activations);
+        pass &= ll_buda::WriteToDeviceDRAM(dram_buffer, activations);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
         pass &= ll_buda::WriteRuntimeArgsToDevice(device, mcast_reader_kernel, core, mcast_reader_args);

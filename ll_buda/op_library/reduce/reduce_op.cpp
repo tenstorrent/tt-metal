@@ -70,6 +70,7 @@ Tensor reduce(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum r
     uint32_t num_input_tiles = 2;
     auto cb_src0 = ll_buda::CreateCircularBuffer(
         program,
+        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -83,6 +84,7 @@ Tensor reduce(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum r
     uint32_t num_output_tiles = 2;
     auto cb_output = ll_buda::CreateCircularBuffer(
         program,
+        device,
         ouput_cb_index,
         core,
         num_output_tiles,

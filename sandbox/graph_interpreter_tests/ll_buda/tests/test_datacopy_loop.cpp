@@ -63,6 +63,7 @@ int main(int argc, char **argv) {
         uint32_t num_input_tiles = 1;
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -76,6 +77,7 @@ int main(int argc, char **argv) {
         uint32_t num_output_tiles = 1;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_output_tiles,
@@ -127,7 +129,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, src_vec);
+        pass &= ll_buda::WriteToDeviceDRAM(src_dram_buffer, src_vec);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -155,7 +157,7 @@ int main(int argc, char **argv) {
         pass &= ll_buda::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

@@ -80,6 +80,7 @@ int main(int argc, char **argv) {
         // this buffer is used in transpose_hc.cpp NCRISC kernel
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_buffer_tiles,
@@ -93,6 +94,7 @@ int main(int argc, char **argv) {
         // this buffer is used in writer_unary.cpp BRISC kernel
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_buffer_tiles,
@@ -151,7 +153,7 @@ int main(int argc, char **argv) {
         if (multibank)
             pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src0_vec, src0_dram_buffer->address());
         else
-            pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
+            pass &= ll_buda::WriteToDeviceDRAM(src0_dram_buffer, src0_vec);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -186,7 +188,7 @@ int main(int argc, char **argv) {
             ll_buda::ReadFromDeviceDRAMChannelsInterleavedTiles(
                 device, dst_dram_buffer->address(), result_vec, dst_dram_buffer->size());
         else
-            ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+            ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

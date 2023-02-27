@@ -164,7 +164,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovementKernel *> create_program(int num_cores_r, int num_cores_c, int per_core_M, int per_core_N, int K, int in0_block_w, int out_subblock_h, int out_subblock_w) {
+std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovementKernel *> create_program(ll_buda::Device *device, int num_cores_r, int num_cores_c, int per_core_M, int per_core_N, int K, int in0_block_w, int out_subblock_h, int out_subblock_w) {
     ll_buda::Program *program = new ll_buda::Program();
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
@@ -193,6 +193,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src0 = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 src0_cb_index,
                 core,
                 cb0_tiles,
@@ -207,6 +208,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             auto cb_src1 = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 src1_cb_index,
                 core,
                 cb1_tiles,
@@ -220,6 +222,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             l1_valid_address += out_CB_size;
             auto cb_output = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 ouput_cb_index,
                 core,
                 out_CB_tiles,
@@ -231,6 +234,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             uint32_t interm0_cb_index = 24;
             auto cb_interm0 = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 interm0_cb_index,
                 core,
                 out_CB_tiles,
@@ -357,7 +361,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, mm_reader_kernel, unary_writer_kernel] = create_program(num_cores_r, num_cores_c, per_core_M, per_core_N, K, in0_block_w, out_subblock_h, out_subblock_w);
+        auto [program, mm_reader_kernel, unary_writer_kernel] = create_program(device, num_cores_r, num_cores_c, per_core_M, per_core_N, K, in0_block_w, out_subblock_h, out_subblock_w);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application

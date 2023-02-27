@@ -46,6 +46,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
     uint32_t num_cb_tiles = 16;
     auto cb_src0 = ll_buda::CreateCircularBuffer(
         program,
+        device,
         0, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
@@ -53,6 +54,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
         DataFormat::Float16_b);
     auto cb_src1 = ll_buda::CreateCircularBuffer(
         program,
+        device,
         1, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,

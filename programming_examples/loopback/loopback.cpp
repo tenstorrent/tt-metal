@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
         constexpr uint32_t l1_buffer_addr = 400 * 1024;
 
-        L1Buffer *l1_b0 = CreateL1Buffer(program, core, dram_buffer_size, l1_buffer_addr);
+        L1Buffer *l1_b0 = CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
 
         constexpr uint32_t input_dram_buffer_addr = 0;
         constexpr int dram_channel = 0;
@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
         */
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= WriteToDeviceDRAM(device, input_dram_buffer, input_vec);
+        pass &= WriteToDeviceDRAM(input_dram_buffer, input_vec);
 
         pass &= ConfigureDeviceWithProgram(device, program);
 
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
         * Validation & Teardown
         */
         std::vector<uint32_t> result_vec;
-        ReadFromDeviceDRAM(device, output_dram_buffer, result_vec, output_dram_buffer->size());
+        ReadFromDeviceDRAM(output_dram_buffer, result_vec);
 
         pass &= input_vec == result_vec;
 

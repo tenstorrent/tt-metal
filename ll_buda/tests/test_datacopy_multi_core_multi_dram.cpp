@@ -83,7 +83,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
             }
         }
     }
-    
+
     return result;
 }
 
@@ -92,7 +92,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
     int num_cores_c,
     int tensor_num_tiles,
     int block_num_tiles) {
-    
+
     ll_buda::Program *program = new ll_buda::Program();
 
     int num_cores = num_cores_r * num_cores_c;
@@ -106,7 +106,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
 
     uint32_t single_tile_size = 2 * 1024; // bfloat16
     uint32_t in0_CB_tiles = block_num_tiles * 2; // double buffer
-    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size; 
+    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in0_CB_index = 0;
 
     uint32_t out_CB_tiles = block_num_tiles * 2; // double buffer
@@ -129,6 +129,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             l1_valid_address += in0_CB_size;
             auto cb_src0 = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 in0_CB_index,
                 core,
                 in0_CB_tiles,
@@ -141,6 +142,7 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             l1_valid_address += out_CB_size;
             auto cb_output = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 out_CB_index,
                 core,
                 out_CB_tiles,
@@ -152,14 +154,14 @@ std::tuple<ll_buda::Program *, ll_buda::DataMovementKernel *, ll_buda::DataMovem
             TT_ASSERT(l1_valid_address < 1024 * 1024);
         }
     }
-    
+
     auto reader_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/reader_copy_tile_layout.cpp",
         all_cores,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
-    
+
     auto writer_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/writer_copy_tile_layout.cpp",
@@ -194,9 +196,9 @@ bool write_runtime_args_to_device(
     int num_cores_c,
     ll_buda::DataMovementKernel *reader_kernel,
     ll_buda::DataMovementKernel *writer_kernel,
-    int tensor_num_tiles, 
-    int block_num_tiles, 
-    int Ht, 
+    int tensor_num_tiles,
+    int block_num_tiles,
+    int Ht,
     int Wt,
     uint32_t src0_dram_addr,
     uint32_t dst_dram_addr) {
@@ -207,8 +209,8 @@ bool write_runtime_args_to_device(
 
     // this doesn't seem to be correct
     /*
-    uint32_t dram_buffer_size_act = single_tile_size * Ht * Wt; 
-    uint32_t dram_buffer_size_out = single_tile_size * Ht * Wt; 
+    uint32_t dram_buffer_size_act = single_tile_size * Ht * Wt;
+    uint32_t dram_buffer_size_out = single_tile_size * Ht * Wt;
 
     uint dram_channel_size = 1024 * 1024 * 1024;
 
@@ -251,7 +253,7 @@ bool write_runtime_args_to_device(
                 (std::uint32_t) num_tiles_per_sub_block_m * N, // dst_sb_stride_y
                 (std::uint32_t) 1, // dst_stride_x
                 (std::uint32_t) N  //dst_stride_y
-            }; 
+            };
 
             // log_info(LogTest, "Core = {}, {}", core.x, core.y);
 
@@ -286,7 +288,7 @@ bool write_runtime_args_to_device(
             // log_info(LogTest, "dst_sb_stride_y = {}", num_tiles_per_sub_block_m * N);
             // log_info(LogTest, "dst_stride_x = {}", 1);
             // log_info(LogTest, "dst_stride_y = {}", N);
-            
+
             pass &= ll_buda::WriteRuntimeArgsToDevice(device, mm_reader_kernel, core, mm_reader_args);
             pass &= ll_buda::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
         }
@@ -390,7 +392,7 @@ int main(int argc, char **argv) {
         auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         pass &= move_tiles_to_dram(device, activations, M, K, src0_dram_addr);
-        
+
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
@@ -409,7 +411,7 @@ int main(int argc, char **argv) {
             src0_dram_addr, src1_dram_addr, dst_dram_addr
         );
         log_info(LogTest, "Writing kernel runtime args to device complete");
-        
+
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program, true);
         pass &= ll_buda::LaunchKernels(device, program);
@@ -419,7 +421,7 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");
-        
+
         for(int i = 0; i < M; i++) {
             auto row = get_row_slice(golden, M, i, M * 32, N * 32);
             for(int j = 0; j < N; j++) {
@@ -433,14 +435,14 @@ int main(int argc, char **argv) {
                 ll_buda::dumpProfilerResults("ReadFromDeviceDRAM_" + std::to_string(i) + "_" + std::to_string(j));
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 auto result_flat_layout = convert_to_flat_layout(result_bfp16);
-                
+
                 // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
                 // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
                 pass &= (golden_tile == result_flat_layout);
             }
         }
         log_info(LogTest, "Golden check complete");
-        
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

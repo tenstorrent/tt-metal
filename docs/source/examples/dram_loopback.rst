@@ -63,7 +63,7 @@ program data.
   constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
   constexpr uint32_t l1_buffer_addr = 400 * 1024;
 
-  L1Buffer *l1_b0 = CreateL1Buffer(program, core, dram_buffer_size, l1_buffer_addr);
+  L1Buffer *l1_b0 = CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
 
 We need to know how large the buffer will be in bytes. Let's say we have 50
 "tiles" worth.
@@ -97,7 +97,7 @@ Sending real data into DRAM
 
   std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
       dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-  pass &= WriteToDeviceDRAM(device, input_dram_buffer, input_vec);
+  pass &= WriteToDeviceDRAM(input_dram_buffer, input_vec);
 
 Note that for the data generation function to work, you need to include header
 ``"common/bfloat16.hpp"``.
@@ -118,8 +118,8 @@ generic, we've written it to have the following arguments:
 
 .. code-block:: cpp
 
-  const tt_xy_pair input_dram_noc_xy = input_dram_buffer->noc_coordinates(device);
-  const tt_xy_pair output_dram_noc_xy = output_dram_buffer->noc_coordinates(device);
+  const tt_xy_pair input_dram_noc_xy = input_dram_buffer->noc_coordinates();
+  const tt_xy_pair output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
   const std::vector<uint32_t> runtime_args = {
       l1_buffer_addr,
@@ -149,7 +149,7 @@ sent!
 .. code-block:: cpp
 
   std::vector<uint32_t> result_vec;
-  ReadFromDeviceDRAM(device, output_dram_buffer, result_vec, output_dram_buffer->size());
+  ReadFromDeviceDRAM(output_dram_buffer, result_vec, output_dram_buffer->size());
 
   pass &= input_vec == result_vec;
 

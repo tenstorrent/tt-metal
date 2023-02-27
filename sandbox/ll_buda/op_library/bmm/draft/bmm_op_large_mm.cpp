@@ -69,6 +69,7 @@ std::tuple<Program *, DataMovementKernel *, DataMovementKernel *> create_program
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src0 = CreateCircularBuffer(
                 program,
+                device,
                 src0_cb_index,
                 core,
                 cb0_tiles,
@@ -83,6 +84,7 @@ std::tuple<Program *, DataMovementKernel *, DataMovementKernel *> create_program
             uint32_t cb1_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src1 = CreateCircularBuffer(
                 program,
+                device,
                 src1_cb_index,
                 core,
                 cb1_tiles,
@@ -96,6 +98,7 @@ std::tuple<Program *, DataMovementKernel *, DataMovementKernel *> create_program
             l1_valid_address += out_CB_size;
             auto cb_output = CreateCircularBuffer(
                 program,
+                device,
                 ouput_cb_index,
                 core,
                 out_CB_tiles,
@@ -107,6 +110,7 @@ std::tuple<Program *, DataMovementKernel *, DataMovementKernel *> create_program
             uint32_t interm0_cb_index = 24;
             auto cb_interm0 = CreateCircularBuffer(
                 program,
+                device,
                 interm0_cb_index,
                 core,
                 out_CB_tiles,

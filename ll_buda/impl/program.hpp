@@ -96,10 +96,11 @@ class Program {
         bool fp32_dest_acc_en,
         bool math_approx_mode);
 
-    friend L1Buffer *CreateL1Buffer(Program *program, const tt_xy_pair &core, uint32_t num_tiles, uint32_t address);
+    friend L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t num_tiles, uint32_t address);
 
     friend CircularBuffer *CreateCircularBuffer(
         Program *program,
+        Device *device,
         uint32_t buffer_id,
         const tt_xy_pair &core,
         uint32_t num_tiles,

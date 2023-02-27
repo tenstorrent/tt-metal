@@ -111,6 +111,7 @@ const map<string, std::function<float(float, float)>> binary_op_to_function = {
 
 // Helpers for tests
 ll_buda::Program *create_program(
+    Device *device,
     uint32_t single_tile_size,
     uint32_t cb_num_tiles,
     uint32_t num_cores,
@@ -127,6 +128,7 @@ ll_buda::Program *create_program(
 
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             cb_num_tiles,
@@ -139,6 +141,7 @@ ll_buda::Program *create_program(
         uint32_t output_cb_addr = 300 * 1024;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             cb_num_tiles,
@@ -151,6 +154,7 @@ ll_buda::Program *create_program(
         uint32_t interm0_cb_addr = 400 * 1024;
         auto cb_interm0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             interm0_cb_index,
             core,
             cb_num_tiles,
@@ -362,7 +366,7 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        ll_buda::Program *program = create_program(single_tile_size, cb_num_tiles, num_cores, graph_interpreter_kernel_args_per_core);
+        ll_buda::Program *program = create_program(device, single_tile_size, cb_num_tiles, num_cores, graph_interpreter_kernel_args_per_core);
 
         bool skip_hlkc = false;
         pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
@@ -374,7 +378,7 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
         for(const auto& src_dram_buffer: src_dram_buffers){
             vector<uint32_t> src_vec = create_random_ones_and_twos_vector_of_bfloat16(
                 src_dram_buffer->size(),  std::chrono::system_clock::now().time_since_epoch().count());
-            pass &= ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, src_vec);
+            pass &= ll_buda::WriteToDeviceDRAM(src_dram_buffer, src_vec);
             src_vecs.push_back(src_vec);
         }
 
@@ -412,8 +416,7 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
             std::vector<std::vector<uint32_t> > result_vecs;
             for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
                 std::vector<uint32_t> result_vec;
-                ll_buda::ReadFromDeviceDRAM(
-                    device, dst_dram_buffer_per_core[core_idx], result_vec, dst_dram_buffer_per_core[core_idx]->size());
+                ll_buda::ReadFromDeviceDRAM(dst_dram_buffer_per_core[core_idx], result_vec);
                 result_vecs.push_back(result_vec);
             }
 
@@ -527,6 +530,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
             for (uint32_t i = 0, src_cb_idx = 0, src_cb_addr = 200 * 1024; i < num_dram_channels; i++, src_cb_idx++, src_cb_addr += cb_num_tiles * single_tile_size){
                 auto src_cb = ll_buda::CreateCircularBuffer(
                     program,
+                    device,
                     src_cb_idx,
                     core,
                     cb_num_tiles,
@@ -542,6 +546,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
             uint32_t output_cb_addr = 600 * 1024;
             auto output_cb_buffer = ll_buda::CreateCircularBuffer(
                 program,
+                device,
                 ouput_cb_index,
                 core,
                 cb_num_tiles,
@@ -554,6 +559,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
             for (uint32_t i = 0, interm_cb_idx = 24, interm_cb_addr = 700 * 1024; i < 1; i++, interm_cb_idx++, interm_cb_addr += cb_num_tiles * single_tile_size){
                 auto interm_cb = ll_buda::CreateCircularBuffer(
                     program,
+                    device,
                     interm_cb_idx,
                     core,
                     cb_num_tiles,
@@ -613,7 +619,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
         for(const auto& src_dram_buffer: src_dram_buffers){
             vector<uint32_t> src_vec = create_random_ones_and_twos_vector_of_bfloat16(
                 src_dram_buffer->size(),  std::chrono::system_clock::now().time_since_epoch().count());
-            pass &= ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, src_vec);
+            pass &= ll_buda::WriteToDeviceDRAM(src_dram_buffer, src_vec);
             src_vecs.push_back(src_vec);
         }
 
@@ -729,8 +735,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
             std::vector<std::vector<uint32_t> > result_vecs;
             for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
                 std::vector<uint32_t> result_vec;
-                ll_buda::ReadFromDeviceDRAM(
-                    device, dst_dram_buffer_per_core[core_idx], result_vec, dst_dram_buffer_per_core[core_idx]->size());
+                ll_buda::ReadFromDeviceDRAM(dst_dram_buffer_per_core[core_idx], result_vec);
                 result_vecs.push_back(result_vec);
             }
 

@@ -175,14 +175,15 @@ InterleavedDramBuffer *CreateInterleavedDramBuffer(Device *device, int num_bank_
     return interleaved_buffer;
 }
 
-L1Buffer *CreateL1Buffer(Program *program, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address) {
-    L1Buffer *l1_buffer = new L1Buffer(core, size_in_bytes, address);
+L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address) {
+    L1Buffer *l1_buffer = new L1Buffer(device, core, size_in_bytes, address);
     program->add_l1_buffer(l1_buffer);
     return l1_buffer;
 }
 
 CircularBuffer *CreateCircularBuffer(
     Program *program,
+    Device *device,
     uint32_t buffer_index,
     const tt_xy_pair &core,
     uint32_t number_of_tiles,
@@ -190,7 +191,7 @@ CircularBuffer *CreateCircularBuffer(
     uint32_t l1_address,
     DataFormat data_format) {
     CircularBuffer *circular_buffer =
-        new CircularBuffer(core, buffer_index, number_of_tiles, size_in_bytes, l1_address, data_format);
+        new CircularBuffer(device, core, buffer_index, number_of_tiles, size_in_bytes, l1_address, data_format);
     program->add_circular_buffer(circular_buffer);
     return circular_buffer;
 }
@@ -597,26 +598,23 @@ bool LaunchKernels(Device *device, Program *program) {
 }
 
 // Copies data from a host buffer into a buffer within the device DRAM channel
-bool WriteToDeviceDRAM(
-    Device *device, DramBuffer *dram_buffer, std::vector<uint32_t> &host_buffer) {
+bool WriteToDeviceDRAM(DramBuffer *dram_buffer, std::vector<uint32_t> &host_buffer) {
     ll_buda_profiler.markStart("WriteToDeviceDRAM");
     bool pass = true;
-    device->cluster()->write_dram_vec(
-        host_buffer, tt_target_dram{device->pcie_slot(), dram_buffer->dram_channel(), 0}, dram_buffer->address());
+    dram_buffer->device()->cluster()->write_dram_vec(
+        host_buffer, tt_target_dram{dram_buffer->device()->pcie_slot(), dram_buffer->dram_channel(), 0}, dram_buffer->address());
     ll_buda_profiler.markStop("WriteToDeviceDRAM");
     return pass;
 }
 
 // Copy data from a device DRAM channel to a host buffer
 bool ReadFromDeviceDRAM(
-    Device *device,
     DramBuffer *dram_buffer,
-    std::vector<uint32_t> &host_buffer,
-    uint32_t size) {
+    std::vector<uint32_t> &host_buffer) {
     ll_buda_profiler.markStart("ReadFromDeviceDRAM");
     bool pass = true;
-    device->cluster()->read_dram_vec(
-        host_buffer, tt_target_dram{device->pcie_slot(), dram_buffer->dram_channel(), 0}, dram_buffer->address(), size);
+    dram_buffer->device()->cluster()->read_dram_vec(
+        host_buffer, tt_target_dram{dram_buffer->device()->pcie_slot(), dram_buffer->dram_channel(), 0}, dram_buffer->address(), dram_buffer->size());
     ll_buda_profiler.markStop("ReadFromDeviceDRAM");
     return pass;
 }
@@ -782,6 +780,13 @@ bool WriteToDeviceL1(
     return pass;
 }
 
+bool WriteToDeviceL1(L1Buffer *l1_buffer, std::vector<uint32_t> &host_buffer) {
+    bool pass = true;
+    llrt::write_hex_vec_to_core(
+        l1_buffer->device()->cluster(), l1_buffer->device()->pcie_slot(), l1_buffer->noc_coordinates(), host_buffer, l1_buffer->address());
+    return pass;
+}
+
 bool WriteToDeviceL1(
     Device *device,
     const tt_xy_pair &core,
@@ -800,6 +805,13 @@ bool ReadFromDeviceL1(
     auto worker_core = device->worker_core_from_logical_core(core);
     host_buffer =
         llrt::read_hex_vec_from_core(device->cluster(), device->pcie_slot(), worker_core, device_buffer_addess, size);
+    return pass;
+}
+
+bool ReadFromDeviceL1(L1Buffer *l1_buffer, std::vector<uint32_t> &host_buffer) {
+    bool pass = true;
+    host_buffer = llrt::read_hex_vec_from_core(
+            l1_buffer->device()->cluster(), l1_buffer->device()->pcie_slot(), l1_buffer->noc_coordinates(), l1_buffer->address(), l1_buffer->size());
     return pass;
 }
 

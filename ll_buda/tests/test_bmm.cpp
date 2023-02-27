@@ -67,6 +67,7 @@ int main(int argc, char **argv) {
         uint32_t num_input_tiles = 2;
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -79,6 +80,7 @@ int main(int argc, char **argv) {
         uint32_t src1_cb_addr = 300 * 1024;
         auto cb_src1 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src1_cb_index,
             core,
             num_input_tiles,
@@ -92,6 +94,7 @@ int main(int argc, char **argv) {
         uint32_t num_output_tiles = 2;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_output_tiles,

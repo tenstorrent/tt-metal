@@ -337,12 +337,13 @@ InterleavedDramBuffer *CreateInterleavedDramBuffer(
  *
  * | Argument      | Description                                       | Type       | Valid Range                                            | Required |
  * |---------------|---------------------------------------------------|------------|--------------------------------------------------------|----------|
+ * | device        | The device where the L1 buffer resides.           | Device *   |                                                        | True     |
  * | program       | The program to which buffer will be added to.     | Program *  |                                                        | True     |
  * | core          | Logical core coordinate of L1 to create buffer on | tt_xy_pair | Any logical worker core on Grayskull                   | True     |
  * | size_in_bytes | Size of DRAM buffer in Bytes                      | uint32_t   | DOX-TODO: valid range? 0 to 800 KB ?? (expressed in Bytes) | True     |
  * | address       | Address at which the DRAM buffer will reside      | uint32_t   | DOX-TODO: fix range. 200KB to 1MB ??? (expressed in Bytes) | True     |
  */
-L1Buffer *CreateL1Buffer(Program *program, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address);
+L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address);
 
 /**
  * Creates a Circular Buffer (CB) in L1 memory and adds it to the program.
@@ -352,6 +353,7 @@ L1Buffer *CreateL1Buffer(Program *program, const tt_xy_pair &core, uint32_t size
  * | Argument      | Description                                                                    | Type               | Valid Range                             | Required |
  * |---------------|--------------------------------------------------------------------------------|--------------------|-----------------------------------------|----------|
  * | program       | The program to which buffer will be added to.                                  | Program *          |                                         | True     |
+ * | device        | The device where the L1 buffer resides.                                        | Device *           |                                         | True     |
  * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 DOX-TODO: specify more detail here. | True     |
  * | core          | The location of the Tensix core on which the CB will reside (SoC co-ordinates) | const tt_xy_pair & | DOX-TODO: { , } –> { , }                    | True     |
  * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | DOX-TODO: range?                            | True     |
@@ -361,6 +363,7 @@ L1Buffer *CreateL1Buffer(Program *program, const tt_xy_pair &core, uint32_t size
  */
 CircularBuffer *CreateCircularBuffer(
     Program *program,
+    Device *device,
     uint32_t buffer_index,
     const tt_xy_pair &core,
     uint32_t num_tiles,
@@ -405,16 +408,12 @@ bool LaunchKernels(Device *device, Program *program);
  *
  * | Argument    | Description                                     | Data type             | Valid range                               | required |
  * |-------------|-------------------------------------------------|-----------------------|-------------------------------------------|----------|
- * | device      | The device whose DRAM to read data from         | Device *              |                                           | Yes      |
  * | dram_buffer | Pointer of the DRAM buffer to read from         | DramBuffer *          |                                           | Yes      |
  * | host_buffer | Pointer of the buffer on host to copy data into | std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
- * | size        | Size of buffer to read in bytes                 | uint32_t              |                                           |          |
  */
 bool ReadFromDeviceDRAM(
-    Device *device,                      // Device
-    DramBuffer *dram_buffer,             // DRAM buffer on device
-    std::vector<uint32_t> &host_buffer,  // Source buffer on host
-    uint32_t size);                      // Size of copy in Bytes
+    DramBuffer *dram_buffer,                // DRAM buffer on device
+    std::vector<uint32_t> &host_buffer);    // Source buffer on host
 
 /**
 * Copies data from a host buffer into a buffer within the device DRAM channel
@@ -423,12 +422,10 @@ bool ReadFromDeviceDRAM(
 *
 * | Argument    | Description                                     | Data type             | Valid range                                      | required |
 * |-------------|-------------------------------------------------|-----------------------|--------------------------------------------------|----------|
-* | device      | The device whose DRAM to send data to           | Device *              |                                                  | Yes      |
 * | dram_buffer | Pointer of the DRAM buffer to send data to      | DramBuffer *          |                                                  | Yes      |
 * | host_buffer | Pointer of the buffer on host to copy data form | std::vector<uint32_t> | Host buffer must be fully fit inside DRAM buffer | Yes      |
 */
 bool WriteToDeviceDRAM(
-    Device *device,                       // Device
     DramBuffer *dram_buffer,              // DRAM buffer on device
     std::vector<uint32_t> &host_buffer);  // Source buffer on host)
 
@@ -522,6 +519,11 @@ bool WriteToDeviceL1(
     std::vector<uint32_t> &host_buffer,   // Source buffer on host
     uint32_t buffer_addess);              // Address within L1
 
+
+bool WriteToDeviceL1(
+    L1Buffer *l1_buffer,                   // L1 buffer
+    std::vector<uint32_t> &host_buffer);   // Source buffer on host
+
 bool WriteToDeviceL1(
     Device *device,
     const tt_xy_pair &core,
@@ -547,6 +549,10 @@ bool ReadFromDeviceL1(
     int device_buffer_addess,            // Address within L1
     std::vector<uint32_t> &host_buffer,  // Source buffer on host
     int size);                           // Size of copy in Bytes
+
+bool ReadFromDeviceL1(
+    L1Buffer *l1_buffer,                   // L1 buffer
+    std::vector<uint32_t> &host_buffer);    // Buffer on host to copy data into
 
 }  // namespace ll_buda
 

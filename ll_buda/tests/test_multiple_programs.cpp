@@ -38,6 +38,7 @@ ll_buda::Program *setup_program_one(ll_buda::Device *device, const tt_xy_pair &c
     uint32_t num_input_tiles = 2;
     auto cb_src0 = ll_buda::CreateCircularBuffer(
         program,
+        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -50,6 +51,7 @@ ll_buda::Program *setup_program_one(ll_buda::Device *device, const tt_xy_pair &c
     uint32_t src1_cb_addr = 300 * 1024;
     auto cb_src1 = ll_buda::CreateCircularBuffer(
         program,
+        device,
         src1_cb_index,
         core,
         num_input_tiles,
@@ -63,6 +65,7 @@ ll_buda::Program *setup_program_one(ll_buda::Device *device, const tt_xy_pair &c
     uint32_t num_output_tiles = 2;
     auto cb_output = ll_buda::CreateCircularBuffer(
         program,
+        device,
         ouput_cb_index,
         core,
         num_output_tiles,
@@ -114,6 +117,7 @@ ll_buda::Program *setup_program_two(ll_buda::Device *device, const tt_xy_pair &c
     uint32_t num_input_tiles = 2;
     auto cb_src0 = ll_buda::CreateCircularBuffer(
         program,
+        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -126,6 +130,7 @@ ll_buda::Program *setup_program_two(ll_buda::Device *device, const tt_xy_pair &c
     uint32_t src1_cb_addr = 300 * 1024;
     auto cb_src1 = ll_buda::CreateCircularBuffer(
         program,
+        device,
         src1_cb_index,
         core,
         num_input_tiles,
@@ -139,6 +144,7 @@ ll_buda::Program *setup_program_two(ll_buda::Device *device, const tt_xy_pair &c
     uint32_t num_output_tiles = 2;
     auto cb_output = ll_buda::CreateCircularBuffer(
         program,
+        device,
         ouput_cb_index,
         core,
         num_output_tiles,
@@ -279,12 +285,12 @@ int main(int argc, char **argv) {
         tt::Tensor<bfloat16> src0_tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto src0_activations_tile_layout = convert_to_tile_layout(src0_tensor.get_values());
         auto src0_activations = pack_bfloat16_vec_into_uint32_vec(src0_activations_tile_layout);
-        pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, src0_activations);
+        pass &= ll_buda::WriteToDeviceDRAM(src0_dram_buffer, src0_activations);
 
         tt::Tensor<bfloat16> src1_tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto src1_activations_tile_layout = convert_to_tile_layout(src1_tensor.get_values());
         auto src1_activations = pack_bfloat16_vec_into_uint32_vec(src1_activations_tile_layout);
-        pass &= ll_buda::WriteToDeviceDRAM(device, src1_dram_buffer, src1_activations);
+        pass &= ll_buda::WriteToDeviceDRAM(src1_dram_buffer, src1_activations);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program1);
 
@@ -293,7 +299,7 @@ int main(int argc, char **argv) {
         pass &= ll_buda::LaunchKernels(device, program1);
 
         std::vector<uint32_t> intermediate_result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, intermediate_result_vec, dst_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, intermediate_result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validatie Intermediate Result
@@ -312,7 +318,7 @@ int main(int argc, char **argv) {
         auto identity = create_identity_matrix(32, 32, 32); //bflaot16 32x32 identity
         auto weights_tile_layout = convert_to_tile_layout(identity);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        pass &= ll_buda::WriteToDeviceDRAM(device, src1_dram_buffer, weights);
+        pass &= ll_buda::WriteToDeviceDRAM(src1_dram_buffer, weights);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program2);
 
@@ -321,7 +327,7 @@ int main(int argc, char **argv) {
         pass &= ll_buda::LaunchKernels(device, program2);
 
         std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

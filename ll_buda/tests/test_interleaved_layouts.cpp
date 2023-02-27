@@ -154,6 +154,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
         uint32_t num_input_tiles = num_tiles_c;
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -166,6 +167,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
         uint32_t output_cb_addr = 300 * 1024;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             1,
@@ -244,7 +246,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
         pass &= ll_buda::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -343,6 +345,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
         uint32_t num_input_tiles = num_tiles_c;
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -355,6 +358,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
         uint32_t output_cb_addr = 300 * 1024;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_input_tiles,

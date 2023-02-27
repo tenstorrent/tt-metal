@@ -12,41 +12,47 @@ namespace ll_buda {
 
 class Buffer {
    public:
-    Buffer(uint32_t size_in_bytes, uint32_t address) : size_in_bytes_(size_in_bytes), address_(address) {}
+    Buffer(Device *device, uint32_t size_in_bytes, uint32_t address) : device_(device), size_in_bytes_(size_in_bytes), address_(address) {}
+
+    Device *device() const { return device_; }
 
     // Returns size of buffer in bytes.
     uint32_t size() const { return size_in_bytes_; }
 
     uint32_t address() const { return address_; }
 
+    virtual tt_xy_pair noc_coordinates() const = 0;
+
    protected:
+    Device *device_;
     uint32_t size_in_bytes_;    // Size in bytes
     uint32_t address_;          // L1 address
 };
 
 class DramBuffer : public Buffer {
    public:
-    DramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address) : device_(device), dram_channel_(dram_channel), Buffer(size_in_bytes, address) {}
+    DramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address) : dram_channel_(dram_channel), Buffer(device, size_in_bytes, address) {}
 
     int dram_channel() const { return dram_channel_; }
 
     tt_xy_pair noc_coordinates() const;
 
    private:
-    Device *device_;
     int dram_channel_;          // DRAM channel ID
 };
 
 class L1Buffer : public Buffer {
    public:
-    L1Buffer(const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address) : core_(core), Buffer(size_in_bytes, address) {
+    L1Buffer(Device *device, const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address) : logical_core_(logical_core), Buffer(device, size_in_bytes, address) {
         TT_ASSERT(address_ >= UNRESERVED_BASE, "First " + std::to_string(UNRESERVED_BASE) + " bytes in L1 are reserved");
     }
 
-    tt_xy_pair core() const { return core_; }
+    tt_xy_pair logical_core() const { return logical_core_; }
+
+    tt_xy_pair noc_coordinates() const;
 
    private:
-    tt_xy_pair core_;          // Logical core
+    tt_xy_pair logical_core_;          // Logical core
 };
 
 }  // namespace ll_buda

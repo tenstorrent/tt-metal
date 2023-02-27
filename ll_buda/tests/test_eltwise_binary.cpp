@@ -70,6 +70,7 @@ int main(int argc, char **argv) {
         uint32_t num_input_tiles = 2;
         auto cb_src0 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -82,6 +83,7 @@ int main(int argc, char **argv) {
         uint32_t src1_cb_addr = 300 * 1024;
         auto cb_src1 = ll_buda::CreateCircularBuffer(
             program,
+            device,
             src1_cb_index,
             core,
             num_input_tiles,
@@ -95,6 +97,7 @@ int main(int argc, char **argv) {
         uint32_t num_output_tiles = 2;
         auto cb_output = ll_buda::CreateCircularBuffer(
             program,
+            device,
             ouput_cb_index,
             core,
             num_output_tiles,
@@ -152,7 +155,7 @@ int main(int argc, char **argv) {
         if (multibank)
             pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src0_vec, src0_dram_buffer->address());
         else
-            pass &= ll_buda::WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
+            pass &= ll_buda::WriteToDeviceDRAM(src0_dram_buffer, src0_vec);
 
         std::vector<uint32_t> src1_vec;
         if (eltwise_op == EltwiseOp::MUL)
@@ -164,7 +167,7 @@ int main(int argc, char **argv) {
         if (multibank)
             pass &= ll_buda::WriteToDeviceDRAMChannelsInterleavedTiles(device, src1_vec, src1_dram_buffer->address());
         else
-            pass &= ll_buda::WriteToDeviceDRAM(device, src1_dram_buffer, src1_vec);
+            pass &= ll_buda::WriteToDeviceDRAM(src1_dram_buffer, src1_vec);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -197,7 +200,7 @@ int main(int argc, char **argv) {
             ll_buda::ReadFromDeviceDRAMChannelsInterleavedTiles(
                 device, dst_dram_buffer->address(), result_vec, dst_dram_buffer->size());
         else
-            ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+            ll_buda::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

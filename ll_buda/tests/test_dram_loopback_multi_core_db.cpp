@@ -74,11 +74,11 @@ int main(int argc, char **argv) {
 
         auto input_dram_buffer = ll_buda::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_src_addr);
 
-        auto l1_b0_a = ll_buda::CreateL1Buffer(program, loader_logical_core, transient_buffer_size_bytes, loader_buffer_address1);
-        auto l1_b0_b = ll_buda::CreateL1Buffer(program, loader_logical_core, transient_buffer_size_bytes, loader_buffer_address2);
+        auto l1_b0_a = ll_buda::CreateL1Buffer(program, device, loader_logical_core, transient_buffer_size_bytes, loader_buffer_address1);
+        auto l1_b0_b = ll_buda::CreateL1Buffer(program, device, loader_logical_core, transient_buffer_size_bytes, loader_buffer_address2);
 
-        auto l1_b1_a = ll_buda::CreateL1Buffer(program, writer_logical_core, transient_buffer_size_bytes, writer_buffer_address1);
-        auto l1_b1_b = ll_buda::CreateL1Buffer(program, writer_logical_core, transient_buffer_size_bytes, writer_buffer_address2);
+        auto l1_b1_a = ll_buda::CreateL1Buffer(program, device, writer_logical_core, transient_buffer_size_bytes, writer_buffer_address1);
+        auto l1_b1_b = ll_buda::CreateL1Buffer(program, device, writer_logical_core, transient_buffer_size_bytes, writer_buffer_address2);
 
         auto output_dram_buffer = ll_buda::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         pass &=
-            ll_buda::WriteToDeviceDRAM(device, input_dram_buffer, src_vec);
+            ll_buda::WriteToDeviceDRAM(input_dram_buffer, src_vec);
 
         pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
 
@@ -156,7 +156,7 @@ int main(int argc, char **argv) {
         pass &= ll_buda::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, output_dram_buffer, result_vec, output_dram_buffer->size());
+        ll_buda::ReadFromDeviceDRAM(output_dram_buffer, result_vec);
         auto dst_vec = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
