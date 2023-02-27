@@ -1,23 +1,36 @@
+from pathlib import Path
+import sys
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+
 import numpy as np
 
 import ll_buda_bindings.ll_buda_bindings._C as _C
+from models.utility_functions import tilize
 
 def run_tilize_test():
-    nr = 4
-    nc = 4
-    nt = nr * nc
-    shape = [32 * nr, 32 * nc]
+    nb = 5
+    nc = 2
+    nh = 4
+    nw = 4
+    nt = nb * nc * nh * nw
+    shape = [nb, nc, 32 * nh, 32 * nw]
+
+    inp = np.random.rand(*shape)
+
     a = _C.tensor.Tensor(
-        [float(i) for i in range(1024 * nt)],
-        [1, 1] + shape,
+        inp.flatten().tolist(),
+        shape,
         _C.tensor.DataFormat.FLOAT32,
         _C.tensor.Layout.ROW_MAJOR,
         device
     )
-    breakpoint()
     b = _C.tensor.tilize(a)
-    breakpoint()
-    c = np.array(b.to(host).data(), dtype=int).reshape(*shape)
+    c = np.array(b.to(host).data(), dtype=float).reshape(*shape)
+
+    tilized_inp = tilize(inp.reshape(*shape))
+
+    assert (abs(tilized_inp - c) < 0.02).all(), "Max abs difference for tilize can be 0.02 due to bfloat conversions"
 
 if __name__ == "__main__":
     device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)

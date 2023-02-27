@@ -64,14 +64,16 @@ def tilize(x):
 
     WARNING: This function should eventually be retired in favour of fully tilizing on device.
     """
-    assert isinstance(x, torch.Tensor), "Input to this function must be an instance of torch.Tensor"
+    assert isinstance(x, (torch.Tensor, np.ndarray)), "Input to this function must be an instance of torch.Tensor or np.array"
     assert len(x.shape) == 4, "Only 4D tensors suppported"
     assert (x.shape[-2] % 32) == 0 and (x.shape[-1] % 32) == 0, "The last two dimensions of the tensor must be divisible by 32"
 
+    if isinstance(x, torch.Tensor):
+        ret = torch.zeros(np.prod(x.shape))
+    else:
+        ret = np.zeros(np.prod(x.shape))
 
-    ret = torch.zeros(np.prod(x.shape))
     idx = 0
-
     for B in range(x.shape[0]):
         for C in range(x.shape[1]):
             for H in range(0, x.shape[2], 32):
@@ -86,6 +88,7 @@ def tilize(x):
                     for face in (face0, face1, face2, face3):
                         ret[idx:idx + 256] = face.reshape(-1)
                         idx += 256
+
     return ret.reshape(x.shape)
 
 def tilize_to_list(x):
@@ -95,12 +98,15 @@ def untilize(x):
     """
     This function untilizes a tensor to row major format.
     """
-    assert isinstance(x, torch.Tensor), "Input to this function must be an instance of torch.Tensor"
+    assert isinstance(x, (torch.Tensor, np.ndarray)), "Input to this function must be an instance of torch.Tensor"
     assert len(x.shape) == 4, "Only 4D tensors suppported"
     assert (x.shape[-2] % 32) == 0 and (x.shape[-1] % 32) == 0, "The last two dimensions of the tensor must be divisible by 32"
 
+    if isinstance(x, torch.Tensor):
+        ret = torch.zeros(x.shape)
+    else:
+        ret = np.zeros(x.shape)
 
-    ret = torch.zeros(x.shape)
     for B in range(x.shape[0]):
         for C in range(x.shape[1]):
             x_hw = x[B,C,:].reshape(-1)
