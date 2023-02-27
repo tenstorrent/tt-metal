@@ -62,7 +62,7 @@ def run_bert_question_and_answering_inference():
     hugging_face_reference_model.eval()
     tt_bert_model = TtBertForQuestionAnswering(2, 2, hugging_face_reference_model, device)
 
-    batch = 1
+    batch = 5
     seq_len = 128
     bert_input = torch.arange(seq_len*batch).reshape(batch, seq_len)
 
@@ -72,14 +72,23 @@ def run_bert_question_and_answering_inference():
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
     tt_out = tt_bert_model(bert_input).to(host)
-    tt_untilized_output = untilize(torch.Tensor(tt_out.data()).reshape(1, 1, seq_len, -1))
+    tt_untilized_output = untilize(torch.Tensor(tt_out.data()).reshape(batch, 1, seq_len, -1))
 
-    tt_start_logits = tt_untilized_output[..., :, 0]
-    tt_end_logits = tt_untilized_output[..., :, 1]
+    tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
+    tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
 
     pytorch_start_logits = pytorch_out.start_logits
     pytorch_end_logits = pytorch_out.end_logits
-    return
+
+    start_logit_match = (abs(tt_start_logits - pytorch_start_logits) < 0.1).all().item()
+    if not start_logit_match:
+        print("Start logits don't match")
+
+    end_logit_match = (abs(tt_end_logits - pytorch_end_logits) < 0.1).all().item()
+    if not end_logit_match:
+        print("End logits don't match")
+
+    assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
 if __name__ == "__main__":
     # Initialize the device
