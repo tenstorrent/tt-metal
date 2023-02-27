@@ -9,7 +9,7 @@ function count_loc {
     fi
 
     #echo "$exclude_option"
-    echo -n "$dir \t$exclude_dirs \t"
+    echo -n "\t$dir \t$exclude_dirs \t"
     cloc --quiet "$dir" $exclude_option | awk '/SUM:/{print $5}'
 }
 
@@ -32,20 +32,7 @@ echo
 echo "Kernels/OPs:"
 count_loc kernels
 count_loc ll_buda/op_library
-count_loc programming_examples 
 echo
-echo
-
-# device
-echo "Device:"
-count_loc device
-echo 
-echo
-
-# LLK/firmware
-echo "Tests:"
-count_loc src/ckernels/grayskull sfpi
-echo 
 echo
 
 # infra
@@ -63,11 +50,27 @@ echo "Tests:"
 count_loc ll_buda/tests
 count_loc build_kernels_for_riscv/tests
 count_loc llrt/tests
+count_loc programming_examples 
 count_loc python_api_testing
 count_loc tensor # testing lib
 echo 
 echo
 
+# device
+echo "Device:"
+count_loc device
+echo 
+echo
+
+# LLK/firmware
+echo "LLK/NOC/firmware for GS:"
+count_loc src/ckernels/grayskull sfpi
+count_loc src/firmware/riscv/common
+count_loc src/firmware/riscv/grayskull
+count_loc src/firmware/riscv/targets erisc
+count_loc src/firmware/riscv/toolchain
+echo 
+echo
 
 # external libraries
 # only one file so it breaks
