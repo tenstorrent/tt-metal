@@ -30,10 +30,9 @@ echo
 
 # kernels
 echo "Kernels/OPs:"
-echo "Kernels/OPs:"
 count_loc kernels
 count_loc ll_buda/op_library
-count_loc programming_examples # this is small -- move to tests?
+count_loc programming_examples 
 echo
 echo
 
@@ -43,11 +42,19 @@ count_loc device
 echo 
 echo
 
+# LLK/firmware
+echo "Tests:"
+count_loc src/ckernels/grayskull sfpi
+echo 
+echo
+
 # infra
-echo "Infra:"
+echo "Infra + tools:"
 count_loc git_hooks
 count_loc reg_scripts
 count_loc release
+count_loc tools
+count_loc tt_gdb
 echo
 echo
 
@@ -57,6 +64,7 @@ count_loc ll_buda/tests
 count_loc build_kernels_for_riscv/tests
 count_loc llrt/tests
 count_loc python_api_testing
+count_loc tensor # testing lib
 echo 
 echo
 

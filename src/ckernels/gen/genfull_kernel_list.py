@@ -1,1 +1,0 @@
-../lib/genfull_kernel_list.py
