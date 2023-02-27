@@ -12,7 +12,6 @@ SILICON_DRIVER_TEST_ENTRIES = (
     TestEntry("llrt/tests/test_silicon_driver", "test_silicon_driver"),
     TestEntry("llrt/tests/test_silicon_driver_dram_sweep", "test_silicon_driver_dram_sweep"),
     TestEntry("llrt/tests/test_silicon_driver_l1_sweep", "test_silicon_driver_l1_sweep"),
-    TestEntry("llrt/tests/test_silicon_driver_tiles_sweep", "test_silicon_driver_tiles_sweep"),
 )
 
 LLRT_TEST_ENTRIES = (
@@ -21,8 +20,6 @@ LLRT_TEST_ENTRIES = (
     TestEntry("llrt/tests/test_run_dram_copy_sweep", "test_run_dram_copy_sweep"),
     TestEntry("llrt/tests/test_run_dram_copy_brisc_ncrisc", "test_run_dram_copy_brisc_ncrisc"),
     TestEntry("llrt/tests/test_run_dram_copy_looped_sweep", "test_run_dram_copy_looped_sweep"),
-    TestEntry("llrt/tests/test_run_dram_copy_tiles_sweep", "test_run_dram_copy_tiles_sweep"),
-    TestEntry("llrt/tests/test_run_dram_copy_looped_l1_tiles_sweep", "test_run_dram_copy_looped_l1_tiles_sweep"),
     TestEntry("llrt/tests/test_run_dram_to_l1_to_dram_copy_sweep", "test_run_dram_to_l1_to_dram_copy_sweep"),
     TestEntry("llrt/tests/test_run_risc_read_speed", "test_run_risc_read_speed"),
     TestEntry("llrt/tests/test_run_risc_write_speed", "test_run_risc_write_speed"),

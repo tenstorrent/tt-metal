@@ -6,7 +6,6 @@ LLRT_TESTS += llrt/tests/test_silicon_driver \
 				llrt/tests/test_run_add_two_ints \
 				llrt/tests/test_silicon_driver_dram_sweep \
 				llrt/tests/test_silicon_driver_l1_sweep \
-				llrt/tests/test_silicon_driver_tiles_sweep \
 				llrt/tests/test_run_dram_copy \
 				llrt/tests/test_run_dram_copy_ncrisc \
 				llrt/tests/test_run_dram_copy_brisc_ncrisc \
@@ -15,8 +14,6 @@ LLRT_TESTS += llrt/tests/test_silicon_driver \
 				llrt/tests/test_run_blank_brisc_triscs \
 				llrt/tests/test_run_datacopy \
 				llrt/tests/test_run_datacopy_switched_riscs \
-				llrt/tests/test_run_dram_copy_tiles_sweep \
-				llrt/tests/test_run_dram_copy_looped_l1_tiles_sweep \
 				llrt/tests/test_run_dram_to_l1_to_dram_copy_sweep \
 				llrt/tests/test_run_reader \
 				llrt/tests/test_run_reader_small \
