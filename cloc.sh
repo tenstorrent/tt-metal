@@ -78,3 +78,22 @@ echo "External libraries:"
 count_loc hlkc/meow_hash
 echo
 echo
+
+# other stuff
+echo "third party:"
+count_loc third_party
+echo 
+echo
+
+echo "unused LLK/FW:"
+count_loc src/ckernels/wormhole
+count_loc src/ckernels/wormhole_b0
+count_loc src/firmware/riscv/wormhole
+count_loc src/firmware/riscv/targets/erisc
+echo
+echo
+
+echo "sandbox:"
+count_loc sandbox
+
+
