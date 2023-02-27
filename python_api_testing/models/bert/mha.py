@@ -95,7 +95,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         V_heads = make_attention_heads(V)
         K_T_heads = _C.tensor.transpose(K_heads)
 
-        qkt = _C.tensor.matmul(Q_heads, K_T_heads)
+        qkt = _C.tensor.bmm(Q_heads, K_T_heads)
 
         # Attention scores computation
         N, C, H, W = qkt.shape() # Need to reshape right now since multi-C not supported for broadcast yet
@@ -106,7 +106,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         _C.tensor.reshape(attention_scores, N, C, H, W) # Reshape back to original shape
 
         # Apply attention to value matrix
-        weighted_activation = _C.tensor.matmul(attention_scores, V_heads)
+        weighted_activation = _C.tensor.bmm(attention_scores, V_heads)
         return unmake_attention_heads(weighted_activation) # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
 
     return mha_

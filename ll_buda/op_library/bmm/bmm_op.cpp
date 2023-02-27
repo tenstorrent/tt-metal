@@ -36,10 +36,12 @@ Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     ll_buda::DramBuffer *src0_dram_buffer = a.buffer();
     ll_buda::DramBuffer *src1_dram_buffer = b.buffer();
     if (bcast_batch)
-        TT_ASSERT(ashape[1] == bshape[1] && ashape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes B1MK*11KN=B1MN"); // always require 1 for second dim to be consistent with NCHW
-    else
+        TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
+    else {
         // same condition as above, different message
-        TT_ASSERT(ashape[1] == bshape[1] && ashape[1] == 1 && "bmm (non-bcast matmul) expects input tensors of shapes B1MK*11KN=B1MN"); // always require 1 for second dim to be consistent with NCHW
+        TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
+            && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
+    }
     TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0);
 
@@ -58,15 +60,14 @@ Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         if (bcast_batch)
             TT_ASSERT(ashape[0] > 0 && bshape[0] == 1);
         else {
-            TT_ASSERT(ashape[0] == bshape[0] && "Batch dimensions for A and B must match for non-broadcast bmm op.");
-            TT_ASSERT(ashape[1] == bshape[1] && ashape[1] == 1 && "Channel dimension must be 1 in bmm op for batch!=1.");
+            TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0] && "Channel and batch dimensions must match in bmm op (non-bcast)");
         }
         TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
         TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
         TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
         TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
         TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
-        uint32_t B = ashape[0];
+        uint32_t B = ashape[0]*ashape[1];
         uint32_t Mt = ashape[2]/TILE_HEIGHT;
         uint32_t Kt = ashape[3]/TILE_WIDTH;
         uint32_t Nt = bshape[3]/TILE_WIDTH;
