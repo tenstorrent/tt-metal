@@ -39,7 +39,7 @@ void populate_kernel_group(KernelGroup &kernel_group, Kernel *kernel) {
 KernelGroup Program::kernels_on_core(const tt_xy_pair &core) const {
     KernelGroup kernel_group;
     for (auto kernel : kernels_) {
-        auto cores = kernel->cores();
+        auto cores = kernel->logical_cores();
         if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
             populate_kernel_group(kernel_group, kernel);
         }
@@ -51,7 +51,7 @@ std::map<tt_xy_pair, KernelGroup> Program::core_to_kernel_group() const {
     std::map<tt_xy_pair, KernelGroup> core_to_kernel_group;
 
     for (auto kernel : kernels_) {
-        for (auto core : kernel->cores()) {
+        for (auto core : kernel->logical_cores()) {
             KernelGroup &kernel_group = core_to_kernel_group[core];
             populate_kernel_group(kernel_group, kernel);
         }
@@ -62,7 +62,7 @@ std::map<tt_xy_pair, KernelGroup> Program::core_to_kernel_group() const {
 
 std::string Program::core_to_op(const tt_xy_pair &core) const {
     for (auto kernel : kernels_) {
-        auto cores = kernel->cores();
+        auto cores = kernel->logical_cores();
         if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
             std::string bin_path = kernel->binary_path(core);
             size_t bin_path_size = bin_path.size();
@@ -80,7 +80,7 @@ std::string Program::core_to_op(const tt_xy_pair &core) const {
 std::vector<std::string> Program::cores_to_ops() const {
     std::vector<std::string> ops;
 
-    for (const auto &core : this->cores()) {
+    for (const auto &core : this->logical_cores()) {
         ops.push_back(this->core_to_op(core));
     }
     return ops;
@@ -106,11 +106,11 @@ std::vector<L1Buffer *> Program::l1_buffers_on_core(const tt_xy_pair &core) cons
     return l1_buffers_on_core;
 }
 
-std::vector<tt_xy_pair> Program::cores() const {
+std::vector<tt_xy_pair> Program::logical_cores() const {
     std::vector<tt_xy_pair> cores_in_program;
     std::set<tt_xy_pair> unique_cores;
     for (auto kernel : kernels_) {
-        for (auto core : kernel->cores()) {
+        for (auto core : kernel->logical_cores()) {
             if (unique_cores.find(core) != unique_cores.end()) {
                 continue;
             }

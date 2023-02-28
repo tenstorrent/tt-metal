@@ -57,16 +57,11 @@ Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     {
         // C = A*B
         // MN = MK*KN
-<<<<<<< HEAD
         if (bcast_batch)
             TT_ASSERT(ashape[0] > 0 && bshape[0] == 1);
         else {
             TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0] && "Channel and batch dimensions must match in bmm op (non-bcast)");
         }
-=======
-        TT_ASSERT(ashape[0] == bshape[0] && ashape[0] == 1);
-        TT_ASSERT(ashape[1] == bshape[1] && "Batch dimension 1 must match for A and B in bmm_op");
->>>>>>> #34: Adding InterleavedDramBuffer
         TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
         TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
         TT_ASSERT(ashape[3] % TILE_WIDTH == 0);

@@ -37,7 +37,7 @@ class Program {
 
     std::vector<L1Buffer *> l1_buffers_on_core(const tt_xy_pair &core) const;
 
-    std::vector<tt_xy_pair> cores() const;
+    std::vector<tt_xy_pair> logical_cores() const;
 
     std::string core_to_op(const tt_xy_pair &core) const;
 

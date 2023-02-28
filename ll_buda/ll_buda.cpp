@@ -561,7 +561,7 @@ bool LaunchKernels(Device *device, Program *program) {
     auto pcie_slot = device->pcie_slot();
 
     // Cores have to be enabled before BRISC reset is de-asserted
-    auto logical_cores_used_in_program = program->cores();
+    auto logical_cores_used_in_program = program->logical_cores();
     auto worker_cores = device->worker_cores_from_logical_cores(logical_cores_used_in_program);
     llrt::internal_::enable_cores(cluster, pcie_slot, worker_cores);  // BRISC FW waits for this enable to run
     llrt::deassert_brisc_reset_for_all_chips_all_cores(cluster);

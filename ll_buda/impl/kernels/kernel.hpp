@@ -51,9 +51,9 @@ class Kernel {
 
     std::string name() const;
 
-    std::vector<tt_xy_pair> cores() const;
+    std::vector<tt_xy_pair> logical_cores() const;
 
-    bool is_on_core(const tt_xy_pair &logical_core) const;
+    bool is_on_logical_core(const tt_xy_pair &logical_core) const;
 
     KernelType kernel_type() const { return kernel_type_; }
 
@@ -66,7 +66,7 @@ class Kernel {
     tt_xy_pair start_core_;                             // First logical Tensix coordinates within core grid
     tt_xy_pair end_core_;                               // Last logical Tensix coordinates within core grid
     KernelType kernel_type_;
-    std::map<tt_xy_pair, std::string> binary_path_;     // 
+    std::map<tt_xy_pair, std::string> binary_path_;     //
 
     void set_binary_path(const tt_xy_pair &logical_core, const std::string &binary_path) { binary_path_.insert({logical_core, binary_path}); }
 

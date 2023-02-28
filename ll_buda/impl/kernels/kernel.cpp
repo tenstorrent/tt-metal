@@ -17,7 +17,7 @@ std::string Kernel::name() const {
     return kernel_name;
 }
 
-std::vector<tt_xy_pair> Kernel::cores() const {
+std::vector<tt_xy_pair> Kernel::logical_cores() const {
     std::vector<tt_xy_pair> cores;
     for (auto x = start_core_.x; x <= end_core_.x; x++) {
         for (auto y = start_core_.y; y <= end_core_.y; y++) {
@@ -27,49 +27,49 @@ std::vector<tt_xy_pair> Kernel::cores() const {
     return cores;
 }
 
-bool Kernel::is_on_core(const tt_xy_pair &logical_core) const {
+bool Kernel::is_on_logical_core(const tt_xy_pair &logical_core) const {
     bool in_x_range = (logical_core.x >= start_core_.x) and (logical_core.x <= end_core_.x);
     bool in_y_range = (logical_core.y >= start_core_.y) and (logical_core.y <= end_core_.y);
     return in_x_range and in_y_range;
 }
 
 std::string Kernel::binary_path(const tt_xy_pair &logical_core) const {
-    if (not is_on_core(logical_core)) {
+    if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot access binary for " + name() + " because it is not on core " + logical_core.str());
     }
     return binary_path_.at(logical_core);
 }
 
 std::vector<uint32_t> DataMovementKernel::compile_time_args(const tt_xy_pair &logical_core) const {
-    if (not is_on_core(logical_core)) {
+    if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot access compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
     return kernel_args_->compile_time_args(logical_core);
 }
 
 std::vector<uint32_t> DataMovementKernel::runtime_args(const tt_xy_pair &logical_core) const {
-    if (not is_on_core(logical_core)) {
+    if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot access runtime args for " + name() + " because it is not on core " + logical_core.str());
     }
     return kernel_args_->runtime_args(logical_core);
 }
 
 size_t DataMovementKernel::compile_time_args_hash(const tt_xy_pair &logical_core) const {
-    if (not is_on_core(logical_core)) {
+    if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
     return DataMovementKernelArgsHash{logical_core}(*kernel_args_);
 }
 
 size_t ComputeKernel::compile_time_args_hash(const tt_xy_pair &logical_core) const {
-    if (not is_on_core(logical_core)) {
+    if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
     return ComputeKernelArgsHash{logical_core}(*kernel_args_);
 }
 
 size_t ComputeKernel::define_args_hash(const tt_xy_pair& logical_core) const {
-    if (not is_on_core(logical_core)) {
+    if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
     return ComputeKernelDefinesHash{logical_core}(defines_);
@@ -138,13 +138,13 @@ void DataMovementKernel::write_runtime_args_to_device(Device *device, const tt_x
         default:
             TT_THROW("Unexpected data movement processor type");
     }
-    
+
     tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, runtime_args, l1_arg_base);
 }
 
 bool DataMovementKernel::configure(Device *device, const tt_xy_pair &logical_core) const {
     bool pass = true;
-    if (not is_on_core(logical_core)) {
+    if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
     }
     auto cluster = device->cluster();
@@ -170,7 +170,7 @@ bool DataMovementKernel::configure(Device *device, const tt_xy_pair &logical_cor
 
 bool ComputeKernel::configure(Device *device, const tt_xy_pair &logical_core) const {
     bool pass = true;
-    if (not is_on_core(logical_core)) {
+    if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
     }
     auto cluster = device->cluster();
@@ -189,7 +189,7 @@ bool ComputeKernel::configure(Device *device, const tt_xy_pair &logical_core) co
         init_test_mailbox(device, worker_core, trisc_mailbox_addresses[trisc_id]);
     }
     tt::llrt::enable_triscs(cluster, pcie_slot, worker_core);
-    
+
     return pass;
 }
 
