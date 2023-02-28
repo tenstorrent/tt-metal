@@ -21,6 +21,18 @@ float ref_sqrt(float x) {
     return sqrtf(x);
 }
 
+float sigmoid(float x) {
+    return 1 / (1 + exp(-x));
+}
+
+float ref_log(float x) {
+    return logf(x);
+}
+
+float ref_tanh(float x) {
+    return tanh(x);
+}
+
 vector<uint32_t> sfpu(const vector<uint32_t> &src, std::function<float(float)> sfpu_func) {
     vector<uint32_t> dst;
 
@@ -86,8 +98,12 @@ bool is_close_0p015(float a, float b) {
     return is_close(a, b, 0.015f);
 }
 
-bool is_close_rtol_006_atol_006(float a, float b) {
+bool is_close_rtol_0p06_atol_0p006(float a, float b) {
     return is_close(a, b, 0.06f, 0.006f);
+}
+
+bool is_close_rtol_0p175_atol_0p1(float a, float b) {
+    return is_close(a, b, 0.175f, 0.1f);
 }
 
 // SFPU maps -> relevant kernels, golden functions, comparison functions
@@ -97,6 +113,9 @@ const map<string, string> sfpu_op_to_hlk_op_name = {
     {"reciprocal", "hlk_sfpu_reciprocal(nullptr, 0); pack_tile(0, CB::c_out0);"},
     {"gelu", "hlk_sfpu_gelu(nullptr, 0); pack_tile(0, CB::c_out0);"},
     {"sqrt", "hlk_sfpu_sqrt(nullptr, 0); pack_tile(0, CB::c_out0);"},
+    {"sigmoid", "hlk_sfpu_sigmoid(nullptr, 0); pack_tile(0, CB::c_out0);"},
+    {"log", "hlk_sfpu_log(nullptr, 0); pack_tile(0, CB::c_out0);"},
+    {"tanh", "hlk_sfpu_tanh(nullptr, 0); pack_tile(0, CB::c_out0);"},
 };
 
 const map<string, std::function<float(float)>> sfpu_op_to_function = {
@@ -105,6 +124,9 @@ const map<string, std::function<float(float)>> sfpu_op_to_function = {
     {"reciprocal",  reciprocal},
     {"gelu",        gelu},
     {"sqrt",        ref_sqrt},
+    {"sigmoid",     sigmoid},
+    {"log",         ref_log},
+    {"tanh",        ref_tanh},
 };
 
 const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>> sfpu_op_to_init_func = {
@@ -113,6 +135,9 @@ const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>>
     {"reciprocal",  create_random_ones_and_twos_vector_of_bfloat16},
     {"gelu",        create_random_binary_vector_of_bfloat16},
     {"sqrt",        create_random_vector_of_bfloat16_0_2},
+    {"sigmoid",     create_random_vector_of_bfloat16_1_1},
+    {"log",         create_random_vector_of_bfloat16_0_2},
+    {"tanh",        create_random_vector_of_bfloat16_1_1},
 };
 
 const map<string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_function = {
@@ -120,5 +145,8 @@ const map<string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_f
     {"reciprocal", equal_within_absolute_tolerance_of_0p03},
     {"gelu", is_close_0p015},
     {"relu", is_close_0p015},
-    {"sqrt", is_close_rtol_006_atol_006},
+    {"sqrt", is_close_rtol_0p06_atol_0p006},
+    {"sigmoid", is_close_rtol_0p06_atol_0p006},
+    {"log", is_close_rtol_0p06_atol_0p006},
+    {"tanh", is_close_rtol_0p175_atol_0p1},
 };

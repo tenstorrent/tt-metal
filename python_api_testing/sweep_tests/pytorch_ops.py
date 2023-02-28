@@ -25,6 +25,18 @@ def relu(x):
     return torch.nn.functional.relu(x)
 
 
+def sigmoid(x):
+    return torch.nn.functional.sigmoid(x)
+
+
+def log(x):
+    return torch.log(x)
+
+
+def tanh(x):
+    return torch.tanh(x)
+
+
 def add(x, y):
     return torch.add(x, y)
 

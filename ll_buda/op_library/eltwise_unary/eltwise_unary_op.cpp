@@ -125,6 +125,9 @@ Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
         case UnaryOpType::GELU: op_name = "hlk_sfpu_gelu(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
         case UnaryOpType::RELU: op_name = "hlk_pack_relu_tile_to_stream(nullptr, 0, CB::c_out0);"; break;
         case UnaryOpType::SQRT: op_name = "hlk_sfpu_sqrt(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::SIGMOID: op_name = "hlk_sfpu_sigmoid(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::LOG: op_name = "hlk_sfpu_log(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::TANH: op_name = "hlk_sfpu_tanh(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
 
         default: TT_ASSERT(false && "Undefined op type");
     }

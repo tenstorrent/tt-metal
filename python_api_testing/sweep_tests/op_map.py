@@ -32,6 +32,18 @@ op_map = {
         "ll_buda_op": ll_buda_ops.eltwise_relu,
         "pytorch_op": pytorch_ops.relu,
     },
+    "eltwise-sigmoid": {
+        "ll_buda_op": ll_buda_ops.eltwise_sigmoid,
+        "pytorch_op": pytorch_ops.sigmoid,
+    },
+    "eltwise-log": {
+        "ll_buda_op": ll_buda_ops.eltwise_log,
+        "pytorch_op": pytorch_ops.log,
+    },
+    "eltwise-tanh": {
+        "ll_buda_op": ll_buda_ops.eltwise_tanh,
+        "pytorch_op": pytorch_ops.tanh,
+    },
     # Eltwise binary
     "eltwise-add": {
         "ll_buda_op": ll_buda_ops.eltwise_add,

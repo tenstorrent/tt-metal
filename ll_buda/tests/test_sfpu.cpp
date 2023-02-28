@@ -216,7 +216,6 @@ int main(int argc, char **argv) {
     bool pass = true;
     for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
         log_info(LogTest, "Running {}", op_name);
-        if (op_name != "sqrt") continue;
         bool pass_ = run_sfpu_test(op_name);
 
         if (pass_) {

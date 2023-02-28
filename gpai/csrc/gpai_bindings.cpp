@@ -78,6 +78,9 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("gelu", &gelu);
     m_tensor.def("relu", &relu);
     m_tensor.def("sqrt", &sqrt);
+    m_tensor.def("sigmoid", &sigmoid);
+    m_tensor.def("log", &log);
+    m_tensor.def("tanh", &tanh);
 
     // TMs
     m_tensor.def("reshape", &reshape);

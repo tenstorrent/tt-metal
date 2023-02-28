@@ -363,6 +363,54 @@ using namespace tt;
  */
 #define sqrt_tile(dst_tile_index)                                                                  hlk_sfpu_sqrt(nullptr, dst_tile_index)
 
+#define sigmoid_tile_init()                                                                        hlk_sfpu_sigmoid_init(nullptr)
+
+/**
+ * Performs element-wise computation of sigmoid(x) for each element of a tile in
+ * DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+#define sigmoid_tile(dst_tile_index)                                                              hlk_sfpu_sigmoid(nullptr, dst_tile_index)
+
+#define log_tile_init()                                                                           hlk_sfpu_log_init(nullptr)
+
+/**
+ * Performs element-wise computation of log(x) for each element of a tile in
+ * DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+#define log_tile(dst_tile_index)                                                                  hlk_sfpu_log(nullptr, dst_tile_index)
+
+#define tanh_tile_init()                                                                          hlk_sfpu_tanh_init(nullptr)
+
+/**
+ * Performs element-wise computation of tanh(x) for each element of a tile in
+ * DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+#define tanh_tile(dst_tile_index)                                                                  hlk_sfpu_tanh(nullptr, dst_tile_index)
+
 /**
  * Performs a reduction operation *B = reduce(A)* using reduce_func for
  * dimension reduction on a tile in the CB at a given index and writes the
@@ -522,6 +570,7 @@ void hlk_sfpu_sqrt_init(tt_core* core_ptr);
 void hlk_sfpu_exponential_init(tt_core* core_ptr);
 void hlk_sfpu_reciprocal_init(tt_core* core_ptr);
 void hlk_sfpu_log_init(tt_core* core_ptr);
+void hlk_sfpu_tanh_init(tt_core* core_ptr);
 void hlk_sfpu_gelu_init(tt_core* core_ptr);
 void hlk_sfpu_gelu_derivative_init(tt_core* core_ptr);
 void hlk_sfpu_sigmoid_init(tt_core* core_ptr);

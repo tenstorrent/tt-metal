@@ -72,6 +72,7 @@ enum class SfpuOp : std::uint8_t
     GeluDerivative,
     Reciprocal,
     Sigmoid,
+    Tanh,
     Dropout,
     Datacopy, // This just means passthrough and no sfpu
     Transpose, // datacopy + math transpose

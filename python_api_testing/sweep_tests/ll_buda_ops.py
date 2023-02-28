@@ -134,6 +134,69 @@ def eltwise_relu(pcie_slot, x):
     return output
 
 
+def eltwise_sigmoid(pcie_slot, x):
+    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, pcie_slot)
+    gpai.device.InitializeDevice(device)
+    host = gpai.device.GetHost()
+
+    t0 = gpai.tensor.Tensor(
+        tilize_to_list(x),
+        x.shape,
+        gpai.tensor.DataFormat.FLOAT32,
+        gpai.tensor.Layout.TILE,
+        device,
+    )
+
+    t1 = gpai.tensor.sigmoid(t0)
+
+    output = untilize(torch.Tensor(t1.to(host).data()).reshape(t1.shape()))
+    gpai.device.CloseDevice(device)
+
+    return output
+
+
+def eltwise_log(pcie_slot, x):
+    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, pcie_slot)
+    gpai.device.InitializeDevice(device)
+    host = gpai.device.GetHost()
+
+    t0 = gpai.tensor.Tensor(
+        tilize_to_list(x),
+        x.shape,
+        gpai.tensor.DataFormat.FLOAT32,
+        gpai.tensor.Layout.TILE,
+        device,
+    )
+
+    t1 = gpai.tensor.log(t0)
+
+    output = untilize(torch.Tensor(t1.to(host).data()).reshape(t1.shape()))
+    gpai.device.CloseDevice(device)
+
+    return output
+
+
+def eltwise_tanh(pcie_slot, x):
+    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, pcie_slot)
+    gpai.device.InitializeDevice(device)
+    host = gpai.device.GetHost()
+
+    t0 = gpai.tensor.Tensor(
+        tilize_to_list(x),
+        x.shape,
+        gpai.tensor.DataFormat.FLOAT32,
+        gpai.tensor.Layout.TILE,
+        device,
+    )
+
+    t1 = gpai.tensor.tanh(t0)
+
+    output = untilize(torch.Tensor(t1.to(host).data()).reshape(t1.shape()))
+    gpai.device.CloseDevice(device)
+
+    return output
+
+
 def eltwise_add(pcie_slot, x, y):
 
     device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, pcie_slot)

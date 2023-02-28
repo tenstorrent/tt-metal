@@ -25,6 +25,9 @@ Compute APIs
   gelu_tile
   recip_tile
   sqrt_tile
+  sigmoid_tile
+  log_tile
+  tanh_tile
 
   reduce_tile
   tilize_and_copy

@@ -41,6 +41,9 @@ int main(int argc, char **argv) {
         Tensor dcRecip = recip(a).to(host);
         Tensor dcGelu = gelu(a).to(host);
         Tensor dcRelu = relu(a).to(host);
+        Tensor dcSigmoid = sigmoid(a).to(host);
+        Tensor dcLog = log(a).to(host);
+        Tensor dcTanh = tanh(a).to(host);
         
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
