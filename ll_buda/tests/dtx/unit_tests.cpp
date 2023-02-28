@@ -19,7 +19,7 @@
 #include "ll_buda/impl/dtx/util_vector_of_ints.hpp"
 #include "ll_buda/impl/dtx/util.hpp"
 #include "ll_buda/impl/dtx/dtx_passes.hpp"
-#include "ll_buda/impl/dtx/kb.hpp"
+
 
 using namespace std;
 
@@ -731,36 +731,6 @@ void run_dtx_tests() {
     else cout << "TESTS FAILED\n\n\n" << endl;
 }
 
-
-
-void run_pass_memory_allocation(Graph * graph) {
-}
-
-// ===============================================================
-//                  Kernel Buffer Graph Infra
-// ===============================================================
-void test_1() {
-
-    Graph * g = new Graph();
-
-    Node * buf_in = g->create_buffer_dram("dram_input_buffer", 0);
-    Node * buf_out = g->create_buffer_dram("dram_output_buffer", 0);
-    Node * buf_l1  = g->create_buffer_l1("l1_buffer", 1024, {0,0});
-    Node * kernel = g->create_data_movement_kernel("dram_loopback", "/kernels/dram_loopback_va_buffer.cpp", {0,0});
-
-    g->add_edge(buf_in, kernel);
-    g->add_edge(kernel, buf_l1);
-    g->add_edge(buf_l1, kernel);
-    g->add_edge(kernel, buf_out);
-
-    run_pass_memory_allocation(g);
-}
-
-bool run_kb_graph_tests() {
-    bool pass = true;
-    test_1();
-    return pass;
-}
 
 // ===============================================================
 // ===============================================================
