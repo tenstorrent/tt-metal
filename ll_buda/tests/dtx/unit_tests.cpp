@@ -15,23 +15,21 @@
 #include <iomanip>
 #include <queue>
 
-#include "dtx.hpp"
-#include "util_vector_of_ints.hpp"
-#include "util.hpp"
-#include "dtx_passes.hpp"
-
-
-#include "kb.hpp"
+#include "ll_buda/impl/dtx/dtx.hpp"
+#include "ll_buda/impl/dtx/util_vector_of_ints.hpp"
+#include "ll_buda/impl/dtx/util.hpp"
+#include "ll_buda/impl/dtx/dtx_passes.hpp"
+#include "ll_buda/impl/dtx/kb.hpp"
 
 using namespace std;
 
 
 bool test_util() {
-    
+
     cout << v2s(increment({3,4}, {2,3}, {5,7})) << endl;
     cout << v2s(increment({3,6}, {2,3}, {5,7})) << endl;
     cout << v2s(increment({3,7}, {2,3}, {5,7})) << endl;
-    
+
     cout << v2s(increment({2,2,5}, {2,2,2}, {5,5,5})) << endl;
     cout << v2s(increment({3,5,5}, {2,2,2}, {5,5,5})) << endl;
     return true;
@@ -48,7 +46,7 @@ bool test_Tensor_class() {
 bool test_TensorPair_class(){
     TensorPair * tp1 = new TensorPair( new Tensor({0,0,0},{10,10,10}), 3, new Tensor({2,2,2}, {8,8,8}));
     tp1->print_string();
-    
+
     TensorPair * tp2 = new TensorPair( new Tensor({0,0,0},{10,10,10}), 2, new Tensor({2,2,2}, {8,8,8}));
     tp2->print_string();
 
@@ -78,18 +76,18 @@ bool test_calculate_line_segment_overlap_in_1d() {
     // No overlap
     pass &= run_single_line_segment_overlap_test({0,10}, {20,30}, {-1,-1});
     pass &= run_single_line_segment_overlap_test({20,30}, {0,10}, {-1,-1});
-    
+
     // Full overlap
     pass &= run_single_line_segment_overlap_test({0,10}, {2,8}, {2,8});
     pass &= run_single_line_segment_overlap_test({2,8}, {0,10}, {2,8});
-    
+
     // Partial overlap
     pass &= run_single_line_segment_overlap_test({5,15}, {0,10}, {5,10});
-    pass &= run_single_line_segment_overlap_test({0,10}, {5,15}, {5,10});    
+    pass &= run_single_line_segment_overlap_test({0,10}, {5,15}, {5,10});
 
     // TO DO
     // add a few more test cases:
-    //  - lines have the same start/end point. to test the "=" in the overlap equations.      
+    //  - lines have the same start/end point. to test the "=" in the overlap equations.
 
     return pass;
 }
@@ -131,19 +129,19 @@ bool run_DataTransformation_test_0(bool DEBUG) {
     TransformationNode * node0 = new TransformationNode("producer", 1);
     TransformationNode * node1 = new TransformationNode("tx1", 1);
     TransformationNode * node2 = new TransformationNode("consumer", 1);
-    
-    // Producer node: 1 tensor. 
+
+    // Producer node: 1 tensor.
     node0->groups[0]->shape = {20,20};
-    
+
     // Transformation #1: vertical blocks
     node1->groups[0]->shape = {20,20};
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0,0},  {20,10}), 0,  new Tensor({0,0},  {20,10}))   );
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0,10}, {20,20}), 0,  new Tensor({0,10}, {20,20}))   );
-    
+
     node2->groups[0]->shape = {20,20};
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0,0}, {10,20}),  0,  new Tensor({0,0}, {10,20}))    );
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({10,0}, {20,20}), 0,  new Tensor({10,0}, {20,20}))   );
-    
+
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
     dtx->transformations.push_back(node1);
@@ -160,7 +158,7 @@ bool run_DataTransformation_test_0(bool DEBUG) {
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0,10},  {10,20}), 0, new Tensor({0,10},  {10,20})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10,0},  {20,10}), 0, new Tensor({10,0},  {20,10})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10,10}, {20,20}), 0, new Tensor({10,10}, {20,20})));
-    
+
     if (DEBUG) golden->print(0);
 
     pass = compare_two_groups(golden->groups[0], node2->groups[0]);
@@ -177,20 +175,20 @@ bool run_DataTransformation_test_1(bool DEBUG) {
     TransformationNode * node0 = new TransformationNode("producer", 1);
     TransformationNode * node1 = new TransformationNode("tx1", 1);
     TransformationNode * node2 = new TransformationNode("consumer", 1);
-    
-    // Producer node: 1 tensor. 
+
+    // Producer node: 1 tensor.
     node0->groups[0]->shape = {40};
-    
+
     // Transformation #1: vertical blocks
     node1->groups[0]->shape = {40};
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 0,  new Tensor({20}, {40}))  );
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 0,  new Tensor({0}, {20}))   );
-    
+
     node2->groups[0]->shape = {40};
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {10}), 0,  new Tensor({10}, {20}))   );
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({10}, {30}), 0,  new Tensor({20}, {40}))   );
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({30}, {40}), 0,  new Tensor({0},  {0}))    );
-    
+
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
     dtx->transformations.push_back(node1);
@@ -207,7 +205,7 @@ bool run_DataTransformation_test_1(bool DEBUG) {
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 0, new Tensor({30}, {40})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 0, new Tensor({20}, {30})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 0, new Tensor({0 }, {10})));
-    
+
     if (DEBUG) golden->print(0);
 
     pass = compare_two_groups(golden->groups[0], node2->groups[0]);
@@ -225,26 +223,26 @@ bool run_DataTransformation_test_2(bool DEBUG) {
     TransformationNode * node0 = new TransformationNode("producer", 2);
     TransformationNode * node1 = new TransformationNode("tx1", 2);
     TransformationNode * node2 = new TransformationNode("consumer", 1);
-    
-    // NODE 0: 
+
+    // NODE 0:
     node0->groups[0]->shape = {40,40};
     node0->groups[1]->shape = {40,40};
-    
-    // NODE 1: 
+
+    // NODE 1:
     node1->groups[0]->shape = {40,40};
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 1, new Tensor({20}, {40}))  );
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 1, new Tensor({0}, {20}))   );
-    
+
     node1->groups[1]->shape = {40,40};
     node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 0, new Tensor({20}, {40}))  );
     node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 0,  new Tensor({0}, {20}))   );
-    
-    // NODE 2: 
+
+    // NODE 2:
     node2->groups[0]->shape = {40,40};
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {10}), 0,  new Tensor({10}, {20}))   );
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({10}, {30}), 1,  new Tensor({20}, {40}))   );
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({30}, {40}), 1,  new Tensor({0},  {0}))    );
-    
+
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
     dtx->transformations.push_back(node1);
@@ -265,7 +263,7 @@ bool run_DataTransformation_test_2(bool DEBUG) {
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 0, new Tensor({30}, {40})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 0, new Tensor({20}, {30})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 0, new Tensor({0 }, {10})));
-    
+
     if (DEBUG) golden->print(0);
 
     pass = compare_two_groups(golden->groups[0], node2->groups[0]);
@@ -283,22 +281,22 @@ bool run_DataTransformation_test_3(bool DEBUG) {
     TransformationNode * node1 = new TransformationNode("tx1", 1);
     TransformationNode * node2 = new TransformationNode("tx2", 1);
     TransformationNode * node3 = new TransformationNode("consumer", 1);
-    
-    // NODE 0: 
+
+    // NODE 0:
     node0->groups[0]->shape = {100};
-    
-    // NODE 1: 
+
+    // NODE 1:
     node1->groups[0]->shape = {100};
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 0, new Tensor({20},  {40}))  );
-    
-    // NODE 2: 
+
+    // NODE 2:
     node2->groups[0]->shape = {100};
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20},  {40}), 0,  new Tensor({40}, {60}))   );
 
-    // NODE 3: 
+    // NODE 3:
     node3->groups[0]->shape = {100};
     node3->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({40},  {60}), 0,  new Tensor({60}, {80}))   );
-    
+
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
     dtx->transformations.push_back(node1);
@@ -325,7 +323,7 @@ bool test_DataTransformations() {
 }
 
 bool test_golden_comparisons() {
-    
+
     cout << "compare_two_vectors_of_ints" << endl;
     cout << "expecting 1, got " << compare_two_vectors_of_ints({1,2,3}, {1,2,3}) << endl;
     cout << "expecting 0, got " << compare_two_vectors_of_ints({1,2,3}, {1,2,3,4}) << endl;
@@ -340,12 +338,12 @@ bool test_golden_comparisons() {
     cout << "expecting 1, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2}))           ) << endl;
     cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{9,2}))           ) << endl;
     cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({9},{2}), 0, new Tensor({1,1},{2,2}))           ) << endl;
-    
-    
+
+
     cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{9,2})), new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2}))           ) << endl;
     cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({1},{2}), 3, new Tensor({1,1},{2,2}))           ) << endl;
     cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({2},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2}))           ) << endl;
-    
+
     return true;
 }
 
@@ -355,23 +353,23 @@ bool test_GenerateAddresses() {
 
     TransformationNode * node0 = new TransformationNode("producer", 1);
     TransformationNode * node1 = new TransformationNode("consumer", 1);
-    
-    // Producer node: 1 tensor. 
+
+    // Producer node: 1 tensor.
     node0->groups[0]->shape = {40};
     node0->groups[0]->address = 0;
     node0->groups[0]->core = {2,3};
-    
+
     // Transformation #1: vertical blocks
     node1->groups[0]->shape = {40};
     node1->groups[0]->address = 0;
     node1->groups[0]->core = {5,6};
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 0,  new Tensor({20}, {40}))  );
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 0,  new Tensor({0}, {20}))   );
-    
+
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
     dtx->transformations.push_back(node1);
-    
+
     if (DEBUG) dtx->print();
 
     pass = generate_transfer_addresses(dtx);
@@ -380,29 +378,29 @@ bool test_GenerateAddresses() {
 }
 
 bool run_DTX_reverse_transformations_test_0(int DEBUG) {
-    
+
     TransformationNode * node0 = new TransformationNode("producer", 2);
     TransformationNode * node1 = new TransformationNode("tx1", 2);
-    
-    // NODE 0: 
+
+    // NODE 0:
     node0->groups[0]->shape = {40};
     node0->groups[1]->shape = {40};
-    
-    // NODE 1: 
+
+    // NODE 1:
     node1->groups[0]->shape = {40};
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 1, new Tensor({20}, {40}))  );
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 1, new Tensor({0}, {20}))   );
-    
+
     node1->groups[1]->shape = {40};
     node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 0, new Tensor({20}, {40}))  );
     node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 0,  new Tensor({0}, {20}))   );
-    
+
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
     dtx->transformations.push_back(node1);
-    
+
     DataTransformations * backwards = reverse_transformations(dtx);
-    
+
     /*
     // Correctness checking
     TransformationNode * golden = new TransformationNode("golden", 1);
@@ -415,7 +413,7 @@ bool run_DTX_reverse_transformations_test_0(int DEBUG) {
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 0, new Tensor({30}, {40})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 0, new Tensor({20}, {30})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 0, new Tensor({0 }, {10})));
-   
+
     if (DEBUG) golden->print(0);
 
     pass = compare_two_groups(golden->groups[0], node2->groups[0]);
@@ -426,35 +424,35 @@ bool run_DTX_reverse_transformations_test_0(int DEBUG) {
 }
 
 bool run_DTX_reverse_transformations_test_1(int DEBUG) {
-    
+
     TransformationNode * node0 = new TransformationNode("producer", 2);
     TransformationNode * node1 = new TransformationNode("tx1", 3);
-    
-    
-    // NODE 0: 
+
+
+    // NODE 0:
     node0->groups[0]->shape = {100};
     node0->groups[1]->shape = {200};
-    
-    // NODE 1: 
+
+    // NODE 1:
     node1->groups[0]->shape = {20};
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({60}, {70}),  0, new Tensor({0},  {10}))  );
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({70}, {80}),  0, new Tensor({10}, {20}))   );
 
-    // NODE 1: 
+    // NODE 1:
     node1->groups[1]->shape = {30};
     node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({130}, {140}), 1, new Tensor({0},  {10}))  );
     node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({140}, {150}), 1, new Tensor({10}, {20}))  );
-    
+
     node1->groups[2]->shape = {40};
     node1->groups[2]->tensor_pairs.push_back(  new TensorPair( new Tensor({80},  {90}),  0, new Tensor({0},  {10}))  );
     node1->groups[2]->tensor_pairs.push_back(  new TensorPair( new Tensor({160}, {170}), 1, new Tensor({10}, {20}))  );
-    
+
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
     dtx->transformations.push_back(node1);
-    
+
     DataTransformations * backwards = reverse_transformations(dtx);
-    
+
 
     /*
     // Correctness checking
@@ -468,7 +466,7 @@ bool run_DTX_reverse_transformations_test_1(int DEBUG) {
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 0, new Tensor({30}, {40})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 0, new Tensor({20}, {30})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 0, new Tensor({0 }, {10})));
-   
+
     if (DEBUG) golden->print(0);
 
     pass = compare_two_groups(golden->groups[0], node2->groups[0]);
@@ -484,29 +482,29 @@ bool run_DTX_reverse_transformations_test_2(int DEBUG) {
     TransformationNode * node0 = new TransformationNode("producer", 1);
     TransformationNode * node1 = new TransformationNode("tx1", 1);
     TransformationNode * node2 = new TransformationNode("tx2", 1);
-    
-    // NODE 0: 
+
+    // NODE 0:
     node0->groups[0]->shape = {40};
-    
-    // NODE 1: 
+
+    // NODE 1:
     node1->groups[0]->shape = {40};
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({10}, {20}),  0, new Tensor({0},  {10}))  );
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {10}),  0, new Tensor({10}, {20}))   );
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({30}, {40}),  0, new Tensor({20}, {30}))   );
     node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {30}),  0, new Tensor({30}, {40}))   );
 
-    // NODE 2: 
+    // NODE 2:
     node2->groups[0]->shape = {40};
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {30}),  0, new Tensor({0},  {10}))  );
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({30}, {40}),  0, new Tensor({10}, {20}))   );
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {10}),  0, new Tensor({20}, {30}))   );
     node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({10}, {20}),  0, new Tensor({30}, {40}))   );
-    
+
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
     dtx->transformations.push_back(node1);
     dtx->transformations.push_back(node2);
-    
+
     dtx->print();
     pass &= collapse_transformations(dtx);
     dtx->print();
@@ -518,8 +516,8 @@ bool run_DTX_reverse_transformations_test_2(int DEBUG) {
     pass &= collapse_transformations(backwards);
     backwards->print();
     pass &= generate_transfer_addresses(backwards);
-    
-    
+
+
 
     /*
     // Correctness checking
@@ -533,7 +531,7 @@ bool run_DTX_reverse_transformations_test_2(int DEBUG) {
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 0, new Tensor({30}, {40})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 0, new Tensor({20}, {30})));
     golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 0, new Tensor({0 }, {10})));
-   
+
     if (DEBUG) golden->print(0);
 
     pass = compare_two_groups(golden->groups[0], node2->groups[0]);
@@ -555,7 +553,7 @@ bool test_DTX_reverse_transformations() {
 
 bool test_generate_sliced_ranges_helper_functions() {
     bool pass = true;
-    
+
     // Part 1 - Test Generated sliced ranges
     vector<vector<vector<int>>> ranges = generate_sliced_ranges({10,10}, {2,2});
 
@@ -567,13 +565,13 @@ bool test_generate_sliced_ranges_helper_functions() {
     list_of_cores = generate_list_of_cores_based_on_range({2,2}, {5,5});
     list_of_cores = generate_list_of_cores_based_on_range({3,2}, {3,5});
     list_of_cores = generate_list_of_cores_based_on_range({5,3}, {9,3});
-    
+
     return pass;
-} 
+}
 
 bool test_pass_parallelize_generic_tensor_slice() {
     bool pass = true;
-    
+
     // Part 3 - Test generic parallelization pass
     DataTransformations * dtx = new DataTransformations();
     TransformationNode * node0 = new TransformationNode("producer", 1);
@@ -584,7 +582,7 @@ bool test_pass_parallelize_generic_tensor_slice() {
     vector<int> cores_start   = {0,0};
     vector<int> cores_end     = {1,1};
     pass &= parallelize_generic_tensor_slice(dtx, slice_factors, cores_start, cores_end);
-    
+
     return pass;
 }
 
@@ -618,7 +616,7 @@ bool run_pass_tilize_and_store_test_0() {
     node0->groups[1]->shape = {128,128  };
     node0->groups[0]->core = {1,2};
     node0->groups[1]->core = {2,3};
-    
+
     dtx->transformations.push_back(node0);
     bool pass = tilize_and_store(dtx, {0,1});
     dtx->print();
@@ -631,7 +629,7 @@ bool test_pass_tilize_and_store() {
 
     // PART 1: The main helper function
     pass &= test_dim_order_counting_helper_function();
-    
+
     // Test simple vector helper method
     /*
     cout << "dut: " << v2s(vector_pad_on_left({32,32}, 2, 0)) << endl;
@@ -643,10 +641,10 @@ bool test_pass_tilize_and_store() {
     //pass &= run_pass_tilize_and_store_test({64,64}, {1,0});
     //pass &= run_pass_tilize_and_store_test({128,128}, {1,0});
     //pass &= run_pass_tilize_and_store_test({2, 64, 64}, {2,1,0});
-    
+
     // Test pass (producer groups > 1)
     pass &= run_pass_tilize_and_store_test_0();
-    
+
 
     return pass;
 }
@@ -657,12 +655,12 @@ bool test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1() {
     // Test #1
     DataTransformations * dtx = new DataTransformations();
     TransformationNode * node0 = new TransformationNode("producer", 1);
-    
+
     int x = 5;
     int y = 5;
     int z = 128;
 
-    
+
     node0->groups[0]->shape = {1, z*y*x};
     dtx->transformations.push_back(node0);
 
@@ -677,17 +675,17 @@ void run_dtx_tests() {
     cout << "==================================================================" << endl;
     cout << "                         Starting DTX TESTs                       " << endl;
     cout << "==================================================================" << endl;
-    
+
     pass &= test_util();
     printf("test_util = %d\n\n", pass);
-    
+
     /*
     pass &= test_Tensor_class();
     printf("test_Tensor_class = %d\n\n", pass);
 
     pass &= test_TensorPair_class();
     printf("test_TensorPair_class = %d\n\n", pass);
-    
+
     pass &= test_calculate_line_segment_overlap_in_1d();
     printf("test_calculate_line_segment_overlap_in_1d - %d\n\n", pass);
 
@@ -699,13 +697,13 @@ void run_dtx_tests() {
 
     pass &= test_DataTransformations();
     printf("test_DataTransformations - %d\n\n", pass);
-    
+
     pass &= test_GenerateAddresses();
     printf("test_GenerateAddresses - %d\n\n", pass);
-    
+
     //pass &= test_DTX_reverse_transformations();
     //printf("test_DTX_reverse_transformations - %d\n\n", pass);
-    
+
     pass &= test_generate_sliced_ranges_helper_functions();
     printf("test_generate_sliced_ranges_helper_functions - %d\n\n", pass);
 
@@ -718,9 +716,9 @@ void run_dtx_tests() {
     pass &= test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1();
     printf("test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1 - %d\n\n", pass);
     */
-    
 
-    
+
+
 
     if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
     else cout << "TESTS FAILED\n\n\n" << endl;
@@ -737,7 +735,7 @@ void run_pass_memory_allocation(Graph * graph) {
 void test_1() {
 
     Graph * g = new Graph();
-    
+
     Node * buf_in = g->create_buffer_dram("dram_input_buffer", 0);
     Node * buf_out = g->create_buffer_dram("dram_output_buffer", 0);
     Node * buf_l1  = g->create_buffer_l1("l1_buffer", 1024, {0,0});
@@ -747,7 +745,7 @@ void test_1() {
     g->add_edge(kernel, buf_l1);
     g->add_edge(buf_l1, kernel);
     g->add_edge(kernel, buf_out);
-    
+
     run_pass_memory_allocation(g);
 }
 
