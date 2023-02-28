@@ -56,11 +56,16 @@ def run_pytorch_test(args):
             getattr(comparison_funcs, comparison_dict["function"]), **comparison_args
         )
 
+        skip_header = False
+        if results_csv_path.exists():
+            skip_header = True
+
         ################# RUN TEST SWEEP #################
-        with open(results_csv_path, "w", newline="") as results_csv:
+        with open(results_csv_path, "a", newline="") as results_csv:
             results_csv_writer = csv.DictWriter(results_csv, fieldnames=fieldnames)
-            results_csv_writer.writeheader()
-            results_csv.flush()
+            if not skip_header:
+                results_csv_writer.writeheader()
+                results_csv.flush()
 
             for input_shapes, datagen_funcs in shapes_and_datagen(
                 shape_dict, datagen_dict
