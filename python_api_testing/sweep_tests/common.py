@@ -67,13 +67,7 @@ def run_test_and_save_results(
 
 
 def shapes_and_datagen(shape_dict, datagen_dict):
-    start_shape = shape_dict["start-shape"]
-    end_shape = shape_dict["end-shape"]
-    interval = shape_dict["interval"]
     num_shapes = shape_dict["num-shapes"]
-
-    method = shape_dict.get("method", "default")
-    num_samples = shape_dict.get("num-samples", "all")
 
     # Datagen functions
     if isinstance(datagen_dict, dict):
@@ -101,104 +95,119 @@ def shapes_and_datagen(shape_dict, datagen_dict):
             idx_list = sorted(random.sample(range(total_shapes), num_samples))
         return idx_list
 
-    if method == "default":
-        # Sweep across start-shape to end-shape
-        # Duplicate the shape num_shapes times
-        num_dims = len(start_shape)
-        assert len(end_shape) == num_dims
-
-        if not isinstance(interval, list):
-            interval = [interval] * num_dims
-
-        assert len(interval) == num_dims
-
-        dim_ranges = [
-            range(start_shape[i], end_shape[i] + interval[i], interval[i])
-            for i in range(num_dims)
-        ]
-
-        sweeps_generator = list(product(*dim_ranges))
-        total_shapes = len(sweeps_generator)
-        idx_list = _get_sample_indices(total_shapes, num_shapes)
-
-        for idx in idx_list:
-            shape = list(sweeps_generator[idx])
-            yield [shape] * num_shapes, datagen_funcs
-
-    elif method in ("bcast_h", "bcast_w", "bcast_hw"):
-        # Like default, but yield a specific second bcast_shape
-        assert num_shapes == 2
-
-        num_dims = len(start_shape)
-        assert len(end_shape) == num_dims
-
-        if not isinstance(interval, list):
-            interval = [interval] * num_dims
-
-        assert len(interval) == num_dims
-
-        dim_ranges = [
-            range(start_shape[i], end_shape[i] + interval[i], interval[i])
-            for i in range(num_dims)
-        ]
-
-        sweeps_generator = list(product(*dim_ranges))
-        total_shapes = len(sweeps_generator)
-        idx_list = _get_sample_indices(total_shapes, num_shapes)
-
-        for idx in idx_list:
-            shape = list(sweeps_generator[idx])
-            b, c, h, w = shape
-            if method == "bcast_h":
-                bcast_shape = [b, c, 1, w]
-            elif method == "bcast_w":
-                bcast_shape = [b, c, h, 1]
-            elif method == "bcast_hw":
-                bcast_shape = [b, c, 1, 1]
-            yield [shape, bcast_shape], datagen_funcs
-
-    elif method == "matmul":
-        # start-shape and end-shape are lists of two shapes
-        # Only supports dim = 4; for the second shape, only the last dim is used
-        assert len(start_shape) == len(end_shape) == 2
-        shape1_start, shape2_start = start_shape
-        shape1_end, shape2_end = end_shape
-
-        num_dims = 4
-        assert (
-            len(shape1_start)
-            == len(shape1_end)
-            == len(shape2_start)
-            == len(shape2_end)
-            == num_dims
-        )
-
-        if not isinstance(interval, list):
-            interval = [interval] * num_dims
-
-        assert len(interval) == num_dims
-
-        dim_ranges = [
-            range(shape1_start[i], shape1_end[i] + interval[i], interval[i])
-            for i in range(num_dims)
-        ]
-        # Add outer dim from last dim of second shape
-        dim_ranges.append(
-            range(shape2_start[-1], shape2_end[-1] + interval[-1], interval[-1])
-        )
-
-        sweeps_generator = list(product(*dim_ranges))
-        total_shapes = len(sweeps_generator)
-        idx_list = _get_sample_indices(total_shapes, num_shapes)
-
-        for idx in idx_list:
-            b, c, h, w, outer_dim = sweeps_generator[idx]
-            shape1 = [b, c, h, w]
-            shape2 = [b, c, w, outer_dim]
-            yield [shape1, shape2], datagen_funcs
+    if "shape-list" in shape_dict:
+        # Path for running hardcoded shapes; ignore all other parameters
+        shape_list = shape_dict["shape-list"]
+        for shape in shape_list:
+            assert len(shape) == num_shapes
+            yield shape, datagen_funcs
 
     else:
-        raise NotImplementedError("Method {method} is not a valid choice")
+        start_shape = shape_dict["start-shape"]
+        end_shape = shape_dict["end-shape"]
+        interval = shape_dict["interval"]
+
+        method = shape_dict.get("method", "default")
+        num_samples = shape_dict.get("num-samples", "all")
+
+        if method == "default":
+            # Sweep across start-shape to end-shape
+            # Duplicate the shape num_shapes times
+            num_dims = len(start_shape)
+            assert len(end_shape) == num_dims
+
+            if not isinstance(interval, list):
+                interval = [interval] * num_dims
+
+            assert len(interval) == num_dims
+
+            dim_ranges = [
+                range(start_shape[i], end_shape[i] + interval[i], interval[i])
+                for i in range(num_dims)
+            ]
+
+            sweeps_generator = list(product(*dim_ranges))
+            total_shapes = len(sweeps_generator)
+            idx_list = _get_sample_indices(total_shapes, num_shapes)
+
+            for idx in idx_list:
+                shape = list(sweeps_generator[idx])
+                yield [shape] * num_shapes, datagen_funcs
+
+        elif method in ("bcast_h", "bcast_w", "bcast_hw"):
+            # Like default, but yield a specific second bcast_shape
+            assert num_shapes == 2
+
+            num_dims = len(start_shape)
+            assert len(end_shape) == num_dims
+
+            if not isinstance(interval, list):
+                interval = [interval] * num_dims
+
+            assert len(interval) == num_dims
+
+            dim_ranges = [
+                range(start_shape[i], end_shape[i] + interval[i], interval[i])
+                for i in range(num_dims)
+            ]
+
+            sweeps_generator = list(product(*dim_ranges))
+            total_shapes = len(sweeps_generator)
+            idx_list = _get_sample_indices(total_shapes, num_shapes)
+
+            for idx in idx_list:
+                shape = list(sweeps_generator[idx])
+                b, c, h, w = shape
+                if method == "bcast_h":
+                    bcast_shape = [b, c, 1, w]
+                elif method == "bcast_w":
+                    bcast_shape = [b, c, h, 1]
+                elif method == "bcast_hw":
+                    bcast_shape = [b, c, 1, 1]
+                yield [shape, bcast_shape], datagen_funcs
+
+        elif method == "matmul":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert len(start_shape) == len(end_shape) == 2
+            shape1_start, shape2_start = start_shape
+            shape1_end, shape2_end = end_shape
+
+            num_dims = 4
+            assert (
+                len(shape1_start)
+                == len(shape1_end)
+                == len(shape2_start)
+                == len(shape2_end)
+                == num_dims
+            )
+
+            if not isinstance(interval, list):
+                interval = [interval] * num_dims
+
+            assert len(interval) == num_dims
+
+            dim_ranges = [
+                range(shape1_start[i], shape1_end[i] + interval[i], interval[i])
+                for i in range(num_dims)
+            ]
+            # Add outer dim from last dim of second shape
+            dim_ranges.append(
+                range(shape2_start[-1], shape2_end[-1] + interval[-1], interval[-1])
+            )
+
+            sweeps_generator = list(product(*dim_ranges))
+            total_shapes = len(sweeps_generator)
+            idx_list = _get_sample_indices(total_shapes, num_shapes)
+
+            for idx in idx_list:
+                b, c, h, w, outer_dim = sweeps_generator[idx]
+                shape1 = [b, c, h, w]
+                shape2 = [b, c, w, outer_dim]
+                yield [shape1, shape2], datagen_funcs
+
+        else:
+            raise NotImplementedError("Method {method} is not a valid choice")
 
 
 # Used by old standalone pytorch test scripts
