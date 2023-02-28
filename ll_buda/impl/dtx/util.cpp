@@ -9,7 +9,7 @@
 
 bool compare_two_vectors_of_ints(vector<int> a, vector<int> b) {
     bool pass = true;
-    
+
     if (a.size() != b.size()) return false;
     for (int d=0; d<a.size(); d++) {
         if (a[d] != b[d]) return false;
@@ -54,9 +54,9 @@ vector<int> calculate_line_segment_overlap_in_1d(int l1_str, int l1_end, int l2_
     vector<int> overlap = {-2, -2};
 
     // No Overlap
-    if ((l1_str >= l2_end) || (l2_str >= l1_end)) {
+    if ((l1_str > l2_end) || (l2_str > l1_end)) {
         return {-1, -1};}
-    
+
     // Full overlap
     else if (l1_str >= l2_str and l1_end <= l2_end) {
         return {l1_str, l1_end};}
@@ -82,7 +82,7 @@ Tensor * calculate_tensor_overlap_in_nd(Tensor * t0, Tensor * t1) {
     for (int d=0; d<rank; d++) {
         vector<int> overlap_1d = calculate_line_segment_overlap_in_1d(t0->str[d], t0->end[d], t1->str[d], t1->end[d]);
         //if (DEBUG) cout << "dim = " << d << ", overlap_1d = " << v2s(overlap_1d) << endl;
-        
+
         if (overlap_1d[0] == -1 && overlap_1d[1] == -1) {
             overlap_nd_exists = false;
         }
@@ -93,11 +93,9 @@ Tensor * calculate_tensor_overlap_in_nd(Tensor * t0, Tensor * t1) {
 
     //if (DEBUG) cout << "nd overlap exists = " << overlap_nd_exists << endl;
     //if (DEBUG) cout << "nd overlap exists = " << has_overlap(overlap_nd) << endl;
-    
+
     if (DEBUG) cout << "Calculating overlap between: " << t0->get_string() << " && " << t1->get_string() << "  ==  " << overlap_nd->get_string() << "    (" << has_overlap(overlap_nd) << ")" << endl;
-    
+
     return overlap_nd;
 
 }
-
-

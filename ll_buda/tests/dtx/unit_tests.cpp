@@ -85,6 +85,13 @@ bool test_calculate_line_segment_overlap_in_1d() {
     pass &= run_single_line_segment_overlap_test({5,15}, {0,10}, {5,10});
     pass &= run_single_line_segment_overlap_test({0,10}, {5,15}, {5,10});
 
+    // Partial overlap (single element) at edge
+    pass &= run_single_line_segment_overlap_test({5,15}, {5,5}, {5,5});
+    pass &= run_single_line_segment_overlap_test({15,15}, {5,15}, {15,15});
+    pass &= run_single_line_segment_overlap_test({5,15}, {3,5}, {5,5});
+    pass &= run_single_line_segment_overlap_test({5,15}, {15,16}, {15,15});
+
+
     // TO DO
     // add a few more test cases:
     //  - lines have the same start/end point. to test the "=" in the overlap equations.
@@ -679,12 +686,12 @@ void run_dtx_tests() {
     pass &= test_util();
     printf("test_util = %d\n\n", pass);
 
-    /*
-    pass &= test_Tensor_class();
-    printf("test_Tensor_class = %d\n\n", pass);
 
-    pass &= test_TensorPair_class();
-    printf("test_TensorPair_class = %d\n\n", pass);
+    // pass &= test_Tensor_class();
+    // printf("test_Tensor_class = %d\n\n", pass);
+
+    // pass &= test_TensorPair_class();
+    // printf("test_TensorPair_class = %d\n\n", pass);
 
     pass &= test_calculate_line_segment_overlap_in_1d();
     printf("test_calculate_line_segment_overlap_in_1d - %d\n\n", pass);
@@ -692,30 +699,30 @@ void run_dtx_tests() {
     pass &= test_calculate_nd_tensor_overlap();
     printf("test_calculate_nd_tensor_overlap - %d\n\n", pass);
 
-    pass &= test_golden_comparisons();
-    printf("test_DataTransformations - %d\n\n", pass);
+    // pass &= test_golden_comparisons();
+    // printf("test_DataTransformations - %d\n\n", pass);
 
-    pass &= test_DataTransformations();
-    printf("test_DataTransformations - %d\n\n", pass);
+    // pass &= test_DataTransformations();
+    // printf("test_DataTransformations - %d\n\n", pass);
 
-    pass &= test_GenerateAddresses();
-    printf("test_GenerateAddresses - %d\n\n", pass);
+    // pass &= test_GenerateAddresses();
+    // printf("test_GenerateAddresses - %d\n\n", pass);
 
-    //pass &= test_DTX_reverse_transformations();
-    //printf("test_DTX_reverse_transformations - %d\n\n", pass);
+    // //pass &= test_DTX_reverse_transformations();
+    // //printf("test_DTX_reverse_transformations - %d\n\n", pass);
 
-    pass &= test_generate_sliced_ranges_helper_functions();
-    printf("test_generate_sliced_ranges_helper_functions - %d\n\n", pass);
+    // pass &= test_generate_sliced_ranges_helper_functions();
+    // printf("test_generate_sliced_ranges_helper_functions - %d\n\n", pass);
 
-    pass &= test_pass_parallelize_generic_tensor_slice();
-    printf("test_pass_parallelize_generic_tensor_slice - %d\n\n", pass);
+    // pass &= test_pass_parallelize_generic_tensor_slice();
+    // printf("test_pass_parallelize_generic_tensor_slice - %d\n\n", pass);
 
-    pass &= test_pass_tilize_and_store();
-    printf("test_pass_tilize_and_store - %d\n\n", pass);
+    // pass &= test_pass_tilize_and_store();
+    // printf("test_pass_tilize_and_store - %d\n\n", pass);
 
-    pass &= test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1();
-    printf("test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1 - %d\n\n", pass);
-    */
+    // pass &= test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1();
+    // printf("test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1 - %d\n\n", pass);
+
 
 
 
