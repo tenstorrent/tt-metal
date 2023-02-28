@@ -2,6 +2,7 @@
 .vscode
 .idea
 *.log
+*.csv
 /tt-perf*
 test_hlk_args_init_gen
 tt_build
