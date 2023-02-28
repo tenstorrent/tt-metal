@@ -84,6 +84,19 @@ Tensor untilize(const Tensor &a) {
         DataFormat::Float16_b
     );
 
+    // Writer compile-time args
+    bool stick_size_is_power_of_two = (ceil(log2(stick_size)) == floor(log2(stick_size)));
+    vector<uint32_t> writer_kernel_args = {src0_dram_buffer->address(), num_sticks, stick_size};
+    DataMovementKernelArgs *compile_time_args;
+    if (stick_size_is_power_of_two) {
+        writer_kernel_args.push_back(log2(stick_size));
+
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        compile_time_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {1});
+    } else {
+        compile_time_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {0});
+    }
+
     // Tilized reader
     ll_buda::DataMovementKernel *unary_reader_kernel = ll_buda::CreateDataMovementKernel(
         program,
@@ -97,6 +110,7 @@ Tensor untilize(const Tensor &a) {
         program,
         "kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
         core,
+        compile_time_args,
         ll_buda::DataMovementProcessor::RISCV_0,
         ll_buda::NOC::RISCV_0_default);
 
@@ -144,9 +158,8 @@ Tensor untilize(const Tensor &a) {
         unary_writer_kernel,
         core,
         {dst_dram_buffer->address(),
-        uint32_t(num_sticks),
-        uint32_t(stick_size),
-        uint32_t(log2(stick_size))}
+        num_sticks,
+        stick_size}
     );
 
     ll_buda::LaunchKernels(device, program);

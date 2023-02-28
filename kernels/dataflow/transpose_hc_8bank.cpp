@@ -35,6 +35,14 @@ void kernel_main() {
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
+
+    const InterleavedPow2AddrGen s0 = {
+        .bank_base_address = src0_addr,
+        .num_used_banks = 8,
+        .log_base_2_of_num_used_banks = 3,
+        .log_base_2_of_bank_unit_size = 11
+    };
+
     uint64_t batch_addr = src0_addr;
     for (u32 n = 0; n < N; n++) {
         u32 htWT = 0;
@@ -57,7 +65,7 @@ void kernel_main() {
                         for (u32 c16 = 0; c16 < 16; c16++) {
                             // In this loop sub, c16 are source subtile, c16
                             // dest in this loop is varying h implicitly via dest address increment
-                            
+
                             // Dest is HCW
                             // We are iterating over it as H Ct Wt-tiles
                             // intra-tile FC16 for F going over 4-subtiles
@@ -82,7 +90,7 @@ void kernel_main() {
                             //    DPRINT << "    Writing to   dst_offs=" << dest_tr0_l1-save_dest << ENDL();
                             //}
 
-                            uint64_t banked_addr = get_noc_addr(batch_itile, src0_addr, 8, 3, 11);
+                            uint64_t banked_addr = get_noc_addr(batch_itile, s0);
                             banked_addr += rem;
 
                             // this starts async NOC dma from DRAM to TR0_L1 buffer
@@ -118,4 +126,3 @@ void kernel_main() {
         batch_addr += CHW2;
     } // n<N loop
 }
-

@@ -12,7 +12,7 @@ import numpy as np
 
 import ll_buda_bindings.ll_buda_bindings._C as _C
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
-#from utility_functions import get_FR, set_FR
+# from utility_functions import get_FR, set_FR
 from fused_ops.linear import Linear as TtLinear
 from fused_ops.softmax import softmax
 
@@ -72,8 +72,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             untilized_x = _C.tensor.untilize(x)
             ctx = _C.tensor.transpose_hc_rm(untilized_x)
             ushape = ctx.shape()
-            reshaped = _C.tensor.reshape(ctx, 1, ushape[0], ushape[1], ushape[2]*ushape[3])
-            #set_FR(1)
+            reshaped = _C.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2]*ushape[3])
             retval = _C.tensor.tilize(reshaped)
             return retval
 
@@ -178,6 +177,5 @@ if __name__ == "__main__":
     device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
     _C.device.InitializeDevice(device)
     host = _C.device.GetHost()
-    #set_FR(0)
     run_mha_inference()
     _C.device.CloseDevice(device)

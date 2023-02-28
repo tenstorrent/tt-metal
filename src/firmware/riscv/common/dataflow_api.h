@@ -396,29 +396,92 @@ std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32
     return NOC_XY_ADDR(NOC_X(noc_x), NOC_Y(noc_y), addr);
 }
 
+/*
+    Need an alias to get_noc_addr so that the structs below don't confuse the above get_noc_addr with
+    the struct variant
+*/
+FORCE_INLINE
+std::uint64_t get_noc_addr_helper(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32_t addr) {
+    /*
+        Get an encoding which contains tensix core and address you want to
+        write to via the noc multicast
+    */
+    return NOC_XY_ADDR(NOC_X(noc_x), NOC_Y(noc_y), addr);
+}
+
+typedef struct {
+    uint32_t bank_base_address; // Base address for the whole tensor.
+    uint32_t num_used_banks; // How many DRAM banks we are using.
+    uint32_t log_base_2_of_num_used_banks; // WARNING: This can only be used if num banks is a power of 2, so ensure your test has valid num_used_banks
+    uint32_t bank_unit_size; // Num bytes in bank unit.
+
+    std::uint64_t get_noc_addr(const uint32_t id) const {
+        uint32_t bank_id = id & (this->num_used_banks - 1);
+
+        // So far, only using this for DRAM, but will eventually generalize to allow usage in L1 as well
+        uint32_t dram_x = dram_channel_to_noc_x[bank_id];
+        uint32_t dram_y = dram_channel_to_noc_y[bank_id];
+        uint32_t dram_addr = mulsi3(id >> this->log_base_2_of_num_used_banks, this->bank_unit_size) + this->bank_base_address;
+
+        uint64_t noc_addr = get_noc_addr_helper(dram_x, dram_y, dram_addr);
+        return noc_addr;
+    }
+
+} InterleavedAddrGen;
+
+
+typedef struct {
+    const uint32_t bank_base_address;
+    const uint32_t num_used_banks;
+    const uint32_t log_base_2_of_num_used_banks;
+    const uint32_t log_base_2_of_bank_unit_size; // WARNING: This struct is used for optimized get_noc_addr in which case you know that bank_unit_size is a power of 2
+
+    std::uint64_t get_noc_addr(const uint32_t id) const {
+        uint32_t bank_id = id & (this->num_used_banks - 1);
+
+        // So far, only using this for DRAM, but will eventually generalize to allow usage in L1 as well
+        uint32_t dram_x = dram_channel_to_noc_x[bank_id];
+        uint32_t dram_y = dram_channel_to_noc_y[bank_id];
+        uint32_t dram_addr = ((id >> this->log_base_2_of_num_used_banks) << this->log_base_2_of_bank_unit_size) + this->bank_base_address;
+
+        uint64_t noc_addr = get_noc_addr_helper(dram_x, dram_y, dram_addr);
+        return noc_addr;
+    }
+
+} InterleavedPow2AddrGen;
+
 FORCE_INLINE
 std::uint64_t get_noc_addr(
-    uint32_t id, uint32_t bank_base_address, uint32_t num_used_banks,
-    uint32_t log_base_2_of_num_used_banks, uint32_t log_base_2_of_bank_unit_size) {
+    const uint32_t id, const InterleavedAddrGen& s) {
     /*
         Alternative API for getting the noc address when we are reading using a swizzled
-        layout.
+        layout. This version assumes bank unit size can be arbitrary size. Use
+        get_noc_addr(const uint32_t id, InterleavedPow2AddrGen s) for optimized algorithm in which stick size
+        is a power of 2.
 
         id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
         bank for this unit of data.
-        bank_base_address: Base address for the whole tensor.
-        num_used_banks: How many memory banks we are using.
-        log_base_2_of_num_used_banks: log(num_used_banks).
-        log_base_2_of_bank_unit_size: log(bank_unit_size).
-    */
-    uint32_t bank_id = id & (num_used_banks - 1);
 
-    // So far, only using this for DRAM, but will eventually generalize to allow usage in L1 as well
-    uint32_t dram_x = dram_channel_to_noc_x[bank_id];
-    uint32_t dram_y = dram_channel_to_noc_y[bank_id];
-    uint32_t dram_addr = ((id >> log_base_2_of_num_used_banks) << log_base_2_of_bank_unit_size) + bank_base_address;
-    uint64_t noc_addr = get_noc_addr(dram_x, dram_y, dram_addr);
-    return noc_addr;
+        InterleavedAddrGen: Check struct for attribute definitions.
+    */
+    return s.get_noc_addr(id);
+}
+
+FORCE_INLINE
+std::uint64_t get_noc_addr(
+    const uint32_t id, const InterleavedPow2AddrGen& s) {
+    /*
+        Alternative API for getting the noc address when we are reading using a swizzled
+        layout. This version assumes bank unit size is a power of 2. For arbitrary bank
+        unit size, use get_noc_addr(const uint32_t id, const InterleavedOffset s)
+
+        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
+        bank for this unit of data.
+
+        InterleavedPow2AddrGen: Check struct for attribute definitions.
+    */
+
+    return s.get_noc_addr(id);
 }
 
 FORCE_INLINE

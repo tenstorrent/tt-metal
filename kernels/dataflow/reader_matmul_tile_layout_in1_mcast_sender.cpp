@@ -6,21 +6,21 @@
 void kernel_main() {
     kernel_profiler::mark_time(20);
     // in0 tensor args
-    uint32_t in0_tensor_addr                    = get_arg_val<uint32_t>(0); 
-    uint32_t in0_tensor_start_tile_id           = get_arg_val<uint32_t>(1); 
-    uint32_t in0_tensor_stride_w                = get_arg_val<uint32_t>(2); 
+    uint32_t in0_tensor_addr                    = get_arg_val<uint32_t>(0);
+    uint32_t in0_tensor_start_tile_id           = get_arg_val<uint32_t>(1);
+    uint32_t in0_tensor_stride_w                = get_arg_val<uint32_t>(2);
     uint32_t in0_tensor_stride_h                = get_arg_val<uint32_t>(3);
     uint32_t in0_tensor_next_block_stride       = get_arg_val<uint32_t>(4);
 
     // in0 block args
     uint32_t in0_block_w                        = get_arg_val<uint32_t>(5);
-    uint32_t in0_block_h                        = get_arg_val<uint32_t>(6); 
+    uint32_t in0_block_h                        = get_arg_val<uint32_t>(6);
     uint32_t in0_block_num_tiles                = get_arg_val<uint32_t>(7);
 
     // in1 tensor args
     uint32_t in1_tensor_addr                    = get_arg_val<uint32_t>(8);
     uint32_t in1_tensor_start_tile_id           = get_arg_val<uint32_t>(9);
-    uint32_t in1_tensor_stride_w                = get_arg_val<uint32_t>(10); 
+    uint32_t in1_tensor_stride_w                = get_arg_val<uint32_t>(10);
     uint32_t in1_tensor_stride_h                = get_arg_val<uint32_t>(11);
     uint32_t in1_tensor_next_block_stride       = get_arg_val<uint32_t>(12);
 
@@ -39,7 +39,7 @@ void kernel_main() {
     uint32_t in1_mcast_dest_noc_end_y           = get_arg_val<uint32_t>(20);
     uint32_t in1_mcast_num_dests                = get_arg_val<uint32_t>(21);
     uint32_t in1_mcast_sender_noc_x             = get_arg_val<uint32_t>(22);
-    uint32_t in1_mcast_sender_noc_y             = get_arg_val<uint32_t>(23); 
+    uint32_t in1_mcast_sender_noc_y             = get_arg_val<uint32_t>(23);
     uint32_t in1_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(24);
     uint32_t in1_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(25);
 
@@ -50,14 +50,28 @@ void kernel_main() {
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
     constexpr uint32_t tile_size_pow2_exponent = 11;
 
+    const InterleavedPow2AddrGen s0 = {
+        .bank_base_address = in0_tensor_addr,
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+    };
+
+    const InterleavedPow2AddrGen s1 = {
+        .bank_base_address = in1_tensor_addr,
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+    };
+
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
-    
+
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
-    
+
     uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
     uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
 
@@ -80,15 +94,14 @@ void kernel_main() {
         for(uint32_t h = 0; h < in0_block_h; h++) {
             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
             for(uint32_t w = 0; w < in0_block_w; w++) {
-                uint64_t in0_tile_noc_address = get_noc_addr(in0_tensor_tile_id, in0_tensor_addr, 
-                                                num_used_dram_ch, num_used_dram_ch_pow2_exponent, tile_size_pow2_exponent);
+                uint64_t in0_tile_noc_address = get_noc_addr(in0_tensor_tile_id, s0);
                 noc_async_read(in0_tile_noc_address, l1_write_addr_in0, single_tile_size_bytes);
                 l1_write_addr_in0 += single_tile_size_bytes;
                 in0_tensor_tile_id += in0_tensor_stride_w;
             }
             in0_tensor_row_start_tile_id += in0_tensor_stride_h;
         }
-        in0_tensor_current_block_start_tile_id += in0_tensor_next_block_stride; 
+        in0_tensor_current_block_start_tile_id += in0_tensor_next_block_stride;
 
         // Barrier! make sure the reads are done
         noc_async_read_barrier();
@@ -105,8 +118,7 @@ void kernel_main() {
         for(uint32_t h = 0; h < in1_block_h; h++) {
             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
             for(uint32_t w = 0; w < in1_block_w; w++) {
-                uint64_t in1_tile_noc_addr = get_noc_addr(in1_tensor_tile_id, in1_tensor_addr, 
-                                                num_used_dram_ch, num_used_dram_ch_pow2_exponent, tile_size_pow2_exponent);
+                uint64_t in1_tile_noc_addr = get_noc_addr(in1_tensor_tile_id, s1);
                 noc_async_read(in1_tile_noc_addr, l1_write_addr_in1, single_tile_size_bytes);
                 l1_write_addr_in1 += single_tile_size_bytes;
                 in1_tensor_tile_id += in1_tensor_stride_w;
@@ -123,23 +135,23 @@ void kernel_main() {
         noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
         noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
         kernel_profiler::mark_time_once(21, &one_time_noc_wait);
-        
+
         // Now we have the block in the CB address, we can mcast to dests!
         uint64_t in1_multicast_data_addr = get_noc_multicast_addr(
-        in1_mcast_dest_noc_start_x, 
-        in1_mcast_dest_noc_start_y, 
-        in1_mcast_dest_noc_end_x, 
-        in1_mcast_dest_noc_end_y, 
+        in1_mcast_dest_noc_start_x,
+        in1_mcast_dest_noc_start_y,
+        in1_mcast_dest_noc_end_x,
+        in1_mcast_dest_noc_end_y,
         in1_start_address);
         // num_dests must not include source, since we are NOT really doing a local copy!
         noc_async_write_multicast(in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_dests);
         noc_async_write_barrier();
         // We should also multicast the flag to destinations
         uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in1_mcast_dest_noc_start_x, 
-        in1_mcast_dest_noc_start_y, 
-        in1_mcast_dest_noc_end_x, 
-        in1_mcast_dest_noc_end_y, 
+        in1_mcast_dest_noc_start_x,
+        in1_mcast_dest_noc_start_y,
+        in1_mcast_dest_noc_end_x,
+        in1_mcast_dest_noc_end_y,
         in1_mcast_receiver_semaphore_addr);
         // num_dests must not include source, since we are NOT really doing a local copy!
         noc_semaphore_set_multicast(in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_dests);
@@ -150,5 +162,3 @@ void kernel_main() {
     }
     kernel_profiler::mark_time(23);
 }
-    
-

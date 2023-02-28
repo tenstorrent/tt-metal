@@ -27,6 +27,21 @@ void kernel_main() {
 
     uint32_t itileA_batch = 0;
     uint32_t itileB_batch = 0;
+
+    const InterleavedPow2AddrGen s0 = {
+        .bank_base_address = src0_addr,
+        .num_used_banks = 8,
+        .log_base_2_of_num_used_banks = 3,
+        .log_base_2_of_bank_unit_size = 11
+    };
+
+    const InterleavedPow2AddrGen s1 = {
+        .bank_base_address = src1_addr,
+        .num_used_banks = 8,
+        .log_base_2_of_num_used_banks = 3,
+        .log_base_2_of_bank_unit_size = 11
+    };
+
     for (uint32_t nb = 0; nb < batch; nb++) {
         uint32_t itileA = itileA_batch;
         for (uint32_t mt = 0; mt < Mt; mt++) {
@@ -34,7 +49,7 @@ void kernel_main() {
             for (uint32_t nt = 0; nt < Nt; nt++) {
                 for (uint32_t kt = 0; kt < Kt; kt++) {
                     { // Read A's tile at (mt, kt)
-                        uint64_t src0_noc_addr = get_noc_addr(itileA, src0_addr, 8, 3, 11);
+                        uint64_t src0_noc_addr = get_noc_addr(itileA, s0);
                         cb_reserve_back(cb_id_in0, onetile);
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
                         noc_async_read(src0_noc_addr, l1_write_addr_in0, tile_bytes);
@@ -43,7 +58,7 @@ void kernel_main() {
                     }
 
                     { // Read B's tile at (kt, nt)
-                        uint64_t src1_noc_addr = get_noc_addr(itileB, src1_addr, 8, 3, 11);
+                        uint64_t src1_noc_addr = get_noc_addr(itileB, s1);
                         cb_reserve_back(cb_id_in1, onetile);
                         uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
                         noc_async_read(src1_noc_addr, l1_write_addr_in1, tile_bytes);

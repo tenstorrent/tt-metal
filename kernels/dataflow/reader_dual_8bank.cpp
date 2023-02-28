@@ -15,16 +15,30 @@ void kernel_main() {
     uint32_t ublock_size_bytes_0 = get_tile_size(cb_id_in0);
     uint32_t ublock_size_bytes_1 = get_tile_size(cb_id_in1);
     uint32_t ublock_size_tiles = 1;
-    
+
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
 
     uint32_t num_tiles = src0_num_tiles > src1_num_tiles ? src0_num_tiles : src1_num_tiles;
 
+    const InterleavedPow2AddrGen s0 = {
+        .bank_base_address = src0_addr,
+        .num_used_banks = 8,
+        .log_base_2_of_num_used_banks = 3,
+        .log_base_2_of_bank_unit_size = 11
+    };
+
+    const InterleavedPow2AddrGen s1 = {
+        .bank_base_address = src1_addr,
+        .num_used_banks = 8,
+        .log_base_2_of_num_used_banks = 3,
+        .log_base_2_of_bank_unit_size = 11
+    };
+
     // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
     for (uint32_t i=0; i<num_tiles; i += ublock_size_tiles) {
         if (i < src0_num_tiles) {
-            uint64_t src0_noc_addr = get_noc_addr(i, src0_addr, 8, 3, 11);
+            uint64_t src0_noc_addr = get_noc_addr(i, s0);
 
             cb_reserve_back(cb_id_in0, ublock_size_tiles);
             l1_write_addr_in0 = get_write_ptr(cb_id_in0);
@@ -37,7 +51,7 @@ void kernel_main() {
         }
 
         if (i < src1_num_tiles) {
-            uint64_t src1_noc_addr = get_noc_addr(i, src1_addr, 8, 3, 11);
+            uint64_t src1_noc_addr = get_noc_addr(i, s1);
 
             cb_reserve_back(cb_id_in1, ublock_size_tiles);
             l1_write_addr_in1 = get_write_ptr(cb_id_in1);

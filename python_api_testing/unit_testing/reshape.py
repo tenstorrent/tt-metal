@@ -46,20 +46,27 @@ def tile_major_reshape():
     print_diff_argmax(tt_got_back, x)
 
 def row_major_reshape():
+    # Power of 2 reshape
     N = 1
     C = 1
     H = 128
     W = 128
-    x = torch.arange(N*C*H*W).reshape(N, C, H, W).float()
-    xp = pad_weight(x).view(-1).tolist()
+    x = torch.rand(N*C*H*W).reshape(N, C, H, W).float()
+    xp = pad_activation(x).view(-1).tolist()
+    xtt = _C.tensor.Tensor(
+        xp, [N, C, H, W],
+        _C.tensor.DataFormat.FLOAT32,
+        _C.tensor.Layout.ROW_MAJOR,
+        device
+    )
 
-    xtt = _C.tensor.Tensor(xp, [N, C, H, W], _C.tensor.DataFormat.FLOAT32, _C.tensor.Layout.ROW_MAJOR, device)
-    reshaped = _C.tensor.reshape(xtt, 1, 128, 2, 64).to(host).data()
-    reshaped_tensor = torch.Tensor(reshaped).reshape(1, 128, 2, 64)
-    return
+    reshaped = _C.tensor.reshape(xtt, 1, 128, 2, 64)
+    reshaped = torch.Tensor(reshaped.to(host).data()).reshape(reshaped.shape())
+    torch_reshaped = torch.Tensor(x).reshape(1, 128, 2, 64)
+    assert (abs(torch_reshaped - reshaped) < 0.02).all().item(), "Failure"
 
 if __name__ == "__main__":
-    # tile_major_reshape()
+    tile_major_reshape()
     row_major_reshape()
 
 _C.device.CloseDevice(device)

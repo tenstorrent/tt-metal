@@ -1,9 +1,10 @@
 #include <math.h>
 
-
 #include "ll_buda/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "ll_buda/host_api.hpp"
 #include "constants.hpp"
+
+#include "llrt/tests/test_libs/debug_mailbox.hpp"
 
 namespace tilize {
 // FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
@@ -83,11 +84,25 @@ Tensor tilize(const Tensor &a) {
         DataFormat::Float16_b
     );
 
+    // Reader compile-time args
+    bool stick_size_is_power_of_two = (ceil(log2(stick_size)) == floor(log2(stick_size)));
+    vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(), num_sticks, stick_size};
+    DataMovementKernelArgs *compile_time_args;
+    if (stick_size_is_power_of_two) {
+        reader_kernel_args.push_back(log2(stick_size));
+
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        compile_time_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {1});
+    } else {
+        compile_time_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {0});
+    }
+
     // Tilized reader
     ll_buda::DataMovementKernel *unary_reader_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
         core,
+        compile_time_args,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
 
@@ -128,14 +143,12 @@ Tensor tilize(const Tensor &a) {
     ////////////////////////////////////////////////////////////////////////////
     ll_buda::ConfigureDeviceWithProgram(device, program);
 
+
     ll_buda::WriteRuntimeArgsToDevice(
         device,
         unary_reader_kernel,
         core,
-        {src0_dram_buffer->address(),
-        uint32_t(num_sticks),
-        uint32_t(stick_size),
-        uint32_t(log2(stick_size)) }
+        reader_kernel_args
     );
 
     ll_buda::WriteRuntimeArgsToDevice(

@@ -178,6 +178,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
             program,
             "kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
+            ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {1}),
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
 
@@ -190,8 +191,6 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
 
         void *hlk_args = new unary_datacopy::hlk_args_t{
             .per_core_tile_cnt = num_output_tiles,
-            // .per_core_block_cnt = 1,
-            // .per_core_block_tile_cnt = num_output_tiles
         };
         ll_buda::ComputeKernelArgs *eltwise_unary_args = ll_buda::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(unary_datacopy::hlk_args_t));
 
@@ -368,6 +367,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
             program,
             "kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
+            ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {1}),
             ll_buda::DataMovementProcessor::RISCV_1,
             ll_buda::NOC::RISCV_1_default);
 
@@ -375,6 +375,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
             program,
             "kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
             core,
+            ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {1}),
             ll_buda::DataMovementProcessor::RISCV_0,
             ll_buda::NOC::RISCV_0_default);
 

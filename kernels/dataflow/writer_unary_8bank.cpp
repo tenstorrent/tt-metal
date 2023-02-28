@@ -7,11 +7,18 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
 
     // single-tile ublocks
-    constexpr uint32_t onetile = 1; 
+    constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
+    const InterleavedPow2AddrGen s = {
+        .bank_base_address = dst_addr,
+        .num_used_banks = 8,
+        .log_base_2_of_num_used_banks = 3,
+        .log_base_2_of_bank_unit_size = 11 // TODO(AP): refactor
+    };
+
     for (uint32_t i = 0; i<num_tiles; i ++) {
-        uint64_t dst_noc_addr = get_noc_addr(i, dst_addr, 8, 3, 11); // TODO(AP): refactor
+        uint64_t dst_noc_addr = get_noc_addr(i, s);
 
         cb_wait_front(cb_id_out0, onetile);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
@@ -23,5 +30,3 @@ void kernel_main() {
         cb_pop_front(cb_id_out0, onetile);
     }
 }
-    
-

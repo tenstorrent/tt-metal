@@ -14,15 +14,23 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    
+
     uint32_t i_tile_N = 0; // first tile in current batch
     uint32_t i_tile = 0;
+
+    const InterleavedPow2AddrGen s = {
+        .bank_base_address = src_addr,
+        .num_used_banks = 8,
+        .log_base_2_of_num_used_banks = 3,
+        .log_base_2_of_bank_unit_size = 11
+    };
+
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n<N; n++) {
         i_tile = i_tile_N;
         for (uint32_t w = 0; w<Wt; w++) {
             for (uint32_t h = 0; h<Ht; h++) {
-                uint64_t src_noc_addr = get_noc_addr(i_tile, src_addr, 8, 3, 11);
+                uint64_t src_noc_addr = get_noc_addr(i_tile, s);
                 cb_reserve_back(cb_id_in0, onetile);
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
                 noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);

@@ -1,4 +1,3 @@
-
 #include "ll_buda/op_library/reshape/reshape_op.hpp"
 #include "common/test_tiles.hpp"
 
@@ -79,10 +78,44 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
         DataFormat::Float16_b
     );
 
+    uint32_t num_old_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
+    uint32_t old_stick_size = a.shape()[3] * 2; // Assuming bfloat16 data format
+
+    uint32_t num_new_sticks = N*C*H;
+    uint32_t new_stick_size = W * 2; // Assuming bfloat16 data format
+
+
+    // Reader compile-time args
+    bool old_stick_size_is_power_of_two = (ceil(log2(old_stick_size)) == floor(log2(old_stick_size)));
+    vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(), num_old_sticks, old_stick_size};
+    DataMovementKernelArgs *reader_compile_time_args;
+    if (old_stick_size_is_power_of_two) {
+        reader_kernel_args.push_back(log2(old_stick_size));
+
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        reader_compile_time_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {1});
+    } else {
+        reader_compile_time_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {0});
+    }
+
+    // Writer compile-time args
+    bool new_stick_size_is_power_of_two = (ceil(log2(new_stick_size)) == floor(log2(new_stick_size)));
+    vector<uint32_t> writer_kernel_args = {dst_dram_buffer->address(), num_new_sticks, new_stick_size};
+    DataMovementKernelArgs *writer_compile_time_args;
+    if (new_stick_size_is_power_of_two) {
+        writer_kernel_args.push_back(log2(new_stick_size));
+
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        writer_compile_time_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {1});
+    } else {
+        writer_compile_time_args = ll_buda::InitializeCompileTimeDataMovementKernelArgs(core, {0});
+    }
+
     ll_buda::DataMovementKernel *unary_reader_kernel = ll_buda::CreateDataMovementKernel(
         program,
         "kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
         core,
+        reader_compile_time_args,
         ll_buda::DataMovementProcessor::RISCV_1,
         ll_buda::NOC::RISCV_1_default);
 
@@ -90,6 +123,7 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
         program,
         "kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
         core,
+        writer_compile_time_args,
         ll_buda::DataMovementProcessor::RISCV_0,
         ll_buda::NOC::RISCV_0_default);
 
@@ -117,28 +151,18 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     ll_buda::CompileProgram(device, program, skip_hlkc);
     ll_buda::ConfigureDeviceWithProgram(device, program);
 
-    uint32_t num_old_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
-    uint32_t old_stick_size = a.shape()[3] * 2; // Assuming bfloat16 data format
     ll_buda::WriteRuntimeArgsToDevice(
         device,
         unary_reader_kernel,
         core,
-        {src0_dram_buffer->address(),
-        uint32_t(num_old_sticks),
-        uint32_t(old_stick_size),
-        uint32_t(log2(old_stick_size)) }
+        reader_kernel_args
     );
 
-    uint32_t num_new_sticks = N*C*H;
-    uint32_t new_stick_size = W * 2; // Assuming bfloat16 data format
     ll_buda::WriteRuntimeArgsToDevice(
         device,
         unary_writer_kernel,
         core,
-        {dst_dram_buffer->address(),
-        uint32_t(num_new_sticks),
-        uint32_t(new_stick_size),
-        uint32_t(log2(new_stick_size))}
+        writer_kernel_args
     );
 
     ll_buda::LaunchKernels(device, program);
@@ -148,5 +172,5 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     return output;
 }
 
-} // namesapce ll_buda
+} // namespace ll_buda
 } // namespace tt
