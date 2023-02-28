@@ -11,6 +11,8 @@ include ll_buda/impl/module.mk
 LL_BUDA_SRCS = \
 	ll_buda/op_library/eltwise_binary/eltwise_binary_op.cpp \
 	ll_buda/op_library/eltwise_unary/eltwise_unary_op.cpp \
+	ll_buda/op_library/eltwise_unary/single_core/eltwise_unary_op_single_core.cpp \
+	ll_buda/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp \
 	ll_buda/op_library/pad_h_rm/pad_h_rm_op.cpp \
 	ll_buda/op_library/transpose/transpose_op.cpp \
 	ll_buda/op_library/transpose_rm/transpose_rm_op.cpp \
