@@ -351,10 +351,6 @@ void run_dtx_tests() {
     cout << "                         Starting DTX TESTs                       " << endl;
     cout << "==================================================================" << endl;
 
-
-
-
-
     // pass &= test_GenerateAddresses();
     // printf("test_GenerateAddresses - %d\n\n", pass);
 
@@ -378,7 +374,6 @@ void run_dtx_tests() {
     else cout << "TESTS FAILED\n\n\n" << endl;
 }
 
-
 // ===============================================================
 // ===============================================================
 
@@ -386,6 +381,4 @@ int main(int argc, char** argv) {
 
     // Run all Data Transformation Tests
     run_dtx_tests();
-
-    //bool result = run_kb_graph_tests();
 }

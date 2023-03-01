@@ -61,7 +61,6 @@ bool test_calculate_line_segment_overlap_in_1d() {
     pass &= run_single_line_segment_overlap_test({5,15}, {3,5}, {5,5});
     pass &= run_single_line_segment_overlap_test({5,15}, {15,16}, {15,15});
 
-
     // TO DO
     // add a few more test cases:
     //  - lines have the same start/end point. to test the "=" in the overlap equations.
