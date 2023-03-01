@@ -3,6 +3,9 @@ LL_BUDA_TESTS += \
 		 ll_buda/tests/ops/test_eltwise_binary_op \
 		 ll_buda/tests/ops/test_eltwise_unary_op \
 		 ll_buda/tests/dtx/unit_tests \
+		 ll_buda/tests/dtx/tensor \
+		 ll_buda/tests/dtx/overlap \
+		 ll_buda/tests/dtx/collapse_transformations \
 		 ll_buda/tests/ops/test_transpose_op \
 		 ll_buda/tests/ops/test_reduce_op \
 		 ll_buda/tests/ops/test_bcast_op \
