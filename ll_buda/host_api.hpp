@@ -313,7 +313,7 @@ DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_
 /**
  * Creates a DRAM Buffer object. DRAM buffers exist independently from a program
  *
- * Return value: Buffer *
+ * Return value: DramBuffer *
  * | Argument      | Description                                  | Type     | Valid Range                                           | Required |
  * |---------------|----------------------------------------------|----------|-------------------------------------------------------|----------|
  * | device        | The device where the DRAM buffer is created  | Device * |                                                       | Yes      |
@@ -333,7 +333,7 @@ InterleavedDramBuffer *CreateInterleavedDramBuffer(
 /**
  * Creates an L1 buffer and adds it to the program.
  *
- * Return value: Buffer *
+ * Return value: L1Buffer *
  *
  * | Argument      | Description                                       | Type       | Valid Range                                            | Required |
  * |---------------|---------------------------------------------------|------------|--------------------------------------------------------|----------|
