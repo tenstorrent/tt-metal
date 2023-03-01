@@ -23,13 +23,13 @@ Welcome to TBD's documentation!
    :caption: Programming Model
 
    programming_model/programming_model
-   
+
 .. toctree::
    :caption: APIs
 
    apis/host_apis2
    apis/kernel_apis
-   
+
 
 .. toctree::
    :caption: Programming Examples
@@ -53,6 +53,11 @@ Welcome to TBD's documentation!
 
    release/release_notes
 
+.. toctree::
+   :caption: Developer Onboarding (Internal Devs Only)
+
+   dev_onboarding/get_started
+
 
 Indices and tables
 ==================
@@ -60,5 +65,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-
-
