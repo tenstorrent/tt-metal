@@ -235,7 +235,7 @@ def main(args):
                         maxTime = cycleCount
                     if cycleCount < minTime:
                         minTime = cycleCount
-
+        print(f" Total runtime {maxTime - minTime} [cycles]")
         timerStats = {}
         timerStatsCores = {}
         setupMaxStrLen = 0

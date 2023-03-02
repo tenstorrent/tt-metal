@@ -7,6 +7,10 @@ TT_METAL_TESTS += \
 		 tt_metal/tests/dtx/overlap \
 		 tt_metal/tests/dtx/collapse_transformations \
 		 tt_metal/tests/ops/test_transpose_op \
+		 tt_metal/tests/ops/test_transpose_wh_single_core \
+		 tt_metal/tests/ops/test_transpose_wh_multi_core \
+		 tt_metal/tests/ops/test_transpose_hc_rm_8bank_single_core \
+		 tt_metal/tests/ops/test_transpose_hc_rm_8bank_multi_core \
 		 tt_metal/tests/ops/test_reduce_op \
 		 tt_metal/tests/ops/test_bcast_op \
 		 tt_metal/tests/ops/test_bmm_op \
@@ -50,6 +54,8 @@ TT_METAL_TESTS += \
 		 tt_metal/tests/test_dtx \
 		 tt_metal/tests/test_dtx_tilized_row_to_col_major \
 		 tt_metal/tests/test_pipeline_across_rows \
+		 tt_metal/tests/test_l1_to_l1_multi_core \
+		 tt_metal/tests/test_dram_copy_sticks_multi_core \
 
 TT_METAL_TESTS_SRCS = $(addsuffix .cpp, $(TT_METAL_TESTS))
 
