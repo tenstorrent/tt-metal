@@ -1,0 +1,67 @@
+---
+- name: Set up package dependencies on node
+  hosts: all
+  become: true
+  tasks:
+    - name: Add apt repo for rose tools
+      apt_repository:
+        repo: ppa:rosecompiler/rose-development
+    - name: Install packages
+      apt:
+        update_cache: yes
+        pkg:
+          - software-properties-common=0.99.9.8
+          - build-essential=12.8ubuntu1.1
+          - python3.8-venv=3.8.10-0ubuntu1~20.04.6
+          - libgoogle-glog-dev=0.4.0-1build1
+          - ruby=1:2.7+1
+          - libyaml-cpp-dev=0.6.2-4ubuntu1
+          - git=1:2.25.1-1ubuntu3.10
+          - git-lfs=2.9.2-1
+          - clang-6.0=1:6.0.1-14
+          - rose=0.11.67.0.1-0
+          - rose-tools=0.11.67.0.1-0
+
+- name: Install doxygen
+  hosts: all
+  tasks:
+    - name: Remove current installation of infra_testing
+      file:
+        path: doxygen-1.9.6
+        state: absent
+    - name: Remove existing oxygen download
+      file:
+        path: doxygen-1.9.6.linux.bin.tar.gz
+        state: absent
+    - name: Download doxygen
+      ansible.builtin.uri:
+        url: "https://www.doxygen.nl/files/doxygen-1.9.6.linux.bin.tar.gz"
+        dest: "/home/{{ ansible_user }}/"
+        status_code: [200, 304]
+    - name: Unpack doxygen
+      ansible.builtin.unarchive:
+        src: doxygen-1.9.6.linux.bin.tar.gz
+        dest: "/home/{{ ansible_user }}/"
+        remote_src: yes
+    - name: Install doxygen
+      become: yes
+      ansible.builtin.shell:
+        chdir: "/home/{{ ansible_user }}/doxygen-1.9.6"
+        cmd: "make install"
+
+
+- name: Create infra_testing assets and verify devices
+  hosts: all
+  tasks:
+    - name: Remove current installation of infra_testing
+      file:
+        path: infra_testing
+        state: absent
+    - name: Make workspace and syseng directories
+      file:
+        path: infra_testing/scripts
+        state: directory
+    - name: Copy script to host
+      ansible.builtin.copy:
+        src: ../scripts/setup_hugepages.py
+        dest: "infra_testing/scripts/setup_hugepages.py"
