@@ -139,7 +139,7 @@ class tt_device
         bool skip_driver_allocs);
 
     //! Deassert brisc reset so it's starts fetching the code
-    virtual void deassert_risc_reset();
+    virtual void deassert_risc_reset(bool start_stagger = false);
 
     //! Assert brisc reset
     virtual void assert_risc_reset();
@@ -259,7 +259,7 @@ class tt_VersimDevice: public tt_device
 
      virtual void start(std::vector<std::string> plusargs, std::vector<std::string> dump_cores, bool no_checkers, bool init_device, bool skip_driver_allocs);
 
-     virtual void deassert_risc_reset();
+     virtual void deassert_risc_reset(bool start_stagger = false);
      virtual void assert_risc_reset();
      virtual bool stop();
      virtual void write_vector(std::vector<std::uint32_t> &mem_vector, tt_cxy_pair target, std::uint32_t address, bool host_resident = false, bool small_access = false, chip_id_t src_device_id = -1);
@@ -301,7 +301,7 @@ class tt_SiliconDevice: public tt_device
         bool init_device,
         bool skip_driver_allocs);
 
-    virtual void deassert_risc_reset();
+    virtual void deassert_risc_reset(bool start_stagger = false);
     virtual void assert_risc_reset();
 
     virtual bool stop();

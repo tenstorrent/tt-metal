@@ -69,3 +69,6 @@ static const TensixSoftResetOptions TENSIX_ASSERT_SOFT_RESET = TensixSoftResetOp
 static const TensixSoftResetOptions TENSIX_DEASSERT_SOFT_RESET = TensixSoftResetOptions::NCRISC |
                                                                  ALL_TRISC_SOFT_RESET |
                                                                  TensixSoftResetOptions::STAGGERED_START;
+
+static const TensixSoftResetOptions TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER = TensixSoftResetOptions::NCRISC |
+                                                                 ALL_TRISC_SOFT_RESET;

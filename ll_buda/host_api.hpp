@@ -398,7 +398,7 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-bool LaunchKernels(Device *device, Program *program);
+bool LaunchKernels(Device *device, Program *program, bool stagger_start = false);
 
 //
 /**

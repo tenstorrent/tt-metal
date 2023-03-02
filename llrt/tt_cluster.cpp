@@ -478,7 +478,7 @@ void tt_cluster::set_remote_tensix_risc_reset(const tt_cxy_pair &core, const Ten
     _mm_sfence();
 }
 
-void tt_cluster::deassert_risc_reset() {
+void tt_cluster::deassert_risc_reset(bool start_stagger) {
     if (type == TargetDevice::Versim) {
         // Not running silicon multichip test
          device->deassert_risc_reset();
@@ -487,11 +487,12 @@ void tt_cluster::deassert_risc_reset() {
         // cores on remote chips
         // TODO: for now assume that chip ids for MMIO chips are 0 ~ (num_mmio_chips-1)
         // Need to change m_pci_device object in silicon driver to support a generic subset of chip ids with MMIO
-        device->deassert_risc_reset();
+        log_info(tt::LogLLRuntime, "Stagger start : {}", start_stagger);
+        device->deassert_risc_reset(start_stagger);
         const std::unordered_set<chip_id_t> &all_chips = ndesc->get_all_chips();
         for (const chip_id_t &chip : all_chips) {
             if (!ndesc->is_chip_mmio_capable(chip)) {
-                deassert_risc_reset_remote_chip(chip);
+                deassert_risc_reset_remote_chip(chip, start_stagger);
             }
         }
     }
@@ -499,8 +500,12 @@ void tt_cluster::deassert_risc_reset() {
     deasserted_risc_reset = false;
 }
 
-void tt_cluster::deassert_risc_reset_remote_chip(const chip_id_t &chip) {
-    broadcast_remote_tensix_risc_reset(chip, TENSIX_DEASSERT_SOFT_RESET);
+void tt_cluster::deassert_risc_reset_remote_chip(const chip_id_t &chip, bool start_stagger) {
+    if (start_stagger){
+        broadcast_remote_tensix_risc_reset(chip, TENSIX_DEASSERT_SOFT_RESET);
+    }else{
+        broadcast_remote_tensix_risc_reset(chip, TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
+    }
 }
 
 void tt_cluster::reset_remote_chip(const chip_id_t &chip) {

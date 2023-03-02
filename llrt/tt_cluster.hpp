@@ -78,8 +78,8 @@ struct tt_cluster
 
     void broadcast_remote_tensix_risc_reset(const chip_id_t &chip, const TensixSoftResetOptions &soft_resets);
     void set_remote_tensix_risc_reset(const tt_cxy_pair &core, const TensixSoftResetOptions &soft_resets);
-    void deassert_risc_reset();
-    void deassert_risc_reset_remote_chip(const chip_id_t &chip_id);
+    void deassert_risc_reset(bool start_stagger = false);
+    void deassert_risc_reset_remote_chip(const chip_id_t &chip_id, bool start_stagger = false);
     void reset_remote_chip(const chip_id_t &chip_id);
     void stop_remote_chip(const chip_id_t &chip);
     void wait_for_completion(std::string output_dir);

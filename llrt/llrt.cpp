@@ -31,7 +31,7 @@ vector<uint32_t> get_trisc_binary(string path, uint32_t trisc_id) {
 
     //string path_to_bin = path + "/tensix_thread" + to_string(id) +
     //    "/tensix_thread" + to_string(id) + ".hex";
-    string path_to_bin = path;  
+    string path_to_bin = path;
 
     fs::path bin_file(path_to_bin);
     if (!fs::exists(bin_file)) {
@@ -50,8 +50,8 @@ vector<uint32_t> get_trisc_binary(string path, uint32_t trisc_id) {
 // proper solution:
 // a) load dummy BRISC FW to unused cores, and keep using the function that de-asserts all BRISCs (easier, we can load blank kernel and disable NCRISC loading)
 // b) de-assert reset only for used BRISCs (needs a new deassert function w/ a list of core to de-assert) (harder)
-void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster) {
-    cluster->deassert_risc_reset(); 
+void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stagger_start) {
+    cluster->deassert_risc_reset(stagger_start);
     log_debug(tt::LogLLRuntime, "deasserted reset for all BRISCs");
 }
 
@@ -70,7 +70,7 @@ void assert_reset_for_all_chips(tt_cluster *cluster) {
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
 void write_hex_vec_to_core(tt_cluster *cluster, int chip, const tt_xy_pair& core, std::vector<uint32_t> hex_vec, uint64_t addr) {
- 
+
     // the API is named "write_dram_vec", and its overloaded variant is taking (chip, core) pair, ie. it can write to core's L1
     cluster->write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr);
 }
@@ -122,19 +122,19 @@ bool test_load_write_read_risc_binary(tt_cluster *cluster, std::string hex_file_
 
     assert(is_worker_core(cluster, core, chip_id));
 
-    std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id); // 0 = BRISC, 1 = NCRISC  
+    std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id); // 0 = BRISC, 1 = NCRISC
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
 
-    uint64_t addr = 0; 
+    uint64_t addr = 0;
     if (riscv_id == 0) {
         addr = l1_mem::address_map::FIRMWARE_BASE; // BRISC binary addr in L1
     } else if (riscv_id == 1) {
         addr = l1_mem::address_map::NCRISC_FIRMWARE_BASE; // NCRISC binary addr in L1
     } else {
         std::cout << "rsicv_id = " << riscv_id << " not yet implemented" << std::endl;
-        exit(1); 
+        exit(1);
     }
 
     write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr);
@@ -154,21 +154,21 @@ bool test_load_write_read_trisc_binary(tt_cluster *cluster, std::string hex_file
 
     assert(is_worker_core(cluster, core, chip_id));
 
-    std::vector<uint32_t> hex_vec = get_trisc_binary(hex_file_path, triscv_id); // TRISC 0, 1, 2  
+    std::vector<uint32_t> hex_vec = get_trisc_binary(hex_file_path, triscv_id); // TRISC 0, 1, 2
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
 
-    uint64_t addr = 0; 
+    uint64_t addr = 0;
     if (triscv_id == 0) {
-        addr = l1_mem::address_map::TRISC0_BASE; 
+        addr = l1_mem::address_map::TRISC0_BASE;
     } else if (triscv_id == 1) {
         addr = l1_mem::address_map::TRISC1_BASE;
     } else if (triscv_id == 2) {
-        addr = l1_mem::address_map::TRISC2_BASE; 
+        addr = l1_mem::address_map::TRISC2_BASE;
     } else {
         std::cout << "triscv_id = " << triscv_id << " is not valid" << std::endl;
-        exit(1); 
+        exit(1);
     }
 
     write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr);
@@ -789,7 +789,7 @@ void run_copy_pattern_kernel_with_specs(tt_cluster *cluster, int chip_id, std::v
             throw std::runtime_error("Initial testing read/write of brisc to core failed");
         }
     }
-    
+
     // The set of cores to load blanks to needs to be calculated one
     // better... we'll need previous state of blank cores as well So we can
     // get the set of cores that need to be loaded with blank for current

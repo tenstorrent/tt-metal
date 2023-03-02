@@ -552,7 +552,7 @@ llrt::TensixRiscsOptions GetRiscOptionFromCoreConfig(bool core_runs_ncrisc, bool
     return risc_option;
 }
 
-bool LaunchKernels(Device *device, Program *program) {
+bool LaunchKernels(Device *device, Program *program, bool stagger_start) {
 
     ll_buda_profiler.markStart("LaunchKernels");
     bool pass = true;
@@ -564,7 +564,7 @@ bool LaunchKernels(Device *device, Program *program) {
     auto logical_cores_used_in_program = program->logical_cores();
     auto worker_cores = device->worker_cores_from_logical_cores(logical_cores_used_in_program);
     llrt::internal_::enable_cores(cluster, pcie_slot, worker_cores);  // BRISC FW waits for this enable to run
-    llrt::deassert_brisc_reset_for_all_chips_all_cores(cluster);
+    llrt::deassert_brisc_reset_for_all_chips_all_cores(cluster, stagger_start);
 
     bool riscs_are_done = false;
     while (not riscs_are_done) {

@@ -30,7 +30,7 @@ void translate_soc_descriptor_to_ca_soc(CA::Soc &soc, const tt_SocDescriptor soc
     switch (core.second.type) {
       case CoreType::ARC: node.arc = true; break;
       case CoreType::DRAM: {
-        node.dram = true; 
+        node.dram = true;
         #ifdef EN_DRAM_ALIAS
           node.dram_channel_id = std::get<0>(soc_descriptor.dram_core_channel_map.at(core.first));
         #endif
@@ -112,7 +112,7 @@ tt_VersimDevice::~tt_VersimDevice () {}
 //   return true;
 // }
 
-void tt_VersimDevice::deassert_risc_reset() {
+void tt_VersimDevice::deassert_risc_reset(bool start_stagger) {
   std::cout << "Versim Device: Deassert risc resets start" << std::endl;
   versim::handle_resetting_triscs(*versim);
   std::cout << "Versim Device: Start main loop " << std::endl;
@@ -157,7 +157,7 @@ void tt_VersimDevice::read_vector(
 void tt_VersimDevice::dump_debug_mailbox(std::string output_path, int device_id) {
   std::ofstream output_file(output_path);
   printf("-Debug: Reading debug mailbox for device %d\n", device_id);
-  
+
   std::vector<std::string> debug_mailboxes = {"T0", "T1", "T2", "FW"};
 
   const int mailbox_base_addr = l1_mem::address_map::DEBUG_MAILBOX_BUF_BASE;

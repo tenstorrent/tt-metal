@@ -23,7 +23,7 @@ void tt_VersimDevice::start(
     bool /*skip_driver_allocs*/
 ) {}
 
-void tt_VersimDevice::deassert_risc_reset() {}
+void tt_VersimDevice::deassert_risc_reset(bool start_stagger) {}
 
 void tt_VersimDevice::assert_risc_reset() {}
 
@@ -53,4 +53,3 @@ bool versim_check_dram_core_exists(
 }
 
 bool tt_VersimDevice::stop() { return true; }
-

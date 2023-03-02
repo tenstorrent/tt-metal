@@ -82,7 +82,7 @@ vector<uint32_t> get_trisc_binary(string path, uint32_t trisc_id);
 // proper solution:
 // a) load dummy BRISC FW to unused cores, and keep using the function that de-asserts all BRISCs (easier, we can load blank kernel and disable NCRISC loading)
 // b) de-assert reset only for used BRISCs (needs a new deassert function w/ a list of core to de-assert) (harder)
-void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster);
+void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stagger_start = false);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 void assert_reset_for_all_chips(tt_cluster *cluster);

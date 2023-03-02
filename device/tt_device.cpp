@@ -11,13 +11,13 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <unordered_map> 
+#include <unordered_map>
 #include "l1_address_map.h"
 #include "yaml-cpp/yaml.h"
 #include "common/assert.hpp"
 
 //
-// Helper functions 
+// Helper functions
 //
 std::string format_node(tt_xy_pair xy) { return std::to_string(xy.x) + "-" + std::to_string(xy.y); }
 
@@ -57,7 +57,7 @@ void tt_device::start(std::vector<std::string> plusargs,std::vector<std::string>
     // To be redefined with each derived device type
 }
 
-void tt_device::deassert_risc_reset() {
+void tt_device::deassert_risc_reset(bool start_stagger) {
     // To be redefined with each derived device type
 }
 void tt_device::assert_risc_reset() {
@@ -80,7 +80,7 @@ void tt_device::read_vector(std::vector<std::uint32_t> &mem_vector, tt_cxy_pair 
 }
 
 uint32_t tt_device::dma_allocation_size(chip_id_t src_device_id)
-{ 
+{
   return 0;
 }
 
@@ -106,7 +106,7 @@ void tt_device::dump_wall_clock_mailbox(std::string output_path, int device_id) 
 void tt_device::dump_perf_buffer(std::map<tt_cxy_pair, std::vector<uint32_t>> &all_dram_events, int device_id) {
   // To be redefined with each derived device type
 }
-    
+
 bool tt_device::test_write_read(tt_cxy_pair target)
 {
     std::vector<uint32_t> test_vector1(30, 0xDEADBEEF);
