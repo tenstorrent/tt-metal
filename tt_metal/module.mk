@@ -11,6 +11,8 @@ include tt_metal/impl/module.mk
 
 TT_METAL_SRCS = \
 	tt_metal/op_library/eltwise_binary/eltwise_binary_op.cpp \
+	tt_metal/op_library/eltwise_binary/single_core/eltwise_binary_op_single_core.cpp \
+	tt_metal/op_library/eltwise_binary/multi_core/eltwise_binary_op_multi_core.cpp \
 	tt_metal/op_library/eltwise_unary/eltwise_unary_op.cpp \
 	tt_metal/op_library/eltwise_unary/single_core/eltwise_unary_op_single_core.cpp \
 	tt_metal/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp \

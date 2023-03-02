@@ -1,4 +1,4 @@
-#include "tt_metal/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_metal/op_library/eltwise_binary/eltwise_binary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
@@ -9,23 +9,28 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
+Tensor eltwise_binary_single_core(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_type) {
     tt_metal::Program *program = new tt_metal::Program();
 
     tt_xy_pair core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to eltwise unary needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to eltwise unary needs to be allocated in a buffer on device!");
+    TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to eltwise binary need to be on device!");
+    TT_ASSERT(a.device() == b.device(), "Operands to eltwise binary need to be on the same device!");
+    TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
 
     uint32_t single_tile_size = 2 * TILE_HW;
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src1_dram_buffer = b.buffer();
+
+    TT_ASSERT(src0_dram_buffer->size() == src1_dram_buffer->size(), "Operand to eltwise binary need to be the same size!");
 
     TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume() / TILE_HW;
 
     auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -76,15 +81,17 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
         DataFormat::Float16_b
     );
 
-    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_unary_8bank.cpp",
+        //"kernels/dataflow/reader_binary.cpp",
+        "kernels/dataflow/reader_dual_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
+        //"kernels/dataflow/writer_unary.cpp",
         "kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -92,24 +99,23 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
 
     vector<uint32_t> compute_kernel_args = {
         num_tiles, // per_core_block_cnt
-        1 // per_core_block_size
+        1, // per_core_block_size
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/eltwise_sfpu.cpp",
+        "kernels/compute/eltwise_binary.cpp",
         core,
-        eltwise_unary_args,
+        eltwise_binary_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
     );
 
-    eltwise_unary_op_utils::set_compute_kernel_defines(eltwise_unary_kernel, op_type);
-
+    eltwise_binary_op_utils::set_compute_kernel_defines(eltwise_binary_kernel, op_type);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
@@ -124,23 +130,25 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
 
     tt_metal::WriteRuntimeArgsToDevice(
         device,
-        unary_reader_kernel,
+        binary_reader_kernel,
         core,
         {src0_dram_buffer->address(),
-        uint32_t(dram_src0_noc_xy.x),
-        uint32_t(dram_src0_noc_xy.y),
-        num_tiles }
-    );
+        (std::uint32_t)dram_src0_noc_xy.x,
+        (std::uint32_t)dram_src0_noc_xy.y,
+        num_tiles,
+        src1_dram_buffer->address(),
+        (std::uint32_t)dram_src1_noc_xy.x,
+        (std::uint32_t)dram_src1_noc_xy.y,
+        num_tiles});
 
     tt_metal::WriteRuntimeArgsToDevice(
         device,
         unary_writer_kernel,
         core,
         {dst_dram_buffer->address(),
-        uint32_t(dram_dst_noc_xy.x),
-        uint32_t(dram_dst_noc_xy.y),
-        num_tiles }
-    );
+        (std::uint32_t)dram_dst_noc_xy.x,
+        (std::uint32_t)dram_dst_noc_xy.y,
+        num_tiles});
 
     tt_metal::LaunchKernels(device, program);
 

@@ -4,9 +4,8 @@
 
 using namespace tt::constants;
 
-namespace tt {
-
-namespace tt_metal {
+namespace eltwise_unary_op_utils {
+using namespace tt::tt_metal;
 
 string get_op_name(UnaryOpType::Enum op_type) {
     string op_name;
@@ -25,7 +24,7 @@ string get_op_name(UnaryOpType::Enum op_type) {
     return op_name;
 }
 
-void set_compute_kernel_defines(tt_metal::ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type){
+void set_compute_kernel_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type){
     string op_name = get_op_name(op_type);
     eltwise_unary_kernel->add_define("SFPU_OP_AND_PACK", op_name);
     bool is_relu = (op_type == UnaryOpType::RELU);
@@ -35,7 +34,7 @@ void set_compute_kernel_defines(tt_metal::ComputeKernel * eltwise_unary_kernel, 
 }
 
 UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a){
-    int32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = a.volume() / TILE_HW;
     if(num_tiles > 1){
         return UnaryOpParallelizationStrategy::MULTI_CORE;
     }
@@ -44,9 +43,15 @@ UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &
     }
 }
 
+}  // namespace eltwise_unary_op_utils
+
+namespace tt {
+
+namespace tt_metal {
+
 Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
 
-    switch (get_parallelization_strategy(a)){
+    switch (eltwise_unary_op_utils::get_parallelization_strategy(a)){
         case UnaryOpParallelizationStrategy::MULTI_CORE:
             return eltwise_unary_multi_core(a, op_type);
             break;

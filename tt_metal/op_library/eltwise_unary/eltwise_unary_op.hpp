@@ -12,9 +12,6 @@ struct UnaryOpType {
     static const vector<Enum> all() { return { EXP, RECIP, GELU, RELU, SQRT, SIGMOID, LOG, TANH }; }
 };
 
-string get_op_name(UnaryOpType::Enum op_type);
-void set_compute_kernel_defines(tt_metal::ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type);
-
 struct UnaryOpParallelizationStrategy {
     enum Enum { MULTI_CORE = 0, SINGLE_CORE = 1 };
     static const vector<Enum> all() { return { MULTI_CORE, SINGLE_CORE }; }
@@ -37,11 +34,13 @@ inline Tensor tanh     (const Tensor &a) { return eltwise_unary(a, UnaryOpType::
 
 }  // namespace tt
 
-namespace eltwise_unary {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t per_core_block_cnt;
-    std::int32_t per_core_block_size;
-};
+namespace eltwise_unary_op_utils {
+using namespace tt::tt_metal;
 
-} // namespace eltwise_unary
+string get_op_name(UnaryOpType::Enum op_type);
+
+void set_compute_kernel_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type);
+
+UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a);
+
+} // namespace eltwise_unary_op_utils
