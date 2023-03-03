@@ -67,8 +67,8 @@ int main(int argc, char **argv) {
 
         pass &= ConfigureDeviceWithProgram(device, program);
 
-        const tt_xy_pair input_dram_noc_xy = input_dram_buffer->noc_coordinates(device);
-        const tt_xy_pair output_dram_noc_xy = output_dram_buffer->noc_coordinates(device);
+        const tt_xy_pair input_dram_noc_xy = input_dram_buffer->noc_coordinates();
+        const tt_xy_pair output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
         const std::vector<uint32_t> runtime_args = {
             l1_buffer_addr,

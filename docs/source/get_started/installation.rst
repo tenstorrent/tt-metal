@@ -21,8 +21,17 @@ Compile and execute an example TT-Accel application on Grayskull:
 
 ::
 
-    make programming_examples/basic_empty_program
-    ./build/test/programming_examples/basic_empty_program
+    make programming_examples/loopback
+    ./build/test/programming_examples/loopback
+
+To try any of the applications from the TT-Accel developer test suite (e.g., test_sfpu), you need to:
+
+::
+
+    export GPAI_ENV=dev
+    make ll_buda/tests/test_sfpu
+    ./build/test/ll_buda/tests/test_sfpu
+
 
 .. only:: not html
 
