@@ -92,6 +92,51 @@ test-list:
     comparison:
       function: comp_pcc
     output-file: all_op_sweep.csv
+  eltwise-sigmoid:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 2048, 2048]
+      interval: 32
+      num-shapes: 1
+      num-samples: 10
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_sweep.csv
+  eltwise-log:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 2048, 2048]
+      interval: 32
+      num-shapes: 1
+      num-samples: 10
+    datagen:
+      function: gen_rand
+      args:
+        low: 1
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_sweep.csv
+  eltwise-tanh:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 2048, 2048]
+      interval: 32
+      num-shapes: 1
+      num-samples: 10
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_sweep.csv
   # ELTWISE BINARY
   eltwise-add:
     shape:
