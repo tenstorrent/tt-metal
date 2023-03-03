@@ -17,9 +17,9 @@ sys.path.insert(0, os.path.abspath('.'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'TBD'
-copyright = '2023, Pathfinding SW Team'
-author = 'Pathfinding SW Team'
+project = 'TT-Accel'
+copyright = 'Tenstorrent'
+author = 'Tenstorrent'
 
 
 # -- General configuration ---------------------------------------------------
