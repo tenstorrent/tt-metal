@@ -49,7 +49,6 @@
         chdir: "/home/{{ ansible_user }}/doxygen-1.9.6"
         cmd: "make install"
 
-
 - name: Create infra_testing assets and verify devices
   hosts: all
   tasks:
@@ -65,3 +64,30 @@
       ansible.builtin.copy:
         src: ../scripts/setup_hugepages.py
         dest: "infra_testing/scripts/setup_hugepages.py"
+
+
+- name: Install SMI (GRAYSKULL ONLY)
+  hosts: all
+  tasks:
+    - name: Make infra_testing workspace for tt-smi
+      file:
+        path: infra_testing/tt_smi/gs
+        state: directory
+    - name: Copy SMI to workspace (assuming assets downloaded)
+      ansible.builtin.copy:
+        src: ../assets/tt_smi/gs/tt-smi
+        dest: "infra_testing/tt_smi/gs/tt-smi"
+    - name: Install SMI to local bin
+      become: yes
+      ansible.builtin.copy:
+        remote_src: true
+        src: "infra_testing/tt_smi/gs/tt-smi"
+        dest: "/usr/local/bin/tt-smi"
+    - name: Make tt-smi executable
+      become: yes
+      ansible.builtin.file:
+        path: "/usr/local/bin/tt-smi"
+        mode: ugo+x
+    - name: Execute tt-smi as a test drive
+      ansible.builtin.shell:
+        cmd: "tt-smi --version"
