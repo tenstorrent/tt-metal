@@ -13,6 +13,7 @@ class TestSuiteType(Enum):
     BUILD_KERNELS_FOR_RISCV = auto()
     LLRT = auto()
     LL_BUDA = auto()
+    PROGRAMMING_EXAMPLE = auto()
     UNKNOWN = auto()
 
 
@@ -59,14 +60,19 @@ def get_env_dict_for_fw_tests():
         "BUDA_HOME": get_git_home_dir_str(),
     }
 
-def build_executable_command_for_test(namespace: str, test_entry: TestEntry, timeout):
-    assert namespace in ("build_kernels_for_riscv", "llrt", "ll_buda")
+
+def default_build_full_path_to_test(namespace, executable_name, extra_params):
+    return pathlib.Path(f"{get_git_home_dir_str()}/build/test/{namespace}/tests/{executable_name}")
+
+
+def build_executable_command_for_test(namespace: str, test_entry: TestEntry, timeout, build_full_path_to_test):
+    assert namespace in ("build_kernels_for_riscv", "llrt", "ll_buda", "programming_example")
 
     test_name = test_entry.test_name
     executable_name = test_entry.executable_name
     extra_params = test_entry.extra_params
 
-    full_path_to_test = pathlib.Path(f"{get_git_home_dir_str()}/build/test/{namespace}/tests/{executable_name}")
+    full_path_to_test = build_full_path_to_test(namespace, executable_name, extra_params)
 
     assert full_path_to_test.exists(), f"Path to {test_name} does not exist - did you build it? Should be {full_path_to_test}"
     assert not full_path_to_test.is_dir()
@@ -130,8 +136,8 @@ def report_tests(test_report):
         print(f"  {test_entry.test_name}-[{extra_params_str}]: {result_str}")
 
 
-def run_single_test(namespace: str, test_entry: TestEntry, timeout, capture_output=False):
-    command = build_executable_command_for_test(namespace, test_entry, timeout=timeout)
+def run_single_test(namespace: str, test_entry: TestEntry, timeout, capture_output=False, build_full_path_to_test=default_build_full_path_to_test):
+    command = build_executable_command_for_test(namespace, test_entry, timeout=timeout, build_full_path_to_test=build_full_path_to_test)
 
     env_for_fw_test = get_env_dict_for_fw_tests()
 
