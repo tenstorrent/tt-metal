@@ -1,14 +1,17 @@
 Getting Started
 ===============
 
-The GitHub page for the project is located here: https://github.com/tenstorrent-accel/gp.ai
+The GitHub page for the project is located here:
+https://github.com/tenstorrent-accel/gp.ai
 
-To be added to the repo, please contact Jasmina or Davor at: jvasiljevic@tenstorrent.com, dcapalija@tenstorrent.com
+To be added to the repo, please contact Jasmina or Davor at:
+jvasiljevic@tenstorrent.com, dcapalija@tenstorrent.com
 
 Running TT-Accel on a cloud machine
----------------------------------------------------------------
+-----------------------------------
 
-Log into your cloud machine, and run the following commands to set up the TT-Accel project:
+Log into your cloud machine, and run the following commands to set up the
+TT-Accel project:
 
 ::
 
@@ -24,14 +27,13 @@ Compile and execute an example TT-Accel application on Grayskull:
     make programming_examples/loopback
     ./build/test/programming_examples/loopback
 
-To try any of the applications from the TT-Accel developer test suite (e.g., test_sfpu), you need to:
+Congratulations! You've run your first program on this stack. For more
+explanation for what you just ran and a deeper dive into the API, please go to
+:ref:`Dram Loopback<DRAM Loopback Example>`.
 
-::
-
-    export GPAI_ENV=dev
-    make ll_buda/tests/test_sfpu
-    ./build/test/ll_buda/tests/test_sfpu
-
+To try any of the applications from the TT-Accel developer test suite (e.g.,
+test_sfpu), please refer to :ref:`Getting Started for Devs<Getting started for
+devs>`.
 
 .. only:: not html
 

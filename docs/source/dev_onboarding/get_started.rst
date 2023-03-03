@@ -1,3 +1,5 @@
+.. _Getting started for devs:
+
 Getting Started
 ===============
 
