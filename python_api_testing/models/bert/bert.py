@@ -11,7 +11,7 @@ from python_api_testing.fused_ops.layernorm import Layernorm
 from python_api_testing.fused_ops.add_and_norm import AddAndNorm
 from python_api_testing.fused_ops.linear import Linear
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
-from utility_functions import enable_binary_cache, enable_compile_cache
+from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled
 
 class TtBertShared(torch.nn.Module):
     @abstractmethod

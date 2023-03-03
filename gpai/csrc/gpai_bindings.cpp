@@ -14,11 +14,6 @@
 
 namespace py = pybind11;
 
-namespace tt { namespace llrt {
-extern void EnableBinaryCache();
-extern int  DisableBinaryCache();
-}}
-
 namespace tt {
 
 namespace ll_buda {
@@ -27,6 +22,10 @@ extern void SetForceRecompiles(int newval);
 extern int  GetForceRecompiles();
 extern void EnableCompileCache();
 extern int  DisableCompileCache();
+extern bool GetCompileCacheEnabled();
+extern void EnableBinaryCache();
+extern int  DisableBinaryCache();
+extern bool GetBinaryCacheEnabled();
 
 void TensorModule(py::module &m_tensor) {
 
@@ -181,8 +180,10 @@ void DeviceModule(py::module &m_device) {
     m_device.def("GetForceRecompiles", &GetForceRecompiles);
     m_device.def("EnableCompileCache", &EnableCompileCache);
     m_device.def("DisableCompileCache", &DisableCompileCache);
-    m_device.def("EnableBinaryCache", &tt::llrt::EnableBinaryCache);
-    m_device.def("DisableBinaryCache", &tt::llrt::DisableBinaryCache);
+    m_device.def("GetCompileCacheEnabled", &GetCompileCacheEnabled);
+    m_device.def("EnableBinaryCache", &EnableBinaryCache);
+    m_device.def("DisableBinaryCache", &DisableBinaryCache);
+    m_device.def("GetBinaryCacheEnabled", &GetBinaryCacheEnabled);
 
     m_device.def("GetHost", &GetHost);
 

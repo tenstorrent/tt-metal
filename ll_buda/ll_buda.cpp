@@ -27,10 +27,12 @@ bool enable_compile_cache = false;
 int force_recompiles = 0;
 void EnableCompileCache() { enable_compile_cache = true; }
 void DisableCompileCache() { enable_compile_cache = false; }
+bool GetCompileCacheEnabled() { return enable_compile_cache; }
 void SetForceRecompiles(int newval) { enable_compile_cache = true; force_recompiles = newval; }
 int  GetForceRecompiles() { return force_recompiles; }
 void EnableBinaryCache() { tt::llrt::llrt_enable_binary_cache = true; }
 void DisableBinaryCache() { tt::llrt::llrt_enable_binary_cache = false; }
+bool GetBinaryCacheEnabled() { return tt::llrt::llrt_enable_binary_cache; }
 
 Host *GetHost() {
     return new Host();

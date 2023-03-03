@@ -237,6 +237,12 @@ def disable_compile_cache():
     """
     gpai.device.DisableCompileCache()
 
+def get_compile_cache_enabled():
+    """
+    Returns the current state of compile cache on/off switch.
+    """
+    return gpai.device.GetCompileCacheEnabled()
+
 def enable_binary_cache():
     """
     Enables the binary loading cache.
@@ -248,3 +254,9 @@ def disable_binary_cache():
     Disables the binary loading cache.
     """
     gpai.device.DisableBinaryCache()
+
+def get_binary_cache_enabled():
+    """
+    Returns the current state of binary loading cache on/off switch.
+    """
+    return gpai.device.GetBinaryCacheEnabled()

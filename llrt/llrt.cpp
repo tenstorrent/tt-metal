@@ -17,9 +17,6 @@ using std::uint32_t;
 bool llrt_enable_binary_cache = false; // TODO(AP): temporary
 std::map<string, std::vector<uint32_t>> risc_binary_cache; // TODO(AP): temporary optimization
 
-void EnableBinaryCache() { llrt_enable_binary_cache = true; }
-void DisableBinaryCache() { llrt_enable_binary_cache = false; }
-
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
 vector <uint32_t> get_risc_binary(string path, uint32_t id) {
