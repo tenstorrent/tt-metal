@@ -32,6 +32,8 @@ class Device {
 
     int num_dram_banks() const;
 
+    tt_xy_pair logical_grid_size() const;
+
     tt_xy_pair worker_core_from_logical_core(const tt_xy_pair &logical_core) const;
 
     std::vector<tt_xy_pair> worker_cores_from_logical_cores(const std::vector<tt_xy_pair> &logical_cores);
