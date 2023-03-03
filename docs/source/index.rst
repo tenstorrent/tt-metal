@@ -30,6 +30,10 @@ Welcome to TBD's documentation!
    apis/host_apis2
    apis/kernel_apis
 
+.. toctree::
+    :caption: Python API
+
+    python_api/python_api
 
 .. toctree::
    :caption: Programming Examples
