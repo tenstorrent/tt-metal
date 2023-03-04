@@ -15,10 +15,11 @@ bool collapse_transformations(DataTransformations * dtx) {
     if (DEBUG) cout << s(2) << "consumer_node = " << consumer_node->opcode << endl;
     int spaces = 0;
 
+    int collapse_itteration = 0;
     while (dtx->transformations.size() > 2) {
 
-        if (DEBUG) cout << s(4) << "There are more than 2 tx. Starting to resolve." << endl;
-
+        if (DEBUG) cout << s(4) << "There are more than 2 tx. Starting to resolve - COLLAPSE ITERATION = " << collapse_itteration << endl;
+        
         // The node being currently processed - to be deleted. It's always the second from the back
         TransformationNode * producer_node = dtx->transformations[dtx->transformations.size()-2];
         if (DEBUG) cout << s(4) << "producer_node = " << producer_node->opcode << endl;
@@ -38,7 +39,12 @@ bool collapse_transformations(DataTransformations * dtx) {
                 for (int consumer_tp_idx=0; consumer_tp_idx<consumer_node->groups[consumer_group_idx]->tensor_pairs.size(); consumer_tp_idx++) {
                     for (int producer_tp_idx=0; producer_tp_idx<producer_node->groups[producer_group_idx]->tensor_pairs.size(); producer_tp_idx++) {      // node1 dst tensor
 
+                        TensorPair * producer_tp = producer_node->groups[producer_group_idx]->tensor_pairs[producer_tp_idx];
+                        TensorPair * consumer_tp = consumer_node->groups[consumer_group_idx]->tensor_pairs[consumer_tp_idx];
+
                         if (DEBUG) cout << s(10) << "producer_tp_idx = " << producer_tp_idx << ",   consumer_tp_idx = " << consumer_tp_idx << endl;
+                        if (DEBUG) cout << s(12) << "PRODUCER = " << producer_tp->get_string() << endl;
+                        if (DEBUG) cout << s(12) << "CONSUMER = " << consumer_tp->get_string() << endl;
 
                         Tensor * overlap = calculate_tensor_overlap_in_nd(producer_node->groups[producer_group_idx]->tensor_pairs[producer_tp_idx]->dst_tensor, consumer_node->groups[consumer_group_idx]->tensor_pairs[consumer_tp_idx]->src_tensor);
 
@@ -52,8 +58,8 @@ bool collapse_transformations(DataTransformations * dtx) {
                             vector<int> new_src_str = vector_subtraction(overlap->str, producer_offset);
                             vector<int> new_src_end = vector_subtraction(overlap->end, producer_offset);
                             Tensor * new_src = new Tensor(new_src_str, new_src_end);
-
-                            if (DEBUG) cout << s(12) << "offset overlap = " << new_src->get_string() << endl;
+                            if (DEBUG) cout << s(14) << "new_src_tensor = " << new_src->get_string() << endl;
+               
 
                             // Part 2: Calculating the new DST tensor
                             vector<int> consumer_offset = vector_subtraction(consumer_node->groups[consumer_group_idx]->tensor_pairs[consumer_tp_idx]->src_tensor->str,
@@ -67,6 +73,10 @@ bool collapse_transformations(DataTransformations * dtx) {
                             int new_src_group = producer_node->groups[producer_group_idx]->tensor_pairs[producer_tp_idx]->src_group;
 
                             // Store results
+                            TensorPair * overlap_tp = new TensorPair(new_src,
+                                                                    new_src_group,
+                                                                    new_dst);
+                            if (DEBUG) cout << s(16) << "NEW OVERLAP TENSOR PAIR: " << overlap_tp->get_string() << endl;
                             resolved_tensor_pairs.push_back(new TensorPair(new_src, new_src_group, new_dst));
                         }
                     }

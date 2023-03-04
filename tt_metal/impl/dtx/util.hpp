@@ -41,3 +41,8 @@ bool compare_two_groups(TensorPairGroup * a, TensorPairGroup * b);
 bool has_overlap(Tensor * overlap);
 vector<int> calculate_line_segment_overlap_in_1d(int l1_str, int l1_end, int l2_str, int l2_end);
 Tensor * calculate_tensor_overlap_in_nd(Tensor * t1, Tensor * t2);
+
+int X(int rank);
+int Y(int rank);
+int Z(int rank);
+int W(int rank);

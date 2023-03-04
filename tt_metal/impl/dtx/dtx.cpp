@@ -1,3 +1,7 @@
+#include <iostream>
+#include <fstream>
+
+
 #include "dtx.hpp"
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
@@ -5,6 +9,84 @@
 // ========================================================
 //                      CLASSES
 // ========================================================
+
+TensorData::TensorData(vector<int> shape) {
+    this->shape = shape;
+    this->rank = shape.size();
+    this->volume = vector_product(shape);
+
+    for (int i=0; i<this->volume; i++){
+        this->data.push_back(i);
+    }
+}
+
+void TensorData::print() {
+    bool DEBUG = true;
+    if (DEBUG) cout << "Printing TensorData " << endl;
+
+    vector<int> counter = zeros(this->rank);
+    for (int i=0; i<this->volume; i++){
+
+        if (DEBUG) cout << s(2) << "i = " << i << ".  counter = " << v2s(counter) << endl;
+
+        int index = 0;   // = y*this->shape[0] + x;
+        for (int d=0; d<rank; d++) {
+            index += counter[d] * shape [d];
+        }
+
+
+        // Incrementing counter
+        counter.back()++;
+        for (int d=rank-1; d>0; d--) {
+            if (counter[d] == this->shape[d]) {
+                counter[d-1]++;
+                counter[d] = 0;
+            }
+        }
+    }
+
+    /*
+    for (int y=0; y<this->shape[0]; y++){
+        for (int x=0; x<this->shape[0]; x++){
+            int index = y*this->shape[0] + x;
+            cout << this->data[index];
+            if (x<this->shape[0]-1)
+                cout << ",";
+        }
+        cout << endl;
+    }
+    cout << endl;
+    */
+}
+
+void TensorData::generate_csv(string filename){
+    bool DEBUG = true;
+
+    string full_filename;
+    full_filename.append(filename);
+    full_filename.append(".csv");
+    ofstream myfile(full_filename);
+
+
+    if (DEBUG) cout << "Generating csv file: " << full_filename << endl;
+
+    for (int y=0; y<this->shape[0]; y++){
+        for (int x=0; x<this->shape[0]; x++){
+            int index = y*this->shape[0] + x;
+            myfile << this->data[index];
+            if (x < this->shape[0]-1)
+                myfile << ",";
+
+        }
+        myfile << endl;
+    }
+    myfile << endl;
+
+    // Close the file
+    myfile.close();
+
+}
+
 
 int Tensor::volume() {
     if (this->rank == 0 || this->rank == -1) return 0;
@@ -85,7 +167,8 @@ void TransformationNode::print(int spaces) {
     for (TensorPairGroup * group : this->groups) {
         cout << s(2 + spaces) << "Group = " << group_index << ";  shape = " << v2s(group->shape) << ", core=" << v2s(group->core) << endl;
 
-        cout << s(4+spaces) << "TensorPairs:" << endl;
+        //cout << s(4+spaces) << "TensorPairs:" << endl;
+        cout << s(4+spaces) << "TensorPairs (" << group->tensor_pairs.size() << "):" << endl;
         int tp_index = 0;
         for (TensorPair * tp : group->tensor_pairs) {
             cout << s(6+spaces) << "TensorPair[" << tp_index << "]  " << tp->get_string() << endl;

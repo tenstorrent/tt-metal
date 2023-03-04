@@ -1,5 +1,6 @@
 #include "dtx.hpp"
 #include "util_vector_of_ints.hpp"
+#include "util.hpp"
 
 bool generate_transfer_addresses(DataTransformations * dtx){
     bool DEBUG = true;
@@ -18,9 +19,11 @@ bool generate_transfer_addresses(DataTransformations * dtx){
         for (TensorPair * consumer_tp : consumer_group->tensor_pairs) {
             //if (DEBUG) consumer_tp->print_string();
 
+            int rank = consumer_tp->src_tensor->str.size();
+
             Transfer * transfer = new Transfer();
-            transfer->src_address = consumer_tp->src_tensor->str[0] + producer_node->groups[consumer_tp->src_group]->address;
-            transfer->dst_address = consumer_tp->dst_tensor->str[0] + consumer_group->address;
+            transfer->src_address = consumer_tp->src_tensor->str[X(rank)] + producer_node->groups[consumer_tp->src_group]->address;
+            transfer->dst_address = consumer_tp->dst_tensor->str[X(rank)] + consumer_group->address;
             transfer->size = consumer_tp->src_tensor->volume();
             transfer->src_soc_core =  copy_vector_of_ints(producer_node->groups[consumer_tp->src_group]->core);
 

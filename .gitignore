@@ -73,8 +73,18 @@ pymetal/ttmetal/*.so
 # exclude MNIST etc model downloads
 data/
 
+<<<<<<< HEAD
 # exclude pytorch binaries
 *.pt
 
 # Remove stuff from before, get rid of later
 gpai/
+=======
+runme.sh
+
+#exclude Tensor generated heatmaps (debug)
+*.png
+
+#exclude output debug files
+out*.txt
+>>>>>>> msg

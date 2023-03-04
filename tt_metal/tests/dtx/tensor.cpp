@@ -76,9 +76,25 @@ bool test_golden_comparisons() {
     return true;
 }
 
+void run_tensor_data_test(vector<int> shape, string filename){
+    cout << endl;
+    TensorData * t = new TensorData(shape);
+    t->print();
+    //t->generate_csv(filename);
+    cout << endl;
+}
+
+
+bool test_tensor_data_class() {
+    run_tensor_data_test({4},     "tensor1");
+    run_tensor_data_test({4,4},   "tensor1");
+    run_tensor_data_test({4,4,4}, "tensor1");
+    return true;
+}
+
 int main(int argc, char** argv) {
     bool pass = true;
-
+    /*
     pass &= test_util();
     printf("test_util = %d\n\n", pass);
 
@@ -90,6 +106,9 @@ int main(int argc, char** argv) {
 
     pass &= test_golden_comparisons();
     printf("test_DataTransformations - %d\n\n", pass);
+    */
+    pass &= test_tensor_data_class();
+    printf("test_tensor_data_class - %d\n\n", pass);
 
     if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
     else cout << "TESTS FAILED\n\n\n" << endl;

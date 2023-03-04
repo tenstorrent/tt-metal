@@ -22,6 +22,20 @@ using namespace std;
 //                      CLASSES
 // ========================================================
 
+class TensorData {
+    public:
+        vector<int> data;
+        int rank;
+        vector<int> shape;
+        int volume;
+
+        TensorData(vector<int> shape);
+
+        void init_increasing();
+        void print();
+        void generate_csv(string filename);
+};
+
 class Tensor {
     public:
         vector<int> str;

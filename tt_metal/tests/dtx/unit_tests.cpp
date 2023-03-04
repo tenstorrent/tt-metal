@@ -184,15 +184,12 @@ bool run_DTX_reverse_transformations_test_2(int DEBUG) {
     pass &= collapse_transformations(dtx);
     dtx->print();
 
-
     DataTransformations * backwards = reverse_transformations(dtx);
 
     //backwards->print();
     pass &= collapse_transformations(backwards);
     backwards->print();
     pass &= generate_transfer_addresses(backwards);
-
-
 
     /*
     // Correctness checking
@@ -216,6 +213,25 @@ bool run_DTX_reverse_transformations_test_2(int DEBUG) {
    return true;
 }
 
+bool run_DTX_reverse_transformations_test_3(int DEBUG) {
+    bool pass = true;
+
+    DataTransformations * dtx = new DataTransformations();
+
+    // Create producer node
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = {2,3,4};
+    dtx->transformations.push_back(node0);
+
+    pass &= transpose_yz(dtx);
+    pass &= transpose_xy(dtx);
+    dtx->print();
+
+    DataTransformations * backwards = reverse_transformations(dtx);
+    backwards->print();
+    return pass;
+}
+
 bool test_DTX_reverse_transformations() {
     bool DEBUG = true;
     bool pass = true;
@@ -223,6 +239,7 @@ bool test_DTX_reverse_transformations() {
     pass &= run_DTX_reverse_transformations_test_0(DEBUG);
     pass &= run_DTX_reverse_transformations_test_1(DEBUG);
     pass &= run_DTX_reverse_transformations_test_2(DEBUG);
+    pass &= run_DTX_reverse_transformations_test_3(DEBUG);
     return pass;
 }
 
@@ -324,22 +341,154 @@ bool test_pass_tilize_and_store() {
     return pass;
 }
 
-bool test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1() {
-    bool pass = true;
 
-    // Test #1
+bool test_transpose_xy() {
+    TensorData * t = new TensorData({32,32});
+    t->print();
+    t->generate_csv("tensor1");
+
+    return true;
+}
+
+bool test_tensor_evaluate() {
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    TransformationNode * node1 = new TransformationNode("tx1", 1);
+
+    // NODE 0:
+    node0->groups[0]->shape = {40};
+
+    // NODE 1:
+    node1->groups[0]->shape = {40};
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 1, new Tensor({20}, {40}))  );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 1, new Tensor({0}, {20}))   );
+
+    DataTransformations * dtx = new DataTransformations();
+    dtx->transformations.push_back(node0);
+    dtx->transformations.push_back(node1);
+
+    TensorData * t = new TensorData({40});
+    t->print();
+    t->generate_csv("tensor1");
+
+    //TensorData * t_out = dtx->evaluate(t_in);
+
+    return true;
+}
+
+bool test_pass_transpose_xy() {
+    bool pass = true;
     DataTransformations * dtx = new DataTransformations();
     TransformationNode * node0 = new TransformationNode("producer", 1);
-
-    int x = 5;
-    int y = 5;
-    int z = 128;
-
-
-    node0->groups[0]->shape = {1, z*y*x};
+    node0->groups[0]->shape = {40, 50};
     dtx->transformations.push_back(node0);
+    pass &= transpose_xy(dtx);
+    dtx->print();
+    return pass;
+}
 
+bool run_transpose_yz(vector<int> shape) {
+    bool pass = true;
+    DataTransformations * dtx = new DataTransformations();
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = shape;
+    dtx->transformations.push_back(node0);
+    pass &= transpose_yz(dtx);
+    dtx->print();
+    return pass;
+}
+
+bool test_pass_transpose_yz() {
+    bool pass = true;
+
+    //pass &= run_transpose_yz({2,3,4});
+    pass &= run_transpose_yz({90, 2, 2, 100});
+    pass &= run_transpose_yz({20, 21, 22, 2, 2, 100});
+    return pass;
+
+}
+
+bool test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1() {
+    bool pass = true;
+    DataTransformations * dtx = new DataTransformations();
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = {10, 4, 4};
+    dtx->transformations.push_back(node0);
     pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1(dtx);
+    dtx->print();
+    return pass;
+}
+
+bool test_convert_abstract_tensor_to_channels_last_layout() {
+    bool pass = true;
+    DataTransformations * dtx = new DataTransformations();
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = {10, 4, 4};
+    dtx->transformations.push_back(node0);
+    pass &= convert_abstract_tensor_to_channels_last_layout(dtx);
+    dtx->print();
+    return pass;
+}
+
+bool test_channels_last_to_2D_matrix() {
+    bool pass = true;
+
+    /*
+    // collapse transformation debug
+    vector<int> shape = {5, 4,4};
+
+    // Right side: AbstractTensor --> consumer conv/mm
+    DataTransformations * dtx_right = new DataTransformations();
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = shape;
+    dtx_right->transformations.push_back(node0);
+    pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1(dtx_right);
+    pass &= row_major_memory_store(dtx_right);
+    pass &= collapse_transformations(dtx_right);
+    */
+
+
+
+    // FULL TEST
+
+    vector<int> shape = {5, 4,4};
+
+    // Right side: AbstractTensor --> consumer conv/mm
+    DataTransformations * dtx_right = new DataTransformations();
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = shape;
+    dtx_right->transformations.push_back(node0);
+    pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1(dtx_right);
+    pass &= row_major_memory_store(dtx_right);
+
+    cout << "\n\nDTX_RIGHT" << endl;
+    dtx_right->print();
+
+
+    // Left side: AbstractTensor --> producer memory buffer
+    DataTransformations * dtx_left = new DataTransformations();
+    TransformationNode * node1 = new TransformationNode("producer", 1);
+    node1->groups[0]->shape = shape;
+    dtx_left->transformations.push_back(node1);
+    pass &= convert_abstract_tensor_to_channels_last_layout(dtx_left);
+
+    cout << "\n\nDTX_LEFT" << endl;
+    dtx_left->print();
+
+    DataTransformations * combined = reverse_and_combine_transformations(dtx_left, dtx_right);
+    cout << "\n\nDTX_COMBINED" << endl;
+    combined->print();
+
+    pass &= optimize_away_transpose(combined);
+    cout << "\n\nDTX_OPTIMIZED" << endl;
+    combined->print();
+
+    pass &= collapse_transformations(combined);
+    cout << "\n\nDTX_COLLAPSED" << endl;
+    combined->print();
+    pass &= generate_transfer_addresses(combined);
+    combined->print();
+
+
 
     return pass;
 }
@@ -354,8 +503,8 @@ void run_dtx_tests() {
     // pass &= test_GenerateAddresses();
     // printf("test_GenerateAddresses - %d\n\n", pass);
 
-    // //pass &= test_DTX_reverse_transformations();
-    // //printf("test_DTX_reverse_transformations - %d\n\n", pass);
+    //pass &= test_DTX_reverse_transformations();
+    //printf("test_DTX_reverse_transformations - %d\n\n", pass);
 
     // pass &= test_generate_sliced_ranges_helper_functions();
     // printf("test_generate_sliced_ranges_helper_functions - %d\n\n", pass);
@@ -366,9 +515,27 @@ void run_dtx_tests() {
     // pass &= test_pass_tilize_and_store();
     // printf("test_pass_tilize_and_store - %d\n\n", pass);
 
-    // pass &= test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1();
-    // printf("test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1 - %d\n\n", pass);
+    //pass &= test_transpose_xy();
+    //printf("test_transpose_xy - %d\n\n", pass);
 
+    //pass &= test_tensor_evaluate();
+    //printf("test_tensor_evaluate - %d\n\n", pass);
+
+    // pass &= test_pass_transpose_xy();
+    // printf("test_pass_transpose_xy - %d\n\n", pass);
+
+    // pass &= test_pass_transpose_yz();
+    // printf("test_pass_transpose_yz - %d\n\n", pass);
+
+    //pass &= test_pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1();
+    //printf("test_pass_transpose_xy - %d\n\n", pass);
+
+    //pass &= test_convert_abstract_tensor_to_channels_last_layout();         // TO DO: generalize rank
+    //printf("test_pass_convert_abstract_tensor_to_channels_last_layout - %d\n\n", pass);
+
+    // In progress
+    pass &= test_channels_last_to_2D_matrix();
+    printf("test_channels_last_to_2D_matrix - %d\n\n", pass);
 
     if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
     else cout << "TESTS FAILED\n\n\n" << endl;

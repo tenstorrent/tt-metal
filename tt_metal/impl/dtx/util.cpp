@@ -99,3 +99,10 @@ Tensor * calculate_tensor_overlap_in_nd(Tensor * t0, Tensor * t1) {
     return overlap_nd;
 
 }
+
+
+
+int X(int rank) {return rank-1;}
+int Y(int rank) {return rank-2;}
+int Z(int rank) {return rank-3;}
+int W(int rank) {return rank-4;}
