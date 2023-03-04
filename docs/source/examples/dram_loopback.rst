@@ -3,13 +3,9 @@
 DRAM Loopback
 =============
 
-Let's understand the memory structres in LL Buda by using an example kernel
-that will simply copy data from one input DRAM buffer to another output DRAM
-buffer, using the compute engine and an L1 memory buffer to do so. We call this
-concept "loopback", or more precisely "DRAM loopback".
-
-We will present this as a series of code additions on top of the :ref:`basic
-example<Setting up a basic test>`.
+We will build a program in TT-Accel that will simply copy data from one DRAM
+buffer to another, using the compute engine and an intermediate L1 buffer to do
+so. We call this concept "loopback".
 
 Building a data movement kernel
 -------------------------------
@@ -53,8 +49,7 @@ need
   engine's work
 * A DRAM buffer that will be written to with output data
 
-for a total of 3. Let's create the L1 buffer first. We attach L1 buffer data to
-program data.
+Let's create the L1 buffer first.
 
 .. code-block:: cpp
 
@@ -65,19 +60,10 @@ program data.
 
   L1Buffer *l1_b0 = CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
 
-We need to know how large the buffer will be in bytes. Let's say we have 50
-"tiles" worth.
+For simplicity, let's make the size of all our buffers 50 tiles. We'll also put
+this particular L1 Buffer at location ``400KB``.
 
-Wait, what's a tile? In LL Buda, we generally structure blocks of data as
-"tiles". Each tile contains ``32 x 32`` (or 1024) values of FP16 format. Since
-FP16 is 2 bytes large, and each tile is 1024 values, 50 tiles is ``50 * (2 * 32
-* 32)`` bytes large. For simplicity, let's make all our buffers this size. Our
-L1 Buffer is therefore of this size, and will be housed at the ``400KB``
-starting address in L1.
-
-We'll make similarly-sized DRAM buffers for input and output data, at different
-locations in DRAM. Note that we will be using DRAM channel 0 for now. On
-Grayskull, we have 8 channels to use.
+Let's make the input and output DRAM buffers.
 
 .. code-block:: cpp
 
