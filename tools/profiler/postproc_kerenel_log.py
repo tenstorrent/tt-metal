@@ -10,6 +10,14 @@ import plot_setup
 
 
 CYCLE_COUNT_TO_MILISECS = 1.2e6
+BASE_HEIGHT = 200
+PER_CORE_HEIGHT = 90
+
+
+def coreCompare(coreStr):
+    x = int(coreStr.split(",")[0])
+    y = int(coreStr.split(",")[1])
+    return x + y * 100
 
 
 def generate_analysis_table(analysisData):
@@ -34,6 +42,81 @@ def generate_analysis_table(analysisData):
     )
 
 
+def print_stats_outfile(timerStats, timerStatsCores):
+    original_stdout = sys.stdout
+    with open("device_stats.txt", "w") as statsFile:
+        sys.stdout = statsFile
+        print_stats(timerStats, timerStatsCores)
+        sys.stdout = original_stdout
+
+
+def print_stats(timerStats, timerStatsCores):
+    numberWidth = 12
+    sampleCores = list(timerStatsCores.keys())
+    if sampleCores:
+        sampleCore = sampleCores[0]
+    for duration in timerStatsCores[sampleCore].keys():
+        print()
+        print(f"=================== {duration} ===================")
+        for stat in timerStats[duration].keys():
+            if "Title" != stat:
+                print(f"  {timerStats[duration][stat]}")
+        print()
+        for core_y in range(-3, 11):
+            # Print row number
+            if core_y > -1 and core_y < 5:
+                print(f"{core_y:>2}|| ", end="")
+            elif core_y > 5:
+                print(f"{core_y-1:>2}|| ", end="")
+            else:
+                print(f"{' ':>4} ", end="")
+
+            for core_x in range(-1, 12):
+                if core_x > -1:
+                    if core_y == -3:
+                        print(f"{core_x:>{numberWidth}}", end="")
+                    elif core_y == -2:
+                        print(f"{'=':=>{numberWidth}}", end="")
+                    elif core_y == -1:
+                        if core_x in [0, 3, 6, 9]:
+                            print(f"{f'DRAM{int(core_x/3)}':>{numberWidth}}", end="")
+                        else:
+                            print(f"{'---':>{numberWidth}}", end="")
+                    elif core_y != 5:
+                        core = f"{core_x},{core_y}"
+                        if core_y > 5:
+                            core = f"{core_x},{core_y-1}"
+                        if core in timerStatsCores.keys():
+                            print(
+                                f"{timerStatsCores[core][duration]:>{numberWidth},}",
+                                end="",
+                            )
+                        else:
+                            print(f"{' ':>{numberWidth}}", end="")
+                    else:
+                        if core_x in [0, 3, 6, 9]:
+                            print(
+                                f"{f'DRAM{4 + int(core_x/3)}':>{numberWidth}}", end=""
+                            )
+                        else:
+                            print(f"{'---':>{numberWidth}}", end="")
+
+                else:
+                    if core_y == 1:
+                        print("ARC", end="")
+                    elif core_y == 3:
+                        print("PCI", end="")
+                    elif core_y > -1:
+                        print("---", end="")
+                    else:
+                        print("   ", end="")
+
+            print()
+        print()
+        print()
+        print()
+
+
 def print_help():
     print(
         "Please choose a plot setup class that matches your test kernel profile data."
@@ -47,12 +130,14 @@ def main(args):
     if len(args) == 1:
         try:
             setup = getattr(plot_setup, args[0])()
+            setup.timerAnalysis.update(setup.timerAnalysisBase)
         except Exception:
             print_help()
             return
     elif len(args) == 0:
         try:
             setup = getattr(plot_setup, "test_base")()
+            setup.timerAnalysis = setup.timerAnalysisBase
         except Exception:
             print_help()
             return
@@ -96,7 +181,8 @@ def main(args):
                     if cycleCount < minTime:
                         minTime = cycleCount
 
-        timerAnalysis = {}
+        timerStats = {}
+        timerStatsCores = {}
         setupMaxStrLen = 0
         for timerAnalysisSetup in setup.timerAnalysis.keys():
             if len(timerAnalysisSetup) > setupMaxStrLen:
@@ -137,6 +223,10 @@ def main(args):
                         )
 
                 if analysisTime != -1:
+                    if core in timerStatsCores.keys():
+                        timerStatsCores[core][timerAnalysisSetup] = analysisTime
+                    else:
+                        timerStatsCores[core] = {timerAnalysisSetup: analysisTime}
                     countAnalysisTime += 1
                     analysisTimeSum += analysisTime
                     if analysisTime > analysisTimeMax:
@@ -148,25 +238,15 @@ def main(args):
             if countAnalysisTime:
                 analysisTimeAverage = analysisTimeSum / countAnalysisTime
 
-            timerAnalysis[timerAnalysisSetup] = {
-                "Average [cycles]": f"{analysisTimeAverage:,.2f}",
-                "Min [cycles]": f"{analysisTimeMin:,}",
-                "Max [cycles]": f"{analysisTimeMax:,}",
+            timerStats[timerAnalysisSetup] = {
+                "Title": f"{timerAnalysisSetup} :",
+                "Average [cycles]": f"Average = {analysisTimeAverage:<14,.2f}",
+                "Min [cycles]": f"Max = {analysisTimeMax:<11,}",
+                "Max [cycles]": f"Min = {analysisTimeMin:<11,}",
             }
 
-            print(
-                f"{timerAnalysisSetup:>{setupMaxStrLen+2}} :",
-                f"Average = {analysisTimeAverage:<14,.2f}",
-                f"Max = {analysisTimeMax:<11,}",
-                f"Min = {analysisTimeMin:<11,}",
-            )
-
-        print()
-
-        def coreCompare(coreStr):
-            x = int(coreStr.split(",")[0])
-            y = int(coreStr.split(",")[1])
-            return x + y * 100
+        print_stats(timerStats, timerStatsCores)
+        print_stats_outfile(timerStats, timerStatsCores)
 
         yVals = sorted(timerVals.keys(), key=coreCompare, reverse=True)
         xVals = {}
@@ -252,7 +332,9 @@ def main(args):
             )
         )
 
-        fig.update_layout(barmode="stack", height=setup.plotHeight)
+        fig.update_layout(
+            barmode="stack", height=BASE_HEIGHT + PER_CORE_HEIGHT * len(yVals)
+        )
 
         fig.write_html("kernel_perf.html")
 
@@ -261,7 +343,7 @@ def main(args):
                 html.H1("Kernel Profiler Plot"),
                 html.Br(),
                 html.H3("Stats Table"),
-                generate_analysis_table(timerAnalysis),
+                generate_analysis_table(timerStats),
                 dcc.Graph(figure=fig),
             ]
         )

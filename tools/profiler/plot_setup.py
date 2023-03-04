@@ -1,38 +1,36 @@
 class test_base:
-    plotHeight = 500
-
     colors = {
-        #Green
+        # Green
         "dark green": "rgba(78, 150, 78, 1.0)",
         "green": "rgba(78, 150, 78, 0.7)",
         "light green": "rgba(78, 150, 78, 0.5)",
         "light light green": "rgba(78, 150, 78, 0.2)",
-        #Red
+        # Red
         "dark red": "rgba(246, 78, 139, 1.0)",
         "red": "rgba(246, 78, 139, 0.7)",
         "light red": "rgba(246, 78, 139, 0.5)",
         "light light red": "rgba(246, 78, 139, 0.2)",
-        #Blue
+        # Blue
         "dark blue": "rgba(78, 78, 246, 1.0)",
         "blue": "rgba(78, 78, 246, 0.8)",
         "light blue": "rgba(78, 78, 246, 0.5)",
         "light light blue": "rgba(78, 78, 246, 0.3)",
-        #Orange
+        # Orange
         "dark orange": "rgba(235, 147, 52, 1.0)",
         "orange": "rgba(235, 147, 52, 0.8)",
         "light orange": "rgba(235, 147, 52, 0.5)",
         "light light orange": "rgba(235, 147, 52, 0.3)",
-        #Purple
+        # Purple
         "dark purple": "rgba(177, 52, 235, 1.0)",
         "purple": "rgba(177, 52, 235, 0.8)",
         "light purple": "rgba(177, 52, 235, 0.5)",
         "light light purple": "rgba(177, 52, 235, 0.3)",
-        #Gray
+        # Gray
         "dark gray": "rgba(0, 0, 0, 0.8)",
         "gray": "rgba(0, 0, 0, 0.6)",
         "light gray": "rgba(0, 0, 0, 0.4)",
         "light light gray": "rgba(0, 0, 0, 0.2)",
-        #Transparent
+        # Transparent
         "blank": "rgba(255, 255, 255, 0.0)",
     }
 
@@ -50,10 +48,10 @@ class test_base:
             ("2", "3", "red", "Kernel start -> kernel end"),
             ("3", "4", "light red", "kernel end -> Main end"),
             ("4", "END", "blank", ""),
-        ]
+        ],
     }
 
-    timerAnalysis = {
+    timerAnalysisBase = {
         "B_start -> B_end": {
             "type": "diff",
             "start": {"risc": "BRISC", "timerID": "2"},
@@ -94,7 +92,6 @@ class test_pipeline_across_rows(test_base):
     }
 
 class test_matmul_multi_core_multi_dram(test_base):
-    plotHeight = 9000
     riscTimerCombo = {
         "BRISC": [
             ("START", "1", "blank", ""),
@@ -128,8 +125,8 @@ class test_matmul_multi_core_multi_dram(test_base):
         "B_end": {"type": "single", "risc": "BRISC", "timerID": "4"},
     }
 
+
 class test_matmul_multi_core_multi_dram_in0_mcast(test_base):
-    plotHeight = 9000
     riscTimerCombo = {
         "BRISC": [
             ("START", "1", "blank", ""),
@@ -142,15 +139,12 @@ class test_matmul_multi_core_multi_dram_in0_mcast(test_base):
         "NCRISC": [
             ("START", "1", "blank", ""),
             ("1", "2", "dark red", "Main start -> Kernel start"),
-
             ("2", "8", "purple", "Kernel start -> First read"),
             ("8", "9", "light purple", "First read -> First CB push"),
             ("9", "3", "light red", "First CB Push -> kernel end"),
-
             ("2", "11", "orange", "Kernel start -> First read"),
             ("11", "12", "light orange", "First read -> First CB push"),
             ("12", "3", "light red", "First CB Push -> kernel end"),
-
             ("3", "4", "light light red", "kernel end -> Main end"),
             ("4", "END", "blank", ""),
         ],
@@ -169,8 +163,8 @@ class test_matmul_multi_core_multi_dram_in0_mcast(test_base):
         },
     }
 
+
 class test_matmul_multi_core_multi_dram_in1_mcast(test_base):
-    plotHeight = 9000
     riscTimerCombo = {
         "BRISC": [
             ("START", "1", "blank", ""),
@@ -183,15 +177,12 @@ class test_matmul_multi_core_multi_dram_in1_mcast(test_base):
         "NCRISC": [
             ("START", "1", "blank", ""),
             ("1", "2", "dark red", "Main start -> Kernel start"),
-
             ("2", "17", "purple", "Kernel start -> First read"),
             ("17", "18", "light purple", "First read -> First CB push"),
             ("18", "3", "light red", "First CB Push -> kernel end"),
-
             ("2", "21", "orange", "Kernel start -> First read"),
             ("21", "22", "light orange", "First read -> First CB push"),
             ("22", "3", "light red", "First CB Push -> kernel end"),
-
             ("3", "4", "light light red", "kernel end -> Main end"),
             ("4", "END", "blank", ""),
         ],
@@ -210,8 +201,8 @@ class test_matmul_multi_core_multi_dram_in1_mcast(test_base):
         },
     }
 
+
 class test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast(test_base):
-    plotHeight = 9000
     riscTimerCombo = {
         "BRISC": [
             ("START", "1", "blank", ""),
@@ -224,28 +215,26 @@ class test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast(test_base):
         "NCRISC": [
             ("START", "1", "blank", ""),
             ("1", "2", "dark red", "Main start -> Kernel start"),
-
-            #NC_in0_s_in1_r
+            # NC_in0_s_in1_r
             ("2", "25", "dark orange", "Kernel start to NOC_0 done"),
             ("25", "26", "orange", "NOC_0 to NOC_1 signal"),
             ("26", "27", "light orange", "NOC_1 to first CB push"),
             ("27", "3", "light light orange", "Pushing blocks"),
-            #NC_in0_s_in1_s
+            # NC_in0_s_in1_s
             ("2", "30", "dark red", "Kernel start to NOC_0 done"),
             ("30", "31", "red", "NOC_0 to NOC_1 signal"),
             ("31", "32", "light red", "NOC_1 to first CB push"),
             ("32", "3", "light light red", "Pushing blocks"),
-            #NC_in0_r_in1_r
+            # NC_in0_r_in1_r
             ("2", "35", "dark purple", "Kernel start to NOC_0 done"),
             ("35", "36", "purple", "NOC_0 to NOC_1 signal"),
             ("36", "37", "light purple", "NOC_1 to first CB push"),
             ("37", "3", "light light purple", "Pushing blocks"),
-            #NC_in0_r_in1_s
+            # NC_in0_r_in1_s
             ("2", "40", "dark blue", "Kernel start to NOC_0 done"),
             ("40", "41", "blue", "NOC_0 to NOC_1 signal"),
             ("41", "42", "light blue", "NOC_1 to first CB push"),
             ("42", "3", "light light blue", "Pushing blocks"),
-
             ("3", "4", "light light red", "kernel end -> Main end"),
             ("4", "END", "blank", ""),
         ],

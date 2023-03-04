@@ -55,6 +55,7 @@ docs/doxygen_build
 
 *profile_log*.csv
 kernel_perf.html
+device_stats.txt
 
 env/
 tags

@@ -487,7 +487,7 @@ void tt_cluster::deassert_risc_reset(bool start_stagger) {
         // cores on remote chips
         // TODO: for now assume that chip ids for MMIO chips are 0 ~ (num_mmio_chips-1)
         // Need to change m_pci_device object in silicon driver to support a generic subset of chip ids with MMIO
-        log_info(tt::LogLLRuntime, "Stagger start : {}", start_stagger);
+        log_debug(tt::LogLLRuntime, "Stagger start : {}", start_stagger);
         device->deassert_risc_reset(start_stagger);
         const std::unordered_set<chip_id_t> &all_chips = ndesc->get_all_chips();
         for (const chip_id_t &chip : all_chips) {
