@@ -7,6 +7,7 @@ PROGRAMMING_EXAMPLES_LDFLAGS = -lll_buda_impl -lll_buda -lllrt -ltt_gdb -ldevice
 include programming_examples/basic_empty_program/module.mk
 include programming_examples/loopback/module.mk
 
+programming_examples: programming_examples/loopback \
+                      programming_examples/basic_empty_program
 programming_examples/loopback: $(PROGRAMMING_EXAMPLES_TESTDIR)/loopback;
 programming_examples/basic_empty_program: $(PROGRAMMING_EXAMPLES_TESTDIR)/basic_empty_program;
-

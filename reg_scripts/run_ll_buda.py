@@ -130,17 +130,17 @@ def build_programming_example_executable_path(namespace, executable_name, extra_
 
 
 if __name__ == "__main__":
-    ll_buda_test_entries = get_ll_buda_test_entries()
-
     cmdline_args = get_cmdline_args(TestSuiteType.LL_BUDA)
 
     timeout, = get_ll_buda_arguments_from_cmdline_args(cmdline_args)
 
-    llb_test_report = run_ll_buda_tests(ll_buda_test_entries, timeout)
-
     programming_example_entries = get_programming_example_entries()
 
     pe_test_report = run_programming_examples(programming_example_entries, timeout)
+
+    ll_buda_test_entries = get_ll_buda_test_entries()
+
+    llb_test_report = run_ll_buda_tests(ll_buda_test_entries, timeout)
 
     test_report = {**llb_test_report, **pe_test_report}
 
