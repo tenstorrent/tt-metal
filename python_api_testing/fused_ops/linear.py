@@ -5,7 +5,7 @@ def Linear(out_features, in_features, weight, bias, device):
     weight = gpai.tensor.Tensor(
         weight,
         [1, 1, out_features, in_features],
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device
     )
@@ -13,7 +13,7 @@ def Linear(out_features, in_features, weight, bias, device):
     bias = gpai.tensor.Tensor(
         bias,
         [1, 1, 32, out_features],
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device
     )

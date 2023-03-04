@@ -17,7 +17,7 @@ def datacopy(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -37,7 +37,7 @@ def eltwise_exp(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -58,7 +58,7 @@ def eltwise_recip(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -79,7 +79,7 @@ def eltwise_sqrt(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -100,7 +100,7 @@ def eltwise_gelu(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -121,7 +121,7 @@ def eltwise_relu(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -142,7 +142,7 @@ def eltwise_sigmoid(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -163,7 +163,7 @@ def eltwise_log(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -184,7 +184,7 @@ def eltwise_tanh(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -206,14 +206,14 @@ def eltwise_add(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -235,14 +235,14 @@ def eltwise_sub(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -264,14 +264,14 @@ def eltwise_mul(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -292,14 +292,14 @@ def matmul(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -322,14 +322,14 @@ def bcast_add_h(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -352,14 +352,14 @@ def bcast_add_w(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -382,14 +382,14 @@ def bcast_add_hw(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -412,14 +412,14 @@ def bcast_sub_h(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -442,14 +442,14 @@ def bcast_sub_w(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -472,14 +472,14 @@ def bcast_sub_hw(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -502,14 +502,14 @@ def bcast_mul_h(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -532,14 +532,14 @@ def bcast_mul_w(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -562,14 +562,14 @@ def bcast_mul_hw(pcie_slot, x, y):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
     t1 = gpai.tensor.Tensor(
         tilize_to_list(y),
         y.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -590,7 +590,7 @@ def reduce_sum_h(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -614,7 +614,7 @@ def reduce_sum_w(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -638,7 +638,7 @@ def reduce_sum_hw(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -662,7 +662,7 @@ def reduce_max_h(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -686,7 +686,7 @@ def reduce_max_w(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -710,7 +710,7 @@ def reduce_max_hw(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -734,7 +734,7 @@ def transpose_wh(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )
@@ -755,7 +755,7 @@ def transpose_hc(pcie_slot, x):
     t0 = gpai.tensor.Tensor(
         tilize_to_list(x),
         x.shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device,
     )

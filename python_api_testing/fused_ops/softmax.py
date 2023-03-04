@@ -53,7 +53,7 @@ if __name__ == "__main__":
     ref_sm = ref_stable_softmax(x)
 
     x_t = tilize_to_list(x)
-    t0 = gpai.tensor.Tensor(x_t, [1, 1, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
+    t0 = gpai.tensor.Tensor(x_t, [1, 1, H, W], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
     func = softmax
     t1 = func(t0)
     t2_data = t1.to(host).data()

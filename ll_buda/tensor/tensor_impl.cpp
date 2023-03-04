@@ -60,6 +60,14 @@ void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_
     tensor.interleaved_buffer_ = CreateInterleavedDramBuffer(tensor.device(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
 }
 
+void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout) {
+    // TODO: Get supported layout and dtypes from device
+    auto supported_dtype = [&dtype]() { return dtype == DataType::BFLOAT16; };
+    auto supported_layout = [&layout]() { return layout == Layout::ROW_MAJOR or layout == Layout::TILE; };
+    TT_ASSERT(supported_dtype() && "Only BFLOAT16 is supported on device!");
+    TT_ASSERT(supported_layout() && "Only ROW_MAJOR and TILE layouts are supported on device!");
+}
+
 
 }  // namespace tensor_impl
 

@@ -22,7 +22,7 @@ def tile_major_reshape():
     x = torch.randn((N,C,H,W))
     xp = pad_weight(x)
 
-    xtt = gpai.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
+    xtt = gpai.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
     gpai.tensor.reshape(xtt, 5, 3, 96, 64)
     assert(xtt.shape() == [5,3,96,64])
     gpai.tensor.reshape(xtt, 3, 5, 64, 96)
@@ -55,7 +55,7 @@ def row_major_reshape():
     xp = pad_activation(x).view(-1).tolist()
     xtt = gpai.tensor.Tensor(
         xp, [N, C, H, W],
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.ROW_MAJOR,
         device
     )

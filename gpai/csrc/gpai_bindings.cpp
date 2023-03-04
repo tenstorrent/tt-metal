@@ -44,6 +44,20 @@ void TensorModule(py::module &m_tensor) {
                 }
             )
         )
+        .def(
+            py::init<>(
+                [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
+                    return Tensor(data, shape, data_type, layout);
+                }
+            )
+        )
+        .def(
+            py::init<>(
+                [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
+                    return Tensor(data, shape, data_type, layout, device);
+                }
+            )
+        )
         .def("to", py::overload_cast<Device*>(&Tensor::to, py::const_), "Moves the tensor to device")
         .def("to", py::overload_cast<Host*>(&Tensor::to, py::const_), "Moves the tensor to CPU")
         .def("print", [](const Tensor &self, Layout print_layout = Layout::ROW_MAJOR) {
@@ -56,8 +70,10 @@ void TensorModule(py::module &m_tensor) {
             std::vector<uint32_t> empty_vec;
             TT_ASSERT(self.data_ptr() != nullptr);
             switch (self.dtype()) {
-                case DataType::BFLOAT16:
+                case DataType::BFLOAT16: {
+                    TT_ASSERT(false && "TODO: Unsupported need to py cast bfloat16");
                     return py::cast(*reinterpret_cast<std::vector<bfloat16>*>(self.data_ptr()));
+                }
                 break;
                 case DataType::FLOAT32:
                     return py::cast(*reinterpret_cast<std::vector<float>*>(self.data_ptr()));

@@ -24,7 +24,7 @@ if __name__ == "__main__":
     W = 32*5
     x = torch.randn((N,C,H,W))
 
-    xt = gpai.tensor.Tensor(x.reshape(-1).tolist(), [N, C, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.ROW_MAJOR, device)
+    xt = gpai.tensor.Tensor(x.reshape(-1).tolist(), [N, C, H, W], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.ROW_MAJOR, device)
 
     # test that reading back from row major is about the same (+/- BF16 conversion)
     xt_data = xt.to(host).data()

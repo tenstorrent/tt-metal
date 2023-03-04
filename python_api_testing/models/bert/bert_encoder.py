@@ -62,7 +62,7 @@ def run_bert_encoder_inference():
     pytorch_out = pytorch_bert_model(bert_encoder_input.squeeze(1)).unsqueeze(1)
 
     tt_bert_encoder_input = tilize_to_list(pad_activation(bert_encoder_input))
-    tt_bert_encoder_input = gpai.tensor.Tensor(tt_bert_encoder_input, bert_encoder_input.shape, gpai.tensor.DataType.FLOAT32,  gpai.tensor.Layout.TILE, device)
+    tt_bert_encoder_input = gpai.tensor.Tensor(tt_bert_encoder_input, bert_encoder_input.shape, gpai.tensor.DataType.BFLOAT16,  gpai.tensor.Layout.TILE, device)
 
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input).to(host)
     tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))

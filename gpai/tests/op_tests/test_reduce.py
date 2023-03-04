@@ -26,13 +26,13 @@ if __name__ == "__main__":
     H = 32*5
     W = 32*3
     torch.manual_seed(123)
-    x = (torch.randn((N,C,H,W))+0.01).to(torch.bfloat16).to(torch.float32)
+    x = (torch.randn((N,C,H,W))+0.01).to(torch.bfloat16)
 
     reduce_dims_tt = [RW, RH, RHW]
     reduce_dims_pyt = [[3], [2], [3,2]]
     reduce_shapes = [[N, C, H, 32], [N, C, 32, W], [N, C, 32, 32]]
     for rtype, expected_shape, rdims_pyt in zip(reduce_dims_tt, reduce_shapes, reduce_dims_pyt):
-        xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
+        xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
         mul = 0.5
         if rtype == RHW:
             mul = 1.0
@@ -43,7 +43,7 @@ if __name__ == "__main__":
         pyt_got_back_rm = torch.Tensor(tt_host_rm).reshape(expected_shape)
         pyt_got_back_rm = untilize(pyt_got_back_rm)
 
-        ref = x.to(torch.bfloat16).sum(rdims_pyt, keepdim=True).to(torch.float32)*mul
+        ref = x.to(torch.bfloat16).sum(rdims_pyt, keepdim=True)*mul
         if rtype == RW:
             ref_padded = torch.zeros(pyt_got_back_rm.shape)
             ref_padded[:,:,:,0:1] = ref

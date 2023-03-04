@@ -12,41 +12,65 @@ namespace tt {
 
 namespace ll_buda {
 
-Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType data_type, Layout layout)
-    : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout) {
-    tensor_impl::initialize_data_wrapper(*this, init_type);
+Tensor::Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout)
+    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
+    tensor_impl::convert_and_write_data_wrapper(*this, data);
 }
 
-Tensor::Tensor(std::vector<bfloat16> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device)
-    : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout), device_(device) {
-    tensor_impl::initialize_data_on_device<bfloat16>(*this, data);
-}
-
-Tensor::Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device)
-    : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout), device_(device) {
-    tensor_impl::initialize_data_on_device<uint32_t>(*this, data);
-}
-
-Tensor::Tensor(std::vector<float> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device)
-    : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout), device_(device) {
-    tensor_impl::initialize_data_on_device<float>(*this, data);
-}
-
-Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType data_type, Layout layout, Device *device)
-    : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout), device_(device) {
-    tensor_impl::initialize_data_wrapper(*this, init_type);
-}
-
-Tensor::Tensor(const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device)
-    : shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout), device_(device) {
+Tensor::Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device)
+    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device) {
     TT_ASSERT(device != nullptr);
-    TT_ASSERT(layout == Layout::ROW_MAJOR or layout == Layout::TILE, "Only ROW_MAJOR or TILE layout is supported!");
-    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, volume());
+    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
+    tensor_impl::convert_and_write_data_wrapper(*this, data);
+}
+
+Tensor::Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout)
+    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
+    tensor_impl::convert_and_write_data_wrapper(*this, data);
+}
+
+Tensor::Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device)
+    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device) {
+    TT_ASSERT(device != nullptr);
+    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
+    tensor_impl::convert_and_write_data_wrapper(*this, data);
+}
+
+Tensor::Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout)
+    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
+    tensor_impl::convert_and_write_data_wrapper(*this, data);
+}
+
+Tensor::Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device)
+    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device) {
+    TT_ASSERT(device != nullptr);
+    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
+    tensor_impl::convert_and_write_data_wrapper(*this, data);
+}
+
+Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType dtype, Layout layout)
+    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
+    tensor_impl::initialize_data_wrapper(*this, init_type);
+}
+
+Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType dtype, Layout layout, Device *device)
+    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device) {
+    TT_ASSERT(device != nullptr);
+    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
+    tensor_impl::initialize_data_wrapper(*this, init_type);
+}
+
+Tensor::Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device)
+    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device) {
+    TT_ASSERT(device != nullptr);
+    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
+    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(dtype, volume());
     tensor_impl::allocate_interleaved_buffer_on_device(*this, packed_size_in_bytes);
 }
 
 Tensor Tensor::to(Device *target_device) const {
     if (on_host()) {
+        tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
         return tensor_impl::to_device_wrapper(*this, target_device);
     }
     TT_ASSERT(this->device_ == target_device && "Currently do not support moving between devices");

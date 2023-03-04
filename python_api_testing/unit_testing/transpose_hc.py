@@ -22,7 +22,7 @@ if __name__ == "__main__":
     x = torch.randn((N,C,H,W))
     xp = pad_weight(x)
 
-    xt = gpai.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
+    xt = gpai.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
     xtt = gpai.tensor.transpose_hc(xt)
     assert(xtt.shape() == [N,H,C,W])
 

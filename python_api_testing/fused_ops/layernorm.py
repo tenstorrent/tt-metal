@@ -17,7 +17,7 @@ def Layernorm(gamma, beta, epsilon: float, H, W, device):
     gamma = gpai.tensor.Tensor(
         gamma,
         [1, 1, 32, W],
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device
     )
@@ -25,7 +25,7 @@ def Layernorm(gamma, beta, epsilon: float, H, W, device):
     beta = gpai.tensor.Tensor(
         beta,
         [1, 1, 32, W],
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device
     )
@@ -33,7 +33,7 @@ def Layernorm(gamma, beta, epsilon: float, H, W, device):
     epsilon = gpai.tensor.Tensor(
         [epsilon] + [0 for _ in range(32 * 32 - 1)],
         [1, 1, 32, 32],
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device
     )
@@ -41,12 +41,12 @@ def Layernorm(gamma, beta, epsilon: float, H, W, device):
     var_scaler = gpai.tensor.Tensor(
         [1 / (H * W)] + [0 for _ in range(32 * 32 - 1)],
         [1, 1, 32, 32],
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.TILE,
         device
     )
 
-    #gpai.tensor.DataType.FLOAT32
+    #gpai.tensor.DataType.BFLOAT16
     RSUM = gpai.tensor.ReduceOpMath.SUM
     RW = gpai.tensor.ReduceOpDim.W
     RH = gpai.tensor.ReduceOpDim.H
@@ -112,7 +112,7 @@ if __name__ == "__main__":
     eps = pad_weight(torch.full((1,1,1,1), epsf))
     var_scaler = pad_weight(torch.full((1,1,1,1), 1.0/(H*W) )) # inverse n for biased variance
 
-    t0 = gpai.tensor.Tensor(tilize_to_list(x), [1, 1, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
+    t0 = gpai.tensor.Tensor(tilize_to_list(x), [1, 1, H, W], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
     ttgamma = tilize_to_list(gamma)
     ttbeta = tilize_to_list(beta)
     func = Layernorm(ttgamma, ttbeta, eps, var_scaler, H, W)

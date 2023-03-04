@@ -43,31 +43,28 @@ namespace tensor_impl {
     void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
     template <typename T>
-    void initialize_data_helper(Tensor &tensor, Initialize init_type);
+    void write_data(Tensor &tensor, std::vector<T> &data);
 }
 
 class Tensor {
     public:
-        Tensor(std::vector<bfloat16> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout)
-            : data_(static_cast<void *>(new std::vector<bfloat16>(std::move(data)))), shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout) {}
+        Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
 
-        Tensor(std::vector<bfloat16> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device);
+        Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device);
 
-        Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout)
-            : data_(static_cast<void *>(new std::vector<uint32_t>(std::move(data)))), shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout) {}
+        Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
 
-        Tensor(std::vector<uint32_t> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device);
+        Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device);
 
-        Tensor(std::vector<float> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout)
-            : data_(static_cast<void *>(new std::vector<float>(std::move(data)))), shape_(shape), strides_(compute_strides()), data_type_(data_type), layout_(layout) {}
+        Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
 
-        Tensor(std::vector<float> data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device);
+        Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device);
 
-        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType data_type, Layout layout);
+        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType dtype, Layout layout);
 
-        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType data_type, Layout layout, Device *device);
+        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType dtype, Layout layout, Device *device);
 
-        Tensor(const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device);
+        Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device);
 
         const std::array<uint32_t, 4>& reshape(int N, int C, int H, int W);
 
@@ -77,7 +74,7 @@ class Tensor {
 
         uint32_t volume() const { return shape_[0] * shape_[1] * shape_[2] * shape_[3]; }
 
-        DataType dtype() const { return data_type_; }
+        DataType dtype() const { return dtype_; }
 
         Layout layout() const { return layout_; }
 
@@ -106,12 +103,12 @@ class Tensor {
         friend void tensor_impl::allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
         template <typename T>
-        friend void tensor_impl::initialize_data_helper(Tensor &tensor, Initialize init_type);
+        friend void tensor_impl::write_data(Tensor &tensor, std::vector<T> &data);
 
         void *data_ = nullptr;                      // Unpopulated if tensor is on device
         std::array<uint32_t, 4> shape_;             // Outer-most dimension first
         std::array<uint32_t, 4> strides_;           // Outer-most dimension first
-        DataType data_type_;
+        DataType dtype_;
         Layout layout_;
         Device *device_ = nullptr;                                  // Set if tensor is allocated on device
         InterleavedDramBuffer *interleaved_buffer_ = nullptr;       // Tensor is stored in multiple DRAM buffers across multiple banks

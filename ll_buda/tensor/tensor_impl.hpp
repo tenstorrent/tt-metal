@@ -52,8 +52,35 @@ inline std::vector<T> initialize_row_major_tensor_data(const std::array<uint32_t
 }
 
 // ======================================================================================
-//                          dtype to uint32_t packer and unpackers
+//                        Data type converters, packers, and unpackers
 // ======================================================================================
+template <typename T1, typename T2>
+inline std::vector<T1> cast_vec(std::vector<T2> &data_to_convert) {
+    std::vector<T1> converted_data;
+    for (auto datum : data_to_convert) {
+        converted_data.push_back(static_cast<T1>(datum));
+    }
+    return converted_data;
+}
+
+template <>
+inline std::vector<float> cast_vec(std::vector<bfloat16> &data_to_convert) {
+    std::vector<float> converted_data;
+    for (auto datum : data_to_convert) {
+        converted_data.push_back(datum.to_float());
+    }
+    return converted_data;
+}
+
+template <>
+inline std::vector<uint32_t> cast_vec(std::vector<bfloat16> &data_to_convert) {
+    std::vector<uint32_t> converted_data;
+    for (auto datum : data_to_convert) {
+        converted_data.push_back((uint32_t)datum.to_uint16());
+    }
+    return converted_data;
+}
+
 template <typename T>
 constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(std::vector<T> &data_to_pack) {
     std::vector<uint32_t> packed_data;
@@ -151,6 +178,11 @@ inline std::vector<T> convert_layout_tile_to_row_major(const std::array<uint32_t
 }
 
 // ======================================================================================
+//                                      Validators
+// ======================================================================================
+void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout);
+
+// ======================================================================================
 //                           Data reader, writer, and initializer
 // ======================================================================================
 std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape);
@@ -177,7 +209,7 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
 }
 
 template <typename T>
-inline void write_data_to_device(const Tensor &tensor, std::vector<T> data) {
+inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
     uint32_t packed_size_in_bytes = packed_buffer_size_bytes<T>(data.size());
     auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(tensor.dtype(), tensor.layout(), packed_size_in_bytes, tensor.shape());
     std::vector<uint32_t> uint32_data = pack_vec_into_uint32_vec<T>(data);
@@ -186,7 +218,7 @@ inline void write_data_to_device(const Tensor &tensor, std::vector<T> data) {
 }
 
 template <typename T>
-inline void initialize_data_on_device(Tensor &tensor, std::vector<T> data) {
+inline void initialize_data_on_device(Tensor &tensor, std::vector<T> &data) {
     TT_ASSERT(tensor.device() != nullptr);
     uint32_t packed_size_in_bytes = packed_buffer_size_bytes<T>(data.size());
     allocate_interleaved_buffer_on_device(tensor, packed_size_in_bytes);
@@ -194,14 +226,29 @@ inline void initialize_data_on_device(Tensor &tensor, std::vector<T> data) {
 }
 
 template <typename T>
-inline void initialize_data_helper(Tensor &tensor, Initialize init_type) {
-    auto data = initialize_data<T>(tensor.shape(), init_type, tensor.layout());
+inline void write_data(Tensor &tensor, std::vector<T> &data) {
     if (tensor.on_host()) {
         auto data_ptr = new std::vector<T>(std::move(data));
         tensor.data_ = static_cast<void *>(data_ptr);
     } else {
         initialize_data_on_device<T>(tensor, data);
     }
+}
+
+template <typename T1, typename T2>
+inline void convert_and_write_data(Tensor &tensor, std::vector<T2> &data) {
+    if (std::is_same<T1, T2>::value) {
+        write_data(tensor, data);
+    } else {
+        std::vector<T1> converted_data = cast_vec<T1>(data);
+        write_data(tensor, converted_data);
+    }
+}
+
+template <typename T>
+inline void initialize_data_helper(Tensor &tensor, Initialize init_type) {
+    auto data = initialize_data<T>(tensor.shape(), init_type, tensor.layout());
+    write_data(tensor, data);
 }
 
 // ======================================================================================

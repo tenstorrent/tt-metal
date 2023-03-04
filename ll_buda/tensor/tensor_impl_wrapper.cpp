@@ -1,6 +1,5 @@
 #include "ll_buda/tensor/tensor_impl_wrapper.hpp"
 
-#include "ll_buda/tensor/tensor_impl.hpp"
 #include "common/bfloat16.hpp"
 
 namespace tt {

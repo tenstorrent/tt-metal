@@ -17,7 +17,7 @@ def run_tilize_test(nb, nc, nh, nw):
     a = gpai.tensor.Tensor(
         inp.flatten().tolist(),
         shape,
-        gpai.tensor.DataType.FLOAT32,
+        gpai.tensor.DataType.BFLOAT16,
         gpai.tensor.Layout.ROW_MAJOR,
         device
     )

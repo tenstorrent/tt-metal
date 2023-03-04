@@ -105,7 +105,7 @@ def run_ffn_inference():
     pytorch_out = pytorch_ffn_model(ffn_input)
 
     tilized_ffn_input = tilize_to_list(pad_activation(ffn_input))
-    tilized_ffn_input = gpai.tensor.Tensor(tilized_ffn_input, ffn_input.shape, gpai.tensor.DataType.FLOAT32,  gpai.tensor.Layout.TILE, device)
+    tilized_ffn_input = gpai.tensor.Tensor(tilized_ffn_input, ffn_input.shape, gpai.tensor.DataType.BFLOAT16,  gpai.tensor.Layout.TILE, device)
 
     tt_out = tt_ffn_model(tilized_ffn_input).to(host)
     tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
