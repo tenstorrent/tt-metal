@@ -61,8 +61,15 @@ LL_BUDA_TEST_ENTRIES = (
     TestEntry("ll_buda/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"),
 
     TestEntry("ll_buda/tests/tensors/test_host_device_loopback", "tensors/test_host_device_loopback"),
-
     TestEntry("ll_buda/tests/test_pipeline_across_rows", "test_pipeline_across_rows"),
+    # DTX Tests
+    TestEntry("ll_buda/tests/dtx/tensor", "dtx/tensor"),
+    TestEntry("ll_buda/tests/dtx/unit_tests/", "dtx/unit_tests"),
+    TestEntry("ll_buda/tests/dtx/overlap", "dtx/overlap"),
+    TestEntry("ll_buda/tests/dtx/collapse_transformations", "dtx/collapse_transformations"),
+    #TestEntry("ll_buda/tests/dtx/tensor_evaluate", "dtx/tensor_evaluate"),
+
+
 )
 
 
