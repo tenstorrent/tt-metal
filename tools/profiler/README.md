@@ -36,36 +36,64 @@ second, ConfigureDeviceWithProgram, 675598392545035, 675598625864988, 233319953
 
 ## Profiling kernel side API
 
-Function `mark_time` in `kernel_profile.hpp`  enables measuring cycle counts in kernel code. The integer id argument is attached to the line in the csv that marks the time for reaching that location in the code.
+### Default Markers
+On the host side minimal changes are necessary on the code.
 
-On the host side minimal changes are necessary on the code. For every program that runs kernels that are profiled `ll_buda::ConfigureDeviceWithProgram` needs its start server arg set to `true`. `ll_buda::stopPrintfServer` function has to run before another `ll_buda::ConfigureDeviceWithProgram` with start server set to true can start. Also, the compile flag for kernel side profiling has to be set, this is done by setting the `ll_buda::CompileProgram` and its `profile_kernel` argument.
+1. The compile flag for kernel side profiling has to be set, this is done by setting the flag in `ll_buda::CompileProgram`.
+2. Print server start flag must be set, this is done setting the flag in `ll_buda::ConfigureDeviceWithProgram` .
+3. `ll_buda::stopPrintfServer` function has to run before another `ll_buda::ConfigureDeviceWithProgram` with print start server set to true can start.
 
-`test_add_two_ints.cpp` demonstrates kernel profiling as part of a simple example.
-Kernel `add_two_ints.cpp` has the tow `mark_time` calls at the start and end of the function.
-
-`test_matmul_multi_core_multi_dram.cpp` is a good example that demonstrates how to grab kernel side
-profiler time. Both kernels `writer_matmul_tile_layout.cpp` and  `reader_matmul_tile_layout.cpp`
-used by these tests are modified to measure their entire execution period.
-
-Once the `ll_buda` test that runs the kernel under profile finishes, `profile_log_kernel.csv` is
-generated.
-
-The following is the sample result for the `test_add_two_ints.cpp`. You can see that inline with
-the host side example above, same markers are recorded twice as the same kernel runs on the same cores with different args.
-
+e.g.
 ```
-0 ,1 ,1 ,BRISC ,0 ,1892410749640
-0 ,1 ,1 ,BRISC ,1 ,1892410749851
-0 ,1 ,1 ,BRISC ,0 ,1892694762480
-0 ,1 ,1 ,BRISC ,1 ,1892694762683
+    constexpr bool profile_kernel = true;
+    pass &= ll_buda::CompileProgram(device, program, skip_hlkc, profile_kernel);
+    pass &= ll_buda::ConfigureDeviceWithProgram(device, program, profile_kernel);
+    .
+    .
+    .
+    .
+    .
+    ll_buda::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, second_runtime_args);
+    pass &= ll_buda::LaunchKernels(device, program);
+
+    .
+    .
+    .
+    .
+    .
+    ll_buda::stopPrintfServer();
 ```
+
+After this setup, default markers will be generated and can be posprocessed.
+
+Default markers are:
+
+1. risc main funtion start and stop
+2. kernel start and stop
+
+<!--`test_matmul_multi_core_multi_dram.cpp` is a good example that demonstrates how to grab kernel side-->
+<!--profiler time. Both kernels `writer_matmul_tile_layout.cpp` and  `reader_matmul_tile_layout.cpp`-->
+<!--used by these tests are modified to measure their entire execution period.-->
+
+<!--Once the `ll_buda` test that runs the kernel under profile finishes, `profile_log_kernel.csv` is-->
+<!--generated.-->
+
+<!--The following is the sample result for the `test_add_two_ints.cpp`. You can see that inline with-->
+<!--the host side example above, same markers are recorded twice as the same kernel runs on the same cores with different args.-->
+
+<!--```-->
+<!--0 ,1 ,1 ,BRISC ,0 ,1892410749640-->
+<!--0 ,1 ,1 ,BRISC ,1 ,1892410749851-->
+<!--0 ,1 ,1 ,BRISC ,0 ,1892694762480-->
+<!--0 ,1 ,1 ,BRISC ,1 ,1892694762683-->
+<!--```-->
 
 ### Plotting kernel profiler
 
-Plotting kernel profiler data requires setting up the `plot_steup.py`. Sample tests are added to this file. The setup is based on timer ID and which risc type they come from. In `test_add_two_ints` for examples shows the plotting of its `brisc`
-kernel profiling results. 
+<!--Plotting kernel profiler data requires setting up the `plot_steup.py`. Sample tests are added to this file. The setup is based on timer ID and which risc type they come from. In `test_add_two_ints` for examples shows the plotting of its `brisc`-->
+<!--kernel profiling results. -->
 
-Setting the environment for running the plotter is as follows.
+1. Set up the environment for running the plotter:
 
 ```
 cd tools/profiler/
@@ -74,13 +102,12 @@ source env/bin/activate
 pip install -r requirements.txt
 ```
 
-The plotter webapp can run using the following command
+2. Run plotter webapp:
 ```
 cd tools/profiler/
-./postproc_kerenel_log.py <test kernel profile setup name>
+./postproc_kerenel_log.py
 ```
-Where `<test kernel profile setup name>` is for example `test_add_two_ints`.
 
-Navigate to `<machine IP>:8050` for output chart.
+3. Navigate to `<machine IP>:8050` to view output chart.
 
-`kernel_perf.html` is also generated from the plot in the `tools/profiler` folder which is the interactive plot of the profiler result.
+4. `kernel_perf.html` and `device_stats.txt` are generated that contain the plot and the chart for the stats.

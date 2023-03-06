@@ -92,7 +92,7 @@ def print_stats(timerStats, timerStatsCores):
                                 end="",
                             )
                         else:
-                            print(f"{' ':>{numberWidth}}", end="")
+                            print(f"{'X':>{numberWidth}}", end="")
                     else:
                         if core_x in [0, 3, 6, 9]:
                             print(
