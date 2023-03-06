@@ -5,17 +5,15 @@ The GitHub page for the project is located here:
 https://github.com/tenstorrent-accel/gp.ai
 
 To be added to the repo, please contact Jasmina or Davor at:
-jvasiljevic@tenstorrent.com, dcapalija@tenstorrent.com
+jvasiljevic@tenstorrent.com, dcapalija@tenstorrent.com.
 
 Running TT-Accel on a cloud machine
 -----------------------------------
 
-Log into your cloud machine, and run the following commands to set up the
-TT-Accel project:
+Run the following commands to set up the TT-Accel project:
 
 ::
 
-    git clone git@github.com:tenstorrent-accel/gp.ai-rel.git --recurse-submodules
     export BUDA_HOME=$(pwd)
     make build
     source build/python_env/bin/activate
@@ -31,9 +29,8 @@ Congratulations! You've run your first program on this stack. For more
 explanation for what you just ran and a deeper dive into the API, please go to
 :ref:`Dram Loopback<DRAM Loopback Example>`.
 
-To try any of the applications from the TT-Accel developer test suite (e.g.,
-test_sfpu), please refer to :ref:`Getting Started for Devs<Getting started for
-devs>`.
+If you're a developer, please instead refer to :ref:`Getting Started for
+Devs<Getting started for devs>`.
 
 .. only:: not html
 
