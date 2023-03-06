@@ -175,6 +175,7 @@ void DeviceModule(py::module &m_device) {
     m_device.def("InitializeDevice", &InitializeDevice);
     m_device.def("CloseDevice", &CloseDevice);
     m_device.def("StartDebugPrintServer", &StartDebugPrintServer);
+    m_device.def("setProfilerDir", &setProfilerDir);
 
     m_device.def("SetForceRecompiles", &SetForceRecompiles);
     m_device.def("GetForceRecompiles", &GetForceRecompiles);

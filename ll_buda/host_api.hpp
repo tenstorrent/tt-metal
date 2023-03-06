@@ -40,9 +40,12 @@ namespace ll_buda {
 // ==================================================
 
 // dump host side profiler results
-void dumpProfilerResults(std::string name_append = "");
+void dumpProfilerResults(std::string name_append = "", bool add_header = false);
 
-// stop host side pintf server
+// set profiler log dir
+void setProfilerDir(std::string output_dir = "");
+
+// stop host side printf server
 void stopPrintfServer();
 
 // ==================================================

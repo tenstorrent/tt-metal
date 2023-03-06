@@ -18,10 +18,14 @@ namespace ll_buda {
 
 static Profiler ll_buda_profiler = Profiler();
 
-void dumpProfilerResults(std::string name_append)
+void dumpProfilerResults(std::string name_append, bool add_header)
 {
-    ll_buda_profiler.dumpResults(name_append);
+    ll_buda_profiler.dumpResults(name_append, add_header);
 }
+
+void setProfilerDir(std::string output_dir){
+     ll_buda_profiler.setOutputDir(output_dir);
+ }
 
 bool enable_compile_cache = false;
 int force_recompiles = 0;
@@ -488,7 +492,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPr
     {
         int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
 
-        std::string log_name = Profiler::getKernelProfilerLogName();
+        std::string log_name = ll_buda_profiler.getKernelProfilerLogName();
         tt_start_debug_print_server(cluster, {pcie_slot}, worker_cores, hart_mask, log_name.c_str());
     }
 

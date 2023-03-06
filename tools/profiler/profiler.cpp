@@ -1,16 +1,24 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <filesystem>
 
-#include "tools/profiler/profiler.hpp" 
+#include "tools/profiler/profiler.hpp"
 
-#define HOST_SIDE_LOG "tools/profiler/profile_log.csv"
-#define DEVICE_SIDE_LOG "tools/profiler/profile_log_kernel.csv"
+#define HOST_SIDE_LOG "profile_log.csv"
+#define DEVICE_SIDE_LOG "profile_log_kernel.csv"
 
 Profiler::Profiler()
 {
     firstRun = true;
+    output_dir = std::filesystem::path("tools/profiler");
 }
+
+void Profiler::setOutputDir(std::string new_output_dir)
+ {
+    std::filesystem::create_directories(new_output_dir);
+    output_dir = new_output_dir;
+ }
 
 TimerPeriodInt Profiler::timerToTimerInt(TimerPeriod period)
 {
@@ -33,16 +41,17 @@ void Profiler::markStop(std::string timer_namer)
     name_to_timer_map[timer_namer].stop = steady_clock::now();
 }
 
-void Profiler::dumpResults(std::string name_append)
+void Profiler::dumpResults(std::string name_append, bool add_header)
 {
     const int large_width = 30;
     const int medium_width = 25;
 
+    std::filesystem::path log_path = output_dir / HOST_SIDE_LOG;
     std::ofstream log_file;
 
-    if (firstRun)
+    if (firstRun || add_header)
     {
-        log_file.open(HOST_SIDE_LOG);
+        log_file.open(log_path);
 
         log_file << "Section Name" << ", ";
         log_file << "Function Name" << ", ";
@@ -54,7 +63,7 @@ void Profiler::dumpResults(std::string name_append)
     }
     else
     {
-        log_file.open(HOST_SIDE_LOG,  std::ios_base::app);
+        log_file.open(log_path,  std::ios_base::app);
     }
 
     for (auto timer : name_to_timer_map)
@@ -96,5 +105,5 @@ void Profiler::kernelProfilerCallback(
 
 std::string Profiler::getKernelProfilerLogName()
 {
-    return DEVICE_SIDE_LOG;
+    return output_dir / DEVICE_SIDE_LOG;
 }

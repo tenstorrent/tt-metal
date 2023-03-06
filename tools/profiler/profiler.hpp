@@ -4,6 +4,7 @@
 #include <string>
 #include <unordered_map>
 #include <iostream>
+#include <filesystem>
 
 using std::chrono::steady_clock;
 using std::chrono::duration;
@@ -33,21 +34,27 @@ class Profiler {
         // First Run
         bool firstRun;
 
+        // Output Dir for Profile Logs
+        std::filesystem::path output_dir;
+
     public:
         //Constructor
         Profiler();
 
         //Mark the steady_clock for the start of the asked name
         void markStart(std::string timer_name);
-        
+
         //Mark the steady_clock time for the end of the asked name
         void markStop(std::string timer_name);
 
+        //Change the output dir of the profile logs
+        void setOutputDir(std::string new_output_dir);
+
         //Traverse all timers and dump the results
-        void dumpResults(std::string name_append);
+        void dumpResults(std::string name_append, bool add_header=false);
 
         //Get kernel profile log filename
-        static std::string getKernelProfilerLogName();
+        std::string getKernelProfilerLogName();
 
         //Callback on receiving profiler data from kernels
         static void kernelProfilerCallback(
