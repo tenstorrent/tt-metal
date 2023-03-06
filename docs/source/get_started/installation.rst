@@ -23,7 +23,7 @@ Compile and execute an example TT-Accel application on Grayskull:
 ::
 
     make programming_examples/loopback
-    ./build/test/programming_examples/loopback
+    ./build/programming_examples/loopback
 
 Congratulations! You've run your first program on this stack. For more
 explanation for what you just ran and a deeper dive into the API, please go to

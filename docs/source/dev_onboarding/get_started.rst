@@ -54,6 +54,7 @@ Python installation:
 
 ::
 
+    make ll_buda/tests
     export BUDA_HOME=<this repo dir>
     python -m reg_scripts.run_ll_buda
 
