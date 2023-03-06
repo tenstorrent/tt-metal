@@ -141,3 +141,6 @@ sent!
 
 Note that we have this exact, full example program in
 ``programming_examples/loopback/loopback.cpp``.
+
+Now we can start adding some compute to our program. Please refer to the
+:ref:`Eltwise binary example<Eltwise binary example>`.

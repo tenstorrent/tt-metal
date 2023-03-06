@@ -8,6 +8,19 @@
 using namespace tt;
 using namespace tt::ll_buda;
 
+/*
+* 1. Host creates two vectors of data.
+* 2. Device eltwise adds them together.
+* 3. Intermediate result read back to host.
+* 4. Create another vector and send vectors to input DRAMs again.
+* 5. Device eltwise muls them together.
+* 6. Read result back and compare to golden.
+* */
+
+/*
+ * We need to copy the types of the compute kernel arguments to use them host-
+ * side.
+ */
 namespace eltwise_binary {
 struct hlk_args_t {
     std::int32_t per_core_block_cnt;
@@ -15,32 +28,22 @@ struct hlk_args_t {
 };
 }
 
-enum EltwiseOp : uint32_t {
-    ADD = 0,
-    SUB = 1,
-    MUL = 2,
-};
-
 int main(int argc, char **argv) {
     bool pass = true;
 
-    const char* op_id_to_op_define[] = {"add_tiles", "sub_tiles", "mul_tiles"};
-
-    EltwiseOp eltwise_op = EltwiseOp::ADD;
-
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Grayskull Device Setup
-        ////////////////////////////////////////////////////////////////////////////
+        /*
+        * Silicon accelerator setup
+        */
         constexpr int pci_express_slot = 0;
         Device *device =
             CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
         pass &= InitializeDevice(device);;
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
+        /*
+        * Setup program to execute along with its buffers and kernels to use
+        */
         Program *program = new Program();
 
         constexpr tt_xy_pair core = {0, 0};
@@ -60,6 +63,10 @@ int main(int argc, char **argv) {
         DramBuffer *src1_dram_buffer = CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
         DramBuffer *dst_dram_buffer = CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
+        /*
+         * Use circular buffers to set input and output buffers that the
+         * compute engine will use.
+         */
         constexpr uint32_t src0_cb_index = CB::c_in0;
         constexpr uint32_t src0_cb_addr = 200 * 1024;
         constexpr uint32_t num_input_tiles = 2;
@@ -101,6 +108,10 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
+        /*
+         * Specify data movement kernels for reading/writing data to/from
+         * DRAM.
+         */
         DataMovementKernel *binary_reader_kernel = CreateDataMovementKernel(
             program,
             "kernels/dataflow/reader_binary_diff_lengths.cpp",
@@ -115,6 +126,9 @@ int main(int argc, char **argv) {
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default);
 
+        /*
+         * Set the parameters that the compute kernel will use.
+         */
         void *hlk_args = new eltwise_binary::hlk_args_t{
             .per_core_block_cnt = 2048,
             .per_core_block_size = 1
@@ -123,6 +137,11 @@ int main(int argc, char **argv) {
 
         constexpr bool fp32_dest_acc_en = false;
         constexpr bool math_approx_mode = false;
+
+        /*
+         * Use the add_tiles operation available in the eltwise_binary
+         * compute kernel.
+         */
         ComputeKernel *eltwise_binary_kernel = CreateComputeKernel(
             program,
             "kernels/compute/eltwise_binary.cpp",
@@ -132,17 +151,17 @@ int main(int argc, char **argv) {
             fp32_dest_acc_en,
             math_approx_mode
         );
-        eltwise_binary_kernel->add_define("ELTWISE_OP", op_id_to_op_define[eltwise_op]);
+        eltwise_binary_kernel->add_define("ELTWISE_OP", "add_tiles");
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
+        /*
+        * Compile kernels used during execution
+        */
         constexpr bool skip_hlkc = false;
         pass &= CompileProgram(device, program, skip_hlkc);
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////
+        /*
+         * Create source data and write to DRAM.
+         */
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
 
@@ -153,6 +172,9 @@ int main(int argc, char **argv) {
 
         pass &= WriteToDeviceDRAM(src1_dram_buffer, src1_vec);
 
+        /*
+         * Configure program and runtime kernel arguments, then execute.
+         */
         pass &= ConfigureDeviceWithProgram(device, program);
 
         tt_xy_pair dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
@@ -183,18 +205,21 @@ int main(int argc, char **argv) {
 
         pass &= LaunchKernels(device, program);
 
+        /*
+         * Read in result into a host vector.
+         */
         std::vector<uint32_t> result_vec;
         ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Validation & Teardown
-        ////////////////////////////////////////////////////////////////////////////
-
         /*
          * Move src data back into DRAM src buffer 0 to do another eltwise calculation
-         * */
+         */
         Program *program_mul = new Program();
 
+        /*
+         * Because we're using a new program, we must redeclare all the
+         * circular buffers and kernels.
+         */
         cb_src0 = CreateCircularBuffer(
             program_mul,
             device,
@@ -254,12 +279,19 @@ int main(int argc, char **argv) {
             math_approx_mode
         );
 
-        eltwise_op = EltwiseOp::MUL;
+        /*
+         * But now let's do an eltwise mul!
+         */
+        eltwise_binary_kernel->add_define("ELTWISE_OP", "mul_tiles");
 
-        eltwise_binary_kernel->add_define("ELTWISE_OP", op_id_to_op_define[eltwise_op]);
-
+        /*
+         * Compile kernels.
+         */
         pass &= CompileProgram(device, program_mul, skip_hlkc);
 
+        /*
+         * Send new input data.
+         */
         pass &= WriteToDeviceDRAM(src0_dram_buffer, result_vec);
 
         constexpr float val_to_mul = 2.0f;
@@ -273,6 +305,9 @@ int main(int argc, char **argv) {
         dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
         dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
+        /*
+         * Configure program and runtime kernel arguments.
+         */
         WriteRuntimeArgsToDevice(
             device,
             binary_reader_kernel,
@@ -295,8 +330,15 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles});
 
+        /*
+         * Execute.
+         */
         pass &= LaunchKernels(device, program_mul);
 
+        /*
+         * Read the result and compare to a golden result. Record pass/fail
+         * and teardown.
+         */
         ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
         std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
