@@ -177,31 +177,34 @@ int main(int argc, char **argv) {
          */
         pass &= ConfigureDeviceWithProgram(device, program);
 
-        tt_xy_pair dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        tt_xy_pair dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        tt_xy_pair dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
         WriteRuntimeArgsToDevice(
             device,
             binary_reader_kernel,
             core,
-            {dram_buffer_src0_addr,
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
-            num_tiles,
-            dram_buffer_src1_addr,
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
-            num_tiles, 0});
+            {
+                src0_dram_buffer->address(),
+                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
+                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+                num_tiles,
+                src1_dram_buffer->address(),
+                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
+                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
+                num_tiles,
+                0
+            }
+        );
 
         WriteRuntimeArgsToDevice(
             device,
             unary_writer_kernel,
             core,
-            {dram_buffer_dst_addr,
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
-            num_tiles});
+            {
+                dst_dram_buffer->address(),
+                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
+                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+                num_tiles
+            }
+        );
 
         pass &= LaunchKernels(device, program);
 
@@ -301,10 +304,6 @@ int main(int argc, char **argv) {
 
         pass &= ConfigureDeviceWithProgram(device, program_mul);
 
-        dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
         /*
          * Configure program and runtime kernel arguments.
          */
@@ -312,23 +311,31 @@ int main(int argc, char **argv) {
             device,
             binary_reader_kernel,
             core,
-            {dram_buffer_src0_addr,
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
-            num_tiles,
-            dram_buffer_src1_addr,
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
-            num_tiles, 0});
+            {
+                src0_dram_buffer->address(),
+                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
+                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+                num_tiles,
+                src1_dram_buffer->address(),
+                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
+                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
+                num_tiles,
+                0
+            }
+        );
 
         WriteRuntimeArgsToDevice(
             device,
             unary_writer_kernel,
             core,
-            {dram_buffer_dst_addr,
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
-            num_tiles});
+            {
+                dst_dram_buffer->address(),
+                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
+                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+                num_tiles
+            }
+        );
+
 
         /*
          * Execute.

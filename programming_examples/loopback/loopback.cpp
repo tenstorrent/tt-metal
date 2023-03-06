@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
         */
         Program *program = new Program();
 
-        tt_xy_pair core = {0, 0};
+        constexpr tt_xy_pair core = {0, 0};
 
         DataMovementKernel *dram_copy_kernel = CreateDataMovementKernel(
             program,
@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
         constexpr uint32_t l1_buffer_addr = 400 * 1024;
 
-        L1Buffer *l1_b0 = CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
+        L1Buffer *l1_buffer = CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
 
         constexpr uint32_t input_dram_buffer_addr = 0;
         constexpr int dram_channel = 0;
@@ -67,18 +67,15 @@ int main(int argc, char **argv) {
 
         pass &= ConfigureDeviceWithProgram(device, program);
 
-        const tt_xy_pair input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        const tt_xy_pair output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-
         const std::vector<uint32_t> runtime_args = {
-            l1_buffer_addr,
-            input_dram_buffer_addr,
-            (std::uint32_t)input_dram_noc_xy.x,
-            (std::uint32_t)input_dram_noc_xy.y,
-            output_dram_buffer_addr,
-            (std::uint32_t)output_dram_noc_xy.x,
-            (std::uint32_t)output_dram_noc_xy.y,
-            dram_buffer_size
+            l1_buffer->address(),
+            input_dram_buffer->address(),
+            static_cast<uint32_t>(input_dram_buffer->noc_coordinates().x),
+            static_cast<uint32_t>(input_dram_buffer->noc_coordinates().y),
+            output_dram_buffer->address(),
+            static_cast<uint32_t>(output_dram_buffer->noc_coordinates().x),
+            static_cast<uint32_t>(output_dram_buffer->noc_coordinates().y),
+            l1_buffer->size()
         };
 
         pass &= WriteRuntimeArgsToDevice(
