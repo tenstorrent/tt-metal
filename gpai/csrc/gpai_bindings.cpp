@@ -11,6 +11,7 @@
 #include "ll_buda/op_library/reshape/reshape_op.hpp"
 
 #include "gpai_bindings.hpp"
+#include "gpai/csrc/type_caster.hpp"
 
 namespace py = pybind11;
 
@@ -71,7 +72,6 @@ void TensorModule(py::module &m_tensor) {
             TT_ASSERT(self.data_ptr() != nullptr);
             switch (self.dtype()) {
                 case DataType::BFLOAT16: {
-                    TT_ASSERT(false && "TODO: Unsupported need to py cast bfloat16");
                     return py::cast(*reinterpret_cast<std::vector<bfloat16>*>(self.data_ptr()));
                 }
                 break;

@@ -66,7 +66,7 @@ class TtMnistModel(torch.nn.Module):
         x_ = tilize_to_list(x)
 
         # x is a pytorch tensor,... need to convert to a buda tensor
-        inp = gpai.tensor.Tensor(x_, x.shape, gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
+        inp = gpai.tensor.Tensor(x_, x.shape, gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
 
         lin1_out = self.lin1(inp)
         lin1_out_act = self.act(lin1_out)

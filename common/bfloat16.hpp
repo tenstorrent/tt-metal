@@ -1,8 +1,16 @@
 #pragma once
 #include <algorithm>
+#include <iostream>
+#include <random>
+#include <vector>
+
+#include "common/assert.hpp"
+#include "common/logger.hpp"
+
+using namespace std;
 
 class bfloat16 {
- private:    
+ private:
     uint16_t uint16_data;
 
  public:
@@ -16,7 +24,7 @@ class bfloat16 {
 
         uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
         // just move upper 16 to lower 16 (truncate)
-        uint32_data = (uint32_data >> 16);    
+        uint32_data = (uint32_data >> 16);
 
         // store lower 16 as 16-bit uint
         uint16_data = (uint16_t)uint32_data;
@@ -97,7 +105,7 @@ inline std::vector<std::uint32_t> create_arange_vector_of_bfloat16(uint32_t num_
             std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << num_1_bfloat16.to_float() << ", \t\t";
             std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << num_2_bfloat16.to_float() << std::endl;
         }
-        
+
         // pack 2 uint16 into uint32
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
@@ -120,7 +128,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(uint32_t num_
 
         //std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << num_1_bfloat16.to_float() << ", \t\t";
         //std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << num_2_bfloat16.to_float() << std::endl;
-        
+
         // pack 2 uint16 into uint32
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
@@ -356,7 +364,7 @@ inline bool packed_uint32_t_vector_comparison(
     for (int i = 0; i < vec_a.size(); i++) {
         std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(vec_a.at(i));
         std::pair<bfloat16, bfloat16> bs = unpack_two_bfloat16_from_uint32(vec_b.at(i));
-        
+
         float a1 = as.first.to_float();
         float b1 = bs.first.to_float();
 

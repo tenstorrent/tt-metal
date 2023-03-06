@@ -5,7 +5,8 @@ GPAI_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -L$(BUDA_HOME) -ldevice -lcommon -lbu
 GPAI_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 GPAI_SRCS = \
-	gpai/csrc/gpai_bindings.cpp
+	gpai/csrc/gpai_bindings.cpp \
+	gpai/csrc/type_caster.cpp \
 
 GPAI_OBJS = $(addprefix $(OBJDIR)/, $(GPAI_SRCS:.cpp=.o))
 GPAI_DEPS = $(addprefix $(OBJDIR)/, $(GPAI_SRCS:.cpp=.d))

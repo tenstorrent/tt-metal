@@ -21,7 +21,7 @@ if __name__ == "__main__":
     C = 128 # 2
     H = 2 # 128
     W = 64
-    x = torch.randn((N,C,H,W)).to(torch.float16).to(torch.float32)
+    x = torch.randn((N,C,H,W)).to(torch.float16)
 
     xt = gpai.tensor.Tensor(x.reshape(-1).tolist(), [N, C, H, W], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.ROW_MAJOR, device)
 

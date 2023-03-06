@@ -57,8 +57,8 @@ def comp_pcc(golden, calculated, pcc=0.99):
         return True, f"PCC: {1.0}"
 
     if golden.dtype == torch.bfloat16:
-        golden = golden.type(torch.float32)
-        calculated = calculated.type(torch.float32)
+        golden = golden.type(torch.float16)
+        calculated = calculated.type(torch.float16)
     cal_pcc = np.min(
         np.ma.corrcoef(
             np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
