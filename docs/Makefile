@@ -7,6 +7,7 @@ SPHINXOPTS    	?=
 SPHINXBUILD   	?= sphinx-build
 SOURCEDIR     	= source
 BUILDDIR      	= build
+DOXYGENDIR    	= doxygen_build
 HTMLDIR       	= $(BUILDDIR)/html
 PORT          	?= 8888
 #TODO: Update when folder created on web server with updated name
@@ -25,8 +26,10 @@ all: clean html server
 
 clean:
 	@rm -rf $(BUILDDIR)
+	@rm -rf $(DOXYGENDIR)
 
 html:
+	@cd .. && doxygen
 	@$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 
 server:
