@@ -61,5 +61,6 @@ Navigate your web browser to `http://<ip address>:<port>`, where `<ip address>`
 is the IP address of the machine on which you launched the web server. For
 example: `http://10.250.37.37:4242`, for port ``4242``.
 
-8. Open a new terminal window and follow the `Getting Started` instructions on
-   the docs page. :)
+8. Open a new terminal window and click the very first `Getting Started` link.
+
+9. Follow the instructions to set up the library.
