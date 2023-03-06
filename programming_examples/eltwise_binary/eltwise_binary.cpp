@@ -22,7 +22,7 @@ using namespace tt::ll_buda;
  * side.
  */
 namespace eltwise_binary {
-struct hlk_args_t {
+struct compute_kernel_args_t {
     std::int32_t per_core_block_cnt;
     std::int32_t per_core_block_size;
 };
@@ -129,11 +129,11 @@ int main(int argc, char **argv) {
         /*
          * Set the parameters that the compute kernel will use.
          */
-        void *hlk_args = new eltwise_binary::hlk_args_t{
+        void *compute_kernel_args = new eltwise_binary::compute_kernel_args_t{
             .per_core_block_cnt = 2048,
             .per_core_block_size = 1
         };
-        ComputeKernelArgs *eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(eltwise_binary::hlk_args_t));
+        ComputeKernelArgs *eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args, sizeof(eltwise_binary::compute_kernel_args_t));
 
         constexpr bool fp32_dest_acc_en = false;
         constexpr bool math_approx_mode = false;
@@ -270,7 +270,7 @@ int main(int argc, char **argv) {
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default);
 
-        eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(eltwise_binary::hlk_args_t));
+        eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args, sizeof(eltwise_binary::compute_kernel_args_t));
 
         eltwise_binary_kernel = CreateComputeKernel(
             program_mul,

@@ -7,24 +7,45 @@ We will build a program in TT-Accel that will simply copy data from one DRAM
 buffer to another, using the compute engine and an intermediate L1 buffer to do
 so. We call this concept "loopback".
 
-Building a data movement kernel
--------------------------------
+We'll go through this code section by section. Note that we have this exact,
+full example program in ``programming_examples/loopback/loopback.cpp``, so you
+can follow along.
 
-First, right after we instantiate a ``Program``, we should declare a
-``DataMovementKernel`` that we want to use. We'll use a pre-written kernel that
-uses the compute engine to copy data from one place to another in the device
-memory. We will need to provide it with some runtime parameters that we will
-send to the device later.
-
-We will also be using the accelerator core with coordinates ``{0, 0}`` to do
-the execution. This is the first core, in the top left of the die.
-
-*Note*: Everything we do were is under the ``tt::ll_buda`` namespace. We have
-a using directive for this: ``using namespace tt::ll_buda``.
+Silicon accelerator setup
+-------------------------
 
 .. code-block:: cpp
 
-  tt_xy_pair core = {0, 0};
+   constexpr int pci_express_slot = 0;
+   Device *device =
+       CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+
+   pass &= InitializeDevice(device);
+
+We instantiate and initialize a device to control our ``GRAYSKULL`` type
+accelerator.
+
+Program pre-compilation setup
+-----------------------------
+
+.. code-block:: cpp
+
+   Program *program = new Program();
+
+We create a ``Program`` to be run on our Grayskull accelerator. This is how
+we'll be keeping track of things in our session with the device.
+
+Building a data movement kernel
+-------------------------------
+
+Declare a ``DataMovementKernel``. We'll use a pre-written kernel that copies
+data from one place to another.
+
+We will be using the accelerator core with coordinates ``{0, 0}``.
+
+.. code-block:: cpp
+
+  constexpr tt_xy_pair core = {0, 0};
 
   DataMovementKernel *dram_copy_kernel = CreateDataMovementKernel(
       program,
@@ -34,22 +55,16 @@ a using directive for this: ``using namespace tt::ll_buda``.
       NOC::RISCV_0_default
   );
 
-When attaching the kernel to the program, we need to declare which processors
-within the core we want to do the processing. We will use ``RISCV_0`` to start
-with.
-
 Create buffers in DRAM and L1
 -----------------------------
 
 Next, we need to declare buffers that we will use during execution. We will
 need
 
-* A DRAM buffer that will house input data
 * An L1 buffer within the core itself that will be used to store the compute
   engine's work
+* A DRAM buffer that will house input data
 * A DRAM buffer that will be written to with output data
-
-Let's create the L1 buffer first.
 
 .. code-block:: cpp
 
@@ -58,7 +73,7 @@ Let's create the L1 buffer first.
   constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
   constexpr uint32_t l1_buffer_addr = 400 * 1024;
 
-  L1Buffer *l1_b0 = CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
+  L1Buffer *l1_buffer0 = CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
 
 For simplicity, let's make the size of all our buffers 50 tiles. We'll also put
 this particular L1 Buffer at location ``400KB``.
@@ -74,7 +89,15 @@ Let's make the input and output DRAM buffers.
   constexpr uint32_t output_dram_buffer_addr = 512 * 1024;
   DramBuffer *output_dram_buffer = CreateDramBuffer(device, dram_channel, dram_buffer_size, output_dram_buffer_addr);
 
-Now let's create some dummy data and send it into the input DRAM buffer!
+Program compilation
+-------------------
+
+.. code-block:: cpp
+
+   constexpr bool skip_hlkc = false;
+   pass &= CompileProgram(device, program, skip_hlkc);
+
+Next we compile our program.
 
 Sending real data into DRAM
 ---------------------------
@@ -85,37 +108,33 @@ Sending real data into DRAM
       dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
   pass &= WriteToDeviceDRAM(input_dram_buffer, input_vec);
 
-Note that for the data generation function to work, you need to include header
-``"common/bfloat16.hpp"``.
+Send in a randomly-generated FP16 vector that will act as our input data
+tensor.
+
+Loading the program with desired settings
+-----------------------------------------
+
+.. code-block:: cpp
+
+   pass &= ConfigureDeviceWithProgram(device, program);
+
+We then configure the device with our compiled program. Now it's time for any
+runtime arguments or input data.
 
 Sending runtime arguments for the data movement kernel
 ------------------------------------------------------
 
-Right after configuring the device with the program, now we'll need to tell the
-data movement kernel its runtime arguments. Because our kernel is somewhat
-generic, we've written it to have the following arguments:
-
-* Where the L1 buffer starts (memory address)
-* Where the input DRAM buffer starts (memory address)
-* The location of the input DRAM buffer's channel on the NOC
-* Where the output DRAM buffer starts (memory address)
-* The location of the output DRAM buffer's channel on the NOC
-* The size of the buffers
-
 .. code-block:: cpp
 
-  const tt_xy_pair input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-  const tt_xy_pair output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-
   const std::vector<uint32_t> runtime_args = {
-      l1_buffer_addr,
-      input_dram_buffer_addr,
-      (std::uint32_t)input_dram_noc_xy.x,
-      (std::uint32_t)input_dram_noc_xy.y,
-      output_dram_buffer_addr,
-      (std::uint32_t)output_dram_noc_xy.x,
-      (std::uint32_t)output_dram_noc_xy.y,
-      dram_buffer_size
+      l1_buffer->address(),
+      input_dram_buffer->address(),
+      static_cast<uint32_t>(input_dram_buffer->noc_coordinates().x),
+      static_cast<uint32_t>(input_dram_buffer->noc_coordinates().y),
+      output_dram_buffer->address(),
+      static_cast<uint32_t>(output_dram_buffer->noc_coordinates().x),
+      static_cast<uint32_t>(output_dram_buffer->noc_coordinates().y),
+      l1_buffer->size()
   };
 
   pass &= WriteRuntimeArgsToDevice(
@@ -125,12 +144,31 @@ generic, we've written it to have the following arguments:
       runtime_args
   );
 
+We now write runtime arguments for our data movement kernel. For this
+particular kernel, we have to provide:
+
+* Where the L1 buffer starts (memory address)
+* Where the input DRAM buffer starts (memory address)
+* The location of the input DRAM buffer's channel on the NOC
+* Where the output DRAM buffer starts (memory address)
+* The location of the output DRAM buffer's channel on the NOC
+* The size of the buffers
+
+Running the program
+-------------------
+
+.. code-block:: cpp
+
+   pass &= LaunchKernels(device, program);
+
+Now we finally launch our program. This is a blocking call which will finish
+when the program on the device finishes.
+
 Launch and verify output
 ------------------------
 
-Now we just ``LaunchKernels`` and wait for it to finish. Then we can finally
-read back the data from the output buffer and assert that it matches what we
-sent!
+Then we can finally read back the data from the output buffer and assert that
+it matches what we sent!
 
 .. code-block:: cpp
 
@@ -139,8 +177,15 @@ sent!
 
   pass &= input_vec == result_vec;
 
-Note that we have this exact, full example program in
-``programming_examples/loopback/loopback.cpp``.
+Validation and teardown
+-----------------------
+
+.. code-block:: cpp
+
+   pass &= CloseDevice(device);
+
+We now use ``CloseDevice`` to teardown our connection to the Tenstorrent
+device.
 
 Now we can start adding some compute to our program. Please refer to the
 :ref:`Eltwise binary example<Eltwise binary example>`.

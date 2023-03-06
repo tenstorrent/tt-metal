@@ -106,7 +106,3 @@ devs>`.
     ::
 
         ./build/test/programming_examples/basic_empty_program
-
-    Congratulations! You've run your first program on this stack. For more
-    explanation for what you just ran and a deeper dive into the API, please go to
-    :ref:`Setting up a basic test`.

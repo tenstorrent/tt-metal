@@ -38,7 +38,6 @@ Welcome to TT-Accel documentation!
 .. toctree::
    :caption: Programming Examples
 
-   examples/setting_up
    examples/dram_loopback
    examples/eltwise_binary
 
