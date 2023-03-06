@@ -12,7 +12,7 @@ cd <REPO>
 
 2. We must install docs dependencies, such as the virtualenv and Doxygen.
 ```
-sudo ./run_docs_setup.sh
+source ./run_docs_setup.sh
 ```
 
 3. Now activate the environment and build HTML pages for the docs and launch a
