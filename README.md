@@ -21,6 +21,8 @@ and create a password. This will be the account you're using:
 sudo adduser <USERNAME>
 ```
 
+Then log out and log back in under that new ``<USERNAME>``.
+
 2. Create an SSH key for this machine.
 
 ```
