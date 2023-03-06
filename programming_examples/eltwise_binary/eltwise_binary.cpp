@@ -56,15 +56,16 @@ int main(int argc, char **argv) {
         constexpr uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         constexpr int dram_dst_channel_id = 0;
 
-        DramBuffer *src0_dram_buffer = CreateDramBuffer(dram_src0_channel_id, dram_buffer_size, dram_buffer_src0_addr);
-        DramBuffer *src1_dram_buffer = CreateDramBuffer(dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
-        DramBuffer *dst_dram_buffer = CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        DramBuffer *src0_dram_buffer = CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size, dram_buffer_src0_addr);
+        DramBuffer *src1_dram_buffer = CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
+        DramBuffer *dst_dram_buffer = CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
         constexpr uint32_t src0_cb_index = CB::c_in0;
         constexpr uint32_t src0_cb_addr = 200 * 1024;
         constexpr uint32_t num_input_tiles = 2;
         CircularBuffer *cb_src0 = CreateCircularBuffer(
             program,
+            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -77,6 +78,7 @@ int main(int argc, char **argv) {
         constexpr uint32_t src1_cb_addr = 300 * 1024;
         CircularBuffer *cb_src1 = CreateCircularBuffer(
             program,
+            device,
             src1_cb_index,
             core,
             num_input_tiles,
@@ -90,6 +92,7 @@ int main(int argc, char **argv) {
         constexpr uint32_t num_output_tiles = 2;
         CircularBuffer *cb_output = CreateCircularBuffer(
             program,
+            device,
             output_cb_index,
             core,
             num_output_tiles,
@@ -97,7 +100,7 @@ int main(int argc, char **argv) {
             output_cb_addr,
             tt::DataFormat::Float16_b
         );
-        
+
         DataMovementKernel *binary_reader_kernel = CreateDataMovementKernel(
             program,
             "kernels/dataflow/reader_binary_diff_lengths.cpp",
@@ -143,18 +146,18 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
 
-        pass &= WriteToDeviceDRAM(device, src0_dram_buffer, src0_vec);
+        pass &= WriteToDeviceDRAM(src0_dram_buffer, src0_vec);
 
         constexpr float val_to_add = -1.0f;
         std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_add);
 
-        pass &= WriteToDeviceDRAM(device, src1_dram_buffer, src1_vec);
+        pass &= WriteToDeviceDRAM(src1_dram_buffer, src1_vec);
 
         pass &= ConfigureDeviceWithProgram(device, program);
 
-        tt_xy_pair dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-        tt_xy_pair dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
-        tt_xy_pair dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        tt_xy_pair dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        tt_xy_pair dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+        tt_xy_pair dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         WriteRuntimeArgsToDevice(
             device,
@@ -181,7 +184,7 @@ int main(int argc, char **argv) {
         pass &= LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+        ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -194,6 +197,7 @@ int main(int argc, char **argv) {
 
         cb_src0 = CreateCircularBuffer(
             program_mul,
+            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -204,6 +208,7 @@ int main(int argc, char **argv) {
 
         cb_src1 = CreateCircularBuffer(
             program_mul,
+            device,
             src1_cb_index,
             core,
             num_input_tiles,
@@ -214,6 +219,7 @@ int main(int argc, char **argv) {
 
         cb_output = CreateCircularBuffer(
             program_mul,
+            device,
             output_cb_index,
             core,
             num_output_tiles,
@@ -254,18 +260,18 @@ int main(int argc, char **argv) {
 
         pass &= CompileProgram(device, program_mul, skip_hlkc);
 
-        pass &= WriteToDeviceDRAM(device, src0_dram_buffer, result_vec);
+        pass &= WriteToDeviceDRAM(src0_dram_buffer, result_vec);
 
         constexpr float val_to_mul = 2.0f;
         src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_mul);
 
-        pass &= WriteToDeviceDRAM(device, src1_dram_buffer, src1_vec);
+        pass &= WriteToDeviceDRAM(src1_dram_buffer, src1_vec);
 
         pass &= ConfigureDeviceWithProgram(device, program_mul);
 
-        dram_src0_noc_xy = src0_dram_buffer->noc_coordinates(device);
-        dram_src1_noc_xy = src1_dram_buffer->noc_coordinates(device);
-        dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
+        dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+        dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         WriteRuntimeArgsToDevice(
             device,
@@ -291,7 +297,7 @@ int main(int argc, char **argv) {
 
         pass &= LaunchKernels(device, program_mul);
 
-        ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
+        ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
         std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
             return bfloat16((a.to_float() + val_to_add) * val_to_mul);

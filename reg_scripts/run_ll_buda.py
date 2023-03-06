@@ -68,6 +68,7 @@ LL_BUDA_TEST_ENTRIES = (
 
 PROGRAMMING_EXAMPLE_ENTRIES = (
     TestEntry("programming_examples/loopback", "programming_examples/loopback"),
+    TestEntry("programming_examples/eltwise_binary", "programming_examples/eltwise_binary"),
 )
 
 
@@ -128,7 +129,7 @@ def run_programming_examples(programming_example_entries, timeout):
 
 
 def build_programming_example_executable_path(namespace, executable_name, extra_params):
-    return Path(f"{get_git_home_dir_str()}/build/test/{executable_name}")
+    return Path(f"{get_git_home_dir_str()}/build/{executable_name}")
 
 
 if __name__ == "__main__":
