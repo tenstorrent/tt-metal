@@ -14,11 +14,12 @@ instructed to.
 
 Proceed to step 2 below if you're not a developer.
 
-You must create your own user account on this machine. Please do the following
-and create a password. This will be the account you're using:
+You must create your own user account with sudo access on this machine. Please
+do the following and create a password. This will be the account you're using:
 
 ```
 sudo adduser <USERNAME>
+sudo usermod -aG sudo <USERNAME>
 ```
 
 Then log out and log back in under that new ``<USERNAME>``.
