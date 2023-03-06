@@ -5,28 +5,30 @@
 #include "constants.hpp"
 
 // TODO(AP): duplication
-namespace bcast_op_params {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    uint32_t B;
-    uint32_t Ht;
-    uint32_t Wt;
-};
-}
-
+namespace bcast_op_utils {
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
-using u32 = std::uint32_t;
 
-namespace {
-const char* get_reader_name(BcastOpDim::Enum bcast_dim) {
-    if (bcast_dim == BcastOpDim::H) {
-        return "kernels/dataflow/reader_bcast_h_8bank.cpp";
-    } else if (bcast_dim == BcastOpDim::W) {
-        return "kernels/dataflow/reader_bcast_w_8bank.cpp";
-    } if (bcast_dim == BcastOpDim::HW) {
-        return "kernels/dataflow/reader_bcast_hw_8bank.cpp";
+// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
+const char* get_reader_name(BcastOpDim::Enum bcast_dim, BcastOpParallelizationStrategy::Enum bcast_parallelization_strategy) {
+		if (bcast_parallelization_strategy == BcastOpParallelizationStrategy::SINGLE_CORE) {
+        if (bcast_dim == BcastOpDim::H) {
+            return "kernels/dataflow/reader_bcast_h_8bank.cpp";
+        } else if (bcast_dim == BcastOpDim::W) {
+            return "kernels/dataflow/reader_bcast_w_8bank.cpp";
+        } if (bcast_dim == BcastOpDim::HW) {
+            return "kernels/dataflow/reader_bcast_hw_8bank.cpp";
+        }
+    }
+    else {
+        if (bcast_dim == BcastOpDim::H) {
+            return "kernels/dataflow/reader_bcast_h_8bank_input_rows_partitioned.cpp";
+        } else if (bcast_dim == BcastOpDim::W) {
+            return "kernels/dataflow/reader_bcast_w_8bank_input_cols_partitioned.cpp";
+        } if (bcast_dim == BcastOpDim::HW) {
+            return "kernels/dataflow/reader_bcast_hw_8bank_partitioned.cpp";
+        }
     }
     TT_ASSERT(false && "Unexpected bcast_dim!");
     return "";
@@ -42,17 +44,54 @@ const char* get_compute_name(BcastOpDim::Enum bcast_dim) {
     return "";
 }
 
-const char* math_to_op_define[] = { "add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast" };
-
+const char* get_math_to_op_define(BcastOpMath::Enum bcast_math) {
+    switch (bcast_math) {
+        case BcastOpMath::ADD:  return "add_tiles_bcast";
+        case BcastOpMath::SUB:  return "sub_tiles_bcast";
+        case BcastOpMath::MUL:  return "mul_tiles_bcast";
+        default:           TT_ASSERT(false && "Unexpected bcast_math!");
+    }
+    return "";
 }
+
+void set_compute_kernel_defines(ComputeKernel * bcast_kernel, BcastOpMath::Enum bcast_math){
+    bcast_kernel->add_define("BCAST_OP", get_math_to_op_define(bcast_math));
+    return;
+}
+
+BcastOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, BcastOpDim::Enum bcast_dim){
+    uint32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t Ht = a.shape()[2] / TILE_HEIGHT;
+    uint32_t Wt = a.shape()[3] / TILE_WIDTH;
+
+    if(Ht > 1 and bcast_dim == BcastOpDim::H){
+        return BcastOpParallelizationStrategy::MULTI_CORE_H;
+    }
+    else if(Wt > 1 and bcast_dim == BcastOpDim::W){
+        return BcastOpParallelizationStrategy::MULTI_CORE_W;
+    }
+    else if(num_tiles > 1 and bcast_dim == BcastOpDim::HW){
+        return BcastOpParallelizationStrategy::MULTI_CORE_HW;
+    }
+    else{
+        return BcastOpParallelizationStrategy::SINGLE_CORE;
+    }
+}
+
+} // namespace bcast_op_utils
+
+
+using namespace tt::tt_metal;
+using namespace tt::constants;
+using u32 = std::uint32_t;
 
 
 namespace tt {
 
 namespace tt_metal {
 
-Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
 
+Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
     const auto ashape = a.shape();
     const auto bshape = b.shape();
     u32 N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
@@ -73,144 +112,20 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
     if (bcast_dim == BcastOpDim::HW)
         TT_ASSERT(bW == TILE_WIDTH && bH == TILE_HEIGHT);
 
-    u32 Wt = W/TILE_WIDTH;
-    u32 Ht = H/TILE_HEIGHT;
-
-    uint32_t num_tensor_tiles = NC*Ht*Wt;
-    uint32_t num_btensor_tiles = NC*bH*bW / TILE_HW;
-
-    tt_metal::Program *program = new tt_metal::Program();
-
-    tt_xy_pair core = {0, 0};
-
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.device() != nullptr and b.device() != nullptr, "Operands to eltwise binary need to be on device!");
-    TT_ASSERT(a.device() == b.device(), "Operands to bcast need to be on the same device!");
-    TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
-
-    uint32_t single_tile_size = 2 * 1024;
-
-    // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
-    tt_metal::Tensor output = Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
-
-    uint32_t src0_cb_index = 0;
-    uint32_t src0_cb_addr = 200 * 1024;
-    uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
-        program,
-        device,
-        src0_cb_index,
-        core,
-        num_input_tiles,
-        num_input_tiles * single_tile_size,
-        src0_cb_addr,
-        DataFormat::Float16_b
-    );
-
-    uint32_t src1_cb_index = 1;
-    uint32_t src1_cb_addr = 300 * 1024;
-    auto cb_src1 = tt_metal::CreateCircularBuffer(
-        program,
-        device,
-        src1_cb_index,
-        core,
-        num_input_tiles,
-        num_input_tiles * single_tile_size,
-        src1_cb_addr,
-        DataFormat::Float16_b
-    );
-
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t output_cb_addr = 400 * 1024;
-    uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffer(
-        program,
-        device,
-        ouput_cb_index,
-        core,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
-        output_cb_addr,
-        DataFormat::Float16_b
-    );
-
-    const char* reader_name = ::get_reader_name(bcast_dim);
-    tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
-        program,
-        reader_name,
-        core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
-
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
-        program,
-        "kernels/dataflow/writer_unary_8bank.cpp",
-        core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
-
-    // TODO(AP): add dimensions and op params
-    vector<uint32_t> compute_kernel_args = {
-        NC, // B
-        Ht, // Ht
-        Wt  // Wt
-    };
-    tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
-
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    const char* compute_name = ::get_compute_name(bcast_dim);
-    auto bcast_kernel = tt_metal::CreateComputeKernel(
-        program,
-        compute_name,
-        core,
-        compute_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
-    );
-    bcast_kernel->add_define("BCAST_OP", ::math_to_op_define[int(bcast_math)]);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-
-        uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            binary_reader_kernel,
-            core,
-            {a.buffer()->address(), // 0
-            0, // 1
-            0, // 2
-            num_tensor_tiles, // 3
-            b.buffer()->address(), // 4
-            0, // 5
-            0, // 6
-            num_btensor_tiles, NC*Ht*Wt, NC, Ht, Wt, bnc1}); // 7 8 9 10 11 12
-
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            unary_writer_kernel,
-            core,
-            { output.buffer()->address(),
-              0, 0, num_tensor_tiles});
-
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
-    tt_metal::LaunchKernels(device, program);
-
-    delete program;
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    switch (bcast_op_utils::get_parallelization_strategy(a, bcast_dim)){
+        case BcastOpParallelizationStrategy::MULTI_CORE_H:
+            return bcast_multi_core_h(a, b, bcast_math, bcast_dim);
+            break;
+        case BcastOpParallelizationStrategy::MULTI_CORE_W:
+            return bcast_multi_core_w(a, b, bcast_math, bcast_dim);
+            break;
+        case BcastOpParallelizationStrategy::MULTI_CORE_HW:
+            return bcast_multi_core_hw(a, b, bcast_math, bcast_dim);
+            break;
+        case BcastOpParallelizationStrategy::SINGLE_CORE:
+        default:
+            return bcast_single_core(a, b, bcast_math, bcast_dim);
+    }
 }
 
 }  // namespace tt_metal

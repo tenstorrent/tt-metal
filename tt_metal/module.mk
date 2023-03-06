@@ -26,6 +26,10 @@ TT_METAL_SRCS = \
 	tt_metal/op_library/reduce/multi_core_w/reduce_op_multi_core_w.cpp \
 	tt_metal/op_library/reduce/multi_core_hw/reduce_op_multi_core_hw.cpp \
 	tt_metal/op_library/bcast/bcast_op.cpp \
+	tt_metal/op_library/bcast/single_core/bcast_op_single_core.cpp \
+	tt_metal/op_library/bcast/multi_core_h/bcast_op_multi_core_h.cpp \
+	tt_metal/op_library/bcast/multi_core_w/bcast_op_multi_core_w.cpp \
+	tt_metal/op_library/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp \
 	tt_metal/op_library/bmm/bmm_op.cpp \
 	tt_metal/op_library/tilize/tilize_op.cpp \
 	tt_metal/op_library/untilize/untilize_op.cpp \
