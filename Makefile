@@ -121,7 +121,6 @@ LIBS_TO_BUILD = \
 	ll_buda \
 	tt_gdb \
 	tensor \
-	compiler \
 	tools \
 	python_env \
 	gpai
@@ -181,7 +180,6 @@ include ll_buda/module.mk
 include tt_gdb/module.mk # needs to compiled after llrt and ll_buda
 include common/common.mk
 include tensor/module.mk
-include compiler/module.mk
 include tools/module.mk
 include python_env/module.mk
 include gpai/module.mk
@@ -191,7 +189,6 @@ ifdef GPAI_ENV_IS_DEV
 include build_kernels_for_riscv/tests/module.mk
 include llrt/tests/module.mk
 include ll_buda/tests/module.mk
-include compiler/tests/module.mk
 include git_hooks/module.mk
 endif
 

@@ -184,7 +184,6 @@ class tt_device
 
     virtual void dump_debug_mailbox(std::string output_path, int device_id);
     virtual void dump_wall_clock_mailbox(std::string output_path, int device_id);
-    virtual void dump_perf_buffer(std::map<tt_cxy_pair, std::vector<uint32_t>> &all_dram_events, int device_id);
     virtual int get_number_of_chips() = 0;
     virtual uint32_t get_harvested_noc_rows(int logical_device_id){
         std::runtime_error("---- tt_device:get_harvested_noc_rows is not implemented\n");
@@ -346,8 +345,6 @@ class tt_SiliconDevice: public tt_device
     static std::vector<chip_id_t> get_available_devices_from_reservations(std::vector<chip_id_t> device_ids, bool verbose);
     static std::map<chip_id_t, chip_id_t> get_logical_to_physical_mmio_device_id_map(std::vector<chip_id_t> physical_device_ids);
     static std::map<chip_id_t, std::string> get_physical_device_id_to_bus_id_map(std::vector<chip_id_t> physical_device_ids);
-
-    virtual void dump_perf_buffer(std::map<tt_cxy_pair, std::vector<uint32_t>> &all_dram_events, int device_id);
 
     virtual uint32_t dma_allocation_size(chip_id_t src_device_id = -1);
 

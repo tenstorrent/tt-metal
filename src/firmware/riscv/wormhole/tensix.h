@@ -1,7 +1,6 @@
 #ifndef TENSIX_H_INCLUDED
 #define TENSIX_H_INCLUDED
 
-//#include "tensix_prototypes.h"
 #include <limits>
 #include <type_traits>
 #include <cstdint>
@@ -56,13 +55,13 @@ typedef std::uint8_t byte;
 // If the FIFO gets overfull, writes are dropped? Additionally, the instruction queue is flushed in some cases.
 #define INSTRN_BUF_BASE      0xFFE40000  // 0xFFE40000 - 0xFFE7FFFF
 #define INSTRN1_BUF_BASE     0xFFE50000  // 0xFFE40000 - 0xFFE7FFFF
-#define INSTRN2_BUF_BASE     0xFFE60000  
+#define INSTRN2_BUF_BASE     0xFFE60000
 
 // PC buffer is used to pass kernel IDs and paramters from Brisc to Triscs, and also as a sync point -- a read from pc buffer+1 address
 // will not return until that thread is idle.
 #define PC_BUF_BASE      0xFFE80000  // 0xFFE80000 - 0xFFEBFFFF
 #define PC1_BUF_BASE     0xFFE90000  // 0xFFE80000 - 0xFFEBFFFF
-#define PC2_BUF_BASE     0xFFEA0000  
+#define PC2_BUF_BASE     0xFFEA0000
 
 // Reads from here retrieve a value written by the tensix code, or 0 if there the mailbox FIFO is empty.
 #define TENSIX_MAILBOX0_BASE 0xFFEC0000  // Brisc
@@ -94,11 +93,11 @@ const static uint32_t L1_MATH_KERNEL_BASE = 0x1E000;      // This is a 128-bit a
 #define RISCV_TDMA_REG_PACKED_SIZE      0xFFB11018
 #define RISCV_TDMA_REG_ACC_PACKED_SIZE  0xFFB1101C  // read only
 #define RISCV_TDMA_REG_INITIAL_PACK_ACC 0xFFB1101C  // write only
-#define RISCV_TDMA_REG_CLK_GATE_EN      0xFFB11024  
-#define RISCV_TDMA_REG_CLK_GATE_HYST    0xFFB11028  
-#define RISCV_TDMA_REG_XMOV_L1_BASE_ADDR  0xFFB1102C  
+#define RISCV_TDMA_REG_CLK_GATE_EN      0xFFB11024
+#define RISCV_TDMA_REG_CLK_GATE_HYST    0xFFB11028
+#define RISCV_TDMA_REG_XMOV_L1_BASE_ADDR  0xFFB1102C
 #define RISCV_TDMA_REG_FIFO_PACKED_TILE_SIZE(packer)      (0xFFB11030 | (packer<<8))
-#define RISCV_TDMA_REG_FIFO_PACKED_TILE_ZEROMASK(packer)  (0xFFB11034 | (packer<<8)) 
+#define RISCV_TDMA_REG_FIFO_PACKED_TILE_ZEROMASK(packer)  (0xFFB11034 | (packer<<8))
 #define RISCV_TDMA_REG_FIFO_PACKED_TILE_STATUS            (0xFFB11038)
 
 #define RISCV_TDMA_PACKED_TILE_FIFO_EMPTY(status,packer)  ((status>>(packer*2))&0x1)
@@ -189,7 +188,7 @@ typedef union {
 #define SOFT_RESET_SRCB_REG         ((0x1)<<16)
 #define SOFT_RESET_DEST_REG         ((0x1)<<17)
 
-// TDMA flop register index offset 
+// TDMA flop register index offset
 #define TDMA_FLOPREG_IDX_BASE(arg)  ((arg) * 32)
 
 /////////////
@@ -215,7 +214,7 @@ typedef union {
 #define INSTRN_RDCFG(arg)          (0xb1000000 | (arg))
 
 #define INSTRN_SETC(arg)            (0x80000000 | (arg)) // Sets thread specific control register <register> to the value stored in the slot argument. 64-bit instruction. Register index in low 11 bits of first word, register value in second word. **Deprecated**
-#define INSTRN_SETRWC(arg)          (0x38000000 | (arg)) // 
+#define INSTRN_SETRWC(arg)          (0x38000000 | (arg)) //
 #define INSTRN_SETADC(arg)          (0x50000000 | (arg)) // Set address counter for one channel and one dimension.
 #define INSTRN_SETADCXY(arg)        (0x51000000 | (arg)) // Set address counters for X and Y dimensions for all channels
 #define INSTRN_SETADCZW(arg)        (0x54000000 | (arg)) // Set address counters for Z and W dimensions for all channels
@@ -248,8 +247,8 @@ typedef union {
 #define INSTRN_SEL_SIZE_2B          2
 #define INSTRN_SEL_SIZE_1B          3
 
-#define INSTRN_SEL_AUTO_INC_NONE    0 
-#define INSTRN_SEL_AUTO_INC_2B      1 
+#define INSTRN_SEL_AUTO_INC_NONE    0
+#define INSTRN_SEL_AUTO_INC_2B      1
 #define INSTRN_SEL_AUTO_INC_4B      2
 #define INSTRN_SEL_AUTO_INC_16B     3
 
@@ -258,7 +257,7 @@ typedef union {
 
 #define REG2FLOP_TARGET_TDMA        0
 #define REG2FLOP_TARGET_LOCAL_REGS  1
-#define REG2FLOP_TARGET_ADDR_CNTRS  2 
+#define REG2FLOP_TARGET_ADDR_CNTRS  2
 
 #define BYTE_OFFSET_ZERO            0
 #define BYTE_OFFSET_ONE             1

@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "dram_address_map.h"
+// #include "dram_address_map.h" // delete this?
 #include "yaml-cpp/yaml.h"
 
 // TODO: Remove dependency on command_assembler + soc
@@ -219,29 +219,6 @@ bool versim_check_dram_core_exists(const std::vector<std::vector<tt_xy_pair>> &d
       }
     }
     return false;
-}
-
-void tt_VersimDevice::dump_perf_buffer(std::map<tt_cxy_pair, std::vector<uint32_t>> &all_dram_events, int device_id) {
-
-    const int num_bytes_per_event = 4;
-    for (auto &dram_bank_to_workers: soc_descriptor.perf_dram_bank_to_workers) {
-      const int perf_buf_this_bank_addr = dram_mem::address_map::DRAM_EACH_BANK_PERF_BUFFER_BASE;
-      int core_x = dram_bank_to_workers.first.x;
-      int core_y = dram_bank_to_workers.first.y;
-      assert(versim_check_dram_core_exists(soc_descriptor.dram_cores, dram_bank_to_workers.first));
-
-      int perf_buf_size = dram_mem::address_map::DRAM_EACH_BANK_PERF_BUFFER_SIZE;
-
-      int num_events_total_this_bank = perf_buf_size / num_bytes_per_event;
-      std::vector<uint32_t> dram_bank_events;
-      read_vector(dram_bank_events, tt_cxy_pair(device_id, core_x, core_y), perf_buf_this_bank_addr, perf_buf_size);
-      assert(dram_bank_events.size() == num_events_total_this_bank);
-      assert(all_dram_events.find(tt_cxy_pair(device_id, core_x, core_y)) == all_dram_events.end());
-      all_dram_events.insert({tt_cxy_pair(device_id, core_x, core_y), dram_bank_events});
-      // for (int event_idx = 0; event_idx < num_events_total_this_bank; event_idx++) {
-      //     output_file << "        " << "- 0x" << std::hex << std::setw(8) << std::setfill('0') << dram_bank_events[event_idx] << std::endl;
-      // }
-    }
 }
 
 int tt_VersimDevice::get_number_of_chips() { return detect_number_of_chips(); }

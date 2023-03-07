@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fw_debug.h"
+#include "ckernel_enum.h"
 #include "ckernel.h"
 #include "ckernel_gpr_map.h"
 #include "llk_param_structs.h"

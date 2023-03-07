@@ -103,10 +103,6 @@ void tt_device::dump_wall_clock_mailbox(std::string output_path, int device_id) 
   // To be redefined with each derived device type
 }
 
-void tt_device::dump_perf_buffer(std::map<tt_cxy_pair, std::vector<uint32_t>> &all_dram_events, int device_id) {
-  // To be redefined with each derived device type
-}
-
 bool tt_device::test_write_read(tt_cxy_pair target)
 {
     std::vector<uint32_t> test_vector1(30, 0xDEADBEEF);

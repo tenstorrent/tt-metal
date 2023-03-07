@@ -7,34 +7,33 @@
 #include "fw_debug.h"
 #include "tensix.h"
 #include "tensix_functions.h"
-#include "atomic_rwptr.h"
 #include "noc_overlay_parameters.h"
 
 class c_tensix_core {
 
-public:    
+public:
     static const bool is_emulated = false;
 
-    static vptr_uint instrn_buf_base(uint32_t thread_id) 
-    { 
+    static vptr_uint instrn_buf_base(uint32_t thread_id)
+    {
         const uint32_t addr[] = { INSTRN_BUF_BASE, INSTRN1_BUF_BASE, INSTRN2_BUF_BASE };
         return reinterpret_cast<uint32_t*>(addr[thread_id]);
     }
-    static vptr_pc_buf pc_buf_base(uint32_t thread_id) 
-    { 
+    static vptr_pc_buf pc_buf_base(uint32_t thread_id)
+    {
         const uint32_t addr[] = { PC_BUF_BASE, PC1_BUF_BASE, PC2_BUF_BASE };
         return reinterpret_cast<uint32_t*>(addr[thread_id]);
     }
     static vptr_uint regfile_base() { return reinterpret_cast<uint32_t*>(REGFILE_BASE); }
-    static vptr_uint cfg_regs_base(uint state_id = 0) 
-    { 
+    static vptr_uint cfg_regs_base(uint state_id = 0)
+    {
         if (state_id == 0)
-            return reinterpret_cast<uint32_t *>(TENSIX_CFG_BASE); 
+            return reinterpret_cast<uint32_t *>(TENSIX_CFG_BASE);
 
-        return reinterpret_cast<uint32_t *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 4 * 4); 
+        return reinterpret_cast<uint32_t *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 4 * 4);
     }
-    static vptr_mailbox mailbox_base(uint32_t thread_id) 
-    { 
+    static vptr_mailbox mailbox_base(uint32_t thread_id)
+    {
         const uint32_t addr[] = { TENSIX_MAILBOX1_BASE, TENSIX_MAILBOX2_BASE, TENSIX_MAILBOX3_BASE };
         return reinterpret_cast<uint32_t*>(addr[thread_id]);
     }
@@ -100,13 +99,6 @@ public:
     static uint64_t read_wall_clock();
     static uint32_t read_wall_clock_l();
 
-    static atomic_rwptr<uint>& fifo_wptr(uint *addr);
-    static atomic_rwptr<uint>& fifo_rdptr(uint *addr);
-    static atomic_rwptr<uint>& fifo_endptr(uint *addr);
-    static atomic_rwptr<uint>& fifo_wptr(uint addr);
-    static atomic_rwptr<uint>& fifo_rdptr(uint addr);
-    static atomic_rwptr<uint>& fifo_endptr(uint addr);
-
     template <class T, std::enable_if_t<std::is_pointer<T>::value, int> = 0>
     static T l1_cast(uint32_t l1_offset)
     {
@@ -147,11 +139,11 @@ private:
     ::ex_set_stride_prepacked(cntset_ind, chan_ind, xy_stride, zw_stride, instrn_buf);
 }*/
 
-inline void c_tensix_core::ex_setpkedgof(uint edge_mask, vptr_uint instrn_buf) 
+inline void c_tensix_core::ex_setpkedgof(uint edge_mask, vptr_uint instrn_buf)
 {
     ::ex_setpkedgof(edge_mask, instrn_buf);
 }
-    
+
 inline void c_tensix_core::ex_clear_dvalid(uint clear_ab, uint reset, vptr_uint instrn_buffer)
 {
     ::ex_clear_dvalid(clear_ab, reset, instrn_buffer);
@@ -161,7 +153,7 @@ inline void c_tensix_core::ex_sem_init(uint semaphore, uint max_value, uint init
 {
     ::ex_sem_init(semaphore, max_value, init_value, instrn_buffer);
 }
-    
+
 inline void c_tensix_core::ex_zeroacc(vptr_uint instrn_buf, uint clear_mode, uint dest_register, uint addressing_mode)
 {
     ::ex_zeroacc(instrn_buf, clear_mode, dest_register, addressing_mode);
@@ -246,39 +238,9 @@ inline uint c_tensix_core::wait(int cycles)
   return bla;
 }
 
-inline atomic_rwptr<uint>& c_tensix_core::fifo_wptr(uint *addr)
-{
-  return make_atomic_rwptr(addr - 3);
-}
-
-inline atomic_rwptr<uint>& c_tensix_core::fifo_rdptr(uint *addr)
-{
-  return make_atomic_rwptr(addr - 4);
-}
-
-inline atomic_rwptr<uint>& c_tensix_core::fifo_endptr(uint *addr)
-{
-  return make_atomic_rwptr(addr - 1);
-}
-
-inline atomic_rwptr<uint>& c_tensix_core::fifo_wptr(uint addr)
-{
-  return fifo_wptr(l1_cast<uint*>(addr));
-}
-
-inline atomic_rwptr<uint>& c_tensix_core::fifo_rdptr(uint addr)
-{
-  return fifo_rdptr(l1_cast<uint*>(addr));
-}
-
-inline atomic_rwptr<uint>& c_tensix_core::fifo_endptr(uint addr)
-{
-  return fifo_endptr(l1_cast<uint*>(addr));
-}
-
 // NOC API
 inline void c_tensix_core::noc_copy(uint64_t src_addr, uint64_t dst_addr, uint32_t size, bool linked, bool posted, bool wr_blocking, bool rd_blocking, uint16_t be) {
-    
+
     FWASSERT("Write-Blocking behaviour is only supported when posted=false", wr_blocking == false || posted == false);
     FWASSERT("Byte-enable is only supported for a word copy", ( be == 0xffff || size <= 16 ));
 
@@ -304,7 +266,7 @@ inline void c_tensix_core::noc_atomic_increment(uint64_t addr, uint32_t incr, ui
  }
 
 inline void c_tensix_core::noc_multicast_copy(uint64_t src_addr, uint64_t dst_addr, uint32_t multicast_mode, uint32_t size, bool linked, bool posted, uint32_t num_blocking_cores) {
- 
+
     uint32_t wacks = noc_wr_ack_received();
     uint32_t num_wacks = size / NOC_MAX_BURST_SIZE + ((size % NOC_MAX_BURST_SIZE) ? 1 : 0);
     num_wacks *= num_blocking_cores;
@@ -342,9 +304,9 @@ inline uint32_t c_tensix_core::read_stream_register_field(uint32_t stream_id, ui
   return ( read_stream_register(stream_id, index) >> shift ) & ((1 << width)-1);
 }
 
-inline uint32_t c_tensix_core::read_wall_clock_l() 
+inline uint32_t c_tensix_core::read_wall_clock_l()
 {
-  return memory_read(RISCV_DEBUG_REG_WALL_CLOCK_L); 
+  return memory_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
 }
 
 inline uint64_t c_tensix_core::read_wall_clock()
@@ -354,7 +316,7 @@ inline uint64_t c_tensix_core::read_wall_clock()
 
   return ((uint64_t)high << 32) | low;
 }
-    
+
 inline void c_tensix_core::check_l1_address_range(std::uint32_t byte_addr, std::size_t length)
 {
     FWASSERT("Exceeded L1 of 1MB!!", ((byte_addr + length) <= (1U << 20)));

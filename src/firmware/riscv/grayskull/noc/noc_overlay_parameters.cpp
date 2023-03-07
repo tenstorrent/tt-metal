@@ -68,13 +68,13 @@ const std::vector<OverlayReg> OLP::registers = {
             {
                 "DRAM_READS__SCRATCH_1_PTR",
                 0,
-                19,
+                18,
                 ""
             }
             ,{
                 "DRAM_READS__TRANS_SIZE_WORDS_HI",
                 (DRAM_READS__SCRATCH_1_PTR+DRAM_READS__SCRATCH_1_PTR_WIDTH),
-                1,
+                4,
                 ""
             }
         },
@@ -116,33 +116,6 @@ const std::vector<OverlayReg> OLP::registers = {
         "// Properties of the remote destination stream (coorindates, stream ID).  Dont-care unless REMOTE_RECEIVER == 1.\n// If destination is multicast, this register specifies the starting coordinates of the destination\n// multicast group/rectangle. (The end coordinates are in STREAM_MCAST_DEST below.)\n"
     }
     ,{
-        "STREAM_LOCAL_DEST",
-        2,
-        {
-            {"STREAM_LOCAL_DEST_MSG_CLEAR_NUM", 0}
-            ,{"STREAM_LOCAL_DEST_STREAM_ID", 1}
-        },
-        {
-            {0, 0}
-            ,{(STREAM_LOCAL_DEST_MSG_CLEAR_NUM+STREAM_LOCAL_DEST_MSG_CLEAR_NUM_WIDTH), 1}
-        },
-        {
-            {
-                "STREAM_LOCAL_DEST_MSG_CLEAR_NUM",
-                0,
-                12,
-                ""
-            }
-            ,{
-                "STREAM_LOCAL_DEST_STREAM_ID",
-                (STREAM_LOCAL_DEST_MSG_CLEAR_NUM+STREAM_LOCAL_DEST_MSG_CLEAR_NUM_WIDTH),
-                STREAM_ID_WIDTH,
-                ""
-            }
-        },
-        "// Properties of the local destination gather stream connection.\n// Dont-care unless LOCAL_RECEIVER == 1.\n// Shares register space with STREAM_REMOTE_DEST_REG_INDEX.\n"
-    }
-    ,{
         "STREAM_REMOTE_DEST_BUF_START",
         3,
         {
@@ -175,13 +148,13 @@ const std::vector<OverlayReg> OLP::registers = {
             {
                 "REMOTE_DEST_BUF_SIZE_WORDS",
                 0,
-                MEM_WORD_ADDR_WIDTH,
+                16,
                 ""
             }
             ,{
                 "DRAM_WRITES__SCRATCH_1_PTR_HI",
                 0,
-                3,
+                2,
                 ""
             }
         },
@@ -445,7 +418,9 @@ const std::vector<OverlayReg> OLP::registers = {
             ,{"STREAM_MCAST_LINKED", 3}
             ,{"STREAM_MCAST_VC", 4}
             ,{"STREAM_MCAST_NO_PATH_RES", 5}
-            ,{"STREAM_MCAST_XY", 6}
+            ,{"MSG_ARB_GROUP_SIZE", 6}
+            ,{"MSG_SRC_IN_ORDER_FWD", 7}
+            ,{"STREAM_MCAST_XY", 8}
         },
         {
             {0, 0}
@@ -455,6 +430,8 @@ const std::vector<OverlayReg> OLP::registers = {
             ,{(STREAM_MCAST_LINKED+STREAM_MCAST_LINKED_WIDTH), 4}
             ,{(STREAM_MCAST_VC+STREAM_MCAST_VC_WIDTH), 5}
             ,{(STREAM_MCAST_NO_PATH_RES+STREAM_MCAST_NO_PATH_RES_WIDTH), 6}
+            ,{(MSG_ARB_GROUP_SIZE+MSG_ARB_GROUP_SIZE_WIDTH), 7}
+            ,{(MSG_SRC_IN_ORDER_FWD+MSG_SRC_IN_ORDER_FWD_WIDTH), 8}
         },
         {
             {
@@ -494,40 +471,8 @@ const std::vector<OverlayReg> OLP::registers = {
                 ""
             }
             ,{
-                "STREAM_MCAST_XY",
-                (STREAM_MCAST_NO_PATH_RES+STREAM_MCAST_NO_PATH_RES_WIDTH),
-                1,
-                ""
-            }
-        },
-        "// Destination spec for multicasting streams. STREAM_MCAST_END_X/Y are\n// the end coordinate for the multicast rectangle, with the ones from \n// STREAM_REMOTE_DEST taken as start. \n// Dont-care if STREAM_MCAST_EN == 0.\n"
-    }
-    ,{
-        "STREAM_MCAST_DEST_NUM",
-        14,
-        {
-        },
-        {
-        },
-        {
-        },
-        "// Number of multicast destinations (dont-care for non-multicast streams)\n"
-    }
-    ,{
-        "STREAM_GATHER",
-        15,
-        {
-            {"MSG_ARB_GROUP_SIZE", 0}
-            ,{"MSG_SRC_IN_ORDER_FWD", 1}
-        },
-        {
-            {0, 0}
-            ,{(MSG_ARB_GROUP_SIZE+MSG_ARB_GROUP_SIZE_WIDTH), 1}
-        },
-        {
-            {
                 "MSG_ARB_GROUP_SIZE",
-                0,
+                (STREAM_MCAST_NO_PATH_RES+STREAM_MCAST_NO_PATH_RES_WIDTH),
                 3,
                 ""
             }
@@ -537,12 +482,18 @@ const std::vector<OverlayReg> OLP::registers = {
                 1,
                 ""
             }
+            ,{
+                "STREAM_MCAST_XY",
+                (MSG_SRC_IN_ORDER_FWD+MSG_SRC_IN_ORDER_FWD_WIDTH),
+                1,
+                ""
+            }
         },
-        "// Specifies MSG_ARB_GROUP_SIZE. Valid values are 1 (round-robin\n// arbitration between each incoming stream) or 4 (round-robin arbitration\n// between groups of 4 incoming streams).\n"
+        "// Destination spec for multicasting streams. STREAM_MCAST_END_X/Y are\n// the end coordinate for the multicast rectangle, with the ones from \n// STREAM_REMOTE_DEST taken as start. \n// Dont-care if STREAM_MCAST_EN == 0. \n// \n// Also specifies MSG_ARB_GROUP_SIZE; valid values are 1 (round-robin\n// arbitration between each incoming stream) or 4 (round-robin arbitration\n// between groups of 4 incoming streams).\n"
     }
     ,{
         "STREAM_MSG_SRC_IN_ORDER_FWD_NUM_MSGS",
-        16,
+        14,
         {
         },
         {
@@ -552,8 +503,19 @@ const std::vector<OverlayReg> OLP::registers = {
         "// When using in-order message forwarding, number of messages after which the source\n// pointer goes back to zero (without phase change).\n// Dont-care if STREAM_MCAST_EN == 0 or MSG_SRC_IN_ORDER_FWD == 0.\n"
     }
     ,{
+        "STREAM_MCAST_DEST_NUM",
+        15,
+        {
+        },
+        {
+        },
+        {
+        },
+        "// Number of multicast destinations (dont-care for non-multicast streams)\n"
+    }
+    ,{
         "STREAM_MSG_HEADER_FORMAT",
-        17,
+        16,
         {
             {"MSG_HEADER_WORD_CNT_OFFSET", 0}
             ,{"MSG_HEADER_WORD_CNT_BITS", 1}
@@ -580,18 +542,18 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_NUM_MSGS_RECEIVED",
-        18,
+        17,
         {
         },
         {
         },
         {
         },
-        "// Number of received & stored messages (read-only). \n// To get the total number of messages penidng in memory read \n// STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM_REG_INDEX\n"
+        "// Number of received & stored messages (read-only).\n"
     }
     ,{
         "STREAM_NEXT_RECEIVED_MSG_ADDR",
-        19,
+        18,
         {
         },
         {
@@ -602,7 +564,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_NEXT_RECEIVED_MSG_SIZE",
-        20,
+        19,
         {
         },
         {
@@ -613,7 +575,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_MSG_INFO_CLEAR",
-        21,
+        20,
         {
         },
         {
@@ -624,7 +586,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_MSG_DATA_CLEAR",
-        22,
+        21,
         {
         },
         {
@@ -635,7 +597,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_NEXT_MSG_SEND",
-        23,
+        22,
         {
         },
         {
@@ -646,7 +608,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_RD_PTR",
-        24,
+        23,
         {
         },
         {
@@ -657,7 +619,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_WR_PTR",
-        25,
+        24,
         {
         },
         {
@@ -668,7 +630,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_MSG_INFO_WR_PTR",
-        26,
+        25,
         {
         },
         {
@@ -679,7 +641,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_PHASE_ADVANCE",
-        27,
+        26,
         {
         },
         {
@@ -690,7 +652,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_BUF_SPACE_AVAILABLE",
-        28,
+        27,
         {
         },
         {
@@ -701,7 +663,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_SOURCE_ENDPOINT_NEW_MSG_INFO",
-        29,
+        28,
         {
             {"SOURCE_ENDPOINT_NEW_MSG_ADDR", 0}
             ,{"SOURCE_ENDPOINT_NEW_MSG_SIZE", 1}
@@ -720,7 +682,7 @@ const std::vector<OverlayReg> OLP::registers = {
             ,{
                 "SOURCE_ENDPOINT_NEW_MSG_SIZE",
                 (SOURCE_ENDPOINT_NEW_MSG_ADDR+SOURCE_ENDPOINT_NEW_MSG_ADDR_WIDTH),
-                (32-MEM_WORD_ADDR_WIDTH),
+                MEM_WORD_ADDR_WIDTH,
                 ""
             }
         },
@@ -728,7 +690,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_NUM_MSGS_RECEIVED_INC",
-        30,
+        29,
         {
             {"SOURCE_ENDPOINT_NEW_MSGS_NUM", 0}
             ,{"SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE", 1}
@@ -755,7 +717,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_RESET",
-        31,
+        30,
         {
         },
         {
@@ -766,7 +728,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_DEST_PHASE_READY_UPDATE",
-        32,
+        31,
         {
             {"PHASE_READY_DEST_NUM", 0}
             ,{"PHASE_READY_NUM", 1}
@@ -809,7 +771,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_SRC_READY_UPDATE",
-        33,
+        32,
         {
             {"STREAM_REMOTE_RDY_SRC_X", 0}
             ,{"STREAM_REMOTE_RDY_SRC_Y", 1}
@@ -844,7 +806,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE",
-        34,
+        33,
         {
             {"REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_DEST_NUM", 0}
             ,{"REMOTE_DEST_BUF_WORDS_FREE_INC", 1}
@@ -863,7 +825,7 @@ const std::vector<OverlayReg> OLP::registers = {
             ,{
                 "REMOTE_DEST_BUF_WORDS_FREE_INC",
                 (REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_DEST_NUM+REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_DEST_NUM_WIDTH),
-                MEM_WORD_ADDR_WIDTH,
+                16,
                 ""
             }
         },
@@ -871,7 +833,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_WAIT_STATUS",
-        35,
+        34,
         {
             {"WAIT_SW_PHASE_ADVANCE_SIGNAL", 0}
             ,{"WAIT_PREV_PHASE_DATA_FLUSH", 1}
@@ -914,7 +876,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_PHASE_AUTO_CFG_HEADER",
-        36,
+        35,
         {
             {"PHASE_NUM_INCR", 0}
             ,{"CURR_PHASE_NUM_MSGS", 1}
@@ -949,7 +911,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_PERF_CONFIG",
-        37,
+        36,
         {
             {"CLOCK_GATING_EN", 0}
             ,{"CLOCK_GATING_HYST", 1}
@@ -984,7 +946,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_MSG_GROUP_ZERO_MASK_AND",
-        38,
+        37,
         {
         },
         {
@@ -995,7 +957,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_MSG_INFO_FULL",
-        39,
+        38,
         {
         },
         {
@@ -1006,7 +968,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_MEM_BUF_SPACE_AVAILABLE_ACK_THRESHOLD",
-        40,
+        39,
         {
         },
         {
@@ -1017,7 +979,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_MSG_INFO_CAN_PUSH_NEW_MSG",
-        41,
+        40,
         {
         },
         {
@@ -1028,7 +990,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_MSG_GROUP_COMPRESS",
-        42,
+        41,
         {
         },
         {
@@ -1038,8 +1000,8 @@ const std::vector<OverlayReg> OLP::registers = {
         "// Concat compress flags from 4 tiles in the pending message group.\n// (Header bit 52.)\n// Read-only.  Valid only for receiver endpoint streams.\n"
     }
     ,{
-        "STREAM_GATHER_CLEAR",
-        43,
+        "STREAM_MCAST_GATHER_CLEAR",
+        42,
         {
             {"MSG_LOCAL_STREAM_CLEAR_NUM", 0}
             ,{"MSG_GROUP_STREAM_CLEAR_TYPE", 1}
@@ -1066,7 +1028,7 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_REMOTE_DEST_TRAFFIC_PRIORITY",
-        44,
+        43,
         {
         },
         {
@@ -1077,34 +1039,18 @@ const std::vector<OverlayReg> OLP::registers = {
     }
     ,{
         "STREAM_DEBUG_STATUS_SEL",
-        45,
+        44,
         {
-            {"DEBUG_STATUS_STREAM_ID_SEL", 0}
-            ,{"DISABLE_DEST_READY_TABLE", 1}
         },
         {
-            {0, 0}
-            ,{(DEBUG_STATUS_STREAM_ID_SEL+DEBUG_STATUS_STREAM_ID_SEL_WIDTH), 1}
         },
         {
-            {
-                "DEBUG_STATUS_STREAM_ID_SEL",
-                0,
-                STREAM_ID_WIDTH,
-                ""
-            }
-            ,{
-                "DISABLE_DEST_READY_TABLE",
-                (DEBUG_STATUS_STREAM_ID_SEL+DEBUG_STATUS_STREAM_ID_SEL_WIDTH),
-                1,
-                ""
-            }
         },
         "// Debug bus stream selection. Write the stream id for the stream that you want exposed on the debug bus\n// This register only exists in stream 0.\n"
     }
     ,{
         "STREAM_DEBUG_ASSERTIONS",
-        46,
+        45,
         {
         },
         {
@@ -1112,17 +1058,6 @@ const std::vector<OverlayReg> OLP::registers = {
         {
         },
         "// Debugging: Non-zero value indicates an invalid stream operation occured.\n// Sticky, write 1 to clear.\n"
-    }
-    ,{
-        "STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM",
-        47,
-        {
-        },
-        {
-        },
-        {
-        },
-        "// Only in receiver endpoint streams (stream 4 and 5)\n// Read-only. Tells you the number of tiles that have arrived in L1\n"
     }
     ,{
         "STREAM_LOCAL_SRC_MASK",
@@ -1159,7 +1094,7 @@ const std::vector<OverlayReg> OLP::registers = {
             {
                 "REMOTE_DEST_WORDS_FREE",
                 0,
-                MEM_WORD_ADDR_WIDTH,
+                16,
                 ""
             }
         },
@@ -1188,88 +1123,6 @@ const std::vector<OverlayReg> OLP::registers = {
         "// Read-only register that exposes internal states of the stream.\n// Useful for debugging. Valid 32-bit data from STREAM_DEBUG_STATUS_REG_INDEX + 0 to STREAM_DEBUG_STATUS_REG_INDEX + 9\n"
     }
     ,{
-        "STREAM_BLOB_AUTO_CFG_DONE",
-        234,
-        {
-        },
-        {
-        },
-        {
-        },
-        "// 32 bit register. Each bit denotes whether the corresponding stream has completed its blob run and is in idle state.\n// Resets to 0 upon starting a new stream run. Initially all are 0 to exclude streams that might not be used.\n// Can be manually reset to 0 by writing 1 to the corresponding bit.\n// Exists only in stream 0\n"
-    }
-    ,{
-        "STREAM_REMOTE_DEST_BUF_START_HI",
-        242,
-        {
-        },
-        {
-        },
-        {
-        },
-        "// High bits for STREAM_REMOTE_DEST_BUF_START\n"
-    }
-    ,{
-        "STREAM_REMOTE_DEST_MSG_INFO_WR_PTR_HI",
-        243,
-        {
-        },
-        {
-        },
-        {
-        },
-        "// High bits for STREAM_REMOTE_DEST_MSG_INFO_WR_PTR\n"
-    }
-    ,{
-        "STREAM_CURR_PHASE_BASE",
-        244,
-        {
-        },
-        {
-        },
-        {
-        },
-        "// Actual phase number executed is STREAM_CURR_PHASE_BASE_REG_INDEX + STREAM_CURR_PHASE_REG_INDEX\n// When reprogramming this register you must also reprogram STREAM_CURR_PHASE_REG_INDEX and STREAM_REMOTE_SRC_PHASE_REG_INDEX\n"
-    }
-    ,{
-        "STREAM_PHASE_AUTO_CFG_PTR_BASE",
-        245,
-        {
-        },
-        {
-        },
-        {
-        },
-        "// Actual address accessed will be STREAM_PHASE_AUTO_CFG_PTR_BASE_REG_INDEX + STREAM_PHASE_AUTO_CFG_PTR_REG_INDEX\n// When reprogramming this register you must also reprogram STREAM_PHASE_AUTO_CFG_PTR_REG_INDEX\n"
-    }
-    ,{
-        "STREAM_BLOB_NEXT_AUTO_CFG_DONE",
-        246,
-        {
-            {"BLOB_NEXT_AUTO_CFG_DONE_STREAM_ID", 0}
-            ,{"BLOB_NEXT_AUTO_CFG_DONE_VALID", 1}
-        },
-        {
-            {0, 0}
-            ,{16, 1}
-        },
-        {
-            {
-                "BLOB_NEXT_AUTO_CFG_DONE_STREAM_ID",
-                0,
-                STREAM_ID_WIDTH,
-                ""
-            }
-            ,{
-                "BLOB_NEXT_AUTO_CFG_DONE_VALID",
-                16,
-                1,
-                ""
-            }
-        },
-        "// Reading this register will give you a stream id of a stream that finished its blob (according to STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX)\n// Subsequent reads will give you the next stream, untill all streams are read, after which it will loop\n// This register is only valid if BLOB_NEXT_AUTO_CFG_DONE_VALID is set (i.e. if STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX non-zero)\n// Exists only in stream 0\n"
-    }
-    ,{
         "FIRMWARE_SCRATCH",
         247,
         {
@@ -1295,41 +1148,33 @@ const std::vector<OverlayReg> OLP::registers = {
         "STREAM_SCRATCH_0",
         248,
         {
-            {"NCRISC_TRANS_EN", 0}
-            ,{"NCRISC_TRANS_EN_IRQ_ON_BLOB_END", 1}
+            {"NEXT_NRISC_PIC_INT_ON_PHASE", 0}
+            ,{"NCRISC_TRANS_EN", 1}
             ,{"NCRISC_CMD_ID", 2}
-            ,{"NEXT_NRISC_PIC_INT_ON_PHASE", 3}
         },
         {
             {0, 0}
-            ,{(NCRISC_TRANS_EN + NCRISC_TRANS_EN_WIDTH), 1}
-            ,{(NCRISC_TRANS_EN_IRQ_ON_BLOB_END + NCRISC_TRANS_EN_IRQ_ON_BLOB_END_WIDTH), 2}
-            ,{(NCRISC_CMD_ID + NCRISC_CMD_ID_WIDTH), 3}
+            ,{(NEXT_NRISC_PIC_INT_ON_PHASE + NEXT_NRISC_PIC_INT_ON_PHASE_WIDTH), 1}
+            ,{(NCRISC_TRANS_EN + NCRISC_TRANS_EN_WIDTH), 2}
         },
         {
             {
-                "NCRISC_TRANS_EN",
+                "NEXT_NRISC_PIC_INT_ON_PHASE",
                 0,
-                1,
+                20,
                 ""
             }
             ,{
-                "NCRISC_TRANS_EN_IRQ_ON_BLOB_END",
-                (NCRISC_TRANS_EN + NCRISC_TRANS_EN_WIDTH),
+                "NCRISC_TRANS_EN",
+                (NEXT_NRISC_PIC_INT_ON_PHASE + NEXT_NRISC_PIC_INT_ON_PHASE_WIDTH),
                 1,
                 ""
             }
             ,{
                 "NCRISC_CMD_ID",
-                (NCRISC_TRANS_EN_IRQ_ON_BLOB_END + NCRISC_TRANS_EN_IRQ_ON_BLOB_END_WIDTH),
+                (NCRISC_TRANS_EN + NCRISC_TRANS_EN_WIDTH),
                 3,
                 ""
-            }
-            ,{
-                "NEXT_NRISC_PIC_INT_ON_PHASE",
-                (NCRISC_CMD_ID + NCRISC_CMD_ID_WIDTH),
-                19,
-                "// Kept for compatibility with grayskull, but doesnt not exist anymore in wormhole\n"
             }
         },
         ""
@@ -1340,12 +1185,9 @@ const std::vector<OverlayReg> OLP::registers = {
         {
             {"DRAM_FIFO_RD_PTR_WORDS_LO", 0}
             ,{"NCRISC_LOOP_COUNT", 1}
-            ,{"NCRISC_INIT_ENABLE_BLOB_DONE_IRQ", 2}
-            ,{"NCRISC_INIT_DISABLE_BLOB_DONE_IRQ", 3}
         },
         {
             {0, 0}
-            ,{(NCRISC_INIT_ENABLE_BLOB_DONE_IRQ + NCRISC_INIT_ENABLE_BLOB_DONE_IRQ_WIDTH), 3}
         },
         {
             {
@@ -1358,18 +1200,6 @@ const std::vector<OverlayReg> OLP::registers = {
                 "NCRISC_LOOP_COUNT",
                 0,
                 24,
-                ""
-            }
-            ,{
-                "NCRISC_INIT_ENABLE_BLOB_DONE_IRQ",
-                0,
-                1,
-                ""
-            }
-            ,{
-                "NCRISC_INIT_DISABLE_BLOB_DONE_IRQ",
-                (NCRISC_INIT_ENABLE_BLOB_DONE_IRQ + NCRISC_INIT_ENABLE_BLOB_DONE_IRQ_WIDTH),
-                1,
                 ""
             }
         },
@@ -1565,140 +1395,123 @@ const std::unordered_map<std::string, std::uint32_t> OLP::registers_by_name = {
     {"STREAM_REMOTE_SRC", 0}
     ,{"STREAM_REMOTE_SRC_PHASE", 1}
     ,{"STREAM_REMOTE_DEST", 2}
-    ,{"STREAM_LOCAL_DEST", 3}
-    ,{"STREAM_REMOTE_DEST_BUF_START", 4}
-    ,{"STREAM_REMOTE_DEST_BUF_SIZE", 5}
-    ,{"STREAM_REMOTE_DEST_WR_PTR", 6}
-    ,{"STREAM_BUF_START", 7}
-    ,{"STREAM_BUF_SIZE", 8}
-    ,{"STREAM_MSG_INFO_PTR", 9}
-    ,{"STREAM_REMOTE_DEST_MSG_INFO_WR_PTR", 10}
-    ,{"STREAM_MISC_CFG", 11}
-    ,{"STREAM_CURR_PHASE", 12}
-    ,{"STREAM_PHASE_AUTO_CFG_PTR", 13}
-    ,{"STREAM_MCAST_DEST", 14}
+    ,{"STREAM_REMOTE_DEST_BUF_START", 3}
+    ,{"STREAM_REMOTE_DEST_BUF_SIZE", 4}
+    ,{"STREAM_REMOTE_DEST_WR_PTR", 5}
+    ,{"STREAM_BUF_START", 6}
+    ,{"STREAM_BUF_SIZE", 7}
+    ,{"STREAM_MSG_INFO_PTR", 8}
+    ,{"STREAM_REMOTE_DEST_MSG_INFO_WR_PTR", 9}
+    ,{"STREAM_MISC_CFG", 10}
+    ,{"STREAM_CURR_PHASE", 11}
+    ,{"STREAM_PHASE_AUTO_CFG_PTR", 12}
+    ,{"STREAM_MCAST_DEST", 13}
+    ,{"STREAM_MSG_SRC_IN_ORDER_FWD_NUM_MSGS", 14}
     ,{"STREAM_MCAST_DEST_NUM", 15}
-    ,{"STREAM_GATHER", 16}
-    ,{"STREAM_MSG_SRC_IN_ORDER_FWD_NUM_MSGS", 17}
-    ,{"STREAM_MSG_HEADER_FORMAT", 18}
-    ,{"STREAM_NUM_MSGS_RECEIVED", 19}
-    ,{"STREAM_NEXT_RECEIVED_MSG_ADDR", 20}
-    ,{"STREAM_NEXT_RECEIVED_MSG_SIZE", 21}
-    ,{"STREAM_MSG_INFO_CLEAR", 22}
-    ,{"STREAM_MSG_DATA_CLEAR", 23}
-    ,{"STREAM_NEXT_MSG_SEND", 24}
-    ,{"STREAM_RD_PTR", 25}
-    ,{"STREAM_WR_PTR", 26}
-    ,{"STREAM_MSG_INFO_WR_PTR", 27}
-    ,{"STREAM_PHASE_ADVANCE", 28}
-    ,{"STREAM_BUF_SPACE_AVAILABLE", 29}
-    ,{"STREAM_SOURCE_ENDPOINT_NEW_MSG_INFO", 30}
-    ,{"STREAM_NUM_MSGS_RECEIVED_INC", 31}
-    ,{"STREAM_RESET", 32}
-    ,{"STREAM_DEST_PHASE_READY_UPDATE", 33}
-    ,{"STREAM_SRC_READY_UPDATE", 34}
-    ,{"STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE", 35}
-    ,{"STREAM_WAIT_STATUS", 36}
-    ,{"STREAM_PHASE_AUTO_CFG_HEADER", 37}
-    ,{"STREAM_PERF_CONFIG", 38}
-    ,{"STREAM_MSG_GROUP_ZERO_MASK_AND", 39}
-    ,{"STREAM_MSG_INFO_FULL", 40}
-    ,{"STREAM_MEM_BUF_SPACE_AVAILABLE_ACK_THRESHOLD", 41}
-    ,{"STREAM_MSG_INFO_CAN_PUSH_NEW_MSG", 42}
-    ,{"STREAM_MSG_GROUP_COMPRESS", 43}
-    ,{"STREAM_GATHER_CLEAR", 44}
-    ,{"STREAM_REMOTE_DEST_TRAFFIC_PRIORITY", 45}
-    ,{"STREAM_DEBUG_STATUS_SEL", 46}
-    ,{"STREAM_DEBUG_ASSERTIONS", 47}
-    ,{"STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM", 48}
-    ,{"STREAM_LOCAL_SRC_MASK", 49}
-    ,{"STREAM_RECEIVER_ENDPOINT_SET_MSG_HEADER", 50}
-    ,{"STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE", 51}
-    ,{"STREAM_RECEIVER_MSG_INFO", 52}
-    ,{"STREAM_DEBUG_STATUS", 53}
-    ,{"STREAM_BLOB_AUTO_CFG_DONE", 54}
-    ,{"STREAM_REMOTE_DEST_BUF_START_HI", 55}
-    ,{"STREAM_REMOTE_DEST_MSG_INFO_WR_PTR_HI", 56}
-    ,{"STREAM_CURR_PHASE_BASE", 57}
-    ,{"STREAM_PHASE_AUTO_CFG_PTR_BASE", 58}
-    ,{"STREAM_BLOB_NEXT_AUTO_CFG_DONE", 59}
-    ,{"FIRMWARE_SCRATCH", 60}
-    ,{"STREAM_SCRATCH", 61}
-    ,{"STREAM_SCRATCH_0", 62}
-    ,{"STREAM_SCRATCH_1", 63}
-    ,{"STREAM_SCRATCH_2", 64}
-    ,{"STREAM_SCRATCH_3", 65}
-    ,{"STREAM_SCRATCH_4", 66}
-    ,{"STREAM_SCRATCH_5", 67}
+    ,{"STREAM_MSG_HEADER_FORMAT", 16}
+    ,{"STREAM_NUM_MSGS_RECEIVED", 17}
+    ,{"STREAM_NEXT_RECEIVED_MSG_ADDR", 18}
+    ,{"STREAM_NEXT_RECEIVED_MSG_SIZE", 19}
+    ,{"STREAM_MSG_INFO_CLEAR", 20}
+    ,{"STREAM_MSG_DATA_CLEAR", 21}
+    ,{"STREAM_NEXT_MSG_SEND", 22}
+    ,{"STREAM_RD_PTR", 23}
+    ,{"STREAM_WR_PTR", 24}
+    ,{"STREAM_MSG_INFO_WR_PTR", 25}
+    ,{"STREAM_PHASE_ADVANCE", 26}
+    ,{"STREAM_BUF_SPACE_AVAILABLE", 27}
+    ,{"STREAM_SOURCE_ENDPOINT_NEW_MSG_INFO", 28}
+    ,{"STREAM_NUM_MSGS_RECEIVED_INC", 29}
+    ,{"STREAM_RESET", 30}
+    ,{"STREAM_DEST_PHASE_READY_UPDATE", 31}
+    ,{"STREAM_SRC_READY_UPDATE", 32}
+    ,{"STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE", 33}
+    ,{"STREAM_WAIT_STATUS", 34}
+    ,{"STREAM_PHASE_AUTO_CFG_HEADER", 35}
+    ,{"STREAM_PERF_CONFIG", 36}
+    ,{"STREAM_MSG_GROUP_ZERO_MASK_AND", 37}
+    ,{"STREAM_MSG_INFO_FULL", 38}
+    ,{"STREAM_MEM_BUF_SPACE_AVAILABLE_ACK_THRESHOLD", 39}
+    ,{"STREAM_MSG_INFO_CAN_PUSH_NEW_MSG", 40}
+    ,{"STREAM_MSG_GROUP_COMPRESS", 41}
+    ,{"STREAM_MCAST_GATHER_CLEAR", 42}
+    ,{"STREAM_REMOTE_DEST_TRAFFIC_PRIORITY", 43}
+    ,{"STREAM_DEBUG_STATUS_SEL", 44}
+    ,{"STREAM_DEBUG_ASSERTIONS", 45}
+    ,{"STREAM_LOCAL_SRC_MASK", 46}
+    ,{"STREAM_RECEIVER_ENDPOINT_SET_MSG_HEADER", 47}
+    ,{"STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE", 48}
+    ,{"STREAM_RECEIVER_MSG_INFO", 49}
+    ,{"STREAM_DEBUG_STATUS", 50}
+    ,{"FIRMWARE_SCRATCH", 51}
+    ,{"STREAM_SCRATCH", 52}
+    ,{"STREAM_SCRATCH_0", 53}
+    ,{"STREAM_SCRATCH_1", 54}
+    ,{"STREAM_SCRATCH_2", 55}
+    ,{"STREAM_SCRATCH_3", 56}
+    ,{"STREAM_SCRATCH_4", 57}
+    ,{"STREAM_SCRATCH_5", 58}
 };
 
 const std::unordered_map<std::uint32_t, std::uint32_t> OLP::registers_by_index = {
     {0, 0}
     ,{1, 1}
     ,{2, 2}
-    ,{3, 4}
-    ,{4, 5}
-    ,{5, 6}
-    ,{6, 7}
-    ,{7, 8}
-    ,{8, 9}
-    ,{9, 10}
-    ,{10, 11}
-    ,{11, 12}
-    ,{12, 13}
-    ,{13, 14}
-    ,{14, 15}
-    ,{15, 16}
-    ,{16, 17}
-    ,{17, 18}
-    ,{18, 19}
-    ,{19, 20}
-    ,{20, 21}
-    ,{21, 22}
-    ,{22, 23}
-    ,{23, 24}
-    ,{24, 25}
-    ,{25, 26}
-    ,{26, 27}
-    ,{27, 28}
-    ,{28, 29}
-    ,{29, 30}
-    ,{30, 31}
-    ,{31, 32}
-    ,{32, 33}
-    ,{33, 34}
-    ,{34, 35}
-    ,{35, 36}
-    ,{36, 37}
-    ,{37, 38}
-    ,{38, 39}
-    ,{39, 40}
-    ,{40, 41}
-    ,{41, 42}
-    ,{42, 43}
-    ,{43, 44}
-    ,{44, 45}
-    ,{45, 46}
-    ,{46, 47}
-    ,{47, 48}
-    ,{48, 49}
-    ,{60, 50}
-    ,{64, 51}
-    ,{128, 52}
-    ,{224, 53}
-    ,{234, 54}
-    ,{242, 55}
-    ,{243, 56}
-    ,{244, 57}
-    ,{245, 58}
-    ,{246, 59}
-    ,{247, 60}
-    ,{248, 61}
-    ,{249, 63}
-    ,{250, 64}
-    ,{251, 65}
-    ,{252, 66}
-    ,{253, 67}
+    ,{3, 3}
+    ,{4, 4}
+    ,{5, 5}
+    ,{6, 6}
+    ,{7, 7}
+    ,{8, 8}
+    ,{9, 9}
+    ,{10, 10}
+    ,{11, 11}
+    ,{12, 12}
+    ,{13, 13}
+    ,{14, 14}
+    ,{15, 15}
+    ,{16, 16}
+    ,{17, 17}
+    ,{18, 18}
+    ,{19, 19}
+    ,{20, 20}
+    ,{21, 21}
+    ,{22, 22}
+    ,{23, 23}
+    ,{24, 24}
+    ,{25, 25}
+    ,{26, 26}
+    ,{27, 27}
+    ,{28, 28}
+    ,{29, 29}
+    ,{30, 30}
+    ,{31, 31}
+    ,{32, 32}
+    ,{33, 33}
+    ,{34, 34}
+    ,{35, 35}
+    ,{36, 36}
+    ,{37, 37}
+    ,{38, 38}
+    ,{39, 39}
+    ,{40, 40}
+    ,{41, 41}
+    ,{42, 42}
+    ,{43, 43}
+    ,{44, 44}
+    ,{45, 45}
+    ,{48, 46}
+    ,{60, 47}
+    ,{64, 48}
+    ,{128, 49}
+    ,{224, 50}
+    ,{247, 51}
+    ,{248, 52}
+    ,{249, 54}
+    ,{250, 55}
+    ,{251, 56}
+    ,{252, 57}
+    ,{253, 58}
 };
 
 const std::vector<OverlayField> OLP::fields = {
@@ -1735,13 +1548,13 @@ const std::vector<OverlayField> OLP::fields = {
     ,{
         "DRAM_READS__SCRATCH_1_PTR",
         0,
-        19,
+        18,
         ""
     }
     ,{
         "DRAM_READS__TRANS_SIZE_WORDS_HI",
         (DRAM_READS__SCRATCH_1_PTR+DRAM_READS__SCRATCH_1_PTR_WIDTH),
-        1,
+        4,
         ""
     }
     ,{
@@ -1763,18 +1576,6 @@ const std::vector<OverlayField> OLP::fields = {
         ""
     }
     ,{
-        "STREAM_LOCAL_DEST_MSG_CLEAR_NUM",
-        0,
-        12,
-        ""
-    }
-    ,{
-        "STREAM_LOCAL_DEST_STREAM_ID",
-        (STREAM_LOCAL_DEST_MSG_CLEAR_NUM+STREAM_LOCAL_DEST_MSG_CLEAR_NUM_WIDTH),
-        STREAM_ID_WIDTH,
-        ""
-    }
-    ,{
         "DRAM_WRITES__SCRATCH_1_PTR_LO",
         0,
         16,
@@ -1783,13 +1584,13 @@ const std::vector<OverlayField> OLP::fields = {
     ,{
         "REMOTE_DEST_BUF_SIZE_WORDS",
         0,
-        MEM_WORD_ADDR_WIDTH,
+        16,
         ""
     }
     ,{
         "DRAM_WRITES__SCRATCH_1_PTR_HI",
         0,
-        3,
+        2,
         ""
     }
     ,{
@@ -1949,20 +1750,20 @@ const std::vector<OverlayField> OLP::fields = {
         ""
     }
     ,{
-        "STREAM_MCAST_XY",
-        (STREAM_MCAST_NO_PATH_RES+STREAM_MCAST_NO_PATH_RES_WIDTH),
-        1,
-        ""
-    }
-    ,{
         "MSG_ARB_GROUP_SIZE",
-        0,
+        (STREAM_MCAST_NO_PATH_RES+STREAM_MCAST_NO_PATH_RES_WIDTH),
         3,
         ""
     }
     ,{
         "MSG_SRC_IN_ORDER_FWD",
         (MSG_ARB_GROUP_SIZE+MSG_ARB_GROUP_SIZE_WIDTH),
+        1,
+        ""
+    }
+    ,{
+        "STREAM_MCAST_XY",
+        (MSG_SRC_IN_ORDER_FWD+MSG_SRC_IN_ORDER_FWD_WIDTH),
         1,
         ""
     }
@@ -1987,7 +1788,7 @@ const std::vector<OverlayField> OLP::fields = {
     ,{
         "SOURCE_ENDPOINT_NEW_MSG_SIZE",
         (SOURCE_ENDPOINT_NEW_MSG_ADDR+SOURCE_ENDPOINT_NEW_MSG_ADDR_WIDTH),
-        (32-MEM_WORD_ADDR_WIDTH),
+        MEM_WORD_ADDR_WIDTH,
         ""
     }
     ,{
@@ -2053,7 +1854,7 @@ const std::vector<OverlayField> OLP::fields = {
     ,{
         "REMOTE_DEST_BUF_WORDS_FREE_INC",
         (REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_DEST_NUM+REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_DEST_NUM_WIDTH),
-        MEM_WORD_ADDR_WIDTH,
+        16,
         ""
     }
     ,{
@@ -2129,58 +1930,28 @@ const std::vector<OverlayField> OLP::fields = {
         ""
     }
     ,{
-        "DEBUG_STATUS_STREAM_ID_SEL",
-        0,
-        STREAM_ID_WIDTH,
-        ""
-    }
-    ,{
-        "DISABLE_DEST_READY_TABLE",
-        (DEBUG_STATUS_STREAM_ID_SEL+DEBUG_STATUS_STREAM_ID_SEL_WIDTH),
-        1,
-        ""
-    }
-    ,{
         "REMOTE_DEST_WORDS_FREE",
         0,
-        MEM_WORD_ADDR_WIDTH,
-        ""
-    }
-    ,{
-        "BLOB_NEXT_AUTO_CFG_DONE_STREAM_ID",
-        0,
-        STREAM_ID_WIDTH,
-        ""
-    }
-    ,{
-        "BLOB_NEXT_AUTO_CFG_DONE_VALID",
         16,
-        1,
+        ""
+    }
+    ,{
+        "NEXT_NRISC_PIC_INT_ON_PHASE",
+        0,
+        20,
         ""
     }
     ,{
         "NCRISC_TRANS_EN",
-        0,
-        1,
-        ""
-    }
-    ,{
-        "NCRISC_TRANS_EN_IRQ_ON_BLOB_END",
-        (NCRISC_TRANS_EN + NCRISC_TRANS_EN_WIDTH),
+        (NEXT_NRISC_PIC_INT_ON_PHASE + NEXT_NRISC_PIC_INT_ON_PHASE_WIDTH),
         1,
         ""
     }
     ,{
         "NCRISC_CMD_ID",
-        (NCRISC_TRANS_EN_IRQ_ON_BLOB_END + NCRISC_TRANS_EN_IRQ_ON_BLOB_END_WIDTH),
+        (NCRISC_TRANS_EN + NCRISC_TRANS_EN_WIDTH),
         3,
         ""
-    }
-    ,{
-        "NEXT_NRISC_PIC_INT_ON_PHASE",
-        (NCRISC_CMD_ID + NCRISC_CMD_ID_WIDTH),
-        19,
-        "// Kept for compatibility with grayskull, but doesnt not exist anymore in wormhole\n"
     }
     ,{
         "DRAM_FIFO_RD_PTR_WORDS_LO",
@@ -2192,18 +1963,6 @@ const std::vector<OverlayField> OLP::fields = {
         "NCRISC_LOOP_COUNT",
         0,
         24,
-        ""
-    }
-    ,{
-        "NCRISC_INIT_ENABLE_BLOB_DONE_IRQ",
-        0,
-        1,
-        ""
-    }
-    ,{
-        "NCRISC_INIT_DISABLE_BLOB_DONE_IRQ",
-        (NCRISC_INIT_ENABLE_BLOB_DONE_IRQ + NCRISC_INIT_ENABLE_BLOB_DONE_IRQ_WIDTH),
-        1,
         ""
     }
     ,{
@@ -2327,96 +2086,87 @@ const std::unordered_map<std::string, std::uint32_t> OLP::fields_by_name = {
     ,{"STREAM_REMOTE_DEST_X", 7}
     ,{"STREAM_REMOTE_DEST_Y", 8}
     ,{"STREAM_REMOTE_DEST_STREAM_ID", 9}
-    ,{"STREAM_LOCAL_DEST_MSG_CLEAR_NUM", 10}
-    ,{"STREAM_LOCAL_DEST_STREAM_ID", 11}
-    ,{"DRAM_WRITES__SCRATCH_1_PTR_LO", 12}
-    ,{"REMOTE_DEST_BUF_SIZE_WORDS", 13}
-    ,{"DRAM_WRITES__SCRATCH_1_PTR_HI", 14}
-    ,{"INCOMING_DATA_NOC", 15}
-    ,{"OUTGOING_DATA_NOC", 16}
-    ,{"REMOTE_SRC_UPDATE_NOC", 17}
-    ,{"LOCAL_SOURCES_CONNECTED", 18}
-    ,{"SOURCE_ENDPOINT", 19}
-    ,{"REMOTE_SOURCE", 20}
-    ,{"RECEIVER_ENDPOINT", 21}
-    ,{"LOCAL_RECEIVER", 22}
-    ,{"REMOTE_RECEIVER", 23}
-    ,{"PHASE_AUTO_CONFIG", 24}
-    ,{"PHASE_AUTO_ADVANCE", 25}
-    ,{"DATA_AUTO_SEND", 26}
-    ,{"NEXT_PHASE_SRC_CHANGE", 27}
-    ,{"NEXT_PHASE_DEST_CHANGE", 28}
-    ,{"DATA_BUF_NO_FLOW_CTRL", 29}
-    ,{"DEST_DATA_BUF_NO_FLOW_CTRL", 30}
-    ,{"REMOTE_SRC_IS_MCAST", 31}
-    ,{"NO_PREV_PHASE_OUTGOING_DATA_FLUSH", 32}
-    ,{"UNICAST_VC_REG", 33}
-    ,{"REG_UPDATE_VC_REG", 34}
-    ,{"STREAM_MCAST_END_X", 35}
-    ,{"STREAM_MCAST_END_Y", 36}
-    ,{"STREAM_MCAST_EN", 37}
-    ,{"STREAM_MCAST_LINKED", 38}
-    ,{"STREAM_MCAST_VC", 39}
-    ,{"STREAM_MCAST_NO_PATH_RES", 40}
+    ,{"DRAM_WRITES__SCRATCH_1_PTR_LO", 10}
+    ,{"REMOTE_DEST_BUF_SIZE_WORDS", 11}
+    ,{"DRAM_WRITES__SCRATCH_1_PTR_HI", 12}
+    ,{"INCOMING_DATA_NOC", 13}
+    ,{"OUTGOING_DATA_NOC", 14}
+    ,{"REMOTE_SRC_UPDATE_NOC", 15}
+    ,{"LOCAL_SOURCES_CONNECTED", 16}
+    ,{"SOURCE_ENDPOINT", 17}
+    ,{"REMOTE_SOURCE", 18}
+    ,{"RECEIVER_ENDPOINT", 19}
+    ,{"LOCAL_RECEIVER", 20}
+    ,{"REMOTE_RECEIVER", 21}
+    ,{"PHASE_AUTO_CONFIG", 22}
+    ,{"PHASE_AUTO_ADVANCE", 23}
+    ,{"DATA_AUTO_SEND", 24}
+    ,{"NEXT_PHASE_SRC_CHANGE", 25}
+    ,{"NEXT_PHASE_DEST_CHANGE", 26}
+    ,{"DATA_BUF_NO_FLOW_CTRL", 27}
+    ,{"DEST_DATA_BUF_NO_FLOW_CTRL", 28}
+    ,{"REMOTE_SRC_IS_MCAST", 29}
+    ,{"NO_PREV_PHASE_OUTGOING_DATA_FLUSH", 30}
+    ,{"UNICAST_VC_REG", 31}
+    ,{"REG_UPDATE_VC_REG", 32}
+    ,{"STREAM_MCAST_END_X", 33}
+    ,{"STREAM_MCAST_END_Y", 34}
+    ,{"STREAM_MCAST_EN", 35}
+    ,{"STREAM_MCAST_LINKED", 36}
+    ,{"STREAM_MCAST_VC", 37}
+    ,{"STREAM_MCAST_NO_PATH_RES", 38}
+    ,{"MSG_ARB_GROUP_SIZE", 39}
+    ,{"MSG_SRC_IN_ORDER_FWD", 40}
     ,{"STREAM_MCAST_XY", 41}
-    ,{"MSG_ARB_GROUP_SIZE", 42}
-    ,{"MSG_SRC_IN_ORDER_FWD", 43}
-    ,{"MSG_HEADER_WORD_CNT_OFFSET", 44}
-    ,{"MSG_HEADER_WORD_CNT_BITS", 45}
-    ,{"SOURCE_ENDPOINT_NEW_MSG_ADDR", 46}
-    ,{"SOURCE_ENDPOINT_NEW_MSG_SIZE", 47}
-    ,{"SOURCE_ENDPOINT_NEW_MSGS_NUM", 48}
-    ,{"SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE", 49}
-    ,{"PHASE_READY_DEST_NUM", 50}
-    ,{"PHASE_READY_NUM", 51}
-    ,{"PHASE_READY_MCAST", 52}
-    ,{"PHASE_READY_TWO_WAY_RESP", 53}
-    ,{"STREAM_REMOTE_RDY_SRC_X", 54}
-    ,{"STREAM_REMOTE_RDY_SRC_Y", 55}
-    ,{"REMOTE_RDY_SRC_STREAM_ID", 56}
-    ,{"REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_DEST_NUM", 57}
-    ,{"REMOTE_DEST_BUF_WORDS_FREE_INC", 58}
-    ,{"WAIT_SW_PHASE_ADVANCE_SIGNAL", 59}
-    ,{"WAIT_PREV_PHASE_DATA_FLUSH", 60}
-    ,{"MSG_FWD_ONGOING", 61}
-    ,{"STREAM_CURR_STATE", 62}
-    ,{"PHASE_NUM_INCR", 63}
-    ,{"CURR_PHASE_NUM_MSGS", 64}
-    ,{"NEXT_PHASE_NUM_CFG_REG_WRITES", 65}
-    ,{"CLOCK_GATING_EN", 66}
-    ,{"CLOCK_GATING_HYST", 67}
-    ,{"PARTIAL_SEND_WORDS_THR", 68}
-    ,{"MSG_LOCAL_STREAM_CLEAR_NUM", 69}
-    ,{"MSG_GROUP_STREAM_CLEAR_TYPE", 70}
-    ,{"DEBUG_STATUS_STREAM_ID_SEL", 71}
-    ,{"DISABLE_DEST_READY_TABLE", 72}
-    ,{"REMOTE_DEST_WORDS_FREE", 73}
-    ,{"BLOB_NEXT_AUTO_CFG_DONE_STREAM_ID", 74}
-    ,{"BLOB_NEXT_AUTO_CFG_DONE_VALID", 75}
-    ,{"NCRISC_TRANS_EN", 76}
-    ,{"NCRISC_TRANS_EN_IRQ_ON_BLOB_END", 77}
-    ,{"NCRISC_CMD_ID", 78}
-    ,{"NEXT_NRISC_PIC_INT_ON_PHASE", 79}
-    ,{"DRAM_FIFO_RD_PTR_WORDS_LO", 80}
-    ,{"NCRISC_LOOP_COUNT", 81}
-    ,{"NCRISC_INIT_ENABLE_BLOB_DONE_IRQ", 82}
-    ,{"NCRISC_INIT_DISABLE_BLOB_DONE_IRQ", 83}
-    ,{"DRAM_FIFO_RD_PTR_WORDS_HI", 84}
-    ,{"DRAM_FIFO_WR_PTR_WORDS_LO", 85}
-    ,{"NCRISC_TOTAL_LOOP_ITER", 86}
-    ,{"DRAM_FIFO_WR_PTR_WORDS_HI", 87}
-    ,{"DRAM_FIFO_CAPACITY_PTR_WORDS_LO", 88}
-    ,{"NCRISC_LOOP_INCR", 89}
-    ,{"NCRISC_LOOP_BACK_NUM_CFG_REG_WRITES", 90}
-    ,{"DRAM_FIFO_CAPACITY_PTR_WORDS_HI", 91}
-    ,{"DRAM_FIFO_BASE_ADDR_WORDS_LO", 92}
-    ,{"NCRISC_LOOP_BACK_AUTO_CFG_PTR", 93}
-    ,{"DRAM_FIFO_BASE_ADDR_WORDS_HI", 94}
-    ,{"DRAM_EN_BLOCKING", 95}
-    ,{"DRAM_DATA_STRUCTURE_IS_LUT", 96}
-    ,{"DRAM_RESET_RD_PTR_TO_BASE_ON_EMPTY", 97}
-    ,{"DRAM_RESET_WR_PTR_TO_BASE_ON_FULL", 98}
-    ,{"DRAM_NO_PTR_UPDATE_ON_PHASE_END", 99}
-    ,{"DRAM_WR_BUFFER_FLUSH_AND_RST_PTRS", 100}
-    ,{"NCRISC_LOOP_NEXT_PIC_INT_ON_PHASE", 101}
+    ,{"MSG_HEADER_WORD_CNT_OFFSET", 42}
+    ,{"MSG_HEADER_WORD_CNT_BITS", 43}
+    ,{"SOURCE_ENDPOINT_NEW_MSG_ADDR", 44}
+    ,{"SOURCE_ENDPOINT_NEW_MSG_SIZE", 45}
+    ,{"SOURCE_ENDPOINT_NEW_MSGS_NUM", 46}
+    ,{"SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE", 47}
+    ,{"PHASE_READY_DEST_NUM", 48}
+    ,{"PHASE_READY_NUM", 49}
+    ,{"PHASE_READY_MCAST", 50}
+    ,{"PHASE_READY_TWO_WAY_RESP", 51}
+    ,{"STREAM_REMOTE_RDY_SRC_X", 52}
+    ,{"STREAM_REMOTE_RDY_SRC_Y", 53}
+    ,{"REMOTE_RDY_SRC_STREAM_ID", 54}
+    ,{"REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_DEST_NUM", 55}
+    ,{"REMOTE_DEST_BUF_WORDS_FREE_INC", 56}
+    ,{"WAIT_SW_PHASE_ADVANCE_SIGNAL", 57}
+    ,{"WAIT_PREV_PHASE_DATA_FLUSH", 58}
+    ,{"MSG_FWD_ONGOING", 59}
+    ,{"STREAM_CURR_STATE", 60}
+    ,{"PHASE_NUM_INCR", 61}
+    ,{"CURR_PHASE_NUM_MSGS", 62}
+    ,{"NEXT_PHASE_NUM_CFG_REG_WRITES", 63}
+    ,{"CLOCK_GATING_EN", 64}
+    ,{"CLOCK_GATING_HYST", 65}
+    ,{"PARTIAL_SEND_WORDS_THR", 66}
+    ,{"MSG_LOCAL_STREAM_CLEAR_NUM", 67}
+    ,{"MSG_GROUP_STREAM_CLEAR_TYPE", 68}
+    ,{"REMOTE_DEST_WORDS_FREE", 69}
+    ,{"NEXT_NRISC_PIC_INT_ON_PHASE", 70}
+    ,{"NCRISC_TRANS_EN", 71}
+    ,{"NCRISC_CMD_ID", 72}
+    ,{"DRAM_FIFO_RD_PTR_WORDS_LO", 73}
+    ,{"NCRISC_LOOP_COUNT", 74}
+    ,{"DRAM_FIFO_RD_PTR_WORDS_HI", 75}
+    ,{"DRAM_FIFO_WR_PTR_WORDS_LO", 76}
+    ,{"NCRISC_TOTAL_LOOP_ITER", 77}
+    ,{"DRAM_FIFO_WR_PTR_WORDS_HI", 78}
+    ,{"DRAM_FIFO_CAPACITY_PTR_WORDS_LO", 79}
+    ,{"NCRISC_LOOP_INCR", 80}
+    ,{"NCRISC_LOOP_BACK_NUM_CFG_REG_WRITES", 81}
+    ,{"DRAM_FIFO_CAPACITY_PTR_WORDS_HI", 82}
+    ,{"DRAM_FIFO_BASE_ADDR_WORDS_LO", 83}
+    ,{"NCRISC_LOOP_BACK_AUTO_CFG_PTR", 84}
+    ,{"DRAM_FIFO_BASE_ADDR_WORDS_HI", 85}
+    ,{"DRAM_EN_BLOCKING", 86}
+    ,{"DRAM_DATA_STRUCTURE_IS_LUT", 87}
+    ,{"DRAM_RESET_RD_PTR_TO_BASE_ON_EMPTY", 88}
+    ,{"DRAM_RESET_WR_PTR_TO_BASE_ON_FULL", 89}
+    ,{"DRAM_NO_PTR_UPDATE_ON_PHASE_END", 90}
+    ,{"DRAM_WR_BUFFER_FLUSH_AND_RST_PTRS", 91}
+    ,{"NCRISC_LOOP_NEXT_PIC_INT_ON_PHASE", 92}
 };

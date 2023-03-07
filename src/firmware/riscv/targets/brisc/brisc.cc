@@ -5,7 +5,6 @@
 
 #include "l1_address_map.h"
 #include "risc_common.h"
-#include "noc_helper.h"
 #include "noc_overlay_parameters.h"
 #include "ckernel_structs.h"
 #include "stream_io_map.h"
