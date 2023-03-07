@@ -62,7 +62,7 @@ LL_BUDA_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(LL_BUDA_TESTS_SRCS:.cpp=.d))
 -include $(LL_BUDA_TESTS_DEPS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
-ll_buda/tests: $(LL_BUDA_TESTS)
+ll_buda/tests: $(LL_BUDA_TESTS) programming_examples
 ll_buda/tests/all: $(LL_BUDA_TESTS)
 ll_buda/tests/%: $(TESTDIR)/ll_buda/tests/% ;
 
