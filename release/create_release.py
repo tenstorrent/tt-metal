@@ -22,7 +22,7 @@ class ReleaseConstants:
 
     REMOTE_ORGANIZATION = "tenstorrent-accel"
 
-    REMOTE_RELEASE_REPO = "gp.ai-rel-test"
+    REMOTE_RELEASE_REPO = "gp.ai-rel"
 
     REMOTE_RELEASE_BRANCH = "main"
 
@@ -30,6 +30,7 @@ class ReleaseConstants:
         map(
             Path,
             [
+                "git_hooks/",
                 "sandbox/",
                 "compiler/tests/",
                 "llrt/tests/",
