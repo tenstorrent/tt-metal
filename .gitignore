@@ -3,6 +3,7 @@
 .idea
 *.log
 *.csv
+*.xlsx
 /tt-perf*
 test_hlk_args_init_gen
 tt_build
