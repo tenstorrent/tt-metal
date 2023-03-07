@@ -72,3 +72,6 @@ gpai/gpai/*.so
 
 # exclude MNIST etc model downloads
 data/
+
+# exclude pytorch binaries
+*.pt
