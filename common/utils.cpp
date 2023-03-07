@@ -11,7 +11,7 @@ namespace utils
             cout << "running: `" + cmd + '`';
             ret = system(cmd.c_str());
         } else {
-            string redirected_cmd = cmd + " >> " + log_file;
+            string redirected_cmd = cmd + " >> " + log_file + " 2>&1";
             ret = system(redirected_cmd.c_str());
         }
         return (ret == 0);
@@ -38,4 +38,3 @@ namespace utils
     }
 }
 }
-
