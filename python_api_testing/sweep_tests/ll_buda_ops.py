@@ -334,7 +334,9 @@ def bcast_add_h(pcie_slot, x, y):
         device,
     )
 
-    t2 = gpai.tensor.bcast(t0, t1, gpai.tensor.BcastOpMath.ADD, gpai.tensor.BcastOpDim.H)
+    t2 = gpai.tensor.bcast(
+        t0, t1, gpai.tensor.BcastOpMath.ADD, gpai.tensor.BcastOpDim.H
+    )
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     gpai.device.CloseDevice(device)
@@ -364,7 +366,9 @@ def bcast_add_w(pcie_slot, x, y):
         device,
     )
 
-    t2 = gpai.tensor.bcast(t0, t1, gpai.tensor.BcastOpMath.ADD, gpai.tensor.BcastOpDim.W)
+    t2 = gpai.tensor.bcast(
+        t0, t1, gpai.tensor.BcastOpMath.ADD, gpai.tensor.BcastOpDim.W
+    )
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     gpai.device.CloseDevice(device)
@@ -394,7 +398,9 @@ def bcast_add_hw(pcie_slot, x, y):
         device,
     )
 
-    t2 = gpai.tensor.bcast(t0, t1, gpai.tensor.BcastOpMath.ADD, gpai.tensor.BcastOpDim.HW)
+    t2 = gpai.tensor.bcast(
+        t0, t1, gpai.tensor.BcastOpMath.ADD, gpai.tensor.BcastOpDim.HW
+    )
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     gpai.device.CloseDevice(device)
@@ -424,7 +430,9 @@ def bcast_sub_h(pcie_slot, x, y):
         device,
     )
 
-    t2 = gpai.tensor.bcast(t0, t1, gpai.tensor.BcastOpMath.SUB, gpai.tensor.BcastOpDim.H)
+    t2 = gpai.tensor.bcast(
+        t0, t1, gpai.tensor.BcastOpMath.SUB, gpai.tensor.BcastOpDim.H
+    )
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     gpai.device.CloseDevice(device)
@@ -454,7 +462,9 @@ def bcast_sub_w(pcie_slot, x, y):
         device,
     )
 
-    t2 = gpai.tensor.bcast(t0, t1, gpai.tensor.BcastOpMath.SUB, gpai.tensor.BcastOpDim.W)
+    t2 = gpai.tensor.bcast(
+        t0, t1, gpai.tensor.BcastOpMath.SUB, gpai.tensor.BcastOpDim.W
+    )
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     gpai.device.CloseDevice(device)
@@ -484,7 +494,9 @@ def bcast_sub_hw(pcie_slot, x, y):
         device,
     )
 
-    t2 = gpai.tensor.bcast(t0, t1, gpai.tensor.BcastOpMath.SUB, gpai.tensor.BcastOpDim.HW)
+    t2 = gpai.tensor.bcast(
+        t0, t1, gpai.tensor.BcastOpMath.SUB, gpai.tensor.BcastOpDim.HW
+    )
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     gpai.device.CloseDevice(device)
@@ -514,7 +526,9 @@ def bcast_mul_h(pcie_slot, x, y):
         device,
     )
 
-    t2 = gpai.tensor.bcast(t0, t1, gpai.tensor.BcastOpMath.MUL, gpai.tensor.BcastOpDim.H)
+    t2 = gpai.tensor.bcast(
+        t0, t1, gpai.tensor.BcastOpMath.MUL, gpai.tensor.BcastOpDim.H
+    )
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     gpai.device.CloseDevice(device)
@@ -544,7 +558,9 @@ def bcast_mul_w(pcie_slot, x, y):
         device,
     )
 
-    t2 = gpai.tensor.bcast(t0, t1, gpai.tensor.BcastOpMath.MUL, gpai.tensor.BcastOpDim.W)
+    t2 = gpai.tensor.bcast(
+        t0, t1, gpai.tensor.BcastOpMath.MUL, gpai.tensor.BcastOpDim.W
+    )
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     gpai.device.CloseDevice(device)
@@ -574,7 +590,9 @@ def bcast_mul_hw(pcie_slot, x, y):
         device,
     )
 
-    t2 = gpai.tensor.bcast(t0, t1, gpai.tensor.BcastOpMath.MUL, gpai.tensor.BcastOpDim.HW)
+    t2 = gpai.tensor.bcast(
+        t0, t1, gpai.tensor.BcastOpMath.MUL, gpai.tensor.BcastOpDim.HW
+    )
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     gpai.device.CloseDevice(device)
@@ -595,7 +613,9 @@ def reduce_sum_h(pcie_slot, x):
         device,
     )
 
-    t1 = gpai.tensor.reduce(t0, gpai.tensor.ReduceOpMath.SUM, gpai.tensor.ReduceOpDim.H, 1)
+    t1 = gpai.tensor.reduce(
+        t0, gpai.tensor.ReduceOpMath.SUM, gpai.tensor.ReduceOpDim.H, 1
+    )
 
     output = untilize(torch.Tensor(t1.to(host).data()).reshape(t1.shape()))
     gpai.device.CloseDevice(device)
@@ -619,7 +639,9 @@ def reduce_sum_w(pcie_slot, x):
         device,
     )
 
-    t1 = gpai.tensor.reduce(t0, gpai.tensor.ReduceOpMath.SUM, gpai.tensor.ReduceOpDim.W, 1)
+    t1 = gpai.tensor.reduce(
+        t0, gpai.tensor.ReduceOpMath.SUM, gpai.tensor.ReduceOpDim.W, 1
+    )
 
     output = untilize(torch.Tensor(t1.to(host).data()).reshape(t1.shape()))
     gpai.device.CloseDevice(device)
@@ -643,7 +665,9 @@ def reduce_sum_hw(pcie_slot, x):
         device,
     )
 
-    t1 = gpai.tensor.reduce(t0, gpai.tensor.ReduceOpMath.SUM, gpai.tensor.ReduceOpDim.HW, 1)
+    t1 = gpai.tensor.reduce(
+        t0, gpai.tensor.ReduceOpMath.SUM, gpai.tensor.ReduceOpDim.HW, 1
+    )
 
     output = untilize(torch.Tensor(t1.to(host).data()).reshape(t1.shape()))
     gpai.device.CloseDevice(device)
@@ -667,7 +691,9 @@ def reduce_max_h(pcie_slot, x):
         device,
     )
 
-    t1 = gpai.tensor.reduce(t0, gpai.tensor.ReduceOpMath.MAX, gpai.tensor.ReduceOpDim.H, 1)
+    t1 = gpai.tensor.reduce(
+        t0, gpai.tensor.ReduceOpMath.MAX, gpai.tensor.ReduceOpDim.H, 1
+    )
 
     output = untilize(torch.Tensor(t1.to(host).data()).reshape(t1.shape()))
     gpai.device.CloseDevice(device)
@@ -691,7 +717,9 @@ def reduce_max_w(pcie_slot, x):
         device,
     )
 
-    t1 = gpai.tensor.reduce(t0, gpai.tensor.ReduceOpMath.MAX, gpai.tensor.ReduceOpDim.W, 1)
+    t1 = gpai.tensor.reduce(
+        t0, gpai.tensor.ReduceOpMath.MAX, gpai.tensor.ReduceOpDim.W, 1
+    )
 
     output = untilize(torch.Tensor(t1.to(host).data()).reshape(t1.shape()))
     gpai.device.CloseDevice(device)
@@ -715,7 +743,9 @@ def reduce_max_hw(pcie_slot, x):
         device,
     )
 
-    t1 = gpai.tensor.reduce(t0, gpai.tensor.ReduceOpMath.MAX, gpai.tensor.ReduceOpDim.HW, 1)
+    t1 = gpai.tensor.reduce(
+        t0, gpai.tensor.ReduceOpMath.MAX, gpai.tensor.ReduceOpDim.HW, 1
+    )
 
     output = untilize(torch.Tensor(t1.to(host).data()).reshape(t1.shape()))
     gpai.device.CloseDevice(device)

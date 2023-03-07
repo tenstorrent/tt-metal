@@ -72,16 +72,22 @@ def shapes_and_datagen(shape_dict, datagen_dict):
     # Datagen functions
     if isinstance(datagen_dict, dict):
         datagen_funcs = [
-            partial(
-                getattr(generation_funcs, datagen_dict["function"]),
-                **datagen_dict["args"]
+            generation_funcs.gen_func_with_cast(
+                partial(
+                    getattr(generation_funcs, datagen_dict["function"]),
+                    **datagen_dict["args"]
+                ),
+                generation_funcs.supported_dtypes[datagen_dict.get("dtype", "float32")],
             )
         ] * num_shapes
     elif isinstance(datagen_dict, list):
         datagen_funcs = [
-            partial(
-                getattr(generation_funcs, _datagen_dict["function"]),
-                **_datagen_dict["args"]
+            generation_funcs.gen_func_with_cast(
+                partial(
+                    getattr(generation_funcs, _datagen_dict["function"]),
+                    **_datagen_dict["args"]
+                ),
+                generation_funcs.supported_dtypes[datagen_dict.get("dtype", "float32")],
             )
             for _datagen_dict in datagen_dict
         ]

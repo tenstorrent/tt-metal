@@ -1,5 +1,15 @@
 import torch
 
+# torch.testing.get_all_dtypes()
+supported_dtypes = {
+    "float32": torch.float32,
+    "bfloat16": torch.bfloat16,
+}
+
+# Wrapper around gen functions to include casting
+def gen_func_with_cast(gen_func, dtype):
+    return lambda size: gen_func(size).to(dtype)
+
 
 def gen_zeros(size):
     return torch.zeros(size)
@@ -9,17 +19,17 @@ def gen_ones(size):
     return torch.ones(size)
 
 
-def gen_constant(size, constant=1):
-    return torch.full(size, constant, dtype=torch.float32)
+def gen_constant(size, constant=1.0):
+    return torch.full(size, constant)
 
 
 def gen_rand(size, low=0, high=100):
-    return torch.FloatTensor(size=size).uniform_(low, high)
+    return torch.Tensor(size=size).uniform_(low, high)
 
 
 def gen_rand_symmetric(size, low=0, high=100):
-    signs = torch.randint(0, 2, size, dtype=torch.float32) * 2 - 1
-    return torch.FloatTensor(size=size).uniform_(low, high) * signs
+    signs = torch.randint(0, 2, size) * 2 - 1
+    return torch.Tensor(size=size).uniform_(low, high) * signs
 
 
 def gen_rand_along_dim(size, low=0, high=100, dim=-1):
@@ -29,8 +39,8 @@ def gen_rand_along_dim(size, low=0, high=100, dim=-1):
     output = torch.zeros(numel)
     num_subel = size[dim]
     for i in range(0, numel, num_subel):
-        subrange = torch.FloatTensor(size=(2,)).uniform_(low, high)
-        output[i : i + num_subel] = torch.FloatTensor(size=(num_subel,)).uniform_(
+        subrange = torch.Tensor(size=(2,)).uniform_(low, high)
+        output[i : i + num_subel] = torch.Tensor(size=(num_subel,)).uniform_(
             torch.min(subrange), torch.max(subrange)
         )
 
