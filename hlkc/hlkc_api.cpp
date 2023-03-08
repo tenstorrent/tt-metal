@@ -37,14 +37,14 @@ std::string compile_hlk(
 )
 {
     string hlkc_path;
-    string buda_home;
+    string tt_metal_home;
     if (!getenv("TT_METAL_HOME")) {
         fs::path cwd = fs::current_path();
-        buda_home = cwd.string();
-        hlkc_path = buda_home + "/build/bin/hlkc";
+        tt_metal_home = cwd.string();
+        hlkc_path = tt_metal_home + "/build/bin/hlkc";
     } else {
-        buda_home = string(getenv("TT_METAL_HOME"));
-        hlkc_path = buda_home + "/build/bin/hlkc";
+        tt_metal_home = string(getenv("TT_METAL_HOME"));
+        hlkc_path = tt_metal_home + "/build/bin/hlkc";
     }
     cout << "    HLK file name: " << input_hlk_file_path << " HLKC_PATH " << hlkc_path << endl;
     string root_dir = "";       // drago - this should be ok since input_hlk_file_path and out_dir_path will be passed with TT_METAL_HOME included
@@ -98,7 +98,7 @@ std::string compile_hlk(
     }
 
     // For any common code that we need from kernels dir itself
-    string kernels_include = "-I" + buda_home + "/kernels/ -I" + buda_home + "/kernels/hostdevcommon/ ";
+    string kernels_include = "-I" + tt_metal_home + "/kernels/ -I" + tt_metal_home + "/kernels/hostdevcommon/ ";
 
     string compile_unpack = hlkc_path + " -hlkc:llk_target unpack -rose:o " + unpack_cpp + " -hlkc:llk_args " + unpack_llk_args_h + " " + cache_setting + " " + perf_dump_flag + " " + fp32_dest_acc_en_flag + " " + device_name_flag + " " + kernels_include + " > " + unpack_log + " 2>&1";
     string compile_math = hlkc_path + " -hlkc:llk_target math -rose:o " + math_cpp + " -hlkc:llk_args " + math_llk_args_h + " " + cache_setting + " " + perf_dump_flag + " " + fp32_dest_acc_en_flag + " " + device_name_flag+ " " + kernels_include + " > " + math_log + " 2>&1";
@@ -143,14 +143,14 @@ void compile_generate_struct_init_header(
         cache_setting = "-cache:off";
     }
     string hlkc_path;
-    string buda_home;
+    string tt_metal_home;
     if (!getenv("TT_METAL_HOME")) {
         fs::path cwd = fs::current_path();
-        buda_home = cwd.string();
+        tt_metal_home = cwd.string();
         hlkc_path = cwd.string() + "/build/bin/hlkc";
     } else {
-        buda_home = string(getenv("TT_METAL_HOME"));
-        hlkc_path = buda_home + "/build/bin/hlkc";
+        tt_metal_home = string(getenv("TT_METAL_HOME"));
+        hlkc_path = tt_metal_home + "/build/bin/hlkc";
     }
 
     string generate_struct_init_cpp = out_dir_path + "/" + out_file_name_base + "_gen.cpp";
@@ -160,7 +160,7 @@ void compile_generate_struct_init_header(
     string generate_struct_init_soname = out_file_name_base + ".so";
 
     // For any common code that we need from kernels dir itself
-    string kernels_include = "-I" + buda_home + "/kernels/ -I" + buda_home + "/kernels/hostdevcommon/ ";
+    string kernels_include = "-I" + tt_metal_home + "/kernels/ -I" + tt_metal_home + "/kernels/hostdevcommon/ ";
 
     string generate_generator_cmd = hlkc_path + " " + input_hlk_file_path + " -hlkc:llk_target struct_init_gen -rose:o " + generate_struct_init_cpp + " " + cache_setting + " " + kernels_include + " > " + generate_struct_init_log + " 2>&1";
     cout << "    " << generate_generator_cmd << endl;
