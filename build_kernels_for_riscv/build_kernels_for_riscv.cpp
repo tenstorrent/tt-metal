@@ -312,6 +312,7 @@ void compile_ckernels_for_trisc(string chlkc_src_dir, string output_dir, string 
 
     // std::cout is not thread-safe
     // cout << "    Make compile cmd: " << make_src_cmd.str() << "\n";
+    log_debug(tt::LogBuildKernels, "    TRISC {} Make compile cmd: {}", thread_id, make_src_cmd.str());
     if (!tt::utils::run_command(make_src_cmd.str(), log_file, false)) {
         string err_msg = "Build ckernels/src failed for a thread " + to_string(thread_id) + " with CKernels '" + kernel_file_name + "'";
         throw std::runtime_error(err_msg);
@@ -332,6 +333,7 @@ void compile_ckernels_for_trisc(string chlkc_src_dir, string output_dir, string 
 
     // std::cout is not thread-safe
     // cout << "    Make link cmd: " << make_cmd.str() << "\n";
+    log_debug(tt::LogBuildKernels, "    TRISC {} Make link cmd: {}", thread_id, make_cmd.str());
     if (!tt::utils::run_command(make_cmd.str(), log_file, false)) {
         string err_msg = "Link ckernels/src failed for a thread " + to_string(thread_id) + " with CKernels '" + kernel_file_name + "'";
         throw std::runtime_error(err_msg);
