@@ -287,7 +287,9 @@ void local_mem_copy() {
 
 int main() {
 
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_MAIN_START);
+#endif
   RISC_POST_STATUS(0x10000000);
 
   // note: BRISC uses NOC0, NCRISC uses NOC1
@@ -326,10 +328,14 @@ int main() {
       local_mem_copy();
   }
 
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
+#endif
   // Run the BRISC kernel
   kernel_main();
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+#endif
 
    if (*use_triscs) {
     // Wait for all the TRISCs to finish (it assumes all 3 TRISCs have been launched and will finish)
@@ -350,7 +356,9 @@ int main() {
   // disable core once we're done
   enable_core_mailbox_ptr[0] = 0x0;
 
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_MAIN_END);
+#endif
   while (true)
   {
     risc_reset_check();

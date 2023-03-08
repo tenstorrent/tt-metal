@@ -64,12 +64,23 @@ e.g.
     ll_buda::stopPrintfServer();
 ```
 
-After this setup, default markers will be generated and can be posprocessed.
+After this setup, default markers will be generated and can be post-processed.
 
 Default markers are:
 
-1. risc main funtion start and stop
-2. kernel start and stop
+1. Kernel start with timer_id 2
+2. Kernel end with timer_id 3
+
+The generated csv is `profile_log_kernel.csv` is saved under `tools/profiler/` byt default.
+
+Sample generated csv for running a kernel on coer 0,0:
+
+```
+0, 0, 0, BRISC, 2, 46413751954532
+0, 0, 0, BRISC, 3, 46413751954779
+0, 0, 0, NCRISC, 2, 46413751955228
+0, 0, 0, NCRISC, 3, 46413751955414
+```
 
 <!--`test_matmul_multi_core_multi_dram.cpp` is a good example that demonstrates how to grab kernel side-->
 <!--profiler time. Both kernels `writer_matmul_tile_layout.cpp` and  `reader_matmul_tile_layout.cpp`-->
@@ -88,7 +99,7 @@ Default markers are:
 <!--0 ,1 ,1 ,BRISC ,1 ,1892694762683-->
 <!--```-->
 
-### Plotting kernel profiler
+### Postprocessing kernel profiler
 
 <!--Plotting kernel profiler data requires setting up the `plot_steup.py`. Sample tests are added to this file. The setup is based on timer ID and which risc type they come from. In `test_add_two_ints` for examples shows the plotting of its `brisc`-->
 <!--kernel profiling results. -->

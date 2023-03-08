@@ -1,5 +1,10 @@
 #pragma once
 
+#define MAIN_FUNCT_MARKER   (1U << 0)
+#define KERNEL_FUNCT_MARKER (1U << 1)
+
+#define PROFILER_OPTIONS KERNEL_FUNCT_MARKER
+
 #include <climits>
 
 #include "debug_print.h"
