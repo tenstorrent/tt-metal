@@ -1,6 +1,6 @@
 
-CKERNELS_DIR = $(BUDA_HOME)/src/ckernels
-FIRMWARE_RISCV_DIR  = $(BUDA_HOME)/src/firmware/riscv
+CKERNELS_DIR = $(TT_METAL_HOME)/src/ckernels
+FIRMWARE_RISCV_DIR  = $(TT_METAL_HOME)/src/firmware/riscv
 COMPILED_KERNELS_DIR?=$(CKERNELS_DIR)/$(ARCH_NAME)/src/out
 COMPILED_KERNELS_DIR_FINAL= $(COMPILED_KERNELS_DIR)/
 UNUSED_COMPILED_KERNELS_DIR=$(CKERNELS_DIR)/$(ARCH_NAME)/src/blank/out/
@@ -37,9 +37,9 @@ endif
 DISABLE_FWLOG ?= 1
 
 # provide in command line or kernel makefile
-SOURCES ?= 
+SOURCES ?=
 SOURCES += $(wildcard $(CKERNELS_COMMON_OUT_DIR)/*.o)
-FIRMWARE_NAME ?= 
+FIRMWARE_NAME ?=
 INFO_NAME = firmware
 ifeq ($(TEST),)
 $(error TEST must be specified on the command line)

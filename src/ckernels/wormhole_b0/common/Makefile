@@ -1,4 +1,4 @@
-include $(BUDA_HOME)/common/common.mk
+include $(TT_METAL_HOME)/common/common.mk
 
 ARCH_NAME ?= wormhole_b0
 DEVICE_TYPE=0
@@ -27,10 +27,10 @@ DEFINES += $(addprefix -DINTERMED_DUMP=, $(INTERMED_DUMP))
 endif
 DEFINES += $(addprefix -DPERF_DUMP_LEVEL=, $(PERF_DUMP_LEVEL)) -DARCH_WORMHOLE
 
-CKERNEL_DIR  = $(BUDA_HOME)/src/ckernels
-CKERNEL_INC_DIR  = $(BUDA_HOME)/build/src/ckernels
-FIRMWARE_RISCV_DIR = $(BUDA_HOME)/src/firmware/riscv
-FIRMWARE_RISCV_INC_DIR = $(BUDA_HOME)/build/src/firmware/riscv
+CKERNEL_DIR  = $(TT_METAL_HOME)/src/ckernels
+CKERNEL_INC_DIR  = $(TT_METAL_HOME)/build/src/ckernels
+FIRMWARE_RISCV_DIR = $(TT_METAL_HOME)/src/firmware/riscv
+FIRMWARE_RISCV_INC_DIR = $(TT_METAL_HOME)/build/src/firmware/riscv
 
 INCLUDES = \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/common/inc \
@@ -38,14 +38,14 @@ INCLUDES = \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/llk_lib/ \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/ \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/noc \
-	-I$(BUDA_HOME)/perf_lib/ \
+	-I$(TT_METAL_HOME)/perf_lib/ \
 	-I$(CKERNEL_INC_DIR)/gen/out # needed for ckernel_ops.h
 
 DISABLE_FWLOG ?= 1
 
 # provide in command line or kernel makefile
-RISCV_TOOLCHAIN_DIR = $(BUDA_HOME)/src/firmware/riscv/toolchain
-SOURCES ?= 
+RISCV_TOOLCHAIN_DIR = $(TT_METAL_HOME)/src/firmware/riscv/toolchain
+SOURCES ?=
 SOURCES += $(wildcard src/*.cc)
 OUTPUT_DIR ?= out
 

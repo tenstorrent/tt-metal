@@ -2,8 +2,8 @@
 
 set -eo pipefail
 
-BUDA_HOME=$(git rev-parse --show-toplevel)
-ASSETS_DIR=$BUDA_HOME/release/machine_setup/assets
+TT_METAL_HOME=$(git rev-parse --show-toplevel)
+ASSETS_DIR=$TT_METAL_HOME/release/machine_setup/assets
 
 SERVER=yyz-lab-65
 GS_TT_SMI_SERVER_LOCATION=/home/software/syseng/bin/tt-smi/gs/tt-smi_2022-12-05-74801e089fb2e564

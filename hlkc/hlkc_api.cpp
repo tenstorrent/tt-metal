@@ -38,16 +38,16 @@ std::string compile_hlk(
 {
     string hlkc_path;
     string buda_home;
-    if (!getenv("BUDA_HOME")) {
+    if (!getenv("TT_METAL_HOME")) {
         fs::path cwd = fs::current_path();
         buda_home = cwd.string();
         hlkc_path = buda_home + "/build/bin/hlkc";
     } else {
-        buda_home = string(getenv("BUDA_HOME"));
+        buda_home = string(getenv("TT_METAL_HOME"));
         hlkc_path = buda_home + "/build/bin/hlkc";
     }
     cout << "    HLK file name: " << input_hlk_file_path << " HLKC_PATH " << hlkc_path << endl;
-    string root_dir = "";       // drago - this should be ok since input_hlk_file_path and out_dir_path will be passed with BUDA_HOME included
+    string root_dir = "";       // drago - this should be ok since input_hlk_file_path and out_dir_path will be passed with TT_METAL_HOME included
     string out_file_name_base = "chlkc";
 
     string unpack_base   = out_dir_path + "/" + out_file_name_base + "_unpack";
@@ -96,14 +96,14 @@ std::string compile_hlk(
         input_hlk_with_defines += " -I" + out_dir_path + " ";
         hlkc_path += " " + input_hlk_with_defines;
     }
-    
+
     // For any common code that we need from kernels dir itself
     string kernels_include = "-I" + buda_home + "/kernels/ -I" + buda_home + "/kernels/hostdevcommon/ ";
 
     string compile_unpack = hlkc_path + " -hlkc:llk_target unpack -rose:o " + unpack_cpp + " -hlkc:llk_args " + unpack_llk_args_h + " " + cache_setting + " " + perf_dump_flag + " " + fp32_dest_acc_en_flag + " " + device_name_flag + " " + kernels_include + " > " + unpack_log + " 2>&1";
     string compile_math = hlkc_path + " -hlkc:llk_target math -rose:o " + math_cpp + " -hlkc:llk_args " + math_llk_args_h + " " + cache_setting + " " + perf_dump_flag + " " + fp32_dest_acc_en_flag + " " + device_name_flag+ " " + kernels_include + " > " + math_log + " 2>&1";
     string compile_pack = hlkc_path + " -hlkc:llk_target pack -rose:o " + pack_cpp + " -hlkc:llk_args " + pack_llk_args_h + " " + cache_setting + " " + perf_dump_flag + " " + untilize_output_flag + " " + pack_microblocks_flag +  " " + fp32_dest_acc_en_flag + " " + device_name_flag + " " + kernels_include + " > " + pack_log + " 2>&1";
-    
+
     vector<string> cmds = {compile_unpack, compile_math, compile_pack};
     vector<thread*> threads;
     function<void(string, int)> sys_lambda = [] (string cmd, int phase) {
@@ -144,12 +144,12 @@ void compile_generate_struct_init_header(
     }
     string hlkc_path;
     string buda_home;
-    if (!getenv("BUDA_HOME")) {
+    if (!getenv("TT_METAL_HOME")) {
         fs::path cwd = fs::current_path();
         buda_home = cwd.string();
         hlkc_path = cwd.string() + "/build/bin/hlkc";
     } else {
-        buda_home = string(getenv("BUDA_HOME"));
+        buda_home = string(getenv("TT_METAL_HOME"));
         hlkc_path = buda_home + "/build/bin/hlkc";
     }
 

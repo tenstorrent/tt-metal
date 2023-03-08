@@ -14,7 +14,7 @@ Run the following commands to set up the TT-Accel project:
 
 ::
 
-    export BUDA_HOME=$(pwd)
+    export TT_METAL_HOME=$(pwd)
     make build
     source build/python_env/bin/activate
 
@@ -92,11 +92,11 @@ Devs<Getting started for devs>` for further instructions for developers.
 
     We'll have to tell the runtime where you're running the programs. This usually
     is just the root directory of this software repository. Export the appropriate
-    ``BUDA_HOME`` environment variable to tell the runtime this.
+    ``TT_METAL_HOME`` environment variable to tell the runtime this.
 
     ::
 
-        export BUDA_HOME=$(pwd)
+        export TT_METAL_HOME=$(pwd)
 
     Well done, now we just run our first example.
 

@@ -1,7 +1,7 @@
 GPAI_LIB = $(LIBDIR)/libgpai_csrc.so
 GPAI_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
-GPAI_INCLUDES = $(COMMON_INCLUDES) -I$(BUDA_HOME)/tt_metal -I$(BUDA_HOME)/. $(shell python3-config --includes) -I$(BUDA_HOME)/third_party/pybind11/include
-GPAI_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -L$(BUDA_HOME) -ldevice -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal -lyaml-cpp -lhlkc_api -lprofiler -lbuild_kernels_for_riscv
+GPAI_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal -I$(TT_METAL_HOME)/. $(shell python3-config --includes) -I$(TT_METAL_HOME)/third_party/pybind11/include
+GPAI_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -L$(TT_METAL_HOME) -ldevice -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal -lyaml-cpp -lhlkc_api -lprofiler -lbuild_kernels_for_riscv
 GPAI_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 GPAI_SRCS = \

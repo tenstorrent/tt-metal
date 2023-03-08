@@ -5,7 +5,7 @@ TOOLS = \
 
 TOOLS_SRCS = $(addsuffix .cpp, $(TOOLS))
 
-TOOLS_INCLUDES = $(COMMON_INCLUDES) -I$(BUDA_HOME)/tools -I$(BUDA_HOME)/. -Illrt
+TOOLS_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tools -I$(TT_METAL_HOME)/. -Illrt
 TOOLS_LDFLAGS = $(LDFLAGS) -ldevice -lllrt  -lcommon -lyaml-cpp -lstdc++fs
 
 TOOLS_DEPS = $(addprefix $(OBJDIR)/, $(TOOLS_SRCS:.cpp=.d))
@@ -18,7 +18,7 @@ tools: $(OBJDIR)/tools/memset
 .PRECIOUS: $(OBJDIR)/tools/%
 $(OBJDIR)/tools/memset: $(OBJDIR)/tools/memset.o
 	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TOOLS_INCLUDES) -o $@ $^ $(TOOLS_LDFLAGS) 
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TOOLS_INCLUDES) -o $@ $^ $(TOOLS_LDFLAGS)
 
 $(OBJDIR)/tools/memset.o: tools/memset.cpp
 	@mkdir -p $(@D)

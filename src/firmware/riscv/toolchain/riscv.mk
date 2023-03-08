@@ -23,9 +23,9 @@ all:: # Always first to guarantee all is the default goal.
 
 TOOLCHAIN := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-include $(BUDA_HOME)/common/common.mk
+include $(TT_METAL_HOME)/common/common.mk
 
-SFPI ?= $(BUDA_HOME)/src/ckernels/sfpi
+SFPI ?= $(TT_METAL_HOME)/src/ckernels/sfpi
 RISCV_TOOLS_PREFIX := $(SFPI)/compiler/bin/riscv32-unknown-elf-
 # RISCV_TOOLS_PREFIX := /home/software/risc-v/riscv64-unknown-elf-gcc-8.3.0-2020.04.0-x86_64-linux-ubuntu14/bin/riscv64-unknown-elf-
 CXX := $(CCACHE) $(RISCV_TOOLS_PREFIX)g++
@@ -34,7 +34,7 @@ AS  := $(CCACHE) $(RISCV_TOOLS_PREFIX)gcc
 OBJDUMP := $(RISCV_TOOLS_PREFIX)objdump
 OBJCOPY := $(RISCV_TOOLS_PREFIX)objcopy
 
-TDMA_ASSEMBLER_DIR := $(BUDA_HOME)/src/software/assembler
+TDMA_ASSEMBLER_DIR := $(TT_METAL_HOME)/src/software/assembler
 TDMA_ASSEMBLER := $(TDMA_ASSEMBLER_DIR)/out/assembler
 
 DEP_FLAGS := -MD -MP
@@ -74,7 +74,7 @@ ARCH_FLAG := "-mgrayskull"
 else ifeq ($(ARCH_NAME),wormhole_b0)
 ARCH_FLAG := "-mwormhole"
 endif
-TRISC_L0_EN ?= 0 
+TRISC_L0_EN ?= 0
 ARCH := -march=rv32i -mabi=ilp32 $(ARCH_FLAG)
 # ARCH := -march=rv32i -mabi=ilp32
 LINKER_SECTIONS_PREFIX ?= tensix
@@ -86,7 +86,7 @@ DEFS := -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=$(TRISC_L0_EN)
 
 ARCH_NAME ?= grayskull
 
-OUTPUT_DIR ?= $(BUDA_HOME)/build/src/firmware/riscv/targets/$(FIRMWARE_NAME)/out
+OUTPUT_DIR ?= $(TT_METAL_HOME)/build/src/firmware/riscv/targets/$(FIRMWARE_NAME)/out
 GEN_DIR := gen
 FIRMWARE_NAME ?= firmware
 INFO_NAME ?= $(FIRMWARE_NAME)
@@ -103,19 +103,19 @@ endif
 
 # Derive the list of source directories from $(SOURCES), use that as a list of include directories.
 SOURCE_DIRS := $(filter-out ./,$(sort $(dir $(SOURCES))))
-INCLUDES := $(INCLUDES) -I "$(BUDA_HOME)" -I "$(SFPI)/include" -I "$(BUDA_HOME)/src/firmware/riscv/common" $(addprefix -iquote ,$(SOURCE_DIRS)) -iquote .
+INCLUDES := $(INCLUDES) -I "$(TT_METAL_HOME)" -I "$(SFPI)/include" -I "$(TT_METAL_HOME)/src/firmware/riscv/common" $(addprefix -iquote ,$(SOURCE_DIRS)) -iquote .
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-  INCLUDES += $(INCLUDES) -I "$(BUDA_HOME)/src/firmware/riscv/wormhole"
-  INCLUDES += $(INCLUDES) -I "$(BUDA_HOME)/src/firmware/riscv/wormhole/noc"
-  INCLUDES += $(INCLUDES) -I "$(BUDA_HOME)/src/firmware/riscv/wormhole/wormhole_b0_defines"
+  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole"
+  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole/noc"
+  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole/wormhole_b0_defines"
 else
-  INCLUDES += $(INCLUDES) -I "$(BUDA_HOME)/src/firmware/riscv/$(ARCH_NAME)"
-  INCLUDES += $(INCLUDES) -I "$(BUDA_HOME)/src/firmware/riscv/$(ARCH_NAME)/noc"
+  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/$(ARCH_NAME)"
+  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/$(ARCH_NAME)/noc"
 endif
 
 ifeq ("$(ARCH_NAME)", "wormhole")
-  INCLUDES += $(INCLUDES) -I "$(BUDA_HOME)/src/firmware/riscv/wormhole/wormhole_a0_defines"
+  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole/wormhole_a0_defines"
 endif
 
 # These are deferred so I can adjust DEP_FLAGS in the dependency-generation-only rules
@@ -138,7 +138,7 @@ endif
 vpath % $(subst $(space),:,$(TOOLCHAIN) $(SOURCE_DIRS))
 
 #stopping bin generation for now
-all:: extras $(OUTFW).hex $(OUTFW).map #$(OUTFW).bin  
+all:: extras $(OUTFW).hex $(OUTFW).map #$(OUTFW).bin
 	@$(PRINT_SUCCESS)
 
 $(GEN_DIR):
@@ -237,15 +237,15 @@ $(OUTFW).map: $(OUTFW).elf
 # Create a file that maps where we log in firmware source to what is being logged
 # IMPROVE: handle multiple source files
 $(OUTPUT_DIR)/$(INFO_NAME).fwlog: $(OUTFW).elf
-	python3 $(BUDA_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(OUTPUT_DIR)/$(INFO_NAME).d > $@
+	python3 $(TT_METAL_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(OUTPUT_DIR)/$(INFO_NAME).d > $@
 
 CKERNEL_DEPS := $(wildcard $(CKERNELS_DIR)/$(ARCH_NAME)/src/out/*.d)
 
 $(OUTPUT_DIR)/ckernel.fwlog: $(OUTFW).elf $(CKERNEL_DEPS) $(OUTPUT_DIR)/ckernel.d
-	python3 $(BUDA_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(OUTPUT_DIR)/ckernel.d > $@.tmp
-	python3 $(BUDA_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(CKERNEL_DEPS) --path=$(CKERNELS_DIR)/$(ARCH_NAME)/src >> $@.tmp
+	python3 $(TT_METAL_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(OUTPUT_DIR)/ckernel.d > $@.tmp
+	python3 $(TT_METAL_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(CKERNEL_DEPS) --path=$(CKERNELS_DIR)/$(ARCH_NAME)/src >> $@.tmp
 #	common .cc files that are not in any dependenecies
-	python3 $(BUDA_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(CKERNELS_DIR)/$(ARCH_NAME)/common/src/fwlog_list --path=$(CKERNELS_DIR)/$(ARCH_NAME)/common/src >> $@.tmp
+	python3 $(TT_METAL_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(CKERNELS_DIR)/$(ARCH_NAME)/common/src/fwlog_list --path=$(CKERNELS_DIR)/$(ARCH_NAME)/common/src >> $@.tmp
 	sort -u $@.tmp > $@   # uniquify
 	rm -f $@.tmp
 
@@ -269,7 +269,7 @@ clean2::
 	rm $(EXTRA_OBJECTS) $(SILENT_ERRORS)
 	rm $(EXTRA_OBJECTS:.o=.d) $(SILENT_ERRORS)
 	rmdir $(OUTPUT_DIR) $(SILENT_ERRORS)
-	rm $(OUTPUT_DIR)/$(INFO_NAME).fwlog $(OUTPUT_DIR)/$(INFO_NAME)-decodedline.txt $(OUTPUT_DIR)/$(INFO_NAME)-debuginfo.txt $(OUTPUT_DIR)/$(INFO_NAME)-symbols.txt $(SILENT_ERRORS) 
+	rm $(OUTPUT_DIR)/$(INFO_NAME).fwlog $(OUTPUT_DIR)/$(INFO_NAME)-decodedline.txt $(OUTPUT_DIR)/$(INFO_NAME)-debuginfo.txt $(OUTPUT_DIR)/$(INFO_NAME)-symbols.txt $(SILENT_ERRORS)
 	rm -rf $(GEN_DIR) $(SILENT_ERRORS)
 
 extras::

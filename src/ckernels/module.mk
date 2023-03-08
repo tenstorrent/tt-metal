@@ -1,7 +1,7 @@
 .PHONY: src/ckernels
 src/ckernels:
-	BUDA_HOME=$(BUDA_HOME) $(MAKE) -C src/ckernels/gen
+	TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C src/ckernels/gen
 
 src/ckernels/clean:
-	BUDA_HOME=$(BUDA_HOME) $(MAKE) -C src/ckernels/gen clean
-	BUDA_HOME=$(BUDA_HOME) $(MAKE) -C src/ckernels/gen clean
+	TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C src/ckernels/gen clean
+	TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C src/ckernels/gen clean

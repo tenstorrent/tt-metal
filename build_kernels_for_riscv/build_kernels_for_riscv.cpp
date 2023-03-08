@@ -189,7 +189,7 @@ void generate_math_fidelity_descriptor(tt::build_kernel_for_riscv_options_t* bui
 void generate_binaries_for_triscs(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const string &out_dir_path, const string& arch_name, bool skip_hlkc, bool parallel) {
 
 
-    string root_dir = std::getenv("BUDA_HOME");
+    string root_dir = std::getenv("TT_METAL_HOME");
 
     log_info(tt::LogBuildKernels, "Compiling HLK to TRISCs");
 

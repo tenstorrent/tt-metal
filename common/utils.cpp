@@ -26,7 +26,7 @@ namespace utils
     }
 
     std::string get_root_dir() {
-        constexpr std::string_view ROOT_DIR_ENV_VAR = "BUDA_HOME";
+        constexpr std::string_view ROOT_DIR_ENV_VAR = "TT_METAL_HOME";
         std::string root_dir;
 
         if(const char* root_dir_ptr = std::getenv(ROOT_DIR_ENV_VAR.data())) {

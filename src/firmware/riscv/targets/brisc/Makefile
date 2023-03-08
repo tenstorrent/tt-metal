@@ -1,27 +1,27 @@
-include $(BUDA_HOME)/common/common.mk
+include $(TT_METAL_HOME)/common/common.mk
 
-CKERNELS_DIR=$(BUDA_HOME)/src/ckernels
+CKERNELS_DIR=$(TT_METAL_HOME)/src/ckernels
 ARCH_NAME ?= grayskull
 DEVICE_TYPE=0
 
 SOURCES =\
-	$(BUDA_HOME)/src/firmware/riscv/common/risc_common.cc \
+	$(TT_METAL_HOME)/src/firmware/riscv/common/risc_common.cc \
 	brisc.cc
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-  SOURCES += $(BUDA_HOME)/src/firmware/riscv/wormhole/tdma_xmov.c
-  SOURCES += $(BUDA_HOME)/src/firmware/riscv/wormhole/noc/noc.c
+  SOURCES += $(TT_METAL_HOME)/src/firmware/riscv/wormhole/tdma_xmov.c
+  SOURCES += $(TT_METAL_HOME)/src/firmware/riscv/wormhole/noc/noc.c
 else
-  SOURCES += $(BUDA_HOME)/src/firmware/riscv/$(ARCH_NAME)/tdma_xmov.c
-  SOURCES += $(BUDA_HOME)/src/firmware/riscv/$(ARCH_NAME)/noc/noc.c
+  SOURCES += $(TT_METAL_HOME)/src/firmware/riscv/$(ARCH_NAME)/tdma_xmov.c
+  SOURCES += $(TT_METAL_HOME)/src/firmware/riscv/$(ARCH_NAME)/noc/noc.c
 endif
 
 FIRMWARE_NAME = brisc
 INFO_NAME = brisc
 
-INCLUDES += -I$(BUDA_HOME)/src/firmware/riscv/targets/ncrisc \
-	-I$(BUDA_HOME)/src/ckernels/$(ARCH_NAME)/common/inc \
-	-I$(BUDA_HOME) \
+INCLUDES += -I$(TT_METAL_HOME)/src/firmware/riscv/targets/ncrisc \
+	-I$(TT_METAL_HOME)/src/ckernels/$(ARCH_NAME)/common/inc \
+	-I$(TT_METAL_HOME) \
 	-I$(KERNEL_INC)
 
 LINKER_SCRIPT_NAME = brisc.ld
@@ -62,4 +62,3 @@ clean:
 	rm -rfd $(OUTPUT_DIR)
 
 all:: $(OUTPUT_DIR)/brisc.hex $(OUTPUT_DIR)/brisc.map $(OUTPUT_DIR)/brisc.fwlog $(OUTPUT_DIR)/brisc-decodedline.txt $(OUTPUT_DIR)/brisc-debuginfo.txt $(OUTPUT_DIR)/brisc-symbols.txt
-

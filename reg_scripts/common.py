@@ -57,7 +57,7 @@ def get_git_home_dir_str():
 
 def get_env_dict_for_fw_tests():
     return {
-        "BUDA_HOME": get_git_home_dir_str(),
+        "TT_METAL_HOME": get_git_home_dir_str(),
     }
 
 

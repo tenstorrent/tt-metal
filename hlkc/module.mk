@@ -21,7 +21,7 @@ HLKC_API_LDFLAGS = $(HLKC_LDFLAGS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
 # TODO: make src/ckernels a real dependency of $(HLKC)
-hlkc: $(HLKC) $(BUDA_HOME)/src/ckernels
+hlkc: $(HLKC) $(TT_METAL_HOME)/src/ckernels
 hlkc/api: $(HLKC_API_LIB)
 
 $(HLKC): $(HLKC_OBJS)
@@ -39,4 +39,3 @@ $(OBJDIR)/hlkc/hlkc_api.o: hlkc/hlkc_api.cpp
 $(OBJDIR)/hlkc/%.o: hlkc/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(HLKC_ROSE_CXXFLAGS) $(HLKC_MEOW_HASH_FLAGS) -c -o $@ $< $(HLKC_ROSE_LDFLAGS) $(HLKC_LDFLAGS)
-

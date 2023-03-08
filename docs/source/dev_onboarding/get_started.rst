@@ -43,7 +43,7 @@ We can now run an individual tt-metal program, like so
 ::
 
     make tt_metal/tests
-    export BUDA_HOME=<this repo dir>
+    export TT_METAL_HOME=<this repo dir>
     ./build/test/tt_metal/tests/test_sfpu
 
 which will run an example SFPU test that will compile, load, and run the
@@ -55,7 +55,7 @@ Python installation:
 ::
 
     make tt_metal/tests
-    export BUDA_HOME=<this repo dir>
+    export TT_METAL_HOME=<this repo dir>
     python -m reg_scripts.run_tt_metal
 
 .. only:: not html

@@ -1,7 +1,7 @@
 all:: # Always first to guarantee all is the default goal.
 
 
-SFPI ?= $(BUDA_HOME)/src/ckernels/sfpi
+SFPI ?= $(TT_METAL_HOME)/src/ckernels/sfpi
 
 ifeq ($(RELEASE), 1)
 TOOLCHAIN := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
@@ -56,11 +56,11 @@ OBJECTS := $(addprefix $(CKERNELS_COMMON_OUT_DIR)/, $(addsuffix .o,$(basename $(
 # DEPENDS := $(addprefix $(CKERNELS_COMMON_OUT_DIR)/, $(addsuffix .d,$(basename $(notdir $(SOURCES)))))
 
 
-# vpath % $(subst $(space),:,$(TOOLCHAIN) $(SOURCE_DIRS) $(BUDA_HOME)/src/ckernels/$(ARCH_NAME)/common/out)
+# vpath % $(subst $(space),:,$(TOOLCHAIN) $(SOURCE_DIRS) $(TT_METAL_HOME)/src/ckernels/$(ARCH_NAME)/common/out)
 
 #FIXME: removing bin generation for now, as it is not used
 ifeq ($(MAKE_FW_MAP),1)
-all:: extras $(OUTFW).hex  $(OUTFW).map #$(OUTFW).bin 
+all:: extras $(OUTFW).hex  $(OUTFW).map #$(OUTFW).bin
 	@$(PRINT_SUCCESS)
 else
 all:: extras $(OUTFW).hex #$(OUTFW).bin
@@ -121,7 +121,7 @@ clean2::
 	rm $(EXTRA_OBJECTS) $(SILENT_ERRORS)
 	rm $(EXTRA_OBJECTS:.o=.d) $(SILENT_ERRORS)
 	rmdir $(OUTPUT_DIR) $(SILENT_ERRORS)
-	rm $(OUTPUT_DIR)/$(INFO_NAME).fwlog $(OUTPUT_DIR)/$(INFO_NAME)-decodedline.txt $(OUTPUT_DIR)/$(INFO_NAME)-debuginfo.txt $(OUTPUT_DIR)/$(INFO_NAME)-symbols.txt $(SILENT_ERRORS) 
+	rm $(OUTPUT_DIR)/$(INFO_NAME).fwlog $(OUTPUT_DIR)/$(INFO_NAME)-decodedline.txt $(OUTPUT_DIR)/$(INFO_NAME)-debuginfo.txt $(OUTPUT_DIR)/$(INFO_NAME)-symbols.txt $(SILENT_ERRORS)
 	rm -rf $(GEN_DIR) $(SILENT_ERRORS)
 
 extras::

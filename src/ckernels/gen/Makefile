@@ -1,13 +1,13 @@
-#include $(BUDA_HOME)/common/common.mk
+#include $(TT_METAL_HOME)/common/common.mk
 
 ARCH_NAME ?= grayskull
 DEVICE_TYPE=0
 
-OUT ?= $(BUDA_HOME)/build/src/ckernels/gen/out
+OUT ?= $(TT_METAL_HOME)/build/src/ckernels/gen/out
 
-CKERNEL_DIR  = $(BUDA_HOME)/src/ckernels
+CKERNEL_DIR  = $(TT_METAL_HOME)/src/ckernels
 # Generate ops functions for ckernels
-OPS_YAML = $(BUDA_HOME)/src/meta/$(ARCH_NAME)/instructions/yaml/assembly.yaml
+OPS_YAML = $(TT_METAL_HOME)/src/meta/$(ARCH_NAME)/instructions/yaml/assembly.yaml
 OPS_TARGET = $(OUT)/ckernel_ops.h
 OPS_SCRIPT = ./genops_ckernel.py
 

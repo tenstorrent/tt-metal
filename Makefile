@@ -5,14 +5,14 @@ MAKEFLAGS := --jobs=8
 #MAKEFLAGS := --jobs=$(shell nproc)
 
 # Setup CONFIG, DEVICE_RUNNER, and out/build dirs first
-BUDA_HOME ?= $(shell git rev-parse --show-toplevel)
+TT_METAL_HOME ?= $(shell git rev-parse --show-toplevel)
 CONFIG ?= assert
 BACKEND_PROFILER_EN ?= 0
 ENABLE_CODE_TIMERS ?= 0
 ARCH_NAME ?= grayskull
 # TODO: enable OUT to be per config (this impacts all scripts that run tests)
 # OUT ?= build_$(DEVICE_RUNNER)_$(CONFIG)
-OUT ?= $(BUDA_HOME)/build
+OUT ?= $(TT_METAL_HOME)/build
 PREFIX ?= $(OUT)
 
 # Disable by default, use negative instead for consistency with BBE

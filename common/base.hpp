@@ -1,5 +1,5 @@
 /** \file base.hpp
- * The basic enums and data structures used by the rest of BUDA code base.
+ * The basic enums and data structures used by the rest of code base.
  */
 #pragma once
 
@@ -34,7 +34,7 @@ namespace tt
 {
 
 /**
- * @brief Specifies the target devices on which the BUDA graph can be run. 
+ * @brief Specifies the target devices on which the graph can be run.
 */
 enum class TargetDevice : uint8_t
 {

@@ -5,9 +5,9 @@ import os
 import sys
 
 if __name__ == "__main__":
-    assert "BUDA_HOME" in os.environ, "BUDA_HOME must be set"
-    BUDA_HOME = os.environ["BUDA_HOME"]
-    executable = f"{BUDA_HOME}/build/obj/tools/memset"
+    assert "TT_METAL_HOME" in os.environ, "TT_METAL_HOME must be set"
+    TT_METAL_HOME = os.environ["TT_METAL_HOME"]
+    executable = f"{TT_METAL_HOME}/build/obj/tools/memset"
     assert os.path.exists(executable), "You must compile the project first"
 
     command = executable.split(" ")
@@ -50,4 +50,3 @@ if __name__ == "__main__":
     os.environ["RUNNING_FROM_PYTHON"] = "1"
     process = Popen(command, stderr=sys.stderr, stdout=sys.stdout)
     stdout, stderr = process.communicate()
-

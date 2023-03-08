@@ -15,9 +15,9 @@ inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevi
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     bool use_full_soc_desc = getenv("FORCE_FULL_SOC_DESC");
     string buda_home;
-    if (getenv("BUDA_HOME")) {
-        buda_home = getenv("BUDA_HOME");
-    } else { 
+    if (getenv("TT_METAL_HOME")) {
+        buda_home = getenv("TT_METAL_HOME");
+    } else {
         buda_home = "./";
     }
     if (buda_home.back() != '/') {
