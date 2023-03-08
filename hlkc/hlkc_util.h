@@ -87,13 +87,13 @@ SgFunctionSymbol* get_function_symbol(SgFunctionCallExp* func_call_exp) {
     return symbol;
 }
 
-template <typename HLK_OP_T> 
+template <typename HLK_OP_T>
 constexpr const char* hlk_op_type_to_string() {
     if constexpr (std::is_same<HLK_OP_T, HlkMatrixOp>::value) {
         return "HlkMatrixOp";
     } else if (std::is_same<HLK_OP_T, HlkSfpuOp>::value) {
         return "HlkSfpuOp";
-    } 
+    }
 }
 
 template <typename HLK_OP_T>
@@ -130,12 +130,12 @@ HlkMatrixOp* get_hlk_matrix_op(SgProject *project) {
     if (hlk_matrix_op_apis.size() == 0) {
         cout << "Error: HLK must contain an " << hlk_op_type_str << " op." << endl;
         exit(1);
-    } 
+    }
 
     if (hlk_matrix_op_apis.size() > 1) {
         cout << "Error: found multiple " << hlk_op_type_str << " ops in an HLK kernel -- not supported atm" << endl;
         exit(1);
-    } 
+    }
 
     HlkMatrixOp* hlk_matrix_op = HlkMatrixOp::make_hlk_matrix_op(hlk_matrix_op_apis[0]);
     return hlk_matrix_op;
@@ -162,14 +162,14 @@ vector <HlkSfpuOp*> get_hlk_sfpu_op(SgProject *project) {
     //if (hlk_sfpu_op_apis.size() > 1) {
     //    cout << "Error: found multiple " << hlk_op_type_str << " ops in an HLK kernel -- not supported atm" << endl;
     //    exit(1);
-    //} 
+    //}
 
     vector<HlkSfpuOp*> hlk_sfpu_ops;
-    
+
     // HLK may contain an SFPU op, or it may not
     for (auto hlk_sfpu_op_api: hlk_sfpu_op_apis) {
         hlk_sfpu_ops.push_back(HlkSfpuOp::make_hlk_sfpu_op(hlk_sfpu_op_api));
-    }    
+    }
 
     return hlk_sfpu_ops;
 }
@@ -194,20 +194,20 @@ vector<SgNode*> find_function_calls_by_name(SgNode* node, string func_call_name)
 }
 
 void check_hlk_main_exists(SgProject* project) {
-    SgFunctionDeclaration* mainDefDecl = SageInterface::findFunctionDeclaration(project, "hlk_main", NULL, true); 
-    ROSE_ASSERT (mainDefDecl != NULL); 
+    SgFunctionDeclaration* mainDefDecl = SageInterface::findFunctionDeclaration(project, "hlk_main", NULL, true);
+    ROSE_ASSERT (mainDefDecl != NULL);
 
     SgFunctionDefinition* mainDef = mainDefDecl->get_definition();
-    ROSE_ASSERT (mainDef != NULL); 
+    ROSE_ASSERT (mainDef != NULL);
 }
 
 SgFunctionDeclaration* find_function_declaration(SgProject* project, string func_name) {
-    SgFunctionDeclaration* func_decl = SageInterface::findFunctionDeclaration(project, func_name, NULL, true); 
-    ROSE_ASSERT (func_decl != NULL); 
+    SgFunctionDeclaration* func_decl = SageInterface::findFunctionDeclaration(project, func_name, NULL, true);
+    ROSE_ASSERT (func_decl != NULL);
 
     return func_decl;
 }
-    
+
 void print_SgNodeContainer(SgNodeContainer node_list) {
     SgNodeContainer::iterator i = node_list.begin();
     while (i != node_list.end()) {
@@ -219,7 +219,7 @@ void print_SgNodeContainer(SgNodeContainer node_list) {
 
 void remove_statement(SgNode *node) {
     SgStatement* node_statement = isSgStatement(node);
-    ROSE_ASSERT(node_statement != NULL);                        
+    ROSE_ASSERT(node_statement != NULL);
     SgScopeStatement* enclosing_scope = node_statement->get_scope();
     enclosing_scope->remove_statement(node_statement);
 }
@@ -309,10 +309,10 @@ vector<SgExpression*> get_func_call_sg_expression_arg_list(SgNode *target_node, 
     SgTreeCopy deep; // helper obj for deep copy
     for (const int arg_position : arg_positions) {
         // make a deep copy of SgExpression* (not sure if really required, possible speed gain if determined not required)
-        // TODO: constrain the expression types allowed to 1) var reference (coeff), 2) ptr dereference (*coeff_ptr), 3) arrow operator (args->coeff) 
-        SgExpression* sg_expr_deep_copy = isSgExpression(exp_ptr_list[arg_position]->copy(deep)); 
+        // TODO: constrain the expression types allowed to 1) var reference (coeff), 2) ptr dereference (*coeff_ptr), 3) arrow operator (args->coeff)
+        SgExpression* sg_expr_deep_copy = isSgExpression(exp_ptr_list[arg_position]->copy(deep));
 
-        extracted_exp_ptr_list.push_back(sg_expr_deep_copy); 
+        extracted_exp_ptr_list.push_back(sg_expr_deep_copy);
 
     }
 
@@ -365,7 +365,7 @@ void replace_and_add_16_to_output_operand_and_drop_first_arg_in_call_statement(S
 
 // default insertion is to position=0 (start of func)
 void insert_void_argless_func_call_to_statement_list(SgProject *project, string target_func_name, string func_call_name, int position=0) {
-    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name); 
+    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name);
     SgFunctionDefinition* main_def = main_decl->get_definition();
     SgBasicBlock* body = main_def->get_body();
 
@@ -375,7 +375,7 @@ void insert_void_argless_func_call_to_statement_list(SgProject *project, string 
 }
 
 void insert_void_argless_func_calls_after_func_call(SgProject *project, string parent_func_name, string target_func_name, vector<string> new_func_call_names) {
-    SgFunctionDeclaration* main_decl = find_function_declaration(project, parent_func_name); 
+    SgFunctionDeclaration* main_decl = find_function_declaration(project, parent_func_name);
     SgFunctionDefinition* main_def = main_decl->get_definition();
     SgBasicBlock* body = main_def->get_body();
 
@@ -407,7 +407,7 @@ void insert_void_argless_func_calls_after_func_call(SgProject *project, string p
 }
 
 void insert_void_argless_func_call_to_statement_list_back(SgProject *project, string target_func_name, string func_call_name, int position=0) {
-    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name); 
+    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name);
     SgFunctionDefinition* main_def = main_decl->get_definition();
     SgBasicBlock* body = main_def->get_body();
 
@@ -416,7 +416,7 @@ void insert_void_argless_func_call_to_statement_list_back(SgProject *project, st
 }
 
 void insert_void_single_arg_func_call_to_statement_list(SgProject *project, string target_func_name, string func_call_name, string var_name, int position=0) {
-    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name); 
+    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name);
     SgFunctionDefinition* main_def = main_decl->get_definition();
     SgBasicBlock* body = main_def->get_body();
 
@@ -429,15 +429,15 @@ void insert_void_single_arg_func_call_to_statement_list(SgProject *project, stri
 
 
 // void insert_void_func_call_to_statement_list_at_top_of_batch_for_loops(
-//     SgProject *project, 
-//     string target_func_name, 
-//     string func_call_name, 
+//     SgProject *project,
+//     string target_func_name,
+//     string func_call_name,
 //     SgForStatement* for_statement,
-//     vector<int> operand_id_vector, 
+//     vector<int> operand_id_vector,
 //     vector<SgExpression*> sg_expr_list,
 //     int position=0
 // ) {
-//     SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name); 
+//     SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name);
 //     SgFunctionDefinition* main_def = main_decl->get_definition();
 //     SgBasicBlock* body = main_def->get_body();
 
@@ -457,7 +457,7 @@ void insert_void_single_arg_func_call_to_statement_list(SgProject *project, stri
 // }
 
 void insert_void_func_call_to_statement_list(SgProject *project, string target_func_name, string func_call_name, string var_name, vector<SgExpression*> sg_expr_list, int position=0) {
-    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name); 
+    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_func_name);
     SgFunctionDefinition* main_def = main_decl->get_definition();
     SgBasicBlock* body = main_def->get_body();
 
@@ -493,7 +493,7 @@ void remove_call_statements(SgProject *project, const vector<string> &func_calls
 }
 
 void replace_call_with_llk_in_main_scope(SgProject *project, SgNode *target_node, string hlk_function_name, string new_function_name, vector<int> args_to_pick) {
-    SgFunctionDeclaration* main_decl = find_function_declaration(project, "hlk_main"); 
+    SgFunctionDeclaration* main_decl = find_function_declaration(project, "hlk_main");
     SgFunctionDefinition* main_def = main_decl->get_definition();
     SgBasicBlock* body = main_def->get_body();
 
@@ -606,7 +606,7 @@ string insert_disaggregated_into_hw_configure(string hw_func_name, uint32_t relu
                hw_func_name += "<ReluType::MAX_THRESHOLD_RELU, " + to_string(relu_threshold) + ">";
             } else {
                hw_func_name += "<ReluType::MIN_THRESHOLD_RELU, " + to_string(relu_threshold) + ">";
-            }   
+            }
         }
     }else{
         //insert right before template starts
@@ -619,7 +619,7 @@ string insert_disaggregated_into_hw_configure(string hw_func_name, uint32_t relu
                hw_func_name += ", ReluType::MAX_THRESHOLD_RELU, " + to_string(relu_threshold) + ">";
             } else {
                hw_func_name += ", ReluType::MIN_THRESHOLD_RELU, " + to_string(relu_threshold) + ">";
-            }   
+            }
         }
     }
 
@@ -630,7 +630,7 @@ string insert_disaggregated_into_hw_configure(string hw_func_name, uint32_t relu
 void replace_hlk_inits_and_insert_hw_configure(SgProject *project, HlkMatrixOp* op, string unpack_or_pack, string dst_mode_str = "", uint32_t relu_config = 0, bool untilize_output = false) {
     assert(unpack_or_pack == "unpack" or unpack_or_pack == "pack");
     SgNodeContainer func_call_list = find_function_calls(project);
-    SgFunctionDeclaration* main_decl = find_function_declaration(project, "hlk_main"); 
+    SgFunctionDeclaration* main_decl = find_function_declaration(project, "hlk_main");
     SgFunctionDefinition* main_def = main_decl->get_definition();
     SgBasicBlock* body = main_def->get_body();
 
@@ -660,16 +660,16 @@ void replace_hlk_inits_and_insert_hw_configure(SgProject *project, HlkMatrixOp* 
         hw_func_name = insert_disaggregated_into_hw_configure(op->get_pack_hw_configure_func_str(), relu_config);
         llk_replacement_init_string = op->get_optional_pack_init_func_str(dst_mode_str, untilize_output);
     }
-    
+
     vector<SgNode*> hlk_api_func_list_item = find_function_calls_by_name(project, op_string);
-    
+
     vector<SgExpression*> unpack_hw_configure_call_expr_ptr_list;
     if (unpack_or_pack == "unpack") {
         unpack_hw_configure_call_expr_ptr_list = get_func_call_sg_expression_arg_list(
             hlk_api_func_list_item.at(0)->get_parent(),
             op->get_unpack_hw_configure_func_hlk_api_expr_positions()
         );
-    } 
+    }
 
     cout << "OP STRING: " << op_string << endl;
 
@@ -690,9 +690,9 @@ void replace_hlk_inits_and_insert_hw_configure(SgProject *project, HlkMatrixOp* 
                 operand_ids = {16};
             } else {
                 operand_ids = get_func_call_int_arguments_value_list(
-                    func_call->get_parent(), 
+                    func_call->get_parent(),
                     operand_positions
-                ); 
+                );
                 if (operand_ids.size() == 0) {
                     operand_ids = {0};
                 }
@@ -748,7 +748,7 @@ void replace_hlk_inits_and_insert_hw_configure(SgProject *project, HlkMatrixOp* 
                 if (op_string_init_once == symbol_str) {
                     replace_call_with_llk_in_main_scope(project, func_call->get_parent(), op_string_init_once, llk_replacement_init_string, {1});
                 } else {
-                    replace_call_statement_drop_first_arg(func_call->get_parent(), llk_replacement_init_string); 
+                    replace_call_statement_drop_first_arg(func_call->get_parent(), llk_replacement_init_string);
                 }
             } else {
                 if (op_string_init_short == symbol_str) {
@@ -758,7 +758,7 @@ void replace_hlk_inits_and_insert_hw_configure(SgProject *project, HlkMatrixOp* 
                 } else {
                     replace_hlk_call_statement(func_call->get_parent(),llk_replacement_init_string , {});
                 }
-            }    
+            }
         }
     }
 }
@@ -767,13 +767,13 @@ void insert_hw_configure_after_init(
     SgProject *project,
     string target_function_name,
     vector<string> hw_func_names,
-    vector<string> llk_init_func_names, 
+    vector<string> llk_init_func_names,
     vector<vector<int>> multi_op_operand_ids,
     vector<vector<SgExpression*>> multi_op_sg_expr_list
 ) {
-    
+
     SgNodeContainer func_call_list = find_function_calls(project);
-    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_function_name); 
+    SgFunctionDeclaration* main_decl = find_function_declaration(project, target_function_name);
     SgFunctionDefinition* main_def = main_decl->get_definition();
 
     int idx = 0;
@@ -797,7 +797,7 @@ void insert_hw_configure_after_init(
 
             SgExprListExp* expr_list = new SgExprListExp(SOURCE_POSITION);
             cout << "Adding hw configure after : " << symbol_str << endl;
-            
+
             for (int operand_id: operand_ids) {
                 expr_list->append_expression(
                     buildIntVal(operand_id)
@@ -806,7 +806,7 @@ void insert_hw_configure_after_init(
             for (SgExpression* sg_expr : sg_expr_list) {
                 expr_list->append_expression(sg_expr);
             }
-    
+
             SgStatement* func_call_statement = isSgStatement(func_call->get_parent());
             SgExprStatement* new_call_statement = build_void_func_call_statement(hw_func_names.at(idx), expr_list, main_def);
             insertStatementAfter(func_call_statement, new_call_statement);
@@ -816,7 +816,7 @@ void insert_hw_configure_after_init(
             }
         }
     }
-    
+
 }
 
 vector<int> replace_call_statements_for_unpack_and_get_operand_ids(SgProject *project, vector<HlkMatrixOp*> hlk_ops) {
@@ -837,13 +837,13 @@ vector<int> replace_call_statements_for_unpack_and_get_operand_ids(SgProject *pr
                 cout << "found an HLK OP replacement target: " << symbol_str << endl;
                 // get operand ids first
                 operand_ids = get_func_call_int_arguments_value_list(
-                                                        func_call->get_parent(), 
-                                                        hlk_ops[i]->get_unpack_func_hlk_api_operand_positions()); 
+                                                        func_call->get_parent(),
+                                                        hlk_ops[i]->get_unpack_func_hlk_api_operand_positions());
                 // then replace
                 replace_hlk_call_statement(
                                     func_call->get_parent(), // parent is SgExprStatement
-                                    hlk_ops[i]->get_unpack_func_str(), 
-                                    hlk_ops[i]->get_unpack_func_hlk_api_args_positions_to_keep()); 
+                                    hlk_ops[i]->get_unpack_func_str(),
+                                    hlk_ops[i]->get_unpack_func_hlk_api_args_positions_to_keep());
 
                 break; // TODO: if we wanted to support multiple HLK calls in the HLK kernel (of the same API) we'd replace all the statements, and we could collect all operand IDs.
             }
@@ -873,15 +873,15 @@ vector<vector<int>> replace_call_statements_for_unpack_and_get_multiple_op_opera
                 cout << "found an HLK OP replacement target: " << symbol_str << endl;
                 // get operand ids first
                 operand_ids = get_func_call_int_arguments_value_list(
-                                                        func_call->get_parent(), 
-                                                        hlk_ops[i]->get_unpack_func_hlk_api_operand_positions()); 
+                                                        func_call->get_parent(),
+                                                        hlk_ops[i]->get_unpack_func_hlk_api_operand_positions());
 
                 multiple_op_operand_ids.push_back(operand_ids);
                 // then replace
                 replace_hlk_call_statement(
                                     func_call->get_parent(), // parent is SgExprStatement
-                                    hlk_ops[i]->get_unpack_func_str(), 
-                                    hlk_ops[i]->get_unpack_func_hlk_api_args_positions_to_keep()); 
+                                    hlk_ops[i]->get_unpack_func_str(),
+                                    hlk_ops[i]->get_unpack_func_hlk_api_args_positions_to_keep());
 
                 break; // TODO: if we wanted to support multiple HLK calls in the HLK kernel (of the same API) we'd replace all the statements, and we could collect all operand IDs.
             }
@@ -962,7 +962,7 @@ void replace_hlk_dropout_with_llk_int_dropout_and_scale(SgProject *project) {
         );
 
         insertStatementAfter(*(body->get_statements().begin()), llk_dropout_probability_decl);
-        insertStatementAfter(*(body->get_statements().begin()), llk_dropout_scale_decl);        
+        insertStatementAfter(*(body->get_statements().begin()), llk_dropout_scale_decl);
 
         // Create new dropout func call expression list that we will use for the llk call
         SgExpressionPtrList new_dropout_llk_func_call_expressions;
@@ -991,7 +991,7 @@ void replace_hlk_dropout_with_llk_int_dropout_and_scale(SgProject *project) {
         SgExprStatement* new_call_statement = build_void_func_call_statement(dropout_math_func_name, new_dropout_llk_func_call_expressions, enclosing_scope);
 
         replaceStatement(target_statement, new_call_statement);
-        
+
         dropout_call_position++;
     }
 }
@@ -1014,12 +1014,12 @@ void replace_call_statements_for_math(SgProject *project, vector<HlkOp*> hlk_ops
                 vector<int> hlk_op_math_args_positions_to_keep = hlk_op->get_math_func_hlk_api_args_positions_to_keep();
 
                 replace_hlk_call_statement(
-                                    func_call->get_parent(), 
-                                    hlk_op->get_math_func_str(), 
+                                    func_call->get_parent(),
+                                    hlk_op->get_math_func_str(),
                                     hlk_op_math_args_positions_to_keep); // parent is SgExprStatement
             }
         }
-    }    
+    }
 }
 
 string detect_dst_mode(SgProject* project, HlkSfpuOp* hlk_sfpu_op, HlkMatrixOp* hlk_matrix_op);
@@ -1086,14 +1086,14 @@ vector<int> replace_call_statements_for_pack_and_get_operand_ids(
                 assert(op_id.size() == 0 or op_id.size() == 1);
 
                 if((hlk_call_names_to_replace[i] == "hlk_pack_tile_to_stream")||
-                   (hlk_call_names_to_replace[i] == "hlk_pack_relu_tile_to_stream")) //FIXME: for now treat the same as general pack 
+                   (hlk_call_names_to_replace[i] == "hlk_pack_relu_tile_to_stream")) //FIXME: for now treat the same as general pack
                                                                                      //but we might want to add args for relu type and threshold setting
                 {
                     SgExpressionPtrList exp_ptr_list = get_exp_ptr_list(func_call->get_parent());
                     string unordered = exp_ptr_list.size() >= 4 ? "true" : "false"; // 4 arguments when tile_index is specified.
                     string untilize_str = untilize_output ? "true" : "false";
                     string replacement_name = llk_names[i] + "<" + unordered + ", " + dst_mode + ", " + untilize_str;
-                    
+
                     if(DeviceEnum::GRAYSKULL != device_enum_from_string(device_name)){
                         const string FP32_DEST_ACC_EN_STR = fp32_dest_acc_en ? "true" : "false";
                         replacement_name += ", " + FP32_DEST_ACC_EN_STR;
@@ -1105,7 +1105,7 @@ vector<int> replace_call_statements_for_pack_and_get_operand_ids(
                     }
 
                     replacement_name += " >";
-                    
+
                     replace_call_statement_drop_first_arg(func_call->get_parent(), replacement_name);
                 }
                 else if(hlk_call_names_to_replace[i] == "hlk_wait_for_free_tiles")
@@ -1128,13 +1128,13 @@ vector<int> replace_call_statements_for_pack_and_get_operand_ids(
                     replace_call_statement_drop_first_arg(func_call->get_parent(), llk_names[i]); // parent is SgExprStatement
                 }
 
-                if (op_id.size() == 1) {    
+                if (op_id.size() == 1) {
                     unique_operand_ids.insert(op_id[0]);
                 }
             }
         }
     }
-    
+
     for(const int i : unique_operand_ids) {
         operand_ids.push_back(i);
     }
@@ -1232,7 +1232,7 @@ void patch_main_decl_for_llk(SgProject *project, string new_main_name) {
 
     // remove "core_ptr" (the first arg)
     SgInitializedNamePtrList& arg_list = main_decl->get_args();
-    arg_list.erase(arg_list.begin()); 
+    arg_list.erase(arg_list.begin());
     // TODO: should also remove the symbol
 
     // create a const void ptr arg for llk_args
@@ -1247,8 +1247,8 @@ void insert_var_decl_with_static_cast_assign_initializer(SgProject *project, str
     SgBasicBlock* body = main_def->get_body();
 
     SgVariableDeclaration* loop_iter_decl = buildVariableDeclaration(
-        new_var_name_str, 
-        buildConstType(buildAutoType()), 
+        new_var_name_str,
+        buildConstType(buildAutoType()),
         buildAssignInitializer(
             buildCastExp(buildVarRefExp(ref_var_name_str, main_def), type, SgCastExp::e_static_cast)),
         main_def);
@@ -1259,39 +1259,39 @@ inline void insert_perf_monitor_set_flag(SgForStatement* outer_loop, string loop
     SgExprListExp* expr_list_perf_target = new SgExprListExp(SOURCE_POSITION);
     expr_list_perf_target->append_expression(buildVarRefExp(loop_iter_name,outer_loop));
     string function_name = "set_perf_dump_flag_for_input";
-    SgExprStatement* check_perf_dump_for_input = build_void_func_call_statement(function_name, expr_list_perf_target, outer_loop); 
+    SgExprStatement* check_perf_dump_for_input = build_void_func_call_statement(function_name, expr_list_perf_target, outer_loop);
     appendStatement(check_perf_dump_for_input, isSgBasicBlock(outer_loop->get_loop_body()));
 }
 
 inline void insert_pack_perf_monitor_init(SgForStatement* outer_loop) {
-    
-    SgExprStatement* record_input_init_time = build_void_func_call_statement("record_pack_input_init_timestamp", buildExprListExp(), outer_loop); 
+
+    SgExprStatement* record_input_init_time = build_void_func_call_statement("record_pack_input_init_timestamp", buildExprListExp(), outer_loop);
     appendStatement(record_input_init_time, isSgBasicBlock(outer_loop->get_loop_body()));
 }
 
 inline void insert_pack_perf_monitor_end(SgForStatement* outer_loop) {
-    
-    SgExprStatement* record_input_end_time = build_void_func_call_statement("record_pack_input_end_timestamp", buildExprListExp(), outer_loop); 
+
+    SgExprStatement* record_input_end_time = build_void_func_call_statement("record_pack_input_end_timestamp", buildExprListExp(), outer_loop);
     appendStatement(record_input_end_time, isSgBasicBlock(outer_loop->get_loop_body()));
 }
 
 
 inline void insert_unpack_first_instruction_perf(SgForStatement* outer_loop) {
-    
-    SgExprStatement* record_input_end_time = build_void_func_call_statement("record_unpack_first_instruction_timestamp", buildExprListExp(), outer_loop); 
+
+    SgExprStatement* record_input_end_time = build_void_func_call_statement("record_unpack_first_instruction_timestamp", buildExprListExp(), outer_loop);
     appendStatement(record_input_end_time, isSgBasicBlock(outer_loop->get_loop_body()));
 }
 
 inline void insert_math_perf_monitor_start(SgForStatement* outer_loop) {
-    
+
     string function_name = "perf_math_counter_start";
-    SgExprStatement* record_input_end_time = build_void_func_call_statement(function_name, buildExprListExp(), outer_loop); 
+    SgExprStatement* record_input_end_time = build_void_func_call_statement(function_name, buildExprListExp(), outer_loop);
     appendStatement(record_input_end_time, isSgBasicBlock(outer_loop->get_loop_body()));
 }
 
 inline void insert_math_perf_monitor_end(SgForStatement* outer_loop) {
-    
-    SgExprStatement* record_input_end_time = build_void_func_call_statement("record_perf_math_counter", buildExprListExp(), outer_loop); 
+
+    SgExprStatement* record_input_end_time = build_void_func_call_statement("record_perf_math_counter", buildExprListExp(), outer_loop);
     appendStatement(record_input_end_time, isSgBasicBlock(outer_loop->get_loop_body()));
 }
 
@@ -1309,7 +1309,7 @@ void insert_outer_loop(SgProject *project, string func_name, bool insert_perf_mo
     SgExpression* incr_expression = buildPlusAssignOp(buildVarRefExp(loop_iter_name, main_def), buildIntVal(1));
     SgForStatement* outer_loop = buildForStatement(init_statement, test_statement, incr_expression, buildBasicBlock());
     insertStatementAfter(*(body->get_statements().begin()), outer_loop);
-    
+
     if (insert_perf_monitor) {
         insert_perf_monitor_set_flag(outer_loop, loop_iter_name);
         if (thread_id == 1) {
@@ -1321,7 +1321,7 @@ void insert_outer_loop(SgProject *project, string func_name, bool insert_perf_mo
     SgStatementPtrList main_func_statements = body->get_statements();
     // move all the original main func statements into the outer loop
     // we skip the first two statements (the two we just added): __outer_loop_iter var declaration and the outer for loop
-    // all other statements are moved to the outer loop (remove & append) 
+    // all other statements are moved to the outer loop (remove & append)
     for (size_t i = 2; i < main_func_statements.size(); i++) {
         removeStatement(main_func_statements[i]);
         appendStatement(main_func_statements[i], isSgBasicBlock(outer_loop->get_loop_body()));
@@ -1340,17 +1340,17 @@ void insert_outer_loop(SgProject *project, string func_name, bool insert_perf_mo
 void insert_namespace(SgProject *project, string main_func_name, string namespace_name) {
     SgFunctionDeclaration* main_decl = find_function_declaration(project, main_func_name);
 
-    SgGlobal* global_scope = isSgGlobal(main_decl->get_scope()); 
+    SgGlobal* global_scope = isSgGlobal(main_decl->get_scope());
     ROSE_ASSERT(global_scope != NULL);
 
     SgName namespace_sg_name(namespace_name);
     // _nfi seems to do a more complete setup than the regular buildNamespaceDecl, however AST consitency check still complains about scope info (unparsing works though)
     // FIXME: fix the AST complaint, if it becomes a problem for unparsing
-    SgNamespaceDeclarationStatement* namespace_decl = buildNamespaceDeclaration_nfi(namespace_sg_name, false, global_scope); 
+    SgNamespaceDeclarationStatement* namespace_decl = buildNamespaceDeclaration_nfi(namespace_sg_name, false, global_scope);
     //SgNamespaceSymbol* namespace_sym = new SgNamespaceSymbol(namespace_decl->get_name(), namespace_decl);
     //global_scope->insert_symbol(namespace_decl->get_name(), namespace_sym);
     //namespace_decl->set_parent(global_scope);
-    
+
     global_scope->append_statement(namespace_decl);
 
     //SgNamespaceDefinitionStatement* namespace_def = buildNamespaceDefinition(namespace_decl);
@@ -1360,7 +1360,7 @@ void insert_namespace(SgProject *project, string main_func_name, string namespac
     ROSE_ASSERT(namespace_def != NULL);
 
     SgDeclarationStatementPtrList global_scope_statements = global_scope->get_declarations();
-    
+
     // move all the original global scope decl statements into the namespace
     // we skip the last statement (the one we just appended): namespace decl
     // we also skip include decl statements
@@ -1373,7 +1373,7 @@ void insert_namespace(SgProject *project, string main_func_name, string namespac
 void insert_header(SgProject *project, string header_file_name) {
     SgFilePtrList file_list = project->get_fileList();
     //cout << "file list size = " << file_list.size() << endl;
-    // only a single file should be provided to the HLKC as input 
+    // only a single file should be provided to the HLKC as input
     ROSE_ASSERT(file_list.size() == 1);
 
     // get the one and only source file
@@ -1392,7 +1392,7 @@ void remove_header(SgProject *project, string header_file_name) {
 
     SgFilePtrList file_list = project->get_fileList();
     //cout << "file list size = " << file_list.size() << endl;
-    // only a single file should be provided to the HLKC as input 
+    // only a single file should be provided to the HLKC as input
     ROSE_ASSERT(file_list.size() == 1);
 
     SgSourceFile* source_file = isSgSourceFile(project->get_fileList()[0]);
@@ -1470,7 +1470,7 @@ void generate_llk_args_init_file_pack(string llk_args_file_name, const vector<in
     }
     // currently generating the default Relu config --> Relu disabled.
     file_stream << "\t.relu_config = {.f = {.ApplyRelu=0, .Threshold=0}}," << endl;
-    
+
     file_stream << "};" << endl;
     file_stream.close();
 }
@@ -1500,14 +1500,14 @@ string detect_dst_mode(SgProject* project, HlkSfpuOp* hlk_sfpu_op, HlkMatrixOp* 
     auto hlk_acc_to_dest = hlk_matrix_op->get_op_api() == HlkMatrixOp::OpApi::hlk_add_tile_to_dst;
 
     if ((dst_mode_int_vals[0] == 2) && (hlk_sfpu_op || hlk_acc_to_dest)) {
-       dst_mode_str = "SyncTile2"; // Workaround for bug preventing simultaneous reads to the same bank  
+       dst_mode_str = "SyncTile2"; // Workaround for bug preventing simultaneous reads to the same bank
                                    // from sfpu and packer. SyncTile2 mode limits number of tiles in dest to 2
                                    // where each tile is stored in the separate bank. In SyncTile2 mode math/pack
                                    // will ping-pong between dest index 0 and 8 compared to SyncTile16 aka SyncTile
                                    // where all 16 indexes are used
     }
     cout << "detected dst_mode_str = " << dst_mode_str << endl;
-    
+
     return dst_mode_str;
 }
 
@@ -1707,7 +1707,7 @@ void generate_hlk_args_struct_init_generator(SgProject *project, string output_f
     remove_header(project, "compute_hlk_api.h");
 
     SgFunctionDeclaration* main_decl = find_function_declaration(project, "hlk_main");
-    SgGlobal* global_scope = isSgGlobal(main_decl->get_scope()); 
+    SgGlobal* global_scope = isSgGlobal(main_decl->get_scope());
     ROSE_ASSERT(global_scope != NULL);
 
     // Create a parameter list with a parameter
@@ -1730,7 +1730,7 @@ void generate_hlk_args_struct_init_generator(SgProject *project, string output_f
     SgVarRefExp *var_ref = buildVarRefExp(args_name,func_body);
     SgPlusPlusOp *pp_expression = buildPlusPlusOp(var_ref);
     SgExprStatement* new_stmt = buildExprStatement(pp_expression);
-        
+
     // insert a statement into the function body
     prependStatement(new_stmt,func_body);
     appendStatement(func,global_scope);
@@ -1771,12 +1771,12 @@ void generate_hlk_args_struct_init_generator(SgProject *project, string output_f
     file_stream.close();
 }
 
-void get_live_variables_for_loop(LivenessAnalysis * liv, SgNode* loop, std::vector<SgInitializedName*>& live_ins, std::vector<SgInitializedName*>& live_outs) 
+void get_live_variables_for_loop(LivenessAnalysis * liv, SgNode* loop, std::vector<SgInitializedName*>& live_ins, std::vector<SgInitializedName*>& live_outs)
 {
   ROSE_ASSERT(liv != NULL);
   ROSE_ASSERT(loop!= NULL);
 
-  // For SgForStatement, virtual CFG node which is interesting has an index number of 2, 
+  // For SgForStatement, virtual CFG node which is interesting has an index number of 2,
   // as shown in its dot graph's node caption.
   // "<SgForStatement> @ 8: 2" means this node is for a for statement at source line 8, with an index 2.
   CFGNode cfg_node(loop, isSgForStatement(loop) ? 2 : 1);
@@ -1884,7 +1884,7 @@ vector<SgStatement*> dead_for_loop_analysis(SgProject* project, LivenessAnalysis
         assert(loop);
         assert(isSgForStatement(loop) || isSgWhileStmt(loop));
 
-        SgNodeContainer func_list = find_function_calls(loop); 
+        SgNodeContainer func_list = find_function_calls(loop);
         if (func_list.size() > 0) {
             loop_is_dead = false;
             cout << "Loop is not dead, it has " << func_list.size() << " func calls." << endl;
@@ -1892,8 +1892,8 @@ vector<SgStatement*> dead_for_loop_analysis(SgProject* project, LivenessAnalysis
         } else {
             cout << "Loop has no function calls, a candidate for bye-bye-loop." << endl;
         }
-        
-        std::vector<SgInitializedName*> live_ins, live_outs;         
+
+        std::vector<SgInitializedName*> live_ins, live_outs;
         get_live_variables_for_loop(liv, loop, live_ins, live_outs);
 
         cout << "live ins: ";
@@ -1924,8 +1924,8 @@ vector<SgStatement*> dead_for_loop_analysis(SgProject* project, LivenessAnalysis
         cout << init_name->get_name().str() << ", ";
         }
         cout << endl;
-        
-        set_difference(liveOuts.begin(), liveOuts.end(), 
+
+        set_difference(liveOuts.begin(), liveOuts.end(),
                         liveIns.begin(), liveIns.end(),
                         inserter(live_diff, live_diff.begin()));
         cout << "live_diff size: " << live_diff.size() << endl;

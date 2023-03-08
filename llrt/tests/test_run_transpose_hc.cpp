@@ -68,9 +68,9 @@ inline vector<u16> gold_transpose_hc(std::vector<u16> src_vec, vector<uint32_t> 
 
 // Test
 bool run_transpose_hc(
-    tt_cluster* cluster, 
-    int chip_id, 
-    const tt_xy_pair& core, 
+    tt_cluster* cluster,
+    int chip_id,
+    const tt_xy_pair& core,
     u32 num_tiles,
     const vector<u32>& shape
 ) {
@@ -104,19 +104,19 @@ bool run_transpose_hc(
     u32 W = shape[3], H = shape[2], C = shape[1];
     u32 HW = H*W;
     TT_ASSERT(shape[0] == 1); // TODO(AP): batch 1 only for now
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
-        { dram_buffer_src_addr, u32(dram_src_noc_xy.x), u32(dram_src_noc_xy.y), W, H, C, HW }, 
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
+        { dram_buffer_src_addr, u32(dram_src_noc_xy.x), u32(dram_src_noc_xy.y), W, H, C, HW },
         NCRISC_L1_ARG_BASE);
 
-    // BRISC kernel arguments to L1 in one-shot 
+    // BRISC kernel arguments to L1 in one-shot
     u32 num_output_tiles = num_tiles;
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
-        { dram_buffer_dst_addr, u32(dram_dst_noc_xy.x), u32(dram_dst_noc_xy.y), num_output_tiles }, 
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
+        { dram_buffer_dst_addr, u32(dram_dst_noc_xy.x), u32(dram_dst_noc_xy.y), num_output_tiles },
         BRISC_L1_ARG_BASE);
-    
+
     // Note: TRISC 0/1/2 kernel args are hard-coded
     TT_ASSERT(dram_buffer_size % sizeof(std::uint32_t) == 0);
-    
+
     // Write input tensor from device DRAM
     constexpr int SEED = 0x1234;
     constexpr float MAXVAL = 4096.0f;
@@ -131,7 +131,7 @@ bool run_transpose_hc(
     vector<u32> dst_vec(src_vec.size());
     cluster->read_dram_vec(
         dst_vec, tt_target_dram{chip_id, dram_dst_channel_id, 0}, dram_buffer_dst_addr, dram_buffer_size);
-    
+
     // untilize input vector for consumption by gold_transpose_hc
     vector<u16> src_untilized16 = untilize_nchw(u16_from_u32_vector(src_vec), shape);
     auto gold_transposed = gold_transpose_hc(src_untilized16, shape); // result is u16 untilized
@@ -157,17 +157,17 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         int chip_id = 0;
         tt_xy_pair xy = {1,1};
         cluster->open_device(arch, target_type, {0}, sdesc_file);
-        cluster->start_device(default_params); // use default params 
+        cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
 
         string op_path = "built_kernels/transpose_hc_op";
 
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", chip_id, xy, 0); // brisc 
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", chip_id, xy, 0); // brisc
         pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", chip_id, xy, 1); // ncrisc
 
         pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread0/tensix_thread0.hex", chip_id, xy, 0); // trisc0

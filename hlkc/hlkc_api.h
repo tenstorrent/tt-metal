@@ -17,4 +17,3 @@ std::string compile_hlk(std::string input_hlk_file_path,
                  bool parallel = false);
 void compile_generate_struct_init_header(std::string input_hlk_file_path, std::string out_dir_path, std::string out_file_name_base, bool enable_cache);
 int run_generate_struct_init_header(std::string out_dir_path, std::string out_file_name_base, const void *args);
-

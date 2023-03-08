@@ -5,7 +5,7 @@
 #include <stdbool.h>
 
 
-/* 
+/*
    Kernel operand mapping scheme:
    - ID 0-7 (inputs, unpacker-only) => streams 8-15
    - ID 8-15 (params, unpacker-only) => streams 16-23
@@ -28,7 +28,7 @@ const int OPERAND_RELAY_START_INDEX = 32;
 const int MAX_NUM_OPERANDS = 64;
 
 // Indexed with operand = kernel operand ID (0-31) per the table above
-// Used for tile push/pop operations. 
+// Used for tile push/pop operations.
 inline __attribute__((always_inline)) uint32_t get_operand_stream_id(int operand) {
   return OPERAND_START_STREAM + operand;
 }
@@ -41,7 +41,7 @@ inline __attribute__((always_inline)) int stream_id_to_operand(uint32_t stream_i
 // Functions below convert between kernel operand indexes (per the above table)
 // and input/output indexes that can be used to iterate separately through
 // streams that have kernel input (stream->unpacker) or kernel output
-// (packer->stream) functionality. 
+// (packer->stream) functionality.
 inline __attribute__((always_inline)) int operand_to_input_index(int operand) {
   return (operand >= OPERAND_INTERMEDIATES_START_INDEX) ? (operand - (OPERAND_INTERMEDIATES_START_INDEX - OPERAND_OUTPUT_START_INDEX)) : operand;
 }
@@ -87,4 +87,3 @@ inline __attribute__((always_inline)) volatile uint32_t* get_packer_tiles_acked_
 }
 
 #endif
-

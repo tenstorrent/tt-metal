@@ -24,7 +24,7 @@ struct hlk_args_t {
 #include <iostream>
 
 std::ostream &operator<<(std::ostream &os, const tile_info_t &tile_info) {
-    os << "buf = " << (int)tile_info.buffer_index 
+    os << "buf = " << (int)tile_info.buffer_index
        << " out_index=" << (int)tile_info.tile_index_within_out_buf
        << " in_offset=" << (int)tile_info.tile_offset_within_in_buf << std::endl;
     return os;
@@ -59,7 +59,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
         // Skip any unused tiles. For now, we're constrained to do it one tile at a time
         const tile_info_t &tile_info = args->tile_info[i];
         for (std::uint32_t s=0; s < tile_info.tile_offset_within_in_buf; s++) {
-            hlk_wait_tiles(core_ptr, HlkOperand::in0, 1); 
+            hlk_wait_tiles(core_ptr, HlkOperand::in0, 1);
             hlk_pop_tiles(core_ptr, HlkOperand::in0, 1);
         }
 
@@ -74,10 +74,9 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
         hlk_pop_tiles(core_ptr, HlkOperand::in0, 1);
         hlk_release_dst(core_ptr, DstMode::Half);
     }
-        
+
     // Push tiles
     for (std::uint32_t i=0; i < args->num_outputs; i++) {
         hlk_push_tiles(core_ptr, HlkOperand::out0 + i, args->tiles_per_output[i]);
     }
 }
-

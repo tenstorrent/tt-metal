@@ -21,7 +21,7 @@ inline void llk_setup_cb_write_interface() {
     volatile std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
     for (std::uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
-      
+
         std::uint32_t fifo_addr = circular_buffer_config_addr[0];
         std::uint32_t fifo_size = circular_buffer_config_addr[1];
         std::uint32_t fifo_size_tiles = circular_buffer_config_addr[2];
@@ -33,7 +33,7 @@ inline void llk_setup_cb_write_interface() {
         cb_write_interface[cb_id].fifo_size_tiles = fifo_size_tiles;
 
         // local copy used by the packer
-        cb_write_interface[cb_id].tiles_received = 0; 
+        cb_write_interface[cb_id].tiles_received = 0;
         // this is currently used for in-order packing (the default mode)
         cb_write_interface[cb_id].fifo_wr_tile_ptr = 0;
 
@@ -41,7 +41,7 @@ inline void llk_setup_cb_write_interface() {
     }
 }
 
-// "llk_setup_outputs" is the old function name that HLKC emits 
+// "llk_setup_outputs" is the old function name that HLKC emits
 inline void llk_setup_outputs() {
     llk_setup_cb_write_interface();
 }
@@ -57,11 +57,11 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
-    // note: we need to use "tiles_received", because this is updated by RISC-V, and not tiles_received_ptr which is updated by packer 
+    // note: we need to use "tiles_received", because this is updated by RISC-V, and not tiles_received_ptr which is updated by packer
     // here we don't synchronize with packer, so if we use tiles_received_ptr could case a data race
     // alternatively we could sync with packer, but that's slower and more complex code
-    // that is, don't do this: uint32_t tiles_received = tiles_received_ptr[0]; 
-    uint32_t tiles_received = cb_write_interface[output].tiles_received; 
+    // that is, don't do this: uint32_t tiles_received = tiles_received_ptr[0];
+    uint32_t tiles_received = cb_write_interface[output].tiles_received;
 
     std::int32_t free_tiles;
     do {
@@ -70,7 +70,7 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
         free_tiles = (std::int32_t) free_tiles_wrap;
     } while (free_tiles < num_tiles);
 
-    // TODO: check if this one is really necessary  
+    // TODO: check if this one is really necessary
     mem_barrier(free_tiles);
 }
 
@@ -88,9 +88,9 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     cb_write_interface[output].tiles_received += num_tiles;
     uint16_t tiles_received_new = cb_write_interface[output].tiles_received;
 
-    // Update the value at tiles_received_ptr with tiles_received_new only after the packer has finished packing 
+    // Update the value at tiles_received_ptr with tiles_received_new only after the packer has finished packing
     // We need to use a Tensix instruction to do the update, which runs only after STALLWAIT has finished
-    // Note that the consumer side of the circular buffer (the one reading from the buffer) is ok to use stale/delayed version of the value at tiles_received_ptr 
+    // Note that the consumer side of the circular buffer (the one reading from the buffer) is ok to use stale/delayed version of the value at tiles_received_ptr
     // This is because consumer is polling the value at tiles_received_ptr, and it will eventually see the updated value
     TT_SETDMAREG(0,tiles_received_new, 0, LO_16(p_gpr_pack::NUM_MSGS_RECEIVED));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish

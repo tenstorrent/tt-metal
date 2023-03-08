@@ -11,8 +11,8 @@ struct hlk_args_t {
 void compute_main(const hlk_args_t *args) {
 
     // Need to pre-initialize an op_info struct and pass into get_next_op_info and modify in that func, since hlkc doesn't support funcs returning vals yet
-    op_info_t op_info = {0, 0, 0, 0, 0, 0, 0}; 
-    
+    op_info_t op_info = {0, 0, 0, 0, 0, 0, 0};
+
     for (int op_idx = 0; op_idx < args->num_ops; op_idx++) {
         hlk_get_next_op_info(core_ptr, op_info);
 

@@ -89,4 +89,3 @@ bool operator!=(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs) {
         static_cast<std::underlying_type<TensixSoftResetOptions>::type>(lhs) !=
         static_cast<std::underlying_type<TensixSoftResetOptions>::type>(rhs);
 }
-

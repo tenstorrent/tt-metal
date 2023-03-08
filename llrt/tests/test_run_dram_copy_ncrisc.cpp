@@ -35,14 +35,14 @@ bool run_dram_copy_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair& co
 
     tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, test_mailbox_init_val, test_mailbox_addr_brisc);
     log_info(tt::LogVerif, "initialized test_maxilbox for brisc");
-    
+
     test_mailbox_init_val_check = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, test_mailbox_addr_brisc, sizeof(uint32_t));  // read a single uint32_t
     TT_ASSERT(test_mailbox_init_val_check[0] == INIT_VALUE);
     log_info(tt::LogVerif, "checked test_mailbox for brisc is correctly initialized to value = {}", test_mailbox_init_val_check[0]);
 
     tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, test_mailbox_init_val, test_mailbox_addr_ncrisc);
     log_info(tt::LogVerif, "initialized test_maxilbox for ncrisc");
-    
+
     test_mailbox_init_val_check = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, test_mailbox_addr_ncrisc, sizeof(uint32_t));  // read a single uint32_t
     TT_ASSERT(test_mailbox_init_val_check[0] == INIT_VALUE);
     log_info(tt::LogVerif, "checked test_mailbox for ncrisc is correctly initialized to value = {}", test_mailbox_init_val_check[0]);
@@ -62,15 +62,15 @@ bool run_dram_copy_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair& co
     std::uint32_t dram_buffer_src_addr = 0;
     tt_xy_pair dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
     log_info(tt::LogVerif, "dram_src_noc_xy = {}", dram_src_noc_xy.str());
-    
+
     std::uint32_t dram_buffer_dst_addr = 512 * 1024;
     tt_xy_pair dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
     log_info(tt::LogVerif, "dram_dst_noc_xy = {}", dram_dst_noc_xy.str());
-    
+
     std::uint32_t dram_buffer_size = 100 * 1024;
 
-    // blast ncrisc kernel arguments to L1 in one-shot 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
+    // blast ncrisc kernel arguments to L1 in one-shot
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
         {l1_buffer_addr,
 
         dram_buffer_src_addr,
@@ -88,7 +88,7 @@ bool run_dram_copy_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair& co
     TT_ASSERT(dram_buffer_size % sizeof(std::uint32_t) == 0);
     int init_value_for_buffer = tt_rnd_int(0,100000);
     log_info(tt::LogVerif, "init_value_for_buffer = {}", init_value_for_buffer);
-    std::vector<std::uint32_t> src_vec(dram_buffer_size/sizeof(std::uint32_t), init_value_for_buffer); 
+    std::vector<std::uint32_t> src_vec(dram_buffer_size/sizeof(std::uint32_t), init_value_for_buffer);
     cluster->write_dram_vec(src_vec, tt_target_dram{chip_id, dram_src_channel_id, 0}, dram_buffer_src_addr); // write to address
 
     tt::llrt::deassert_brisc_reset_for_all_chips_all_cores(cluster);
@@ -102,10 +102,10 @@ bool run_dram_copy_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair& co
     while(!brisc_done || !ncrisc_done) {
         test_mailbox_read_val_brisc = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, test_mailbox_addr_brisc, sizeof(uint32_t));  // read a single uint32_t
         test_mailbox_read_val_ncrisc = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, test_mailbox_addr_ncrisc, sizeof(uint32_t));  // read a single uint32_t
-      
-        TT_ASSERT(test_mailbox_read_val_brisc[0] == INIT_VALUE || test_mailbox_read_val_brisc[0] == DONE_VALUE); // ensure no corruption 
-        TT_ASSERT(test_mailbox_read_val_ncrisc[0] == INIT_VALUE || test_mailbox_read_val_ncrisc[0] == DONE_VALUE); // ensure no corruption 
-      
+
+        TT_ASSERT(test_mailbox_read_val_brisc[0] == INIT_VALUE || test_mailbox_read_val_brisc[0] == DONE_VALUE); // ensure no corruption
+        TT_ASSERT(test_mailbox_read_val_ncrisc[0] == INIT_VALUE || test_mailbox_read_val_ncrisc[0] == DONE_VALUE); // ensure no corruption
+
         brisc_done = test_mailbox_read_val_brisc[0] == DONE_VALUE;
         ncrisc_done = test_mailbox_read_val_ncrisc[0] == DONE_VALUE;
 
@@ -129,16 +129,16 @@ int main(int argc, char** argv)
     const TargetDevice target_type = TargetDevice::Silicon;
     const tt::ARCH arch = tt::ARCH::GRAYSKULL;
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
-    
+
 
     tt_rnd_set_seed(std::random_device()());
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
 
         // tt::llrt::print_worker_cores(cluster);
 
@@ -173,4 +173,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

@@ -16,7 +16,7 @@
 using tt::llrt::CircularBufferConfigVec;
 
 bool run_data_copy_multi_tile(tt_cluster* cluster, int chip_id, const tt_xy_pair& core, int num_tiles) {
-    
+
     std::uint32_t single_tile_size = 2 * 1024;
     std::uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     std::uint32_t dram_buffer_src_addr = 0;
@@ -41,21 +41,21 @@ bool run_data_copy_multi_tile(tt_cluster* cluster, int chip_id, const tt_xy_pair
     tt::llrt::set_config_for_circular_buffer(circular_buffer_config_vec, 16, 300*1024, 2*single_tile_size, 2); // output buf (starts at index 16)
     // buffer_config_vec written in one-shot
     tt::llrt::write_circular_buffer_config_vector_to_core(cluster, chip_id, core, circular_buffer_config_vec);
-    
+
     // NCRISC kernel arguments to L1 in one-shot
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
-        { dram_buffer_src_addr, (std::uint32_t)dram_src_noc_xy.x, (std::uint32_t)dram_src_noc_xy.y, (std::uint32_t)num_tiles }, 
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
+        { dram_buffer_src_addr, (std::uint32_t)dram_src_noc_xy.x, (std::uint32_t)dram_src_noc_xy.y, (std::uint32_t)num_tiles },
         NCRISC_L1_ARG_BASE);
 
-    // BRISC kernel arguments to L1 in one-shot 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
-        { dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, (std::uint32_t)num_tiles}, 
+    // BRISC kernel arguments to L1 in one-shot
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
+        { dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, (std::uint32_t)num_tiles},
         BRISC_L1_ARG_BASE);
-    
+
     // Note: TRISC 0/1/2 kernel args are hard-coded
 
     TT_ASSERT(dram_buffer_size % sizeof(std::uint32_t) == 0);
-    
+
     // Write tiles sequentially to DRAM
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100, tt::tiles_test::get_seed_from_systime());
     cluster->write_dram_vec(src_vec, tt_target_dram{chip_id, dram_src_channel_id, 0}, dram_buffer_src_addr); // write to address
@@ -80,17 +80,17 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
 
         // tt::llrt::print_worker_cores(cluster);
 
         string op_path = "built_kernels/datacopy_op_switched_riscs";
 
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", 0, {1,1}, 0); // brisc 
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", 0, {1,1}, 0); // brisc
         pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", 0, {1,1}, 1); // ncrisc
 
         pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread0/tensix_thread0.hex", 0, {1,1}, 0); // trisc0
@@ -122,4 +122,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

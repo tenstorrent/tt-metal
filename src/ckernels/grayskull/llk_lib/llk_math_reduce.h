@@ -87,7 +87,7 @@ inline void llk_math_reduce(uint dst_index) {
                 ckernel_template::run(instrn_buffer);
                 TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
             } else {
-                TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);                
+                TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
             }
         }
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
@@ -136,7 +136,7 @@ inline void llk_math_reduce(uint dst_index) {
                 if constexpr (high_fidelity) {
                     ckernel_template::run(instrn_buffer);
                 } else {
-                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);                    
+                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
                 }
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
@@ -218,7 +218,7 @@ inline void reduce_configure_addrmod() {
         .srcb = {.incr = 0},
         .dest = {.incr = 1},
     }.set(ADDR_MOD_2);
-    
+
     if constexpr (is_high_fidelity) {
         addr_mod_t{
             .srca = {.incr = 0},
@@ -252,13 +252,13 @@ inline void reduce_configure_mop() {
 
 template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0>
 inline void llk_math_reduce_init() {
-    
+
     constexpr bool high_fidelity = num_fidelity_phases > 0 && num_fidelity_phases <= 4;
-    
+
     reduce_configure_addrmod<type, high_fidelity>();
     if constexpr (high_fidelity) {
         reduce_configure_mop<dim, num_fidelity_phases>();
     }
-    
+
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

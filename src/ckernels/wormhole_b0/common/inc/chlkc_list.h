@@ -8,7 +8,7 @@
 
 using namespace ckernel;
 
-    
+
 #ifdef UCK_CHLKC_MATH
 // #include "chlkc_math_llk_args.h"
 #include "chlkc_math_fidelity.h"
@@ -40,12 +40,12 @@ namespace chlkc_unpack { void unpack_main(const struct hlk_args_t* hlk_args=null
 
 
 uint run_kernel() {
-    
+
 #ifdef UCK_CHLKC_MATH
     FWLOG1("run_kernel = %s", HLKC_MATH);
     regfile[p_gpr::DBG_CKID] = HLKC_MATH;
     trisc_l1_mailbox_write((HLKC_MATH << 16) | KERNEL_IN_PROGRESS);
-    zeroacc();  
+    zeroacc();
     chlkc_math::math_main(&hlk_args, arg_loop_count);
 #endif
 
@@ -60,12 +60,10 @@ uint run_kernel() {
     FWLOG1("run_kernel = %s", HLKC_UNPACK);
     regfile[p_gpr::DBG_CKID] = HLKC_UNPACK;
     trisc_l1_mailbox_write((HLKC_UNPACK << 16) | KERNEL_IN_PROGRESS);
-    zerosrc();  
+    zerosrc();
     chlkc_unpack::unpack_main(&hlk_args, arg_loop_count);
 #endif
 
 return 0;
 
 }
-
-    

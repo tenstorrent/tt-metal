@@ -176,7 +176,7 @@ static __attribute__((unused)) __attribute__((noinline)) bool stream_get_push_fl
       num_tiles = stream_get_curr_phase_num_msgs(stream_id);
     uint32_t cur_phase = stream_get_curr_phase(stream_id);
     if (cur_phase == prev_phase) {
-      if constexpr (fracture) 
+      if constexpr (fracture)
         return buf_size == buf_space_available; // We dont need num_tiles > 0 as there is no resend concept for fracture
       else
         return buf_size == buf_space_available && num_tiles > 0; // For this case we might be resending next phase so we need the num_tiles > 0 check
@@ -257,26 +257,25 @@ inline bool assert_check(uint32_t stream_id, bool hang) {
 
 inline void check_dummy_phase(uint32_t stream_id) {
   if (stream_phase_is_active(stream_id)) {
-    uint32_t cur_phase = stream_get_curr_phase(stream_id); 
+    uint32_t cur_phase = stream_get_curr_phase(stream_id);
     if (cur_phase == 0xFFFFF) {
       if (NOC_STREAM_READ_REG_FIELD(stream_id, STREAM_MISC_CFG_REG_INDEX, SOURCE_ENDPOINT)) {
         uint32_t buf_size = NOC_STREAM_READ_REG(stream_id, STREAM_BUF_SIZE_REG_INDEX);
         uint32_t buf_space_available = NOC_STREAM_READ_REG(stream_id, STREAM_BUF_SPACE_AVAILABLE_REG_INDEX);
         uint32_t num_tiles = stream_get_curr_phase_num_msgs(stream_id);
-    
+
         if (buf_space_available == buf_size && num_tiles > 0) {
           stream_relay_tiles(stream_id, 1, 1);
         }
-      } 
+      }
     }
   }
 }
 
 inline bool is_dummy_phase(uint32_t stream_id) {
-  uint32_t cur_phase = stream_get_curr_phase(stream_id); 
+  uint32_t cur_phase = stream_get_curr_phase(stream_id);
   return cur_phase == 0xFFFFF;
 }
 
 
 #endif //ndef _STREAM_INTERFACE_H_
-

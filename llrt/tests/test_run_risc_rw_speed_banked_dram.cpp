@@ -277,11 +277,11 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
 
         pass = run_risc_rw_speed_dram_banked(cluster, 0, cores, buffer_size, num_repetitions, transaction_size, dram_channel_count_as_bits);
 
@@ -306,4 +306,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

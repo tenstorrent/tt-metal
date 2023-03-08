@@ -3,8 +3,8 @@
 #include "compute_hlk_api.h"
 
 struct hlk_args_t {
-    int num_reductions; 
-    
+    int num_reductions;
+
     // per-batch params
     int num_input_blocks;
     int input_block_size;
@@ -50,7 +50,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
 
         hlk_release_dst(core_ptr, DstMode::Full);
     }
-    
+
     hlk_add_tile_init(core_ptr);
     for (int reduction_index = 0; reduction_index < args->num_reductions; reduction_index++) {
 
@@ -58,7 +58,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
 
         hlk_wait_tiles(core_ptr, HlkOperand::intermed0, args->input_block_shape_c);
         hlk_wait_tiles(core_ptr, HlkOperand::intermed1, args->input_block_shape_c);
-        
+
         for (int dst_tile_index = 0; dst_tile_index < args->input_block_shape_c; ++dst_tile_index)
         {
             hlk_add_tile(core_ptr, HlkOperand::intermed0, HlkOperand::intermed1, dst_tile_index, dst_tile_index, dst_tile_index);

@@ -40,9 +40,9 @@ void compute_main(const hlk_args_t *args) {
             cb_pop_front(CB::c_in1, onetile);
         }
 
-        cb_reserve_back(CB::c_out0, onetile); 
+        cb_reserve_back(CB::c_out0, onetile);
         pack_tile(0, CB::c_out0);
-        cb_push_back(CB::c_out0, onetile); 
+        cb_push_back(CB::c_out0, onetile);
 
         release_dst(DstMode::Full);
     }

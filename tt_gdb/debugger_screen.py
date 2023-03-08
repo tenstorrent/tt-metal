@@ -56,7 +56,7 @@ def create_layout_with_panel(risc_name, highlight_risc=False, text=""):
         title = f"[grey0]{risc_name}"
     else:
         title = risc_name
-    
+
     return Panel(text, title=title, border_style=Style(color=risc_to_color[risc_name]))
 
 def get_split_screen_layout(text, current_risc):
@@ -82,7 +82,7 @@ def get_split_screen_layout(text, current_risc):
 
     layout["left"].split(
         Layout(create_layout_with_panel(
-            "trisc0", 
+            "trisc0",
             highlight_risc="trisc0" == current_risc,
             text=text.get("trisc0", "")
         ), name="trisc0"),
@@ -108,7 +108,7 @@ class DebugLayout:
         self.layout = get_split_screen_layout(self.text, current_risc)
         self.op = op
         self.current_risc = current_risc
-    
+
     def render(self, key):
         old_risc = self.current_risc
         new_risc = risc_to_risc[self.current_risc].get(key, old_risc)
@@ -117,14 +117,14 @@ class DebugLayout:
 
         old_layout = self.layout[risc_to_layout_side[old_risc]]
         old_layout[old_risc].update(create_layout_with_panel(
-            risc_name=old_risc, 
+            risc_name=old_risc,
             highlight_risc=False,
             text=self.text[old_risc]
         ))
 
         new_layout = self.layout[risc_to_layout_side[new_risc]]
         new_layout[new_risc].update(create_layout_with_panel(
-            risc_name=new_risc, 
+            risc_name=new_risc,
             highlight_risc=True,
             text=self.text[new_risc]
         ))

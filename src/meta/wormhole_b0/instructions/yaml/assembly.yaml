@@ -9,7 +9,7 @@
 # Functional Coverage:
 # --------------------------------------
 #
-# Auto-generated instruction-level FCOV is specified with the following three tags as commented in the example below. 
+# Auto-generated instruction-level FCOV is specified with the following three tags as commented in the example below.
 #
 #
 # SOME_INSTR:
@@ -415,13 +415,13 @@ ZEROACC:
           field_type: BIN
           start_bit: 19
           description: "Clear modes:
-            000 - clear only specified dest register. 
-            001 - dest_index specifies block of 16 registers to clear. 
-            010 - dest_index specified upper or lower half to clear. 
+            000 - clear only specified dest register.
+            001 - dest_index specifies block of 16 registers to clear.
+            010 - dest_index specified upper or lower half to clear.
             011 - clear all registers
-            010 - dest_index specified upper or lower half to clear when full dest is available (16bit data in dest). 
+            010 - dest_index specified upper or lower half to clear when full dest is available (16bit data in dest).
             011 - clear all registers when full dest is available (16bit data in dest).
-            110 - dest_index specified upper or lower half to clear when half dest is available (32bit data in dest). 
+            110 - dest_index specified upper or lower half to clear when half dest is available (32bit data in dest).
             111 - clear all registers half dest is available (32bit data in dest)."
           fcov_point_bins:
             bins: [ {name: "clear_only_specified_dest_register",                                value: "0x0"},
@@ -789,7 +789,7 @@ MPOOL3S1:
         - name: index_en
           field_type: BIN
           start_bit: 14
-          description: Enable index output for max-pooling      
+          description: Enable index output for max-pooling
           fcov_point_bool:
         - name: addr_mode
           field_type: BIN
@@ -1141,7 +1141,7 @@ MFCONV3S1:
     src_mask: 0x3
     fcov:
     arguments: *CONV_ARGS
-    description: "3x3 primitive for convolution, with stride 1 with each FP Row operating on four filters. Outputs 8x 12-wide rows of data"    
+    description: "3x3 primitive for convolution, with stride 1 with each FP Row operating on four filters. Outputs 8x 12-wide rows of data"
 
 XMOV:
     op_binary: 0x40
@@ -1250,7 +1250,7 @@ PACR_SETREG:
           field_type: BIN
           start_bit: 23
           description: "Set to 1 to trigger register write"
-    description: "Set MMIO register through packer pipeline. Max register value is limited to 10-bit (upper bits must be don't care!). 32-bit address is assembled 
+    description: "Set MMIO register through packer pipeline. Max register value is limited to 10-bit (upper bits must be don't care!). 32-bit address is assembled
                   as desribed under AddrSel field."
 
 UNPACR:
@@ -1350,17 +1350,17 @@ UNPACR_NOP: # Misc unpack instruction with side effect (skips actual search and 
                             [6] - set dvalid
                         2 - UNP_NOP (inject cycle delay between back to back unpack)
                         3 - UNP_POP+stream_id (same as 0 but stream ID and message clear count are passed through instruction argument instead of register
-                                              [21:16] - stream id 
+                                              [21:16] - stream id
                                               [14:12] - message clear count)
                         4 - UNP_POP+stream_id (same as 3 with support for clearing up to 2k messages)
-                                              [22]    - register address select 
+                                              [22]    - register address select
                                               [21:16] - stream id
-                                              [14: 4] - message clear count 
+                                              [14: 4] - message clear count
                                               [3]     - message count accumulate
                         5 - UNPACK_NP_NEGINFSRC
                         6 - RESERVED
                         7 - UNPACK_SETDVALID"
-                        
+
           fcov_point_bins:
             bins: [  {name: "UNP_POP",        value: "0x0"},
                      {name: "UNP_ZERO_SRC",   value: "0x1"},
@@ -2868,7 +2868,7 @@ RMWCIB0:
   src_mask: 0x0
   fcov:
   arguments: &RMWCIB
-      - name: CfgRegAddr 
+      - name: CfgRegAddr
         start_bit: 0
         field_type: HEX
         description: Address of CFG register in active state space
@@ -2899,7 +2899,7 @@ RMWCIB1:
   fcov:
   arguments:  *RMWCIB
   description: "Read-Modify-Write on Byte 1 of the cfg register, only updating the bits set in mask"
-  
+
 RMWCIB2:
   instrn_type: LOCAL_CREGS
   ex_resource: CFG
@@ -2981,14 +2981,14 @@ REPLAY:
         start_bit: 1
         field_type: BIN
         description: >
-          When load_mode == 0, this bit has no effect. 
-          
+          When load_mode == 0, this bit has no effect.
+
           When load_mode == 1, we have:
-            - When this bit is 1, instructions that are loaded into the replay buffer 
+            - When this bit is 1, instructions that are loaded into the replay buffer
               are also executed by the Tensix core (takes as many cycles as it would
               normally take to execute the loaded Tensix instructions)
-              
-            - When this bit is 0, instructions are only loaded into the replay buffer 
+
+            - When this bit is 0, instructions are only loaded into the replay buffer
               (guaranteed to take only one cycle per loaded Tensix instruction)
       - name: len
         start_bit: 4
@@ -2998,5 +2998,3 @@ REPLAY:
         start_bit: 14
         field_type: DEC
         description: "replay_buffer[start_idx +: len] are targeted by this replay command. The hardware will only use the log2(replay_buffer_depth) LSBs of this field."
-        
-

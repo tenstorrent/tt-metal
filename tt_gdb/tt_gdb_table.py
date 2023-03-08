@@ -28,23 +28,23 @@ def get_functional_workers(path="device/grayskull_120_arch.yaml"):
     last_col_idx = None
     cols = []
     col = []
-    # functional worker is of the form {col}-{row}, which is confusing, so we 
+    # functional worker is of the form {col}-{row}, which is confusing, so we
     # are transposing the array to be of form {row}-{col}
-    for functional_worker in functional_workers: 
+    for functional_worker in functional_workers:
         col_idx, row_idx = functional_worker.split("-")
-       
+
         if last_col_idx != col_idx:
             cols.append([])
             last_col_idx = col_idx
 
         cols[-1].append(f"{row_idx}-{col_idx}")
-    
+
     functional_worker_arr = [[None for _ in range(len(cols))] for _ in range(len(cols[0]))]
-    
+
     for col_idx, col in enumerate(cols):
         for row_idx, data in enumerate(cols[col_idx]):
             functional_worker_arr[row_idx][col_idx] = data
-    
+
     return functional_worker_arr
 
 def highlight_exact_core(
@@ -52,7 +52,7 @@ def highlight_exact_core(
     core: str,
     style: Union[str, Style],
 ) -> int:
-    
+
     def get_matches():
         for match in re.finditer(core, text.plain):
             start, end = match.span()
@@ -62,10 +62,10 @@ def highlight_exact_core(
                 actual_match &= not text.plain[start - 1].isnumeric()
             if end != len(text.plain) - 1:
                 actual_match &= not text.plain[end + 1].isnumeric()
-            
+
             if actual_match:
                 yield match
-            
+
             yield None
 
     matches = filter(lambda x: x is not None, get_matches())
@@ -91,16 +91,16 @@ class ChipGrid:
         self.functional_workers = get_functional_workers()
 
         # Where our cursor starts at within the chip grid
-        self.start_index = start_index 
+        self.start_index = start_index
 
-        # We highlight these cores differently 
+        # We highlight these cores differently
         self.cores_with_breakpoint = defaultdict(list)
         for row_col in cores_with_breakpoint:
             row, col = row_col.split("-")
             row = int(row)
             col = int(col)
             self.cores_with_breakpoint[row].append(col)
-        
+
         s = [[str(e) for e in row] for row in self.functional_workers]
         lens = [max(map(len, col)) for col in zip(*s)]
         fmt = '\t'.join('{{:{}}}'.format(x) for x in lens)
@@ -124,7 +124,7 @@ class ChipGrid:
 
         self.table = table
         self.reset()
-    
+
     def get_physical_coord_from_row_and_col(self, row, col):
         return [int(x) for x in self.functional_workers[row][col].split("-")]
 
@@ -136,20 +136,20 @@ class ChipGrid:
 
         for physical_col in self.cores_with_breakpoint.get(physical_row, []):
             self.highlight_index(row, physical_row, physical_col, ChipGrid.BREAKPOINT_HIGHLIGHT_COLOR)
-            
+
     def reset_rows(self):
         for row in range(len(self.functional_workers)):
-            self.reset_row(row) 
-    
+            self.reset_row(row)
+
     def reset(self):
         self.highlight_row, self.highlight_col = self.start_index
         self.reset_rows()
         self.highlight_core_at_current_index()
-    
+
     def highlight_index(self, row, physical_row, physical_col, color):
         highlight_exact_core(self.text_rows[row], f"{physical_row}-{physical_col}", color)
         assert len(self.text_rows[row].spans) > 0, "Highlight index did not correctly apply"
-    
+
     def highlight_core_at_current_index(self):
         row = self.highlight_row
         col = self.highlight_col
@@ -160,7 +160,7 @@ class ChipGrid:
             color = ChipGrid.BREAKPOINT_HIGHLIGHT_COLOR_ON_TOP_OF_HIGHLIGHT_COLOR
         else:
             color = ChipGrid.HIGHLIGHT_COLOR
-        
+
         self.highlight_index(row, physical_row, physical_col, color)
 
     def render(self, key):
@@ -178,12 +178,12 @@ class ChipGrid:
             self.highlight_col = max(0, self.highlight_col - 1)
         else:
             return
-        
+
         self.reset_row(old_row)
-    
+
         # Highlight new position
         self.highlight_core_at_current_index()
-    
+
     @property
     def table_view(self):
         return Align.center(self.table)
@@ -228,11 +228,11 @@ def write_core_debug_info(core_debug_info):
         j.write(json.dumps(core_debug_info, indent=4))
 
 def debugger(
-    cores_with_breakpoint: list = [], 
-    ops: list = [], 
-    breakpoint_lines: list = [], 
-    start_index: tuple = (0, 0), 
-    current_risc: str = "trisc0", 
+    cores_with_breakpoint: list = [],
+    ops: list = [],
+    breakpoint_lines: list = [],
+    start_index: tuple = (0, 0),
+    current_risc: str = "trisc0",
     reenter: bool = False
 ):
     assert len(cores_with_breakpoint) == len(breakpoint_lines) == len(ops), "The lengths of all arguments to 'debugger' must be equal"
@@ -243,11 +243,11 @@ def debugger(
     with Input(keynames="curses") as input_generator:
         while True:
 
-            if not reenter: 
+            if not reenter:
                 special_char = core_grid(c, console, input_generator)
 
             if reenter or special_char == repr("\n"):
-                # If we are leaving the tt_gdb debugger and we are going back into the python context, we update the start state 
+                # If we are leaving the tt_gdb debugger and we are going back into the python context, we update the start state
                 # of the grid, and then enter the core that we left off at
                 reenter = False
 
@@ -259,7 +259,7 @@ def debugger(
                     current_core = f"{physical_row}-{physical_col}"
                     index_of_core_in_list = cores_with_breakpoint.index(current_core)
                     op = ops[index_of_core_in_list]
-                
+
                 ret_vals = enter_core(op, text, current_risc=current_risc)
 
                 # User wants to enter the debugger for a particular core
@@ -295,7 +295,7 @@ if __name__ == "__main__":
 
     debugger(
         cores_with_breakpoint=args.cores_with_breakpoint,
-        breakpoint_lines=args.breakpoint_lines, 
+        breakpoint_lines=args.breakpoint_lines,
         ops=args.ops,
 
         # Optional arguments

@@ -88,7 +88,7 @@
 #define       DRAM_READS__TRANS_SIZE_WORDS_LO_WIDTH   12
 
 // Remote source phase (may be different from the destination stream phase.)
-// We use 20-bit phase ID, so phase count doesnt wrap until 1M phases. 
+// We use 20-bit phase ID, so phase count doesnt wrap until 1M phases.
 // Dont-care unless REMOTE_SOURCE == 1.
 #define   STREAM_REMOTE_SRC_PHASE_REG_INDEX   1
 #define       DRAM_READS__SCRATCH_1_PTR             0
@@ -128,8 +128,8 @@
 #define       DRAM_WRITES__SCRATCH_1_PTR_HI       0
 #define       DRAM_WRITES__SCRATCH_1_PTR_HI_WIDTH   3
 
-// Write pointer for the remote destination stream memory buffer. 
-// Can be written directly; automatically reset to 0 when 
+// Write pointer for the remote destination stream memory buffer.
+// Can be written directly; automatically reset to 0 when
 // STREAM_REMOTE_DEST_BUF_START is written.
 #define   STREAM_REMOTE_DEST_WR_PTR_REG_INDEX   5
 
@@ -139,28 +139,28 @@
 // Stream buffer size (in words).
 #define   STREAM_BUF_SIZE_REG_INDEX   7
 
-// Stream message info buffer address. 
+// Stream message info buffer address.
 //
-// This register needs to be initialized to the start of the message info buffer during 
+// This register needs to be initialized to the start of the message info buffer during
 // phase configuration.  Subsequently it will be incremented by hardware as data are read
-// from the buffer, thus doubling as the read pointer during phase execution. 
+// from the buffer, thus doubling as the read pointer during phase execution.
 //
 // Stream hardware will assume that this buffer is large enough to hold info for all messages
 // within a phase, so unlike the buffer, it never needs to wrap.
-// 
-// The buffer is filled automatically by snooping for streams with remote source. 
-// For source enpoints, the buffer is written explicitly (along with the data buffer), after which 
+//
+// The buffer is filled automatically by snooping for streams with remote source.
+// For source enpoints, the buffer is written explicitly (along with the data buffer), after which
 // STREAM_NUM_MSGS_RECEIVED_INC is written to notify the stream that messages are available for
-// sending. 
-// 
-// Write pointer is also managed automatically by hardware, but can be read or reset using 
+// sending.
+//
+// Write pointer is also managed automatically by hardware, but can be read or reset using
 // STREAM_MSG_INFO_WR_PTR_REG. Write pointer is also reset when writing this register.
 #define   STREAM_MSG_INFO_PTR_REG_INDEX   8
 
-// Write pointer for the remote destination message info buffer. 
-// Dont-care unless REMOTE_RECEIVER==1. 
+// Write pointer for the remote destination message info buffer.
+// Dont-care unless REMOTE_RECEIVER==1.
 // Needs to be initialized to the start of the message info buffer of the remote destination
-// at phase start, if destination is changed. 
+// at phase start, if destination is changed.
 // Subsequently its incremented automatically as messages are forwarded.
 #define   STREAM_REMOTE_DEST_MSG_INFO_WR_PTR_REG_INDEX   9
 
@@ -173,13 +173,13 @@
 //        RECEIVER_ENDPOINT = stream is read by local unpacker/math
 //        REMOTE_RECEIVER = stream forwards data to a remote destination or multicast group
 //        LOCAL_RECEIVER = stream is connected to a local destination stream
-//        None set = stream just stores data in a local buffer, without forwarding/clearing, and 
+//        None set = stream just stores data in a local buffer, without forwarding/clearing, and
 //                   finishes the phase once all messages have been received
 //   * Phase/data forward options:
 //      PHASE_AUTO_CONFIG = set to 1 for stream to fetch next phase configuration automatically.
-//      PHASE_AUTO_ADVANCE = set to 1 for stream to advance to next phase automatically 
+//      PHASE_AUTO_ADVANCE = set to 1 for stream to advance to next phase automatically
 //            (otherwise need to write STREAM_PHASE_ADVANCE below)
-//      DATA_AUTO_SEND = set to 1 to forward data automatically based on read/write pointers; 
+//      DATA_AUTO_SEND = set to 1 to forward data automatically based on read/write pointers;
 //             set to 0 to forward data only when STREAM_NEXT_MSG_SEND is written
 #define   STREAM_MISC_CFG_REG_INDEX   10
 #define       INCOMING_DATA_NOC                       0
@@ -234,13 +234,13 @@
 
 // Pointer to the stream auto-config data. Initialized to the start of
 // the auto-config structure at workload start, automatically updated
-// subsequenty. 
+// subsequenty.
 // Specified as byte address, needs to be multiple of 4B.
 #define   STREAM_PHASE_AUTO_CFG_PTR_REG_INDEX   12
 
 // Destination spec for multicasting streams. STREAM_MCAST_END_X/Y are
-// the end coordinate for the multicast rectangle, with the ones from 
-// STREAM_REMOTE_DEST taken as start. 
+// the end coordinate for the multicast rectangle, with the ones from
+// STREAM_REMOTE_DEST taken as start.
 // Dont-care if STREAM_MCAST_EN == 0.
 #define   STREAM_MCAST_DEST_REG_INDEX   13
 #define       STREAM_MCAST_END_X             0
@@ -284,8 +284,8 @@
 #define       MSG_HEADER_WORD_CNT_BITS         (MSG_HEADER_WORD_CNT_OFFSET+MSG_HEADER_WORD_CNT_OFFSET_WIDTH)
 #define       MSG_HEADER_WORD_CNT_BITS_WIDTH     MEM_WORD_BIT_OFFSET_WIDTH
 
-// Number of received & stored messages (read-only). 
-// To get the total number of messages penidng in memory read 
+// Number of received & stored messages (read-only).
+// To get the total number of messages penidng in memory read
 // STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM_REG_INDEX
 #define   STREAM_NUM_MSGS_RECEIVED_REG_INDEX   18
 
@@ -295,15 +295,15 @@
 // Size in words of the next in line received message (read-only).
 #define   STREAM_NEXT_RECEIVED_MSG_SIZE_REG_INDEX   20
 
-// Clear message info for one or more stored messages.  Only valid values are 1, 2, or 4. 
-// No effect on the read pointer. 
+// Clear message info for one or more stored messages.  Only valid values are 1, 2, or 4.
+// No effect on the read pointer.
 // Should be used only for streams where RECEIVER_ENDPOINT == 1.
 #define   STREAM_MSG_INFO_CLEAR_REG_INDEX   21
 
-// Move read pointer & reclaim buffer space for one or more stored messages.  
-// Sends flow control update to the source if REMOTE_SOURCE==1. 
-// Only valid values are 1, 2, or 4. 
-// Should be used only for streams where RECEIVER_ENDPOINT == 1, after 
+// Move read pointer & reclaim buffer space for one or more stored messages.
+// Sends flow control update to the source if REMOTE_SOURCE==1.
+// Only valid values are 1, 2, or 4.
+// Should be used only for streams where RECEIVER_ENDPOINT == 1, after
 // STREAM_MSG_INFO_CLEAR_REG has been written with the same value.
 #define   STREAM_MSG_DATA_CLEAR_REG_INDEX   22
 
@@ -311,33 +311,33 @@
 #define   STREAM_NEXT_MSG_SEND_REG_INDEX   23
 
 // Read pointer value (word offset relative to buffer start). Can be updated by
-// writing the register (e.g. to force resend). 
+// writing the register (e.g. to force resend).
 // Value does not guarantee that all data up to the current value have been sent
 // off (forwarding command may be  ongoing).  To find out free space in the buffer,
-// read STREAM_BUF_SPACE_AVAILABLE. 
+// read STREAM_BUF_SPACE_AVAILABLE.
 // Automatically reset to 0 when STREAM_BUF_START_REG is updated.
 #define   STREAM_RD_PTR_REG_INDEX   24
 
-// Write pointer value (word offset relative to buffer start). 
-// Can be read to determine the location at which to write new data. 
-// In normal operation, should be updated only by writing 
+// Write pointer value (word offset relative to buffer start).
+// Can be read to determine the location at which to write new data.
+// In normal operation, should be updated only by writing
 // STREAM_NUM_MSGS_RECEIVED_INC_REG or STREAM_SOURCE_ENDPOINT_NEW_MSG_INFO_REG.
 #define   STREAM_WR_PTR_REG_INDEX   25
 
-// Write pointer value for message info buffer (absolute word address). 
-// In normal operation, should be updated only by writing 
+// Write pointer value for message info buffer (absolute word address).
+// In normal operation, should be updated only by writing
 // STREAM_NUM_MSGS_RECEIVED_INC_REG or STREAM_SOURCE_ENDPOINT_NEW_MSG_INFO_REG.
 #define   STREAM_MSG_INFO_WR_PTR_REG_INDEX   26
 
 // Write-only. Write 1 to advance to the next phase if PHASE_AUTO_ADVANCE == 0.
 #define   STREAM_PHASE_ADVANCE_REG_INDEX   27
 
-// Available buffer space at the stream (in 16B words). 
+// Available buffer space at the stream (in 16B words).
 // Source cant send data unless available space > 0.
 #define   STREAM_BUF_SPACE_AVAILABLE_REG_INDEX   28
 
-// For endpoints with SOURCE_ENDPOINT == 1, this register is for firmware 
-// to register new message for sending. 
+// For endpoints with SOURCE_ENDPOINT == 1, this register is for firmware
+// to register new message for sending.
 // This updates the msg_info register structure directly, rather than writing to the message info
 // buffer in memory.
 // Must not be written when the message info register structure is full, or if
@@ -349,7 +349,7 @@
 #define       SOURCE_ENDPOINT_NEW_MSG_SIZE       (SOURCE_ENDPOINT_NEW_MSG_ADDR+SOURCE_ENDPOINT_NEW_MSG_ADDR_WIDTH)
 #define       SOURCE_ENDPOINT_NEW_MSG_SIZE_WIDTH   (32-MEM_WORD_ADDR_WIDTH)
 
-// For endpoints with SOURCE_ENDPOINT == 1, this register is for firmware 
+// For endpoints with SOURCE_ENDPOINT == 1, this register is for firmware
 // to update the number of messages whose data & header are available in the memory buffer.
 // Hardware register is incremented atomically if sending of previous messages is in progress.
 #define   STREAM_NUM_MSGS_RECEIVED_INC_REG_INDEX   30
@@ -361,9 +361,9 @@
 // Write to reset & stop stream.
 #define   STREAM_RESET_REG_INDEX   31
 
-// Write phase number to indicate destination ready for the given phase. 
+// Write phase number to indicate destination ready for the given phase.
 // (This is done automatically by stream hardware when starting a phase with REMOTE_SOURCE=1.)
-// The phase number is the one indicated by STREAM_REMOTE_SRC_PHASE_REG at destination. 
+// The phase number is the one indicated by STREAM_REMOTE_SRC_PHASE_REG at destination.
 // This register is mapped to the shared destination ready table, not a per-stream register.
 // (Stream index is taken from the register address, and stored into the table along with the
 // phase number.)
@@ -379,8 +379,8 @@
 #define       PHASE_READY_TWO_WAY_RESP       (PHASE_READY_MCAST+PHASE_READY_MCAST_WIDTH)
 #define       PHASE_READY_TWO_WAY_RESP_WIDTH   1
 
-// Source ready message register for two-way handshake (sent by source in 
-// case destination ready entry is not found in the table). 
+// Source ready message register for two-way handshake (sent by source in
+// case destination ready entry is not found in the table).
 // If received by a stream that already sent its ready update, it prompts resending.
 #define   STREAM_SRC_READY_UPDATE_REG_INDEX   33
 #define       STREAM_REMOTE_RDY_SRC_X        0
@@ -390,7 +390,7 @@
 #define       REMOTE_RDY_SRC_STREAM_ID       (STREAM_REMOTE_RDY_SRC_Y+STREAM_REMOTE_RDY_SRC_Y_WIDTH)
 #define       REMOTE_RDY_SRC_STREAM_ID_WIDTH   STREAM_ID_WIDTH
 
-// Update available buffer space at remote destination stream. 
+// Update available buffer space at remote destination stream.
 // this is rd_ptr increment issued when a message is forwarded
 #define   STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX   34
 #define       REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_DEST_NUM       0
@@ -415,7 +415,7 @@
 
 // Register corresponding to the auto-configuration header. Written by each auto-config access
 // at phase start, can be also written by software for initial configuration or if auto-config
-// is disabled. 
+// is disabled.
 // PHASE_NUM_INCR is phase number increment relative to the previous executed phase (or 0 right
 // after reset). The increment happens after auto-config is done, and before the phase is executed.
 // (Therefore reading  STREAM_CURR_PHASE_REG while auto-config is ongoing, or if it hasnt started
@@ -443,7 +443,7 @@
 #define       PARTIAL_SEND_WORDS_THR       (CLOCK_GATING_HYST+CLOCK_GATING_HYST_WIDTH)
 #define       PARTIAL_SEND_WORDS_THR_WIDTH   8
 
-// AND value of zero masks for the pending message group. 
+// AND value of zero masks for the pending message group.
 // (Header bits [95:64].)
 // Read-only.  Valid only for receiver endpoint streams.
 #define   STREAM_MSG_GROUP_ZERO_MASK_AND_REG_INDEX   38
@@ -453,20 +453,20 @@
 
 // 4-bit wide register that determines the threshold at which a stream
 // with remote source sends an update message to STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE.
-// Dont-care unless REMOTE_SOURCE==1.  
+// Dont-care unless REMOTE_SOURCE==1.
 // Values:
-//   value[3:0] == 0 => disable threshold. Acks send as soon as any data are cleared/forwarded. 
+//   value[3:0] == 0 => disable threshold. Acks send as soon as any data are cleared/forwarded.
 //   value[3:0] >  0 => threshold calculated according to the following formula:
 //         if (value[3])
 //              threshold = buf_size - (buf_size >> value[2:0])
-//         else 
+//         else
 //              threshold = (buf_size >> value[2:0])
 //
-// This enables setting thresholds of buf_size/2, buf_size/4, buf_size/8, ... buf_size/256, 
+// This enables setting thresholds of buf_size/2, buf_size/4, buf_size/8, ... buf_size/256,
 // as well as  3*buf_size/4, 7*buf_size/8, etc.
 #define   STREAM_MEM_BUF_SPACE_AVAILABLE_ACK_THRESHOLD_REG_INDEX   40
 
-// Returns 1 if the message info register can accept new message push (read-only). 
+// Returns 1 if the message info register can accept new message push (read-only).
 // Equivalent to checking the condition:
 //   (STREAM_MSG_INFO_FULL_REG_INDEX == 0) && (STREAM_MSG_INFO_PTR_REG_INDEX == STREAM_MSG_INFO_WR_PTR_REG_INDEX)
 // (I.e. ther is free space in the msg info register, and we dont have any message info headers in the
@@ -478,8 +478,8 @@
 // Read-only.  Valid only for receiver endpoint streams.
 #define   STREAM_MSG_GROUP_COMPRESS_REG_INDEX   42
 
-// Msg_LOCAL_STREAM_CLEAR_NUM specifies the number of messages that should 
-// be cleared from a gather stream before moving onto the next stream. 
+// Msg_LOCAL_STREAM_CLEAR_NUM specifies the number of messages that should
+// be cleared from a gather stream before moving onto the next stream.
 // When MSG_ARB_GROUP_SIZE > 1, the order of clearing the streams can be selected
 // with MSG_GROUP_STREAM_CLEAR_TYPE. 0 = clear the whole group MSG_LOCAL_STREAM_CLEAR_NUM times,
 // 1 = clear each stream of the group MSG_LOCAL_STREAM_CLEAR_NUM times before
@@ -490,10 +490,10 @@
 #define       MSG_GROUP_STREAM_CLEAR_TYPE       (MSG_LOCAL_STREAM_CLEAR_NUM+MSG_LOCAL_STREAM_CLEAR_NUM_WIDTH)
 #define       MSG_GROUP_STREAM_CLEAR_TYPE_WIDTH   1
 
-// Priority for traffic sent to remote destination. 
-// Valid only for streams capable of remote sending. 
-// 4-bit value. 
-// Set to 0 to send traffic under round-robin arbitration. 
+// Priority for traffic sent to remote destination.
+// Valid only for streams capable of remote sending.
+// 4-bit value.
+// Set to 0 to send traffic under round-robin arbitration.
 // Set to 1-15 for priority arbitration (higher values are higher priority).
 #define   STREAM_REMOTE_DEST_TRAFFIC_PRIORITY_REG_INDEX   44
 
@@ -514,30 +514,30 @@
 #define   STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM_REG_INDEX   47
 
 // Bit mask of connnected local source. Dont care if LOCAL_SOURCES_CONNECTED == 0.
-// Mask segments [23:0], [47:24], and [63:48] are at indexes STREAM_LOCAL_SRC_MASK_REG_INDEX, 
+// Mask segments [23:0], [47:24], and [63:48] are at indexes STREAM_LOCAL_SRC_MASK_REG_INDEX,
 // STREAM_LOCAL_SRC_MASK_REG_INDEX+1, STREAM_LOCAL_SRC_MASK_REG_INDEX+2.
 #define   STREAM_LOCAL_SRC_MASK_REG_INDEX   48
 
 // For receiver endpoint streams that expose the full message header bus to unpacker,
 // write this register to specify the full header in case the stream is not snooping
-// a remote source but instead also works as a source endpoint. 
+// a remote source but instead also works as a source endpoint.
 // Write (STREAM_RECEIVER_ENDPOINT_SET_MSG_HEADER_REG_INDEX+i) to set bits [i*32 +: 32]
 // of the message header for the next message, prior to writing STREAM_SOURCE_ENDPOINT_NEW_MSG_INFO_REG_INDEX.
 #define   STREAM_RECEIVER_ENDPOINT_SET_MSG_HEADER_REG_INDEX   60
 
-// Available buffer space at remote destination stream(s). 
-// Dont care unless REMOTE_RECEIVER == 1. 
-// Source cant send data unless WORDS_FREE > 0.  
-// Read-only; updated automatically to maximum value when 
-// STREAM_REMOTE_DEST_BUF_SIZE_REG is updated. 
-// For multicast streams, values for successive destinations are at 
-// subsequent indexes (STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX+1, 
+// Available buffer space at remote destination stream(s).
+// Dont care unless REMOTE_RECEIVER == 1.
+// Source cant send data unless WORDS_FREE > 0.
+// Read-only; updated automatically to maximum value when
+// STREAM_REMOTE_DEST_BUF_SIZE_REG is updated.
+// For multicast streams, values for successive destinations are at
+// subsequent indexes (STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX+1,
 // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX+2, etc.).
 #define   STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX   64
 #define       REMOTE_DEST_WORDS_FREE       0
 #define       REMOTE_DEST_WORDS_FREE_WIDTH   MEM_WORD_ADDR_WIDTH
 
-// Read-only register view of the bits on the o_full_msg_info bus. 
+// Read-only register view of the bits on the o_full_msg_info bus.
 // Exposed as 32-bit read-only registers starting at this index.
 #define   STREAM_RECEIVER_MSG_INFO_REG_INDEX   128
 
@@ -662,4 +662,3 @@
 #define       NCRISC_LOOP_NEXT_PIC_INT_ON_PHASE_WIDTH    20
 
 #endif // def NOC_OVERLAY_PARAMETERS_H
-

@@ -56,7 +56,7 @@ inline void llk_unpack_A_mop_config() {
                 0,
                 0);
             tmp.program(instrn_buffer);
-        }    
+        }
     } else if constexpr (BType == BroadcastType::ROW) {
 #if SKIP_UNP0 == 1
             static constexpr uint unpack_srca = TT_OP_NOP;
@@ -96,7 +96,7 @@ inline void llk_unpack_A_mop_config() {
                 0,
                 0);
             tmp.program(instrn_buffer);
-        }    
+        }
     } else if constexpr (BType == BroadcastType::SCALAR) {
         static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
 #if SKIP_UNP1 == 1

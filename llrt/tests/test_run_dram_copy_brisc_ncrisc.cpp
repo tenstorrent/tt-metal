@@ -26,8 +26,8 @@ void tt_rnd_set_seed(int seed) {
 struct dram_copy_kernel_args {
     int dram_src_channel_id;
     std::uint32_t dram_src_buffer_addr;
-    tt_xy_pair dram_src_noc_xy; 
-    
+    tt_xy_pair dram_src_noc_xy;
+
     int dram_dst_channel_id;
     std::uint32_t dram_dst_buffer_addr = 512 * 1024;
     tt_xy_pair dram_dst_noc_xy;
@@ -38,8 +38,8 @@ struct dram_copy_kernel_args {
 };
 
 void write_dram_copy_kernel_args(tt_cluster* cluster, int chip_id, tt_xy_pair core, const dram_copy_kernel_args& kernel_args) {
-    // blast dram copy kernel arguments to L1 in one-shot 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
+    // blast dram copy kernel arguments to L1 in one-shot
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
         {kernel_args.l1_buffer_addr,
 
         kernel_args.dram_src_buffer_addr,
@@ -51,7 +51,7 @@ void write_dram_copy_kernel_args(tt_cluster* cluster, int chip_id, tt_xy_pair co
        (std::uint32_t) kernel_args.dram_dst_noc_xy.y,
 
         kernel_args.dram_buffer_size,
-        }, 
+        },
         kernel_args.arg_base_addr);
 }
 
@@ -70,7 +70,7 @@ bool run_dram_copy_brisc_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pa
         .dram_dst_channel_id = 0,
         .dram_dst_buffer_addr = 512*1024,
         .dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster,0),
-    
+
         .dram_buffer_size = 100 * 1024,
         .l1_buffer_addr = 200 * 1024, // addr=200KB
         .arg_base_addr = BRISC_L1_ARG_BASE
@@ -88,7 +88,7 @@ bool run_dram_copy_brisc_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pa
         .dram_dst_channel_id = 1,
         .dram_dst_buffer_addr = 512*1024,
         .dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster,1),
-    
+
         .dram_buffer_size = 100 * 1024,
         .l1_buffer_addr = 300 * 1024, // addr=300KB
         .arg_base_addr = NCRISC_L1_ARG_BASE
@@ -96,24 +96,24 @@ bool run_dram_copy_brisc_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pa
 
     log_info(tt::LogVerif, "ncrisc dram_src_noc_xy = {}", ncrisc_kernel_args.dram_src_noc_xy.str());
     log_info(tt::LogVerif, "ncrisc dram_dst_noc_xy = {}", ncrisc_kernel_args.dram_dst_noc_xy.str());
-    
+
 
     write_dram_copy_kernel_args(cluster, chip_id, core, brisc_kernel_args);
     write_dram_copy_kernel_args(cluster, chip_id, core, ncrisc_kernel_args);
 
     TT_ASSERT(ncrisc_kernel_args.dram_buffer_size == brisc_kernel_args.dram_buffer_size);
     TT_ASSERT(ncrisc_kernel_args.dram_buffer_size % sizeof(std::uint32_t) == 0);
-    
+
     int brisc_init_value_for_buffer = tt_rnd_int(0,100000);
     log_info(tt::LogVerif, "brisc_init_value_for_buffer = {}", brisc_init_value_for_buffer);
-    std::vector<std::uint32_t> brisc_src_vec(brisc_kernel_args.dram_buffer_size/sizeof(std::uint32_t), brisc_init_value_for_buffer); 
-    // blast the BRISC's src buffer to DRAM 
+    std::vector<std::uint32_t> brisc_src_vec(brisc_kernel_args.dram_buffer_size/sizeof(std::uint32_t), brisc_init_value_for_buffer);
+    // blast the BRISC's src buffer to DRAM
     cluster->write_dram_vec(brisc_src_vec, tt_target_dram{chip_id, brisc_kernel_args.dram_src_channel_id, 0}, brisc_kernel_args.dram_src_buffer_addr); // write to address
 
     int ncrisc_init_value_for_buffer = tt_rnd_int(0,100000);
     log_info(tt::LogVerif, "ncrisc_init_value_for_buffer = {}", ncrisc_init_value_for_buffer);
-    std::vector<std::uint32_t> ncrisc_src_vec(ncrisc_kernel_args.dram_buffer_size/sizeof(std::uint32_t), ncrisc_init_value_for_buffer); 
-    // blast the NCRISC's src buffer to DRAM 
+    std::vector<std::uint32_t> ncrisc_src_vec(ncrisc_kernel_args.dram_buffer_size/sizeof(std::uint32_t), ncrisc_init_value_for_buffer);
+    // blast the NCRISC's src buffer to DRAM
     cluster->write_dram_vec(ncrisc_src_vec, tt_target_dram{chip_id, ncrisc_kernel_args.dram_src_channel_id, 0}, ncrisc_kernel_args.dram_src_buffer_addr); // write to address
 
     tt::llrt::deassert_brisc_reset_for_all_chips_all_cores(cluster);
@@ -145,22 +145,22 @@ int main(int argc, char** argv)
     const TargetDevice target_type = TargetDevice::Silicon;
     const tt::ARCH arch = tt::ARCH::GRAYSKULL;
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
-    
+
 
     tt_rnd_set_seed(std::random_device()());
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
 
         // tt::llrt::print_worker_cores(cluster);
 
         // the first worker core starts at (1,1)
         // load BRISC FW (this also load NCRISC from L1 to IRAM and also deasserts reset for NCRISC)
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/dram_copy_brisc_ncrisc/brisc/brisc.hex", 0, {3,10}, 0); 
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/dram_copy_brisc_ncrisc/brisc/brisc.hex", 0, {3,10}, 0);
         // load NCRISC FW
         pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/dram_copy_brisc_ncrisc/ncrisc/ncrisc.hex", 0, {3,10}, 1);
 
@@ -188,4 +188,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

@@ -14,4 +14,3 @@ std::string get_epoch_id_report_relative_directory();
 
 } // namespace reportify
 } // namespace tt
-

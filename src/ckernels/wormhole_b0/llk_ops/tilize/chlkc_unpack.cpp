@@ -1,10 +1,10 @@
 #include <cstdint>
-#include "llk_unpack_common.h" 
-#include "llk_unpack_tilize.h" 
+#include "llk_unpack_common.h"
+#include "llk_unpack_tilize.h"
 namespace NAMESPACE
 {
 
-struct hlk_args_t 
+struct hlk_args_t
 {
 int32_t per_core_tile_cnt; // Total number of tiles produced at the output per core
 int32_t per_core_block_cnt; // Number of blocks of size 1xN tiles (1 rows and N cols)
@@ -23,7 +23,7 @@ for (__outer_loop_iter = 0; __outer_loop_iter < outer_loop_cnt; __outer_loop_ite
   for (int i = 0; i < args -> per_core_block_cnt; ++i) {
     llk_wait_blocks(0,1);
     for (int j = 0; j < args -> per_core_block_tile_cnt; ++j) {
-      llk_unpack_tilize(0,j,args -> per_core_block_c_dim); 
+      llk_unpack_tilize(0,j,args -> per_core_block_c_dim);
     }
     llk_pop_blocks(0,1,args -> per_core_block_c_dim);
   }

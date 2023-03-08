@@ -12,9 +12,9 @@
 #include "llrt.hpp"
 #include "test_libs/tiles.hpp"
 
-enum INITIALIZE 
-{    
-    Zeros = 0, 
+enum INITIALIZE
+{
+    Zeros = 0,
     Ones = 1,
     Increment = 2
 };
@@ -66,7 +66,7 @@ class Tensor {
 Tensor pad(Tensor &input) {
     std::array<uint32_t, 4> in_shape = input.shape;
     std::array<uint32_t, 4> out_shape = {in_shape[0], in_shape[1], in_shape[2] + 2, in_shape[3] + 2};
-    
+
     std::vector<uint32_t> out;
     for(auto w = 0; w < in_shape[0]; w++) {
         for(auto z = 0; z < in_shape[1]; z++) {
@@ -145,14 +145,14 @@ vector<vector<uint32_t>> move_act_dram_to_l1(Tensor &input_zxyw) {
     vector<vector<uint32_t>> output;
     std::array<uint32_t, 4> in_shape = input_zxyw.shape;
 
-    
+
     std::vector<std::pair<int, int>> increments;
     for (auto j=0; j<3; j++) {
-        for(auto i =0; i<3; i++) {    
+        for(auto i =0; i<3; i++) {
             increments.push_back(std::make_pair(i - 1, j - 1));
         }
     }
-    
+
     for(int w = 0; w < in_shape[0]; w++) {
         for(int y = 1; y < in_shape[1] - 1; y++) {
             for(int x = 1; x < in_shape[2] - 1; x++) {
@@ -171,7 +171,7 @@ vector<vector<uint32_t>> move_act_dram_to_l1(Tensor &input_zxyw) {
                 output.push_back(row);
             }
         }
-        
+
     }
 
     return output;
@@ -194,10 +194,10 @@ L1 have 1D address range, but the stored data should reflect the proper layout
 (i.e. ZXYW vs 2D).
 */
 std::vector<tt::llrt::DramToL1CopySpec> get_dram_to_l1_specs(
-    const tt_xy_pair core, 
-    int dram_channel_id, 
-    Tensor &activation_zxyw, 
-    std::uint32_t starting_dram_address, 
+    const tt_xy_pair core,
+    int dram_channel_id,
+    Tensor &activation_zxyw,
+    std::uint32_t starting_dram_address,
     std::uint32_t starting_l1_address
 ) {
     std::vector<tt::llrt::DramToL1CopySpec> specs = {};
@@ -207,7 +207,7 @@ std::vector<tt::llrt::DramToL1CopySpec> get_dram_to_l1_specs(
     unsigned total_vec_size = activation_vector.size();
     std::vector<std::pair<int, int>> increments;
     for (auto j=0; j<3; j++) {
-        for(auto i =0; i<3; i++) {    
+        for(auto i =0; i<3; i++) {
             increments.push_back(std::make_pair(i - 1, j - 1));
         }
     }
@@ -225,11 +225,11 @@ std::vector<tt::llrt::DramToL1CopySpec> get_dram_to_l1_specs(
                     TT_ASSERT(dram_address >= 0 and dram_address <=total_buffer_size);
                     // move the data at xnew/ynew to L1
                     specs.push_back(tt::llrt::create_dram_to_l1_copy_spec(
-                        core, 
-                        dram_channel_id, 
-                        chunk_size/*buffer size*/, 
-                        dram_address/*dram address*/, 
-                        l1_address, 
+                        core,
+                        dram_channel_id,
+                        chunk_size/*buffer size*/,
+                        dram_address/*dram address*/,
+                        l1_address,
                         load_firmware_flag
                     ));
                     load_firmware_flag = false;
@@ -254,11 +254,11 @@ int main(int argc, char** argv)
     const tt_xy_pair core = {11, 3};
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
 
         std::uint32_t starting_l1_address = 250 * 1024;
         std::uint32_t starting_dram_address = 0;
@@ -290,7 +290,7 @@ int main(int argc, char** argv)
         std::uint32_t total_l1_buffer_size = chunk_size * 9 * act_shape[2] * act_shape[3];
         vector<std::uint32_t> dst_vec = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, starting_l1_address, total_l1_buffer_size); // read size is in bytes
         pass &= golden_vector == dst_vec;
-            
+
         cluster->close_device();
         delete cluster;
 
@@ -312,4 +312,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

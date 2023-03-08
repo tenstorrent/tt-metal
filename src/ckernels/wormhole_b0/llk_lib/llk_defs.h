@@ -7,7 +7,7 @@ enum ReduceDim {
 };
 
 enum PoolType {
-  SUM, 
+  SUM,
   AVG,
   MAX
 };
@@ -18,7 +18,7 @@ enum DataCopyType
   B2D
 };
 
-enum EltwiseBinaryType 
+enum EltwiseBinaryType
 {
   ELWMUL,
   ELWDIV,
@@ -27,17 +27,17 @@ enum EltwiseBinaryType
   ELWLESS
 };
 
-enum DstSync { 
-  SyncHalf    = 0, 
-  SyncFull    = 1, 
+enum DstSync {
+  SyncHalf    = 0,
+  SyncFull    = 1,
   SyncTile16  = 2,
-  SyncTile2   = 3 
+  SyncTile2   = 3
 };
 
-enum BroadcastType 
+enum BroadcastType
 {
   NONE    = 0x0, // A - None || B - None
-  COL     = 0x1, // A - None || B - Col Broadcast  
+  COL     = 0x1, // A - None || B - Col Broadcast
   ROW     = 0x2, // A - None || B - Row Broadcast
   SCALAR  = 0x3  // A - None || B - Scalar Broadcast
 };
@@ -70,7 +70,7 @@ enum out_op_id_e
 };
 
 enum ReluType {
-  NO_RELU, 
+  NO_RELU,
   ZERO_RELU,
   MIN_THRESHOLD_RELU,
   MAX_THRESHOLD_RELU

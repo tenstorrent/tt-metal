@@ -32,4 +32,3 @@ for line in fileinput.input():
         data += [int(tok, 16) for tok in line.split()]
 
 write_data()
-

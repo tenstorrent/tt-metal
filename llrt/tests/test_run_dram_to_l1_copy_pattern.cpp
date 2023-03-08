@@ -17,12 +17,12 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         const int chip_id = 0;
         cluster->open_device(arch, target_type, {chip_id}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
         tt::llrt::LoadFirmwareFlag load_firmware_flag = true;
         tt_xy_pair core = {11, 3};
         tt_xy_pair dram = {1, 0};
@@ -41,7 +41,7 @@ int main(int argc, char** argv)
             std::make_tuple(shape, ConvParameters(1, 1, 2, 2, 0, 0))
         };
 
-        for(auto test_case: test_cases) {  
+        for(auto test_case: test_cases) {
             auto shape = std::get<0>(test_case);
             auto conv_params = std::get<1>(test_case);
 
@@ -68,8 +68,8 @@ int main(int argc, char** argv)
                 tt::llrt::create_copy_pattern_spec(
                     core,
                     starting_l1_address,
-                    dram, 
-                    starting_dram_address,  
+                    dram,
+                    starting_dram_address,
                     nchw,
                     {conv_params.R, conv_params.S, conv_params.U, conv_params.V}, // RSUV
                     4,
@@ -105,4 +105,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

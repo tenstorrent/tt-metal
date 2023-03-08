@@ -26,14 +26,14 @@ struct p_gpr_unpack
     constexpr static uint TMP1              = 13;   // Temp data
     constexpr static uint TILE_SIZE         = 14;   // Tile size stored for untilize llk
     constexpr static uint TILE_OFFSET       = 15;   // Tile offset address used by untilize llk
-    constexpr static uint SRCA_TRANSPOSE_XY = 17;   // unpacker can do src A transpose in wormhole 
+    constexpr static uint SRCA_TRANSPOSE_XY = 17;   // unpacker can do src A transpose in wormhole
 };
 
 // Math GPR thread
 struct p_gpr_math
 {
-    constexpr static uint PERF_DBUS_CNTL    = 4;   // Control debug bus perf counter selection 
-    constexpr static uint PERF_MEM_DUMP_CNTL_CLEAR= 5;   // Clear write to memory flag 
+    constexpr static uint PERF_DBUS_CNTL    = 4;   // Control debug bus perf counter selection
+    constexpr static uint PERF_MEM_DUMP_CNTL_CLEAR= 5;   // Clear write to memory flag
     constexpr static uint PERF_MEM_DUMP_CNTL_SET= 6;   // Set write to memory flag
     constexpr static uint PERF_CNT_START    = 7;   // Start perf counter
     constexpr static uint PERF_CNT_STOP     = 8;   // Stop perf counter

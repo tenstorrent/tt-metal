@@ -260,7 +260,7 @@ inline void eltwise_binary_configure_mop() {
                 tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             }
             tmp.program(instrn_buffer);
-        } 
+        }
     }
 }
 

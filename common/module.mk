@@ -42,4 +42,3 @@ $(OBJDIR)/common/model/%.o: common/model/%.cpp
 $(OBJDIR)/common/%.o: common/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(COMMON_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(COMMON_INCLUDES) $(COMMON_DEFINES) -c -o $@ $(COMMON_LDFLAGS) $<
-

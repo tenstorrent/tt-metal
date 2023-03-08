@@ -11,9 +11,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
 
     // ublocks size defined in tiles
-    constexpr uint32_t ublock_size_tiles = 1; 
+    constexpr uint32_t ublock_size_tiles = 1;
     uint32_t ublock_size_bytes = get_tile_size(cb_id_in0) * ublock_size_tiles;
-    
+
     for (uint32_t count = 0; count < num_repetitions; count++) {
         uint32_t src_addr_loop = src_addr;
         // read a ublock of tiles from src to CB, and then push the ublock to unpacker

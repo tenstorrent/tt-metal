@@ -3,7 +3,7 @@
 #include "compute_hlk_api.h"
 
 struct hlk_args_t {
-    int num_reductions; 
+    int num_reductions;
 
     // per-batch params
     int num_input_blocks;
@@ -33,7 +33,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
                     hlk_acquire_dst(core_ptr, DstMode::Full);
 
                     if (not is_first_block_and_row) {
-			hlk_copy_tile_to_dst_init(core_ptr);    
+			hlk_copy_tile_to_dst_init(core_ptr);
                         hlk_wait_tiles(core_ptr, HlkOperand::intermed1, args->input_sub_block_shape_c);
                         for (int dst_tile_index = 0; dst_tile_index < args->input_sub_block_shape_c; ++dst_tile_index)
                         {

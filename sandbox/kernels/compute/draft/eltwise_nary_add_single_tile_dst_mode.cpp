@@ -6,16 +6,16 @@ struct hlk_args_t {
     std::int32_t per_core_tile_cnt;
     std::int32_t input_count;
 };
-  
+
 void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
 
     for(int t = 0; t < args->per_core_tile_cnt; ++t)
     {
         hlk_acquire_dst(core_ptr, DstMode::Half);
-        
+
 
         // Wait for tiles on the input
-        for (int i=0; i < args->input_count; i++) 
+        for (int i=0; i < args->input_count; i++)
         {
             // Accumulate
             hlk_wait_tiles(core_ptr, HlkOperand::in0 + i, 1);
@@ -31,4 +31,3 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
         hlk_release_dst(core_ptr, DstMode::Half);
     }
 }
-

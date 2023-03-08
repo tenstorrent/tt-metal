@@ -21,7 +21,7 @@ void kernel_main() {
 
     // single-tile ublocks
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    
+
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
 

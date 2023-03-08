@@ -4,7 +4,7 @@
 
 struct hlk_args_t {
     std::int32_t slice_factor;  // slice input block into a number of output blocks
-    
+
     // input tensor dims
     std::int32_t num_input_blocks; // can be interpreted as "num blocks", "num tensors", "z-dim", or "batch" loop
     std::int32_t num_tiles_per_input_block;
@@ -13,12 +13,12 @@ struct hlk_args_t {
     std::int32_t output_block_shape_c;
 };
 
-// do this for "num blocks" (per_core_num_blocks) 
+// do this for "num blocks" (per_core_num_blocks)
 //    In0: an RM block with dims (per_core_in_r_tile, input_block_shape_c)
 //    Out0: create "slice_factor" output blocks, each with (per_core_in_r_tile, output_block_shape_c)
 void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
 
-    for (int block_index = 0; block_index < args->num_input_blocks; block_index++) { 
+    for (int block_index = 0; block_index < args->num_input_blocks; block_index++) {
 
         hlk_wait_tiles(core_ptr, HlkOperand::in0, args->num_tiles_per_input_block);
 

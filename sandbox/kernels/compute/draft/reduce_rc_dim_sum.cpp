@@ -3,7 +3,7 @@
 #include "compute_hlk_api.h"
 
 struct hlk_args_t {
-    int batch_size; 
+    int batch_size;
 
     // per-batch params
     int per_core_in_r;

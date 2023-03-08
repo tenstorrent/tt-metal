@@ -9,7 +9,7 @@
 // Also provides a version that allocates memory for you (such as on the stack), see below
 
 template <bool REVERSE_PRIORITY=false>
-class FixedSizePriorityQueue 
+class FixedSizePriorityQueue
 {
     protected:
     std::pair<uint32_t, uint32_t> *heap;
@@ -17,7 +17,7 @@ class FixedSizePriorityQueue
     uint32_t max_size;
 
     public:
-    FixedSizePriorityQueue(uint32_t addr_, uint32_t max_size_) 
+    FixedSizePriorityQueue(uint32_t addr_, uint32_t max_size_)
     {
         heap = (std::pair<uint32_t, uint32_t> *) addr_;
         num_elem = 0;
@@ -54,7 +54,7 @@ class FixedSizePriorityQueue
         return first_elem;
     }
 
-    __attribute__((always_inline)) 
+    __attribute__((always_inline))
     inline const std::pair<uint32_t, uint32_t>& top() const
     {
         FWASSERT("You are trying to view an empty priority queue.", !is_empty());
@@ -62,19 +62,19 @@ class FixedSizePriorityQueue
         return heap[0];
     }
 
-    __attribute__((always_inline)) 
+    __attribute__((always_inline))
     inline const uint32_t size() const
     {
         return num_elem;
     }
 
-    __attribute__((always_inline)) 
+    __attribute__((always_inline))
     inline const bool is_empty() const
     {
         return size() == 0;
     }
 
-    __attribute__((always_inline)) 
+    __attribute__((always_inline))
     inline const bool is_full() const
     {
         return size() == max_size;
@@ -131,4 +131,3 @@ class FixedSizePriorityQueue
     }
 
 };
-

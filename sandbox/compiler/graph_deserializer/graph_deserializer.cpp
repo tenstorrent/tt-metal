@@ -1,8 +1,8 @@
 #include "graph_deserializer.hpp"
 
-std::unordered_map<std::string, tt::graphlib::InputNodeType> input_type_string_map = 
+std::unordered_map<std::string, tt::graphlib::InputNodeType> input_type_string_map =
     {
-        {"accumulator", tt::graphlib::InputNodeType::Accumulator}, 
+        {"accumulator", tt::graphlib::InputNodeType::Accumulator},
         {"input", tt::graphlib::InputNodeType::Activation},
         {"loss", tt::graphlib::InputNodeType::Loss},
         {"parameter", tt::graphlib::InputNodeType::Parameter},
@@ -11,9 +11,9 @@ std::unordered_map<std::string, tt::graphlib::InputNodeType> input_type_string_m
         {"target", tt::graphlib::InputNodeType::Target},
     };
 
-std::unordered_map<std::string, tt::graphlib::EdgeType> edge_type_string_map = 
+std::unordered_map<std::string, tt::graphlib::EdgeType> edge_type_string_map =
     {
-        {"Data", tt::graphlib::EdgeType::kData}, 
+        {"Data", tt::graphlib::EdgeType::kData},
         {"Control", tt::graphlib::EdgeType::kControl},
         {"DataLoopback", tt::graphlib::EdgeType::kDataLoopback},
         {"AutogradFwdToBwd", tt::graphlib::EdgeType::kAutogradFwdToBwd},
@@ -50,7 +50,7 @@ void json_to_node(tt::graphlib::Graph * graph, nlohmann::json data, std::string 
     int node_id = node_data["unique_id"];
     Node * node;
     if (node_class == "Input::") {
-        string prefix = "Input::";        
+        string prefix = "Input::";
         assert(node_type.compare(0, prefix.size(), prefix) == 0);
         node_type = node_type.substr(prefix.size());
         // TODO: set requires grad correctly
@@ -62,26 +62,26 @@ void json_to_node(tt::graphlib::Graph * graph, nlohmann::json data, std::string 
     else if (node_type == "Constant") {
         if (node_data.contains("constant_value")) {
             auto constant_dims = node_data["constant_dims"].get<std::vector<uint32_t>>();
-            node = 
-                graph->add_node(create_node<ConstantInputNode>(node_name, 
-                                    stof((string) node_data["constant_value"]), 
-                                    constant_dims[0], 
+            node =
+                graph->add_node(create_node<ConstantInputNode>(node_name,
+                                    stof((string) node_data["constant_value"]),
+                                    constant_dims[0],
                                     constant_dims[1]));
         }
         else if (node_data.contains("constant_tile")) {
-           node = 
-                graph->add_node(create_node<ConstantInputNode>(node_name, 
-                                    node_data["constant_tile"].get<std::vector<float>>())); 
+           node =
+                graph->add_node(create_node<ConstantInputNode>(node_name,
+                                    node_data["constant_tile"].get<std::vector<float>>()));
         }
         else {
             assert(node_data.contains("constant_dims"));
             auto tensor_shape = Shape::create(node_data["constant_dims"].get<std::vector<uint32_t>>());
             std::shared_ptr<void> vps = std::make_shared<int>();
 
-            node = 
-                graph->add_node(create_node<ConstantInputNode>(node_name, 
+            node =
+                graph->add_node(create_node<ConstantInputNode>(node_name,
                                     vps,
-                                    tensor_shape)); 
+                                    tensor_shape));
         }
     }
     else if (node_data.contains("ir") && node_data["ir"] == "pybuda") {
@@ -144,7 +144,7 @@ void json_to_node(tt::graphlib::Graph * graph, nlohmann::json data, std::string 
         string p = "port_";
         int consumer_input_port_id = stoi(port.substr(p.size()));
         auto edge_info = node_data["input_node_to_edge_type"].get<std::map<string, string>>();
-        graph_edges.push_back(Edge(input_node->id(), (PortId)0, node->id(), 
+        graph_edges.push_back(Edge(input_node->id(), (PortId)0, node->id(),
                 (PortId)consumer_input_port_id, edge_type_string_map[edge_info[input_node_name]]));
         graph->add_edge(graph_edges.back());
         /* // collect tm ops if there are any
@@ -158,7 +158,7 @@ void json_to_node(tt::graphlib::Graph * graph, nlohmann::json data, std::string 
 }
 void build_graph_from_json(tt::graphlib::Graph * graph, std::string json_file) {
     using json = nlohmann::json;
-    std::ifstream ifs(json_file); 
+    std::ifstream ifs(json_file);
     json data = json::parse(ifs);
     ifs.close();
     for (auto node_name : data["topological_sorted_nodes"]) {

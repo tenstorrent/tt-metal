@@ -21,12 +21,12 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         const int chip_id = 0;
         cluster->open_device(arch, target_type, {chip_id}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
         tt::llrt::LoadFirmwareFlag load_firmware_flag = true;
         tt_xy_pair core = {11, 3};
         int dram_channel_id = 0;
@@ -57,7 +57,7 @@ int main(int argc, char** argv)
         // std::ofstream results_file;
         // results_file.open ("sweep.csv");
         // results_file<<"N, C, H, W, R, S, U, V, PadH, PadW, Total L1 (MB), Read BW (GB/sec), L1 to Dram (sec)\n";
-        for(auto test_case: test_cases) {  
+        for(auto test_case: test_cases) {
             auto shape = std::get<0>(test_case);
             auto conv_params = std::get<1>(test_case);
 
@@ -83,10 +83,10 @@ int main(int argc, char** argv)
             std::array<std::uint32_t, 4> nchw = {padded_shape[0], padded_shape[1], padded_shape[2], padded_shape[3]};
             std::vector<tt::llrt::CopyPatternSpec> specs = {
                 tt::llrt::create_copy_pattern_spec(
-                    core, 
-                    starting_l1_address, 
-                    dram, 
-                    starting_dram_address, 
+                    core,
+                    starting_l1_address,
+                    dram,
+                    starting_dram_address,
                     nchw,
                     {conv_params.R, conv_params.S, conv_params.U, conv_params.V}, // RSUV
                     2,
@@ -95,7 +95,7 @@ int main(int argc, char** argv)
                 )
             };
             bool load_blanks = load_firmware_flag;
-            
+
             auto start = std::chrono::steady_clock::now();
             tt::llrt::run_copy_pattern_kernel_with_specs(cluster, chip_id, specs, load_blanks);
             auto end = std::chrono::steady_clock::now();
@@ -116,9 +116,9 @@ int main(int argc, char** argv)
             end = std::chrono::steady_clock::now();
             std::chrono::duration<double> l1_to_dram_seconds = end-start;
             log_info(tt::LogVerif, "L1 to Dram time: {}s", l1_to_dram_seconds.count());
-            
+
             // results_file<<shape[0]<<","<<shape[1]<<","<<shape[2]<<","<<shape[3]<<","<<conv_params.R<<","<<conv_params.S<<","<<conv_params.U<<","<<conv_params.V<<","<<conv_params.PadH<<","<<conv_params.PadW<<","<<total_l1_used<<","<<read_bw_gbps<<","<<l1_to_dram_seconds.count()<<std::endl;
-      
+
             std::vector<std::uint32_t> dst_vec_dram = tt::llrt::read_hex_vec_from_core(cluster, chip_id, dram, dst_dram_address, total_buffer_size);
             auto dst_vec = unpack_uint32_vec_into_bfloat16_vec(dst_vec_dram);
             TT_ASSERT(golden_vector.size() == dst_vec.size());
@@ -150,4 +150,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

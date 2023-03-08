@@ -52,7 +52,7 @@ std::vector<T> convert_to_tile_layout(const std::vector<T>& data) {
         result.insert(result.end(), bottom_left.begin(), bottom_left.end());
         result.insert(result.end(), bottom_right.begin(), bottom_right.end());
     }
-    
+
     return result;
 }
 
@@ -75,7 +75,7 @@ std::vector<T> convert_to_flat_layout(const std::vector<T>& data) {
             }
         }
     }
-        
+
     return result;
 }
 
@@ -157,7 +157,7 @@ struct TensAddr {
             prod *= sh[j];
         return prod;
     }
- 
+
     TensAddr(vector<std::uint32_t> shape) : sh(shape) {}
     int offs(int n, int c, int h, int w) {
         TT_ASSERT(std::uint32_t(n) < sh[0] && std::uint32_t(c) < sh[1] && std::uint32_t(h) < sh[2] && std::uint32_t(w) < sh[3]);

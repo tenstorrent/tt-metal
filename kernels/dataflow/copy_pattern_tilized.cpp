@@ -1,15 +1,15 @@
 #include <cstdint>
-/** 
+/**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or other RISCs
- * Any two RISC processors cannot use the same CMD_BUF 
+ * Any two RISC processors cannot use the same CMD_BUF
  * non_blocking APIs shouldn't be mixed with slow noc.h APIs
  * explicit flushes need to be used since the calls are non-blocking
- * */ 
+ * */
 void kernel_main() {
-    std::uint32_t dram_buffer_src_addr_base        = get_arg_val<uint32_t>(0); 
-    std::uint32_t dram_src_noc_x                   = get_arg_val<uint32_t>(1); 
+    std::uint32_t dram_buffer_src_addr_base        = get_arg_val<uint32_t>(0);
+    std::uint32_t dram_src_noc_x                   = get_arg_val<uint32_t>(1);
     std::uint32_t dram_src_noc_y                   = get_arg_val<uint32_t>(2);
-    
+
     std::uint32_t N                                = get_arg_val<uint32_t>(3);
     std::uint32_t C                                = get_arg_val<uint32_t>(4);
     std::uint32_t H                                = get_arg_val<uint32_t>(5);
@@ -23,19 +23,19 @@ void kernel_main() {
     std::uint32_t num_tiles_c                      = get_arg_val<uint32_t>(13); // C * R * S / 32
     std::uint32_t num_bytes_per_row_of_tiles       = get_arg_val<uint32_t>(14); // num_tiles_c * 32x32 * 2B
     std::uint32_t num_repetitions                  = get_arg_val<uint32_t>(15);
-    
+
 
     for(std::uint32_t i = 0; i < num_repetitions; i++) {
         // l1 address to write to
         std::uint32_t l1_address = get_write_ptr(0);
-    
+
         std::uint32_t stick_size_bytes = C << 1; // C * 2B
         noc_fast_read_set_len(stick_size_bytes);
         // DRAM NOC src address
         std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr_base);
         noc_fast_read_set_src_xy(dram_buffer_src_noc_addr);
 
-        std::uint32_t num_reads_issued = 0; // number of noc reads issued       
+        std::uint32_t num_reads_issued = 0; // number of noc reads issued
         // next l1 address to write to for the first tile in the current row of tiles
         std::uint32_t first_tile_write_address = l1_address;
         std::uint32_t num_bytes_in_current_row_of_tiles = 0;
@@ -50,7 +50,7 @@ void kernel_main() {
         std::uint32_t filter_row_start_address; // increments by vertical dilation (ignored for now)
         // horizontal iteration over the filter row
         std::uint32_t filter_datum_address; // increments by horizontal dilation (ignored for now)
-        
+
         // to keep track of the dram address to read from
         std::uint32_t dram_buffer_src_addr;
         for(std::uint32_t n = 0; n < N; n++) {
@@ -92,7 +92,7 @@ void kernel_main() {
                                 cb_push_back(0, num_tiles_c);
                                 l1_address = get_write_ptr(0);
                                 first_tile_write_address = l1_address;
-                                
+
                                 num_reads_issued = 0;
                                 num_bytes_in_current_row_of_tiles = 0;
                                 num_bytes_in_current_tile_row = 0;

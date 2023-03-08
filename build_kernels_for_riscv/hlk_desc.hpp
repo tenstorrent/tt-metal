@@ -8,9 +8,9 @@
 #include "common/tt_backend_api_types.hpp"
 #include "common/assert.hpp"
 
-namespace tt 
+namespace tt
 {
-/** 
+/**
  * @brief A descriptor of the high-level kernel. Contains circular buffer formats, HLK filename, HLK args ptr/size.
 */
 

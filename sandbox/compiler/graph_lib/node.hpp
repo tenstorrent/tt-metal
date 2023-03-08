@@ -92,4 +92,3 @@ class Node {
 std::ostream& operator<<(std::ostream& out, const Node& node);
 }  // namespace graphlib
 }  // namespace tt
-

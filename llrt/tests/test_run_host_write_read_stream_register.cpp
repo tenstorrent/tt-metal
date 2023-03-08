@@ -18,25 +18,25 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         const int chip_id = 0;
         cluster->open_device(arch, target_type, {chip_id}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
         tt::llrt::LoadFirmwareFlag load_firmware_flag = true;
         tt_xy_pair core = {11, 3};
 
         for(std::uint32_t stream_id = 0; stream_id < NUM_STREAMS; stream_id ++) {
             for(std::uint32_t register_id: REGISTERS) {
                 for(std::uint32_t i = 0; i < 10; i++) {
-                    std::vector<uint32_t> src_vec = {i};                
+                    std::vector<uint32_t> src_vec = {i};
                     std::uint32_t stream_register_address = STREAM_REG_ADDR(stream_id, register_id);
                     tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, src_vec, stream_register_address);
                     vector<std::uint32_t> dst_vec = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, stream_register_address, src_vec.size() * sizeof(uint32_t)); // read size is in bytes
                     if(src_vec != dst_vec) {
                         std::cout<<"Failed["<<stream_id<<","<<register_id<<"]: "<<src_vec[0]<<", "<<dst_vec[0]<<std::endl;
-                    } 
+                    }
                     pass &= (src_vec == dst_vec);
                 }
             }
@@ -62,4 +62,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

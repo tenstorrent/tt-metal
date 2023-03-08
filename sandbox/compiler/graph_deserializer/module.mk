@@ -18,4 +18,3 @@ $(COMPILER_GRAPH_DESERIALIZER): $(COMPILER_GRAPH_LIB) $(COMPILER_REPORTIFY) $(CO
 $(OBJDIR)/compiler/graph_deserializer/%.o: compiler/graph_deserializer/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(COMPILER_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(COMPILER_GRAPH_DESERIALIZER_INCLUDES) -c -o $@ $<
-

@@ -25,4 +25,3 @@ $(PROFILER_LIB): $(PROFILER_OBJS)
 $(OBJDIR)/tools/profiler/%.o: tools/profiler/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(PROFILER_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(PROFILER_INCLUDES) $(PROFILER_DEFINES) -c -o $@ $<
-

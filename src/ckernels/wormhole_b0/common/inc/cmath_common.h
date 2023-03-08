@@ -152,7 +152,7 @@ inline void set_dst_write_addr(uint32_t tile_index)
     } else {
         // FIXME MT: add this mapping for other layout
     }
-    
+
 }
 
 // Programming a dst write addr offset that gets added to base

@@ -41,13 +41,13 @@ void compute_main(const hlk_args_t *args) {
     }
 
     // Pack out
-    cb_reserve_back(CB::c_out0, args->out_block_tile_cnt); 
+    cb_reserve_back(CB::c_out0, args->out_block_tile_cnt);
     for(int i=0 ; i<args->out_block_tile_cnt;++i)
     {
         pack_tile(i, CB::c_out0);
     }
 
-    cb_push_back(CB::c_out0, args->out_block_tile_cnt); 
+    cb_push_back(CB::c_out0, args->out_block_tile_cnt);
 
     release_dst(DstMode::Full);
 }

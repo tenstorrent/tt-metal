@@ -5,4 +5,3 @@ Device Management
   CreateDevice
   InitializeDevice
   CloseDevice
-  

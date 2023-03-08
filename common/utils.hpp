@@ -22,7 +22,7 @@ namespace utils
     inline void hash_combine(SizeT& seed, const SizeT value) {
         seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
-    
+
     template <class T>
     struct vector_hash {
     inline std::size_t operator()(const std::vector<T> &vec) const
@@ -36,4 +36,3 @@ namespace utils
 };
 }
 }
-

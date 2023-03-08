@@ -19,15 +19,15 @@ int main(int argc, char** argv)
     const TargetDevice target_type = TargetDevice::Silicon;
     const tt::ARCH arch = tt::ARCH::GRAYSKULL;
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
-    
+
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         const int chip_id = 0;
         cluster->open_device(arch, target_type, {chip_id}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
 
         const std::uint32_t total_buffer_size = 512* 1024;
 
@@ -102,4 +102,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

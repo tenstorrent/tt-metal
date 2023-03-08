@@ -3,7 +3,7 @@
 #include "compute_hlk_api.h"
 
 struct hlk_args_t {
-    int batch_size; 
+    int batch_size;
 
     // per-batch params
     int input_block_inner_dim;
@@ -28,8 +28,8 @@ struct hlk_args_t {
     constexpr static std::uint32_t kTileHeight = 32;
     int pack_row_shift_x[MAX_WEIGHT_Z] = {0}; // shift packing by this many rows. Can be negative.
     int initial_rd_ptr[MAX_WEIGHT_Z] = {0}; // initial read state for the shifted packing
-    int initial_x[MAX_WEIGHT_Z] = {0}; 
-    int initial_y[MAX_WEIGHT_Z] = {0}; 
+    int initial_x[MAX_WEIGHT_Z] = {0};
+    int initial_y[MAX_WEIGHT_Z] = {0};
     int initial_padding[MAX_WEIGHT_Z] = {0};
 };
 
@@ -100,7 +100,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
                 pack_state[pack_index + 1].current_y = args->initial_y[b];
                 pack_state[pack_index + 1].partial_tile = false;
             }
-            else 
+            else
             {
                 int valid_row_count = args->per_iteration_r_tiles * hlk_args_t::kTileHeight;
                 pack_state[pack_index].current_rd_ptr =
@@ -158,5 +158,3 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
         hlk_release_dst(core_ptr, DstMode::Full);
     }
 }
-
-

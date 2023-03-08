@@ -68,4 +68,3 @@ void kernel_main() {
     u32 dest_tr0_l1 = get_write_ptr(operand0);
     cb_push_back(operand0, onetile);
 }
-

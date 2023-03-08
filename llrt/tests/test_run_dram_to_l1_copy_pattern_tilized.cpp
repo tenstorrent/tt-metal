@@ -12,12 +12,12 @@
 using tt::llrt::CircularBufferConfigVec;
 
 bool run_copy_pattern_multi_tile(
-    tt_cluster* cluster, 
-    int chip_id, 
-    const tt_xy_pair& core, 
+    tt_cluster* cluster,
+    int chip_id,
+    const tt_xy_pair& core,
     std::uint32_t num_tiles_r,
     std::uint32_t num_tiles_c,
-    std::vector<uint32_t>& src_vec, 
+    std::vector<uint32_t>& src_vec,
     std::vector<bfloat16>& expected_dst_vec,
     std::array<std::uint32_t, 4>& nchw,
     std::array<std::uint32_t, 4>& rsuv
@@ -52,7 +52,7 @@ bool run_copy_pattern_multi_tile(
     tt::llrt::write_circular_buffer_config_vector_to_core(cluster, chip_id, core, circular_buffer_config_vec);
 
     // NCRISC kernel arguments to L1 in one-shot
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
         {
             dram_buffer_src_addr,
             (std::uint32_t)dram_src_noc_xy.x,
@@ -70,16 +70,16 @@ bool run_copy_pattern_multi_tile(
             num_tiles_c,
             num_tiles_c * 1024 * 2,
             1
-        }, 
+        },
         NCRISC_L1_ARG_BASE);
 
-    // BRISC kernel arguments to L1 in one-shot 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
-        { dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, (std::uint32_t)(num_tiles_r * num_tiles_c) }, 
+    // BRISC kernel arguments to L1 in one-shot
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
+        { dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, (std::uint32_t)(num_tiles_r * num_tiles_c) },
         BRISC_L1_ARG_BASE);
-    
+
     TT_ASSERT(dram_buffer_size % sizeof(std::uint32_t) == 0);
-    
+
     // Write tiles sequentially to DRAM
     cluster->write_dram_vec(src_vec, tt_target_dram{chip_id, dram_src_channel_id, 0}, dram_buffer_src_addr); // write to address
 
@@ -104,7 +104,7 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         const int chip_id = 0;
         tt_xy_pair core = {1, 1};
@@ -112,7 +112,7 @@ int main(int argc, char** argv)
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
         string op_path = "built_kernels/copy_pattern_tilized";
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", 0, core, 0); // brisc 
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", 0, core, 0); // brisc
         pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", 0, core, 1); // ncrisc
 
         pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread0/tensix_thread0.hex", 0, core, 0); // trisc0
@@ -138,7 +138,7 @@ int main(int argc, char** argv)
 
         auto padded_shape = tensor_padded.get_shape();
         std::array<std::uint32_t, 4> nchw = {padded_shape[0], padded_shape[1], padded_shape[2], padded_shape[3]};
-        std::array<std::uint32_t, 4> rsuv = {conv_params.R, conv_params.S, conv_params.U, conv_params.V};     
+        std::array<std::uint32_t, 4> rsuv = {conv_params.R, conv_params.S, conv_params.U, conv_params.V};
         std::uint32_t num_tiles_c = rsuv[0] * rsuv[1];
         std::uint32_t num_tiles_r = (shape[3] * shape[2] * shape[0]) / 32;
         pass &= run_copy_pattern_multi_tile(
@@ -173,4 +173,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

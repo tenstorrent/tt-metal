@@ -57,7 +57,7 @@ inline void wait_for_stream_messages(const regp p_stream_reg, const uint count)
 }
 
 inline void wait_for_N_stream_messages(const regp p_stream_reg, const uint num_messages) {
-    
+
     uint c = 0;
     do {
         uint32_t msg_info_wr = read_stream_register(p_stream_reg, STREAM_MSG_INFO_WR_PTR_REG_INDEX);
@@ -299,7 +299,7 @@ namespace ckernel::stream
       auto base_addr = read_stream_register(stream_reg, STREAM_BUF_START_REG_INDEX) << 4;
       return reinterpret_cast<std::uint8_t*>(base_addr);
     }
-    
+
     inline std::uint8_t* get_stream_msg_info_wr_ptr(const regp stream_reg) {
       auto base_addr = read_stream_register(stream_reg, STREAM_MSG_INFO_WR_PTR_REG_INDEX) << 4;
       return reinterpret_cast<std::uint8_t*>(base_addr);

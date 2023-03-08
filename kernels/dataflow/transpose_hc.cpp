@@ -57,7 +57,7 @@ void kernel_main() {
                         for (u32 c16 = 0; c16 < 16; c16++) {
                             // In this loop sub, c16 are source subtile, c16
                             // dest in this loop is varying h implicitly via dest address increment
-                            
+
                             // Dest is HCW
                             // We are iterating over it as H Ct Wt-tiles
                             // intra-tile FC16 for F going over 4-subtiles
@@ -113,4 +113,3 @@ void kernel_main() {
         batch_addr += CHW2;
     } // n<N loop
 }
-

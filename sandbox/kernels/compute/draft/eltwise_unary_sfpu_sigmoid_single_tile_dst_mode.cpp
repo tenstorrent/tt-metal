@@ -27,4 +27,3 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
         hlk_push_tiles(core_ptr, HlkOperand::out0, args->per_core_block_dim);
     }
 }
-

@@ -1,7 +1,7 @@
 #include "compute_hlk_api.h"
 
 struct hlk_args_t {
-    int batch_size; 
+    int batch_size;
 
     int input_block_inner_dim;
     int per_block_r_tiles;
@@ -32,8 +32,8 @@ struct hlk_args_t {
     constexpr static std::uint32_t kTileHeight = 32;
     int pack_row_shift_x[MAX_WEIGHT_Z] = {0}; // shift packing by this many rows. Can be negative.
     int initial_rd_ptr[MAX_WEIGHT_Z] = {0}; // initial read state for the shifted packing
-    int initial_x[MAX_WEIGHT_Z] = {0}; 
-    int initial_y[MAX_WEIGHT_Z] = {0}; 
+    int initial_x[MAX_WEIGHT_Z] = {0};
+    int initial_y[MAX_WEIGHT_Z] = {0};
     int initial_padding[MAX_WEIGHT_Z] = {0};
 };
 
@@ -45,7 +45,7 @@ struct hlk_args_t {
 
 void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
 {
-            
+
     // Pack state per column of data
     hlk_pack_shifted_state_t pack_state[2 * hlk_args_t::MAX_WEIGHT_Z];
 
@@ -65,7 +65,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
     int initial_padding[hlk_args_t::MAX_WEIGHT_Z];
     __builtin_memcpy(initial_padding, args->initial_padding, sizeof(initial_padding));
 
-    int in1_wait_tile_counter = 0; 
+    int in1_wait_tile_counter = 0;
 
     // Depthwise has a different read pattern. Weights are one row, but activations pointer is moving on each matmul.
     int per_col_in0_increment = args->depthwise ? 1 : 0;
@@ -87,7 +87,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
             {
                 // We'll buffer up across batches, i.e. first batch will buffer and the rest will reuse
                 if (b == 0) {
-                    in0_wait_tile_counter += args->in0_block_tile_cnt; 
+                    in0_wait_tile_counter += args->in0_block_tile_cnt;
                     hlk_wait_tiles(core_ptr, HlkOperand::in0, in0_wait_tile_counter);
                 }
 
@@ -96,7 +96,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
                     in1_wait_tile_counter += args->in1_block_tile_cnt;
                     hlk_wait_tiles(core_ptr, HlkOperand::in1, in1_wait_tile_counter);
                 }
-                
+
                 int in0_block_tile_index = in0_base_read_index;
 
                 for(int r=0;r<args->per_iteration_r_tiles;++r)
@@ -123,7 +123,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
 
             // Pack out
             if (iteration == 0) {
-                hlk_wait_for_free_tiles(core_ptr, HlkOperand::out0+b, args->col_tile_count); 
+                hlk_wait_for_free_tiles(core_ptr, HlkOperand::out0+b, args->col_tile_count);
 
                 // Set initial state
                 pack_state[pack_index].current_rd_ptr = args->initial_rd_ptr[b];
@@ -138,7 +138,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
                 pack_state[pack_index + 1].current_y = args->initial_y[b];
                 pack_state[pack_index + 1].partial_tile = false;
             }
-            else 
+            else
             {
                 int valid_row_count = args->per_iteration_r_tiles * hlk_args_t::kTileHeight;
                 pack_state[pack_index].current_rd_ptr =

@@ -84,7 +84,7 @@ class memory {
     }
     return s.str();
   }
-  
+
   // // TODO: Remove CA Translation
   // operator CommandAssembler::memory() const { return CommandAssembler::memory(m_base, m_content); }
 

@@ -150,8 +150,8 @@ void tt_ClusterDescriptor::enable_all_devices() {
     this->enabled_active_chips = this->all_chips;
 }
 
-bool tt_ClusterDescriptor::chips_have_ethernet_connectivity() const { 
-    return ethernet_connections.size() > 0; 
+bool tt_ClusterDescriptor::chips_have_ethernet_connectivity() const {
+    return ethernet_connections.size() > 0;
 }
 
 
@@ -165,7 +165,7 @@ std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<
                 const auto &[dest_chip, dest_channel] = chip_channel;
                 if (this->enabled_active_chips.find(dest_chip) != this->enabled_active_chips.end()) {
                     eth_connections[chip][src_channel] = chip_channel;
-                
+
                 }
             }
         }

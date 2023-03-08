@@ -8,11 +8,11 @@
 
 namespace ckernel::packer
 {
-   constexpr uint32_t OUTPUT_BASE    = 16; 
-   constexpr uint32_t OUTPUT_BASE_ID = 0; 
-   constexpr uint32_t PACK_CNT       = 4; 
-   
-   
+   constexpr uint32_t OUTPUT_BASE    = 16;
+   constexpr uint32_t OUTPUT_BASE_ID = 0;
+   constexpr uint32_t PACK_CNT       = 4;
+
+
    constexpr uint PACK_SEL(const uint pack_count)
    {
      return (pack_count == 1) ? 0x1 :
@@ -43,7 +43,7 @@ namespace ckernel::packer
    } pack_config_t;
 
    static_assert(sizeof(pack_config_t) == (sizeof(uint32_t)*4));
-   
+
    typedef union {
      uint32_t val[4];
      pack_config_t f;
@@ -85,21 +85,21 @@ namespace ckernel::packer
 
       if (pack_src_format[pack_output] != pack_dst_format[pack_output]) {
          TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
-         tensix_sync();	         
-      }	      
+         tensix_sync();
+      }
 
       cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = is_fp32_dest_acc_en ? (0x1) : (0x0);
 
       const uint pack_per_xy_plane = 16;
 
-      uint x_stride = (uint)(pack_src_format[pack_output]&0x3) == (uint)DataFormat::Float32 ? 4 : 
+      uint x_stride = (uint)(pack_src_format[pack_output]&0x3) == (uint)DataFormat::Float32 ? 4 :
                       (uint)(pack_src_format[pack_output]&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
       uint y_stride = 16*x_stride;
       uint z_stride = PACK_CNT*16*y_stride;
       uint w_stride = z_stride;
-   
+
       // Strides (not needed)
-      cfg[PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32] = (y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) | 
+      cfg[PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32] = (y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
                                                     (       0<<PCK0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for src address (ch0)
       cfg[PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32] = (w_stride<<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT) |
                                                     (       0<<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT);  // W stride for src address (ch0)
@@ -126,8 +126,8 @@ namespace ckernel::packer
       // Program:
       // THCON_SEC0_REG1_Row_start_section_size = cfg_reg_array[1][0 +: 16];
       // THCON_SEC0_REG1_Exp_section_size = cfg_reg_array[1][16 +: 16];
-      // This is filled with garbage, and will be set up on every pack: 
-      //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];    
+      // This is filled with garbage, and will be set up on every pack:
+      //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];
       // THCON_SEC0_REG1_Disable_zero_compress = cfg_reg_array[1][64 +: 1];
       // THCON_SEC0_REG1_Add_l1_dest_addr_offset = cfg_reg_array[1][65 +: 1];
       // THCON_SEC0_REG1_Unused0 = cfg_reg_array[1][66 +: 2];
@@ -150,7 +150,7 @@ namespace ckernel::packer
 
       if ((uint)(pack_dst_format[pack_output]&0x2) != 0) {
          // Override exp section size for packers 1,2,3
-         // Tile header + exp size + datum size 
+         // Tile header + exp size + datum size
          if ((uint)(pack_dst_format[pack_output]&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format[pack_output]&0x1F) == (uint)DataFormat::Bfp8_b) {
             config.f.exp_section_size = 1 + 2 + 16;
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
@@ -206,7 +206,7 @@ namespace ckernel::packer
 
       // Assume face height 16
       TTI_SETADCXX(p_setadc::PAC, (256/pack_per_xy_plane)-1, 0x0);
-   
+
       // Store value for num_msg_received register when tile count is 1
       regfile[p_gpr_pack::ONE_MSG_RECEIVED] = ((1*GET_L1_TILE_SIZE((uint)pack_dst_format[pack_output]))<<12)|1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/;
       sync_regfile_write(p_gpr_pack::ONE_MSG_RECEIVED);
@@ -222,13 +222,13 @@ namespace ckernel::packer
       //             however dest capacity is unchanged (e.g. 0x100 to 0x1FF should be unused now)
       constexpr uint32_t DEST_OFFSET_SHIFT = 0; //is_fp32_dest_acc_en ? (1) : (0);
       constexpr uint32_t DEST_HALF_OFFSET = DEST_REGISTER_HALF_SIZE >> DEST_OFFSET_SHIFT;
-      
+
       if constexpr (untilize) {
          if constexpr (FaceLayout == ColMajor) {
             // Packer0 :  0,32,  1,33 ...  7, 39
 	    // Packer1 :  8,40,  9,41 ... 15, 47
-	    // Packer2 : 16,48, 17,49 ... 23, 55		  
-	    // Packer3 : 23,56, 24,57 ... 31, 63		  
+	    // Packer2 : 16,48, 17,49 ... 23, 55
+	    // Packer3 : 23,56, 24,57 ... 31, 63
             regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
             regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x8;
             regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x10;
@@ -237,11 +237,11 @@ namespace ckernel::packer
             regfile[p_gpr_pack::DEST_OFFSET_HI+1] = DEST_HALF_OFFSET + 0x8;
             regfile[p_gpr_pack::DEST_OFFSET_HI+2] = DEST_HALF_OFFSET + 0x10;
             regfile[p_gpr_pack::DEST_OFFSET_HI+3] = DEST_HALF_OFFSET + 0x18;
-         } else {		 
+         } else {
             // Packer0 :  0,16,  1,17 ...  7, 23
 	    // Packer1 :  8,24,  9,25 ... 15, 31
-	    // Packer2 : 32,48, 33,49 ... 39, 55		  
-	    // Packer3 : 40,56, 41,57 ... 47, 63		  
+	    // Packer2 : 32,48, 33,49 ... 39, 55
+	    // Packer3 : 40,56, 41,57 ... 47, 63
             regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
             regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x8;
             regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x20;
@@ -250,8 +250,8 @@ namespace ckernel::packer
             regfile[p_gpr_pack::DEST_OFFSET_HI+1] = DEST_HALF_OFFSET + 0x8;
             regfile[p_gpr_pack::DEST_OFFSET_HI+2] = DEST_HALF_OFFSET + 0x20;
             regfile[p_gpr_pack::DEST_OFFSET_HI+3] = DEST_HALF_OFFSET + 0x28;
-	 }    
-      } else { 
+	 }
+      } else {
          if constexpr (FaceLayout == ColMajor) {
             regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
             regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x20;
@@ -289,7 +289,7 @@ namespace ckernel::packer
    {
            dest_offset_id = 1 - dest_offset_id;
    }
-   
+
    // Flip packer dest register offset to 0 or DEST_REGISTER_HALF_SIZE
    // flip-flopping between two halfs
    template <DstSync Dst>
@@ -314,7 +314,7 @@ namespace ckernel::packer
          const uint8_t offset3 = (uint8_t)(pack_dst_format[pack_output]&0x3) == (uint8_t)DataFormat::Float32  ? 0xC0 : (uint8_t)(pack_dst_format[pack_output]&0x3) == (uint8_t)DataFormat::Float16  ? 0x60 : 0x3;
          TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
          TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+0));
-   
+
          TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset1), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
          TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset1), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+1));
 
@@ -335,14 +335,14 @@ namespace ckernel::packer
          const uint8_t offset1 = (uint8_t)(pack_dst_format[pack_output]&0x3) == (uint8_t)DataFormat::Float32  ? 0x40 : (uint8_t)(pack_dst_format[pack_output]&0x3) == (uint8_t)DataFormat::Float16  ? 0x20 : 0x1;
          TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
          TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+0));
-   
+
          TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset1), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
          TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset1), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+1));
 
          TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK0 | p_stall::PACK1);
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR+1);
-         
+
       } else {
          FWASSERT("Unsupported pack select mask!", false);
       }
@@ -369,16 +369,13 @@ namespace ckernel::packer
        dest_offset_id = 0;
    }
 
-   inline uint32_t get_output_id(uint32_t output) 
+   inline uint32_t get_output_id(uint32_t output)
    {
       return ((output) - OUTPUT_BASE);
    }
 
-   inline constexpr uint32_t get_output_base_id() 
+   inline constexpr uint32_t get_output_base_id()
    {
       return (OUTPUT_BASE_ID);
    }
 }
-
-
-

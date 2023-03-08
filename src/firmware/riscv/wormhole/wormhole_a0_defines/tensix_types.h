@@ -9,7 +9,7 @@
 
 //
 //  tensix_types.h
-//  This file contains tensix structures used by RISCV firmware and test-bench/tests 
+//  This file contains tensix structures used by RISCV firmware and test-bench/tests
 //
 //  Copyright © 2018 Tenstorrent. All rights reserved.
 //
@@ -17,7 +17,7 @@
 /////////////
 // Global enums and defines
 ////////////
-typedef enum 
+typedef enum
 {
   XMOV_L0_TO_L1 = 0,
   XMOV_L1_TO_L0 = 1,
@@ -25,7 +25,7 @@ typedef enum
   XMOV_L1_TO_L1 = 3,
 } xmov_direction_t;
 
-typedef enum 
+typedef enum
 {
   TDMA_MOVER0 = 0,
   TDMA_MOVER1 = 1
@@ -110,11 +110,11 @@ typedef struct {
   uint32_t reserved_0  : 3;
   uint32_t blobs_per_xy_plane  : 4;
   uint32_t reserved_1  : 4;
-  uint32_t x_dim       : 16; 
-  uint32_t y_dim       : 16; 
-  uint32_t z_dim       : 16; 
-  uint32_t w_dim       : 16; 
-  uint32_t blobs_y_start : 32; 
+  uint32_t x_dim       : 16;
+  uint32_t y_dim       : 16;
+  uint32_t z_dim       : 16;
+  uint32_t w_dim       : 16;
+  uint32_t blobs_y_start : 32;
   uint32_t digest_type : 8;  // Not used
   uint32_t digest_size : 8;  // Not used
 } tile_descriptor_t; // Unpack configuration
@@ -176,10 +176,10 @@ static_assert(sizeof(TileHeader) == 16, "TileHeader must be 16B");
 struct SectionHeader
 {
   // occupied part of the 16B line
-  std::uint16_t section_id;     
-  std::uint16_t section_size; 
-  std::uint16_t tile_count;  
-  
+  std::uint16_t section_id;
+  std::uint16_t section_size;
+  std::uint16_t tile_count;
+
   // unoccupied part of the 16B line
   std::uint16_t reserved[5];
 
@@ -304,10 +304,10 @@ struct io_queue_pointers_t {
   inline void increment_rd_pointer() volatile {
     if (!valid())
       return;
-    std::uint32_t new_rdptr = rdptr + (data_size_16B << 4);	
+    std::uint32_t new_rdptr = rdptr + (data_size_16B << 4);
     if ((new_rdptr & ~WRAP_MASK) >= get_buffer_end()) {
       if (wrap_bit(new_rdptr)) {
-        new_rdptr = base_addr; 
+        new_rdptr = base_addr;
       } else {
         new_rdptr = WRAP_MASK | base_addr;
       }
@@ -326,7 +326,7 @@ struct io_queue_pointers_t {
     std::uint32_t new_wrptr = wrptr + (data_size_16B << 4);
     if ((new_wrptr & ~WRAP_MASK) >= get_buffer_end()) {
       if (wrap_bit(new_wrptr)) {
-        new_wrptr = base_addr; 
+        new_wrptr = base_addr;
       } else {
         new_wrptr = WRAP_MASK | base_addr;
       }
@@ -363,6 +363,6 @@ struct io_queue_pointers_t {
     return value & ~WRAP_MASK;
   }
 
-}; 
+};
 
 #endif

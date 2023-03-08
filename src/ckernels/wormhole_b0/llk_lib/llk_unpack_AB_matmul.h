@@ -66,7 +66,7 @@ inline void llk_unpack_AB_matmul_mop_config(bool transpose) {
 
         tmp.program(instrn_buffer);
     }
-    
+
 }
 
 template<bool is_fp32_dest_acc_en = false>
@@ -75,7 +75,7 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
     constexpr uint32_t srcb_height = 16;
     constexpr bool is_row_pool = false;
     bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
-    configure_unpack_AB(get_operand_id(unpack_AB_params->unpB_operand), get_operand_id(unpack_AB_params->unpA_operand), 
+    configure_unpack_AB(get_operand_id(unpack_AB_params->unpB_operand), get_operand_id(unpack_AB_params->unpA_operand),
                         srca_height, srcb_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en);
 }
 

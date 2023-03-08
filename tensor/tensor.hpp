@@ -9,9 +9,9 @@ using SHAPE = std::array<std::uint32_t, 4>;
 namespace tt
 {
 
-enum class Initialize 
-{    
-    ZEROS = 0, 
+enum class Initialize
+{
+    ZEROS = 0,
     ONES = 1,
     INCREMENT = 2,
     RANDOM = 3
@@ -166,13 +166,13 @@ template <class T>
 Tensor<T> pad(Tensor<T> &input, std::array<std::array<uint32_t, 2>, 4> pad_size, T val = 0) {
     auto in_shape = input.get_shape();
     std::array<uint32_t, 4> out_shape = {
-        in_shape[0]+ pad_size[0][0] + pad_size[0][1], 
-        in_shape[1] + pad_size[1][0] + pad_size[1][1], 
-        in_shape[2] + pad_size[2][0] + pad_size[2][1], 
+        in_shape[0]+ pad_size[0][0] + pad_size[0][1],
+        in_shape[1] + pad_size[1][0] + pad_size[1][1],
+        in_shape[2] + pad_size[2][0] + pad_size[2][1],
         in_shape[3] + pad_size[3][0] + pad_size[3][1]
     };
     Tensor<T> output(out_shape);
-    
+
     auto output_strides = output.get_strides();
     auto input_values = input.get_values();
     std::vector<T> out;

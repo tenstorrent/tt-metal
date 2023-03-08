@@ -176,10 +176,10 @@ private:
     int dim_c_;
 public:
     ConstantInputNode(const std::string &name, float constant_value, int dim_r = -1, int dim_c = -1)
-        : InputNode(name, InputNodeType::Constant, NodeType::kInput), 
+        : InputNode(name, InputNodeType::Constant, NodeType::kInput),
           node_type_(ConstantInputNodeType::SingleValue), constant_value_(constant_value), dim_r_(dim_r), dim_c_(dim_c) {}
     ConstantInputNode(const std::string &name, std::vector<float> const &tile_value)
-        : InputNode(name, InputNodeType::Constant, NodeType::kInput), 
+        : InputNode(name, InputNodeType::Constant, NodeType::kInput),
           node_type_(ConstantInputNodeType::SingleTile), tile_value_(tile_value), dim_r_(-1), dim_c_(-1) {}
     ConstantInputNode(const std::string &name, std::shared_ptr<void> tensor_handle, Shape const &tensor_shape) :
         InputNode(name, InputNodeType::Constant, NodeType::kInput),
@@ -287,7 +287,7 @@ private:
 
     // fusing/graph changes have the output of this node be equal to a different golden node
     bool has_golden_id_ = false;
-    std::uint32_t golden_id_; 
+    std::uint32_t golden_id_;
 
 public:
     OpNode(const std::string &name, const std::string &op_type, NodeType node_type) : Node(name, node_type), op_type_({op_type, {}, {}}), gradient_op_(false) {}
@@ -354,7 +354,7 @@ public:
     void copy_parent_op_attributes(BudaOpNode *node);
 
     std::uint32_t min_input_buffer_multiplier(std::uint32_t operand, std::uint32_t default_value) const;
-    void set_min_input_buffer_multiplier(std::uint32_t operand, std::uint32_t tiles); 
+    void set_min_input_buffer_multiplier(std::uint32_t operand, std::uint32_t tiles);
 
     virtual std::unique_ptr<Node> clone(std::string const& name = "") override;
 

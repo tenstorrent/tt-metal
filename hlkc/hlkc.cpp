@@ -108,17 +108,17 @@ void generate_unpack(SgProject *project, string llk_args_file_name, bool perf_du
 
     patch_main_decl_for_llk(project, "unpack_main");
 
-    if (hlk_ops.size() > 0) { 
+    if (hlk_ops.size() > 0) {
         insert_outer_loop(project, "hlk_main", perf_dump_en, 0);
     }
 
     if (std::getenv("HACK_FOR_GRAPH_INTERPRETER") != nullptr) {
         for (auto& op : hlk_ops) {
             replace_hlk_inits_and_insert_hw_configure(project, op, "unpack");
-        }  
+        }
         string hw_func_name = "llk_unpack_AB_hw_configure_disaggregated";
         SgNodeContainer func_call_list = find_function_calls(project);
-        SgFunctionDeclaration* main_decl = find_function_declaration(project, "hlk_main"); 
+        SgFunctionDeclaration* main_decl = find_function_declaration(project, "hlk_main");
         SgFunctionDefinition* main_def = main_decl->get_definition();
         SgBasicBlock* body = main_def->get_body();
 
@@ -133,11 +133,11 @@ void generate_unpack(SgProject *project, string llk_args_file_name, bool perf_du
 
         SgExprStatement* new_call_statement = build_void_func_call_statement(hw_func_name, expr_list, main_def);
         insertStatementAfter(*(body->get_statements().begin()), new_call_statement);
-    
+
     } else if (multi_op) {
         for (auto& op : hlk_ops) {
             replace_hlk_inits_and_insert_hw_configure(project, op, "unpack");
-        }  
+        }
     } else if (hlk_ops.size() > 0) {
         hlk_api_func_list = find_function_calls_by_name(project, hlk_ops[0]->get_op_str());
         llk_init_list = {hlk_ops[0]->get_unpack_init_func_str()};
@@ -149,7 +149,7 @@ void generate_unpack(SgProject *project, string llk_args_file_name, bool perf_du
     }
 
     vector<vector<int>> operand_ids = replace_call_statements_for_unpack_and_get_multiple_op_operand_ids(project, hlk_ops);
-    
+
     if (not multi_op and hlk_ops.size() > 0) {
         if (operand_ids.at(0).size() == 0) {
             operand_ids = {{0}};
@@ -180,7 +180,7 @@ void generate_math(SgProject *project, string llk_args_file_name, bool perf_dump
     for (auto& op : hlk_matrix_ops) {
         hlk_ops.push_back(op);
     }
-   
+
     HlkMatrixOp* hlk_matrix_op;
     if (hlk_ops.size() > 0) {
         hlk_matrix_op = hlk_matrix_ops[0];
@@ -251,7 +251,7 @@ void generate_math(SgProject *project, string llk_args_file_name, bool perf_dump
     replace_call_statements(project, {"hlk_get_tile"     , "hlk_release_tile"      , "hlk_debug_dump" ,      "hlk_reconfig_unpacker_df",      "hlk_get_next_op_info" },
                                      {"llk_math_get_tile", "llk_math_release_tile" , "llk_math_debug_dump" , "llk_math_reconfig_data_format", "llk_get_next_op_info"});
 
-    patch_main_decl_for_llk(project, "math_main"); // TODO: this probably incomplete (so we keep using "hlk_main" below), I think we need to update the symbol table 
+    patch_main_decl_for_llk(project, "math_main"); // TODO: this probably incomplete (so we keep using "hlk_main" below), I think we need to update the symbol table
 
     // TODO: These hlk_acquire_dst/hlk_release_dst will likely fail with real multi-op
     if (hlk_matrix_ops.size() > 0) {
@@ -299,7 +299,7 @@ void generate_math(SgProject *project, string llk_args_file_name, bool perf_dump
         insert_void_argless_func_call_to_statement_list(project, "hlk_main", hlk_sfpu_op->get_math_init_func_str(), 1);
     }
 
-    // If dropout, we need to do a post-pass to ensure that the dropout probability is converted from float to uint16 format and that 
+    // If dropout, we need to do a post-pass to ensure that the dropout probability is converted from float to uint16 format and that
     // scale is fp1_8_7 format
     replace_hlk_dropout_with_llk_int_dropout_and_scale(project);
 
@@ -392,7 +392,7 @@ void generate_pack(SgProject *project, string llk_args_file_name, bool perf_dump
         insert_outer_loop(project, "hlk_main", perf_dump_en, 2); // FIXME: should be using unpack_main, but function "unpack_main" can't be found
     }
 
-    // pack shifted is always done in col major face layout 
+    // pack shifted is always done in col major face layout
     string llk_pack_dest_init;
     if (hlk_ops.size() > 0) {
         if(has_pack_shifted){
@@ -417,7 +417,7 @@ void generate_pack(SgProject *project, string llk_args_file_name, bool perf_dump
         }
         string hw_func_name = "llk_pack_hw_configure_disaggregated<false>";
         SgNodeContainer func_call_list = find_function_calls(project);
-        SgFunctionDeclaration* main_decl = find_function_declaration(project, "hlk_main"); 
+        SgFunctionDeclaration* main_decl = find_function_declaration(project, "hlk_main");
         SgFunctionDefinition* main_def = main_decl->get_definition();
         SgBasicBlock* body = main_def->get_body();
 
@@ -459,10 +459,10 @@ void generate_pack(SgProject *project, string llk_args_file_name, bool perf_dump
         insert_void_argless_func_call_to_statement_list(project, "hlk_main", llk_pack_dest_init, 1);
         insert_void_argless_func_call_to_statement_list(project, "hlk_main", "llk_setup_outputs", 1);
     }
-    
-    if (!has_pack_shifted and hlk_ops.size() > 0) {  // pack_shifted has expclicit pack_init and was replaced above  
+
+    if (!has_pack_shifted and hlk_ops.size() > 0) {  // pack_shifted has expclicit pack_init and was replaced above
        insert_void_argless_func_call_to_statement_list(project, "hlk_main", llk_pack_init_func, 1);
-    } 
+    }
 
     if (not multi_op and hlk_ops.size() > 0) {
         cout << "HELLO: " << hw_func_names.at(0) << endl;
@@ -522,7 +522,7 @@ inline CompilationContext parse_arguments(int argc, char* argv[]) {
     Rose_STL_Container<string> arg_vec = CommandlineProcessing::generateArgListFromArgcArgv(argc, argv); printf ("l.size() = %zu \n",arg_vec.size());
     printf ("Preprocessor (before): argv = \n%s \n",StringUtility::listToString(arg_vec).c_str());
 
-    // Add a test for HLKC target (unpack, math, pack) 
+    // Add a test for HLKC target (unpack, math, pack)
     string llk_target = "unpack";
     if (CommandlineProcessing::isOptionWithParameter(arg_vec, "-hlkc:", "llk_target", llk_target, true)) {
         printf ("Turning on HLKC's llk_target = %s\n", llk_target.c_str());
@@ -536,7 +536,7 @@ inline CompilationContext parse_arguments(int argc, char* argv[]) {
         printf ("Output file set to = %s\n", output_file_name.c_str());
     } else {
         printf ("Defaulting to output_file = %s\n", output_file_name.c_str());
-        // TODO: handle adding "-rose:o <output_file_name>" manually, low priority, we currently always supply the filename 
+        // TODO: handle adding "-rose:o <output_file_name>" manually, low priority, we currently always supply the filename
     }
 
     fs::path output_dir = fs::path(output_file_name).parent_path();
@@ -561,7 +561,7 @@ inline CompilationContext parse_arguments(int argc, char* argv[]) {
         printf ("Turning off HLKC's caching mechanism\n");
         enable_cache = false;
     }
-    
+
     bool perf_dump_en = false;
     if (CommandlineProcessing::isOption(arg_vec, "-perf_dump:", "1", true)) {
         printf ("Perf-Dump is enabled in hlkc.\n");
@@ -666,7 +666,7 @@ int main(int argc, char* argv[]) {
     // Build the AST used by ROSE
     // enable constant folding, it will replace enum references in the AST with the compile-time constants
     // we require compile-time contants as args on several LLK functions (some checks already exist)
-    SgProject* project = frontend(compilation_context.arg_vec, true); 
+    SgProject* project = frontend(compilation_context.arg_vec, true);
     ROSE_ASSERT(project != NULL);
 
     // these could be converted to compile-time constexpr static_assert's
@@ -702,7 +702,7 @@ int main(int argc, char* argv[]) {
     //generatePDF(*project);
     //generate_cfg_hlk_main(project);
 
-    // Generate source code from AST 
+    // Generate source code from AST
     if (compilation_context.llk_target != LLKTarget::STRUCT_INIT_GEN) {
         // experimenting with these tranforms -- they don't seem to help at the moment
         //legacy::PRE::partialRedundancyElimination(project);

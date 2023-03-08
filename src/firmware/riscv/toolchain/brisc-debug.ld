@@ -7,7 +7,7 @@ REGION_ALIAS("REGION_LDM", BRISC_CODE)
 REGION_ALIAS("REGION_ZEROS", ZEROS)
 
 __firmware_stack_size = 1024;
-__local_mem_rodata_start_addr = ORIGIN(BRISC_CODE); 
+__local_mem_rodata_start_addr = ORIGIN(BRISC_CODE);
 
 INCLUDE "brisc-sections.ld"
-INCLUDE "tensix-address.ld" 
+INCLUDE "tensix-address.ld"

@@ -37,8 +37,8 @@ using std::endl;
 constexpr bool REMOVE_TEMP_DEBUG_PRINT_FILE = true;
 
 void launch_on_cores(
-    tt_cluster* cluster, 
-    int chip_id, 
+    tt_cluster* cluster,
+    int chip_id,
     vector<tt_xy_pair> cores,
     u32 num_tiles,
     u32 num_underscores_to_print,
@@ -50,7 +50,7 @@ void launch_on_cores(
     { // load the op to cores
         string op_path = "built_kernels/test_debug_print_op";
         for (auto xy: cores) {
-            pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", chip_id, xy, 0); // brisc 
+            pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", chip_id, xy, 0); // brisc
             pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", chip_id, xy, 1); // ncrisc
             pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread0/tensix_thread0.hex", chip_id, xy, 0); // trisc0
             pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread1/tensix_thread1.hex", chip_id, xy, 1); // trisc1
@@ -87,18 +87,18 @@ void launch_on_cores(
         // bool(ARG2) = print endl
         // print("_"*ARG3)
         uint32_t x = core.x, y = core.y;
-        tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
-            { dram_buffer_src_addr, u32(dram_src_noc_xy.x), u32(dram_src_noc_xy.y), ARG0, ARG1, ARG2, ARG3, x, y, end_x }, 
+        tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
+            { dram_buffer_src_addr, u32(dram_src_noc_xy.x), u32(dram_src_noc_xy.y), ARG0, ARG1, ARG2, ARG3, x, y, end_x },
             NCRISC_L1_ARG_BASE);
 
-        // BRISC kernel arguments to L1 in one-shot 
+        // BRISC kernel arguments to L1 in one-shot
         u32 num_output_tiles = 0;
         u32 num_plus_signs_to_print = 4;
-        tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, 
-            { dram_buffer_dst_addr, u32(dram_dst_noc_xy.x), u32(dram_dst_noc_xy.y), num_output_tiles, num_plus_signs_to_print, x, y, multicore_sync }, 
+        tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
+            { dram_buffer_dst_addr, u32(dram_dst_noc_xy.x), u32(dram_dst_noc_xy.y), num_output_tiles, num_plus_signs_to_print, x, y, multicore_sync },
             BRISC_L1_ARG_BASE);
     }
-    
+
     tt::llrt::internal_::setup_riscs_on_specified_cores(cluster, chip_id, tt::llrt::TensixRiscsOptions::ALL_RISCS, cores);
     tt::llrt::internal_::run_riscs_on_specified_cores(cluster, chip_id, tt::llrt::TensixRiscsOptions::ALL_RISCS, cores);
 }
@@ -111,10 +111,10 @@ std::string test_tmpnam()
 }
 
 bool run_test_debug_print(
-    tt_cluster* cluster, 
-    int chip_id, 
-    const tt_xy_pair& core_start, 
-    const tt_xy_pair& core_end, 
+    tt_cluster* cluster,
+    int chip_id,
+    const tt_xy_pair& core_start,
+    const tt_xy_pair& core_end,
     u32 num_tiles,
     u32 num_underscores_to_print,
     const char* gold_string
@@ -184,8 +184,8 @@ int main(int argc, char** argv)
         tt_xy_pair xy_end1x1 = {2,2};
         tt_xy_pair xy_end5x5 = {6,6};
         cluster->open_device(arch, target_type, {0}, sdesc_file);
-        cluster->start_device(default_params); // use default params 
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        cluster->start_device(default_params); // use default params
+        tt::llrt::utils::log_current_ai_clk(cluster);
         if (pass) {
             uint32_t num_tiles = 1;
             const char* expected1 = "   2\nTestConstCharStrNC{1,1}\n0.1235\n0.1200\n0.1226\n____\nBR{1,1}\n++++\n";

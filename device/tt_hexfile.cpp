@@ -29,8 +29,8 @@ unsigned int data_hex_digits = round_up_div(std::numeric_limits<memory::word_t>:
 
 // The optional @ is captured (so its presence can be detected) and the hex digits are captured.
 bool parse_hex_line(const std::string& line, bool* seen_at, memory::address_t* hex_address) {
-  
-#ifdef USE_REGEX_PARSER 
+
+#ifdef USE_REGEX_PARSER
 
     // captures:                  (1 )          (2                )
     static const regex re(R"__(\s*(@?)(?:0[Xx])?([[:xdigit:]]{1,8})\s*,?\s*)__");
@@ -143,7 +143,7 @@ memory::address_t read_discontiguous_hex_file(
         cout << "new_addr = " << std::hex << new_addr << ", addr = " << addr << std::dec << endl;
         throw runtime_error("Memory image address goes backwards.");
       }
-        
+
 
       addr = new_addr;
     } else {

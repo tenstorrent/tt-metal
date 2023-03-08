@@ -164,17 +164,17 @@ int main(int argc, char *argv[])
     } f2u = {.f = 1.0f};
 
     for (uint i = 0; i < 16; i++) l1_buffer[i] = f2u.u;  // Load const into L1 buffer
- 
+
 
     reset_cfg_state_id();
-    
+
     trisc_l1_mailbox_write(RESET_VAL);
 
-    if ((uint)l1_mem::address_map::RISC_LOCAL_MEM_BASE == 
+    if ((uint)l1_mem::address_map::RISC_LOCAL_MEM_BASE ==
             ((uint)__local_mem_rodata_end_addr&0xfff00000))
     {
        local_mem_copy();
-    }  
+    }
 
     allocate_debug_mailbox_buffer();
     allocate_debug_buffer();
@@ -185,7 +185,7 @@ int main(int argc, char *argv[])
     record_dummy_math_event();
     set_thread_id_parameter();
 #endif
-  
+
     //while (ready_for_next_epoch())
     {
         run_kernel();

@@ -162,7 +162,7 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
             return dp;
         }
     }
- 
+
     uint8_t* printbuf = dp.data();
     // no need for a circular buffer since perf is not critical
     printbuf[wpos] = typecode;

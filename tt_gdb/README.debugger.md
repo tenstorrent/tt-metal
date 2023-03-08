@@ -1,6 +1,6 @@
 # tt_gdb
 ## Enabling the breakpoint server
-To enable the breakpoint server, in your test, you must include `tt_gdb/tt_gdb.hpp`, and call it right before calling your test function. 
+To enable the breakpoint server, in your test, you must include `tt_gdb/tt_gdb.hpp`, and call it right before calling your test function.
 
 For example, below is a snippet of enabling tt_gdb in `test_run_datacopy`.
 
@@ -9,7 +9,7 @@ const vector<tt_xy_pair> cores = {core};
 const vector<string> ops = {op};
 
 tt_gdb(cluster, chip_id, cores, ops);
-pass &= run_data_copy_multi_tile(cluster, chip_id, core, 2048); 
+pass &= run_data_copy_multi_tile(cluster, chip_id, core, 2048);
 ```
 where cluster was defined earlier in the file.
 
@@ -21,7 +21,7 @@ pip3 install -r requirements.txt
 ```
 
 ## Compiling under debug mode
-To get the most out of `tt_gdb`, you must compile under debug mode. This will use different debug ld files for the riscs, and will enable debug symbols. To enable under debug mode, use 
+To get the most out of `tt_gdb`, you must compile under debug mode. This will use different debug ld files for the riscs, and will enable debug symbols. To enable under debug mode, use
 `DEBUG_MODE=1` when compiling a test.
 
 For example, below is a snippet of compiling with `DEBUG_MODE=1` for compilation of the datacopy op.
@@ -53,8 +53,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
 
     // single-tile ublocks
-    uint32_t ublock_size_bytes = get_tile_size(cb_id_out0); 
-    uint32_t ublock_size_tiles = 1; 
+    uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
+    uint32_t ublock_size_tiles = 1;
 
 
 
@@ -74,14 +74,14 @@ You can move around the grid with the arrow keys, and when you would like to deb
 
 ![alt text](core-view.png)
 
-Gray will represent your current cursor, so in this image, we are hovering over trisc0. Just like before, you can use the arrow keys to move around. Since we hit a breakpoint for brisc, you will see a message notifying you that a breakpoint has been hit, as well as which line the breakpoint was on. 
+Gray will represent your current cursor, so in this image, we are hovering over trisc0. Just like before, you can use the arrow keys to move around. Since we hit a breakpoint for brisc, you will see a message notifying you that a breakpoint has been hit, as well as which line the breakpoint was on.
 
 TODO(agrebenisan): In the future, would like to make this a hyperlink that brings you directly to the file and line number.
 
 From this screen, we can select a particular thread to debug. For example, if we move to the brisc thread and press enter, we will see this prompt:
 
 ```bash
-(tt_gdb) 
+(tt_gdb)
 ```
 
 Here, you can write `help` or `h` to display available commands:

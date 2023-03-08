@@ -56,11 +56,11 @@ class Graph {
     Graph(const Graph &other) = delete;
 
     static NodeId generate_unique_node_id() { return ++last_node_id_assigned_; }
-    static GraphId generate_unique_graph_id() { 
+    static GraphId generate_unique_graph_id() {
         while (Graph::assigned_graph_ids_.find(last_graph_id_assigned_) != Graph::assigned_graph_ids_.end()) {
             last_graph_id_assigned_++;
         }
-        return last_graph_id_assigned_++; 
+        return last_graph_id_assigned_++;
     }
 
     // instead of copy-constructor, prefer to explicitly provide a clone() method
@@ -72,12 +72,12 @@ class Graph {
     IRLevel get_ir_level() const { return ir_level_; }
 
     // Node-level queries
-    Node *node_by_id(NodeId id) const { 
+    Node *node_by_id(NodeId id) const {
       // Some kind of memory corruption here when running from python... even though the element is in
       // the map, the "at" function throws an exception.
       // Working around for now, but need to run some valgrind or something to figure it out :(.
       try {
-        return this->nodes_map_raw_.at(id); 
+        return this->nodes_map_raw_.at(id);
       } catch (...) {
         for(const auto& elem : this->nodes_map_raw_)
           if (elem.first == id) return elem.second;

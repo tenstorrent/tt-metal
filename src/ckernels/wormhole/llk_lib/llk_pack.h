@@ -104,7 +104,7 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t *pack_params) {
     } else {
         cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = 0x00000000;
         cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0x0000ffff;
-        
+
         if constexpr (untilize) {
             cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x00000005;
         } else {

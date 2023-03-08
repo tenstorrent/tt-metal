@@ -75,7 +75,7 @@ struct PackOperation {
       std::cout << config_blob[i] << ", ";
     }
     std::cout << std::endl;
-    
+
     std::cout << "\t\tstream_ids=";
     for(unsigned i = 0; i < 4; i++) {
       std::cout << (unsigned)stream_ids[i] << ", ";
@@ -119,8 +119,8 @@ struct PackParams {
 
   std::uint32_t bias_section_addr;
 
-  // PackParams() { 
-  //   std::memset(this, 0, sizeof(*this)); 
+  // PackParams() {
+  //   std::memset(this, 0, sizeof(*this));
   // }
 
   void SetPackConfigBlob(int idx, std::array<std::uint32_t, 8> pack_config) {
@@ -305,8 +305,8 @@ struct StreamConvParams {
              pack_32b_field(kernel_id_math, 8, 8) |
              pack_32b_field(kernel_id_packer, 8, 0);
 
-    // XXX: Unclear if casting the bool to uint32_t is the best way 
-    cmd[1] = pack_32b_field(input_stream_id, 8, 24) | 
+    // XXX: Unclear if casting the bool to uint32_t is the best way
+    cmd[1] = pack_32b_field(input_stream_id, 8, 24) |
              pack_32b_field((uint32_t)unpack_halo_strips[3], 1, 23) |
              pack_32b_field((uint32_t)unpack_halo_strips[2], 1, 22) |
              pack_32b_field((uint32_t)unpack_halo_strips[1], 1, 21) |
@@ -319,13 +319,13 @@ struct StreamConvParams {
     cmd[4] = pack_32b_field(unpack_weights_offset, 16, 0) |
              pack_32b_field(math_Z_dim_ratio_log2, 16, 16);
 
-    cmd[5] = pack_32b_field(num_output_tiles, 16, 16) | 
-             pack_32b_field(output_tile_id_offset, 16, 0); 
+    cmd[5] = pack_32b_field(num_output_tiles, 16, 16) |
+             pack_32b_field(output_tile_id_offset, 16, 0);
 
     cmd[6] = pack_32b_field(num_input_tiles, 16, 16) |
              pack_32b_field(halo_y_spec(), 16, 0);
 
-    cmd[7] = pack_32b_field(halo_dim, 4, 20) | 
+    cmd[7] = pack_32b_field(halo_dim, 4, 20) |
              pack_32b_field(input_phase_id, 20, 0);
 
     return cmd;
@@ -334,20 +334,20 @@ struct StreamConvParams {
 };
 
 struct UnaryOperationParams
-{  
+{
   // UnaryOperationParams() { std::memset(this, 0, sizeof(UnaryOperationParams));}
   std::uint32_t math_fidelity;
   std::uint32_t repack_Z_dim_ratio_log2;
-    
+
   std::uint32_t kernel_id_unpacker;
   std::uint32_t kernel_id_math;
   std::uint32_t kernel_id_packer;
-  
+
   std::uint32_t num_activation_tiles;
 
   std::uint32_t input_A_stream_id;
   //std::uint32_t input_A_phase_id;
-  
+
   std::uint32_t output_stream_id[4];
   //std::uint32_t output_phase_id[4];
 
@@ -355,7 +355,7 @@ struct UnaryOperationParams
   std::uint32_t unpacker_kernel_address;
   std::uint32_t math_kernel_address;
   std::uint32_t packer_kernel_address;
-  
+
   std::uint32_t input_A_section_id;
   std::uint32_t input_A_fifo_address;
 

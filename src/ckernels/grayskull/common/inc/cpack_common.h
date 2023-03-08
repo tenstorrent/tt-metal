@@ -13,18 +13,18 @@
 namespace ckernel::packer
 {
    // budabackend
-   //constexpr uint32_t OUTPUT_BASE    = 16; 
-   //constexpr uint32_t OUTPUT_BASE_ID = 0; 
-   
+   //constexpr uint32_t OUTPUT_BASE    = 16;
+   //constexpr uint32_t OUTPUT_BASE_ID = 0;
+
    // lo-buda
-   constexpr uint32_t OUTPUT_BASE    = 0; 
-   constexpr uint32_t OUTPUT_BASE_ID = 16; 
-   
-   constexpr uint32_t PACK_CNT       = 4; 
+   constexpr uint32_t OUTPUT_BASE    = 0;
+   constexpr uint32_t OUTPUT_BASE_ID = 16;
+
+   constexpr uint32_t PACK_CNT       = 4;
 
    // Pack src format, save src format to make reconfig writes only
    uint32_t tile_desc_pack_src_format;
-   
+
    constexpr uint PACK_SEL(const uint pack_count)
    {
      return (pack_count == 1) ? 0x1 :
@@ -52,8 +52,8 @@ namespace ckernel::packer
      uint32_t exp_threshold_en  : 1;
      uint32_t reserved_2 : 3;
      uint32_t exp_threshold : 8;
-   } pack_config_t; 
-   
+   } pack_config_t;
+
    typedef union {
      uint32_t val[4];
      pack_config_t f;
@@ -83,8 +83,8 @@ namespace ckernel::packer
       // Program:
       // THCON_SEC0_REG1_Row_start_section_size = cfg_reg_array[1][0 +: 16];
       // THCON_SEC0_REG1_Exp_section_size = cfg_reg_array[1][16 +: 16];
-      // This is filled with garbage, and will be set up on every pack: 
-      //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];    
+      // This is filled with garbage, and will be set up on every pack:
+      //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];
       // THCON_SEC0_REG1_Disable_zero_compress = cfg_reg_array[1][64 +: 1];
       // THCON_SEC0_REG1_Add_l1_dest_addr_offset = cfg_reg_array[1][65 +: 1];
       // THCON_SEC0_REG1_Unused0 = cfg_reg_array[1][66 +: 2];
@@ -115,7 +115,7 @@ namespace ckernel::packer
 
       if ((uint)(pack_dst_format[operand_id]&0x2) != 0) {
          // Override exp section size for packers 1,2,3
-         // Tile header + exp size + datum size 
+         // Tile header + exp size + datum size
          if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8_b) {
             config.f.exp_section_size = 1 + 2 + 16;
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
@@ -197,7 +197,7 @@ namespace ckernel::packer
       for (uint i=0; i<4; i++) {
 	 cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+i]=0xffffffff;
          cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32+i] = 0x0;
-      }	 
+      }
 
       regfile[p_gpr_pack::TILE_HEADER]   = GET_L1_TILE_SIZE((uint)pack_dst_format[pack_output]);
       regfile[p_gpr_pack::TILE_HEADER+1] = 0;
@@ -210,9 +210,9 @@ namespace ckernel::packer
       uint relu_threshold  = reg_read_barrier((uint)&cfg[STACC_RELU_ReluThreshold_ADDR32]);
       apply_relu      &= (~STACC_RELU_ApplyRelu_MASK);
       relu_threshold  &= (~STACC_RELU_ReluThreshold_MASK);
-      struct { 
-         uint apply:16; 
-         uint threshold:16; 
+      struct {
+         uint apply:16;
+         uint threshold:16;
       } tmp_relu_cfg = {.apply = relu_config&0xf, .threshold = (relu_config>>16)&0xffff};
       apply_relu |= tmp_relu_cfg.apply<<STACC_RELU_ApplyRelu_SHAMT;
       relu_threshold |= tmp_relu_cfg.threshold<<STACC_RELU_ReluThreshold_SHAMT;
@@ -221,7 +221,7 @@ namespace ckernel::packer
 
       // Assume face height 16
       TTI_SETADCXX(p_setadc::PAC, (256/pack_per_xy_plane)-1, 0x0);
-   
+
       // Store value for num_msg_received register when tile count is 1
       //regfile[p_gpr_pack::PACK_STREAM_SYNC] = 0;
       regfile[p_gpr_pack::ONE_MSG_RECEIVED] = ((1*GET_L1_TILE_SIZE((uint)pack_dst_format[pack_output]))<<12)|1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/;
@@ -230,7 +230,7 @@ namespace ckernel::packer
       // MT: Ensure thread safety between unpacker and packer threads by using semaphore
       if (!skip_alu_format_set) {
          wait_for_unpack_config_done();
-         uint alu_dst_format = pack_src_format[pack_output]; 
+         uint alu_dst_format = pack_src_format[pack_output];
          cfg_rmw(ALU_FORMAT_SPEC_REG2_Dstacc_RMW, alu_dst_format);
          semaphore_get(semaphore::UNPACK_PACK_CONFIG_SYNC);
       }
@@ -244,8 +244,8 @@ namespace ckernel::packer
          if constexpr (FaceLayout == ColMajor) {
             // Packer0 :  0,32,  1,33 ...  7, 39
 	    // Packer1 :  8,40,  9,41 ... 15, 47
-	    // Packer2 : 16,48, 17,49 ... 23, 55		  
-	    // Packer3 : 23,56, 24,57 ... 31, 63		  
+	    // Packer2 : 16,48, 17,49 ... 23, 55
+	    // Packer3 : 23,56, 24,57 ... 31, 63
             regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
             regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x8;
             regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x10;
@@ -254,11 +254,11 @@ namespace ckernel::packer
             regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x8;
             regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x10;
             regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x18;
-         } else {		 
+         } else {
             // Packer0 :  0,16,  1,17 ...  7, 23
 	    // Packer1 :  8,24,  9,25 ... 15, 31
-	    // Packer2 : 32,48, 33,49 ... 39, 55		  
-	    // Packer3 : 40,56, 41,57 ... 47, 63		  
+	    // Packer2 : 32,48, 33,49 ... 39, 55
+	    // Packer3 : 40,56, 41,57 ... 47, 63
             regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
             regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x8;
             regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x20;
@@ -267,8 +267,8 @@ namespace ckernel::packer
             regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x8;
             regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x20;
             regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x28;
-	 }    
-      } else { 
+	 }
+      } else {
          if constexpr (FaceLayout == ColMajor) {
             regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
             regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x20;
@@ -306,7 +306,7 @@ namespace ckernel::packer
    {
            dest_offset_id = 1 - dest_offset_id;
    }
-   
+
    // Flip packer dest register offset to 0 or 0x200
    // flip-flopping between two halfs
    template <DstSync Dst>
@@ -370,16 +370,13 @@ namespace ckernel::packer
        dest_offset_id = 0;
    }
 
-   inline uint32_t get_output_id(uint32_t output) 
+   inline uint32_t get_output_id(uint32_t output)
    {
       return ((output) - OUTPUT_BASE);
    }
 
-   inline constexpr uint32_t get_output_base_id() 
+   inline constexpr uint32_t get_output_base_id()
    {
       return (OUTPUT_BASE_ID);
    }
 }
-
-
-

@@ -71,5 +71,5 @@ void generate_and_dump_op_histogram(tt::graphlib::Graph * graph) {
         myfile2 << it2->first << "," << it2->second << ",\n";
     }
     myfile2.close();
-    
+
 }

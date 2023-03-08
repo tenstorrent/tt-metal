@@ -156,5 +156,3 @@ if (hack) {
     hlk_pop_tiles(core_ptr, HlkOperand::intermed1, args->out_block_tile_cnt);
     hlk_push_tiles(core_ptr, HlkOperand::out0, args->out_block_tile_cnt);
 }
-
-

@@ -4,8 +4,8 @@
    notice and this notice are preserved.  */
 
 /*
-  This file contains pre-processor directives that are compiled to create tensix-sections.ld, 
-  any modifications should be made to tensix-sections-pre-proc.ld, tensix-sections.ld is a generated file 
+  This file contains pre-processor directives that are compiled to create tensix-sections.ld,
+  any modifications should be made to tensix-sections-pre-proc.ld, tensix-sections.ld is a generated file
 */
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
@@ -158,7 +158,7 @@ SECTIONS
    . += __firmware_stack_size;
    __stack_top = .;
   } > REGION_LDM
-  
+
 #else
 
   .bss            :

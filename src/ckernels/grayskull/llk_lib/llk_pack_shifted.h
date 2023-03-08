@@ -99,13 +99,13 @@ inline void llk_pack_shifted(const llk_pack_shifted_params_t *params, llk_pack_s
 
     if (params->initial_padding>0) {
        if (params->initial_padding <= FACE_HEIGHT) {
-           TT_SETADCXX(p_setadc::PAC, ((params->initial_padding*16)-1), 0x0); 
+           TT_SETADCXX(p_setadc::PAC, ((params->initial_padding*16)-1), 0x0);
            TTI_PACR(ADDR_MOD_2, 1, 0x3, 0, 0, 0, 0);
            write_row_index+=params->initial_padding;
        } else if (params->initial_padding < TILE_HEIGHT) {
            TTI_SETADCXX(p_setadc::PAC, (16*FACE_HEIGHT)-1, 0x0);
            TTI_PACR(ADDR_MOD_2, 1, 0x3, 0, 0, 0, 1);
-           TT_SETADCXX(p_setadc::PAC, (((params->initial_padding-FACE_HEIGHT)*16)-1), 0x0); 
+           TT_SETADCXX(p_setadc::PAC, (((params->initial_padding-FACE_HEIGHT)*16)-1), 0x0);
            program_packer_destination<PACK_01>((std::uint16_t)(pack_tile_base_addr+2*(2*FACE_HEIGHT)), OUTPUT_BASE_ID); //FIXME: scale based on the format
            TTI_PACR(ADDR_MOD_2, 1, 0x3, 0, 0, 0, 0);
            write_row_index+=params->initial_padding;
@@ -116,29 +116,29 @@ inline void llk_pack_shifted(const llk_pack_shifted_params_t *params, llk_pack_s
            write_row_index+=TILE_HEIGHT;
        }
        // Pack single rows
-       TTI_SETADCXX(p_setadc::PAC, 16-1, 0x0); 
-    } 
+       TTI_SETADCXX(p_setadc::PAC, 16-1, 0x0);
+    }
 
     int curr_tile_index=-1;
     while ( (write_row_index < TILE_HEIGHT) &&
             // Keep going until we reached end of valid dest, unless it's final iteration in which case we just pad to the end
             ( (state->current_rd_ptr < params->valid_row_count) || params->final_iteration) )
     {
-        bool insert_blank = 
+        bool insert_blank =
             ((state->current_y) >= params->original_y) ||  // we're past the end
             (((state->current_x) < params->row_shift_x) && (params->row_shift_x > 0)) || // initial postive X-shift
             (((state->current_x) >= (params->original_x + params->row_shift_x)) && (params->row_shift_x < 0)); // final negative X-shift
-       
+
         if (write_row_index == FACE_HEIGHT) {
            TTI_PACR(ADDR_MOD_2, 0, 0x3, 0, 0, 1, 1); //close tile in order to update address
            program_packer_destination<PACK_01>((std::uint16_t)(pack_tile_base_addr+2*(2*FACE_HEIGHT)), OUTPUT_BASE_ID); //FIXME: scale based on the format
         }
 
-   
+
 
         if (insert_blank)
         {
-            // Insert empty rows 
+            // Insert empty rows
             TTI_PACR(ADDR_MOD_0, 1, 0x3, 0, 0, 0, 0);
         }
         else
@@ -159,7 +159,7 @@ inline void llk_pack_shifted(const llk_pack_shifted_params_t *params, llk_pack_s
 
             TT_PACR(ADDR_MOD_0, pack_zeros, 0x3, 0, 0, 0, 0);
 
-            
+
         }
         write_row_index++;
 
@@ -198,4 +198,3 @@ inline void llk_pack_shifted(const llk_pack_shifted_params_t *params, llk_pack_s
 
     TTI_PACR(ADDR_MOD_2, 0, 0x3, 0, 0, 1, 1); //close tile
 }
-   

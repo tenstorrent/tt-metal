@@ -1,4 +1,4 @@
-/** 
+/**
 
 This is deprecated CMD code generation for old test_firmware and other older custom firmwares
 

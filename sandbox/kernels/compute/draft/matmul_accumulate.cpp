@@ -86,7 +86,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
 
         hlk_pop_tiles(core_ptr, HlkOperand::in0, args->in0_block_tile_cnt);
         hlk_pop_tiles(core_ptr, HlkOperand::in1, args->in1_block_tile_cnt);
-       
+
     }
 
     /* Finish Computing Matmul */
@@ -110,11 +110,11 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
 		            int intermed1_buffer_tile_offset = dst_r_offset +
 		                ((dst_c_offset + m)%args->num_n_sub_blocks)*args->num_tiles_per_sub_block +
 			            ((dst_c_offset + m)/args->num_n_sub_blocks)*args->num_tiles_per_n_sub_block + n;
-	                                                
+
                    hlk_add_tile(core_ptr, HlkOperand::intermed0, HlkOperand::intermed1, dst_tile_index, intermed1_buffer_tile_offset, dst_tile_index);
                    dst_tile_index++;
-	       }    
-	    }   
+	       }
+	    }
 
             hlk_pop_tiles(core_ptr, HlkOperand::intermed0, args->num_tiles_per_sub_block);
 
@@ -139,5 +139,3 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
     hlk_pop_tiles(core_ptr, HlkOperand::intermed1, args->out_block_tile_cnt);
 
 }
-
-

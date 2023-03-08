@@ -15,9 +15,9 @@
 #include "conv_pattern.hpp"
 using namespace std;
 
-enum INITIALIZE 
-{    
-    Zeros = 0, 
+enum INITIALIZE
+{
+    Zeros = 0,
     Ones = 1,
     Increment = 2,
     Random = 3,
@@ -31,7 +31,7 @@ enum INITIALIZE
         std::array<uint32_t, 2> padding_x = {0, 0};
         std::array<uint32_t, 2> padding_y = {0, 0};
         ConvParameters() {}
-        ConvParameters(uint32_t stride_x_, uint32_t stride_y_, std::array<uint32_t, 2> padding_x_, std::array<uint32_t, 2> padding_y_) : 
+        ConvParameters(uint32_t stride_x_, uint32_t stride_y_, std::array<uint32_t, 2> padding_x_, std::array<uint32_t, 2> padding_y_) :
         stride_x(stride_x_), stride_y(stride_y_), padding_x(padding_x_), padding_y(padding_y_) {}
         void print() {
             std::cout << "stride x = " << stride_x << " , stride y = " << stride_y << std::endl;
@@ -129,9 +129,9 @@ tt::Tensor<T> conv(tt::Tensor<T> &activation, tt::Tensor<T> &weights, ConvParame
     auto activation_values = activation.get_values();
     auto weights_values = weights.get_values();
     std::array<uint32_t, 4> out_shape = {
-                                        act_shape[0], 
-                                        weights_shape[0], 
-                                        ( (act_shape[2] + 2 * conv_params.PadH - weights_shape[2]) / conv_params.U) + 1, 
+                                        act_shape[0],
+                                        weights_shape[0],
+                                        ( (act_shape[2] + 2 * conv_params.PadH - weights_shape[2]) / conv_params.U) + 1,
                                         ( (act_shape[3] + 2 * conv_params.PadW - weights_shape[3]) / conv_params.V) + 1
                                         };
     auto output_volume = out_shape[0] * out_shape[1] * out_shape[2] * out_shape[3];
@@ -152,7 +152,7 @@ tt::Tensor<T> conv(tt::Tensor<T> &activation, tt::Tensor<T> &weights, ConvParame
                             for(auto cin = 0; cin < act_shape[1]; cin++) { // filter cin
                                 // auto act_x = x-(filter_center_x - fx);
                                 // auto act_y = y-(filter_center_y - fy);
-                                auto act_x = x * conv_params.V - conv_params.PadW + fx; 
+                                auto act_x = x * conv_params.V - conv_params.PadW + fx;
                                 auto act_y = y * conv_params.U - conv_params.PadH + fy;
                                 // std::cout<<"act_y = "<<act_y<<", act_x = "<<act_x<<std::endl;
                                 // std::cout<<"fy = "<<fy<<", fx = "<<fx<<std::endl;
@@ -223,17 +223,17 @@ tt::Tensor<T> conv(tt::Tensor<T> &activation, tt::Tensor<T> &weights, ConvParame
     vector<vector<double>> output;
     std::array<uint32_t, 4> in_shape = input_zxyw.shape;
     std::array<uint32_t, 2> out_shape_face_xy = {
-                                        ( (in_shape[1] + conv_params.padding_y[0] + conv_params.padding_y[1] - weights_shape[2]) / conv_params.stride_y) + 1, 
+                                        ( (in_shape[1] + conv_params.padding_y[0] + conv_params.padding_y[1] - weights_shape[2]) / conv_params.stride_y) + 1,
                                         ( (in_shape[2] + conv_params.padding_x[0] + conv_params.padding_x[1] - weights_shape[3]) / conv_params.stride_x) + 1
                                         };
-    
+
     std::vector<std::pair<int, int>> increments;
     for (auto j=0; j<weights_shape[2]; j++) {
-        for(auto i =0; i<weights_shape[3]; i++) {    
+        for(auto i =0; i<weights_shape[3]; i++) {
             increments.push_back(std::make_pair(i, j));
         }
     }
-    
+
     for(auto w = 0; w < in_shape[0]; w++) {
         for(auto y = 0; y < out_shape_face_xy[0]; y++) {
             for(auto x = 0; x < out_shape_face_xy[1]; x++) {
@@ -256,7 +256,7 @@ tt::Tensor<T> conv(tt::Tensor<T> &activation, tt::Tensor<T> &weights, ConvParame
                 output.push_back(row);
             }
         }
-        
+
     }
 
     return output;
@@ -266,7 +266,7 @@ tt::Tensor<T> conv(tt::Tensor<T> &activation, tt::Tensor<T> &weights, ConvParame
     vector<vector<double>> output;
     std::array<uint32_t, 4> in_shape = input_zxyw.shape;
 
-    
+
     for(auto w = 0; w < in_shape[0]; w++) {
         std::vector<double> row;
         for(auto y = 0; y < in_shape[1]; y++) {
@@ -311,7 +311,7 @@ vector<vector<T>> matmult(vector<vector<T>> &act, vector<vector<T>> &weights) {
         }
         output.push_back(output_row);
     }
-    
+
     return output;
 }
 
@@ -327,7 +327,7 @@ void run_conv(std::array<uint32_t, 4> act_shape, std::array<uint32_t, 4> weights
     // weights.print();
     tt::Tensor<std::uint32_t> golden = conv(activation, weights, conv_params);
     // golden.print();
-    
+
     /*************************************************************************** HOST PREP *******************************************************************/
     std::array<std::array<uint32_t, 2>, 4> pad_size = {{{0, 0}, {0, 0}, {conv_params.PadH, conv_params.PadH}, {conv_params.PadW, conv_params.PadW}}};
     tt::Tensor<std::uint32_t> activation_tensor_padded = tt::pad(activation, pad_size);
@@ -342,7 +342,7 @@ void run_conv(std::array<uint32_t, 4> act_shape, std::array<uint32_t, 4> weights
     // This will create the 2D matrix by modeling what dram to l1 read patterns are
     auto activation_matrix = move_act_dram_to_l1(activation_nhwc, conv_params);
     //vector<vector<double>> activation_matrix = move_act_dram_to_l1(activation_zxyw, weights_shape, conv_params);
-    
+
     std::tuple<uint32_t, uint32_t, std::vector<uint32_t>> addr_map = gen_address_map_conv_act_for_mm(activation_nhwc.get_shape(), conv_params);
 
     auto dram_to_l1_tilized_address_map = std::get<2>(addr_map);
@@ -378,7 +378,7 @@ void run_conv(std::array<uint32_t, 4> act_shape, std::array<uint32_t, 4> weights
         }
         throw std::runtime_error(string("Output in nchw layout does not match golden output in nchw layout"));
     }
-    
+
     //cout<<"Test PASSED!"<<endl;
 }
 
@@ -398,12 +398,12 @@ class ConvTestParameters {
 
 int main(int argc, char** argv)
 {
-    
+
     vector<ConvTestParameters> sweep_conv_test_params;
     sweep_conv_test_params.push_back(ConvTestParameters({1, 32, 10, 10}, {16, 32, 3, 3}, ConvParameters(3, 3, 1, 1, 0, 0)));
     //vector<ConvParameters> sweep_conv_params;
     //sweep_conv_params.push_back(ConvParameters(1, 1, ));
-    // Sweep conv parameters - 
+    // Sweep conv parameters -
     // stride x and y - 1 to 3
     // uneven stride x and y - 1 to 3
     // padding left and right 0 to 2
@@ -418,8 +418,8 @@ int main(int argc, char** argv)
                             sweep_conv_params.push_back(
                                 ConvParameters(stride_x, stride_y, {padding_left, padding_right}, {padding_top, padding_bottom})
                                 );
-                        }            
-                    }            
+                        }
+                    }
                 }
             }
         }
@@ -437,8 +437,8 @@ int main(int argc, char** argv)
     //             for (auto [kernel_x, kernel_y] : sweep_kernel_xy) {
     //                 for (auto conv_params : sweep_conv_params) {
     //                 sweep_conv_test_params.push_back(ConvTestParameters({w, z, y, x}, {o, z, kernel_y, kernel_x}, conv_params));
-    //                 }                            
-    //             } 
+    //                 }
+    //             }
     //         }
     //     }
     // }
@@ -458,7 +458,7 @@ int main(int argc, char** argv)
             std::cout << error.what() << std::endl;
             std::cout << "Conv Test Parameters - " << std::endl;
             test_params.print();
-            std::cout << "-------------------------------------------------" << std::endl;            
+            std::cout << "-------------------------------------------------" << std::endl;
         }
     }
     if (failing_tests == 0) {
@@ -470,4 +470,3 @@ int main(int argc, char** argv)
     }
     return 0;
 }
-

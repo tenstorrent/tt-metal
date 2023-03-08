@@ -328,9 +328,9 @@ void HlkMatrixOp::specialize_math_pack_sync(string dst_mode_str, bool untilize_e
 }
 
 void HlkMatrixOp::specialize_pack_func_str(const vector<int>& int_arg_vals, bool untilize_en, bool adv_features_en, bool fp32_dest_acc_en) {
-    
+
     const string UNTILIZE_EN = untilize_en ? "true" : "false";
-    
+
     string suffix = "<" + UNTILIZE_EN + ">";
     pack_hw_configure_func_str   += suffix;
     specialize_hw_fp32(pack_hw_configure_func_str, adv_features_en, fp32_dest_acc_en);
@@ -391,7 +391,7 @@ class HlkMatrixOp_hlk_copy_tile_to_dst : public HlkMatrixOp {
             math_func_hlk_api_args_positions_to_keep = {3};
             math_func_hlk_api_option_positions = {};
             math_struct_t_str              = "llk_math_eltwise_unary_params_t";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en) {
@@ -434,7 +434,7 @@ class HlkMatrixOp_hlk_tilize_and_copy_to_dst : public HlkMatrixOp {
             math_func_hlk_api_args_positions_to_keep = {3};
             math_func_hlk_api_option_positions = {};
             math_struct_t_str              = "llk_math_eltwise_unary_params_t";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en) {
@@ -477,7 +477,7 @@ class HlkMatrixOp_hlk_untilize_and_copy_to_dst : public HlkMatrixOp {
             math_func_hlk_api_args_positions_to_keep = {3};
             math_func_hlk_api_option_positions = {};
             math_struct_t_str              = "llk_math_eltwise_unary_params_t";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en) {
@@ -520,7 +520,7 @@ class HlkMatrixOp_hlk_transpose_xy_tile : public HlkMatrixOp {
             math_func_hlk_api_args_positions_to_keep = {3};
             math_func_hlk_api_option_positions = {};
             math_struct_t_str              = "llk_math_eltwise_unary_params_t";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en) {
@@ -559,7 +559,7 @@ class HlkMatrixOp_hlk_load_mm_partial_to_dst : public HlkMatrixOp {
         math_func_hlk_api_args_positions_to_keep = {3};
         math_func_hlk_api_option_positions = {};
         math_struct_t_str = "llk_math_eltwise_unary_params_t";
-            
+
     }
 
     virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en) {
@@ -597,7 +597,7 @@ class HlkMatrixOp_hlk_broadcast_tile : public HlkMatrixOp {
         math_func_hlk_api_args_positions_to_keep = {4};
         math_func_hlk_api_option_positions = {1};
         math_struct_t_str = "llk_math_eltwise_unary_params_t";
-            
+
     }
 
     virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en = false) {
@@ -644,7 +644,7 @@ class HlkMatrixOp_hlk_mm_tile : public HlkMatrixOp {
             math_func_hlk_api_args_positions_to_keep = {5};
             math_func_hlk_api_option_positions = {};
             math_struct_t_str              = "llk_math_matmul_params_t";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en) {
@@ -694,7 +694,7 @@ class HlkMatrixOp_hlk_add_tile : public HlkMatrixOp {
             math_func_hlk_api_args_positions_to_keep = {5};
             math_func_hlk_api_option_positions = {};
             math_struct_t_str              = "llk_math_eltwise_binary_params_t";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en) {
@@ -785,7 +785,7 @@ class HlkMatrixOp_hlk_multiply_tile : public HlkMatrixOp {
             math_func_hlk_api_args_positions_to_keep = {5};
             math_func_hlk_api_option_positions = {};
             math_struct_t_str              = "llk_math_eltwise_binary_params_t";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en) {
@@ -826,7 +826,7 @@ class HlkMatrixOp_hlk_add_tile_bcast : public HlkMatrixOp {
             math_func_hlk_api_args_positions_to_keep = {6};
             math_func_hlk_api_option_positions = {1};
             math_struct_t_str              = "llk_math_eltwise_binary_params_t";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en = false) {
@@ -1262,7 +1262,7 @@ class HlkMatrixOp_hlk_reduce_tile : public HlkMatrixOp {
             math_struct_t_str              = "llk_math_reduce_params_t";
 
             pack_hw_configure_func_str = "llk_pack_reduce_hw_configure";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en = false) {
@@ -1283,7 +1283,7 @@ class HlkMatrixOp_hlk_reduce_tile : public HlkMatrixOp {
             math_init_func_str           += suffix_math;
             math_func_str                += suffix_math;
             pack_hw_configure_func_str   += suffix_unpack_pack;
-            
+
             specialize_hw_fp32(math_func_str, adv_features_en, fp32_dest_acc_en);
             specialize_hw_fp32(pack_hw_configure_func_str, adv_features_en, fp32_dest_acc_en);
         }
@@ -1329,7 +1329,7 @@ class HlkMatrixOp_hlk_add_tile_to_dst : public HlkMatrixOp {
             math_func_hlk_api_args_positions_to_keep = {3,4};
             math_func_hlk_api_option_positions = {};
             math_struct_t_str              = "llk_math_eltwise_binary_params_t";
-            
+
         }
 
         virtual void specialize(const vector<int>& int_arg_vals, bool adv_features_en, bool fp32_dest_acc_en = false) {
@@ -1392,7 +1392,7 @@ class HlkSfpuOp : public HlkOp {
             hlk_sfpu_sigmoid = 8
         };
 
-        static constexpr OpApi all_op_apis[NUM_HLK_SFPU_OPS] = { 
+        static constexpr OpApi all_op_apis[NUM_HLK_SFPU_OPS] = {
             hlk_sfpu_exponential,
             hlk_sfpu_sqrt,
             hlk_sfpu_gelu,
@@ -1407,7 +1407,7 @@ class HlkSfpuOp : public HlkOp {
         static const string all_op_api_strs[NUM_HLK_SFPU_OPS];
 
     protected:
-        OpApi op_api; 
+        OpApi op_api;
         string op_str;
 
         // LLK math

@@ -8,10 +8,10 @@ constexpr uint8_t ADDR_MOD_1 = 1;
 constexpr uint8_t ADDR_MOD_2 = 2;
 constexpr uint8_t ADDR_MOD_3 = 3;
 
-constexpr uint32_t SRC_INCR_MASK = 0x3F; 
-constexpr uint32_t DEST_INCR_MASK = 0x3FF; 
+constexpr uint32_t SRC_INCR_MASK = 0x3F;
+constexpr uint32_t DEST_INCR_MASK = 0x3FF;
 
-//FIXME: These should be updated from cfg_defines.h 
+//FIXME: These should be updated from cfg_defines.h
 
 struct addr_mod_t
 {

@@ -6,7 +6,7 @@ struct hlk_args_t {
     std::int32_t per_core_block_cnt;
     std::int32_t per_core_block_dim;
 };
-  
+
 void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
 
     for(int i = 0; i < args->per_core_block_cnt ; ++i) {
@@ -21,13 +21,13 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
         }
         hlk_pop_tiles(core_ptr, HlkOperand::in0, args->per_core_block_dim);
 
-        hlk_wait_for_free_tiles(core_ptr, HlkOperand::out0, args->per_core_block_dim); 
+        hlk_wait_for_free_tiles(core_ptr, HlkOperand::out0, args->per_core_block_dim);
         for(int i = 0; i < args->per_core_block_dim ; ++i) {
             hlk_pack_tile_to_stream(core_ptr, i, HlkOperand::out0);
         }
-        hlk_push_tiles(core_ptr, HlkOperand::out0, args->per_core_block_dim); 
+        hlk_push_tiles(core_ptr, HlkOperand::out0, args->per_core_block_dim);
 
         hlk_release_dst(core_ptr, DstMode::Half);
-    } 
+    }
 
 }

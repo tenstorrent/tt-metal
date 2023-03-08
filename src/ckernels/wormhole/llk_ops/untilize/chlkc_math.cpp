@@ -1,10 +1,10 @@
 #include <cstdint>
-#include "llk_math_common.h" 
-#include "llk_math_eltwise_unary_datacopy.h" 
+#include "llk_math_common.h"
+#include "llk_math_eltwise_unary_datacopy.h"
 namespace NAMESPACE
 {
 
-struct hlk_args_t 
+struct hlk_args_t
 {
 int32_t per_core_tile_cnt; // Total number of tiles produced at the output per core
 int32_t per_core_block_tile_r_dim; // Block tile r dim (RT)

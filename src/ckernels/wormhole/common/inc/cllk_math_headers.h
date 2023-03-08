@@ -23,7 +23,7 @@ inline void llk_math_set_dest_section_flip();
 
 //
 // LLK matrix multiplication
-// 
+//
 inline void llk_math_mmul_init();
 inline void llk_math_mmul();
 
@@ -50,4 +50,3 @@ template <DataCopyType datacopy_type>
 inline void llk_math_eltwise_unary_datacopy();
 template <DataCopyType datacopy_type>
 inline void llk_math_eltwise_unary_datacopy_init();
-

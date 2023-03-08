@@ -36,6 +36,6 @@ void wait_tdma_movers_done(uint mover_busy_mask)
   do {
     tdma_mover_status = memory_read(RISCV_TDMA_REG_STATUS);
   // Wait until both movers are not busy, and fifo is empty
-  } while ( (tdma_mover_status & (mover_busy_mask | RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK)) 
+  } while ( (tdma_mover_status & (mover_busy_mask | RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK))
               != RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK);
 }

@@ -40,7 +40,7 @@ struct Edge {
     EdgeType edge_type = EdgeType::kData;
 
     EdgeUniqueId unique_id() const {
-        // intentionally exclude edge_creation_id from the tuple hash since 
+        // intentionally exclude edge_creation_id from the tuple hash since
         // it's unrelated to Edge identity
         return std::make_tuple(
             static_cast<NodeId>(this->producer_node_id),

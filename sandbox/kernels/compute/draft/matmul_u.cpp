@@ -96,7 +96,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
                    hlk_release_dst(core_ptr, DstMode::Half);
                }
            }
-           
+
            if (spill) enable_reload = true;
 
            hlk_pop_tiles(core_ptr, HlkOperand::in0, in0_block_tile_cnt);
@@ -106,5 +106,3 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
    }
 
 }
-
-

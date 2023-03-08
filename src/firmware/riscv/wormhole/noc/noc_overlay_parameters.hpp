@@ -109,7 +109,7 @@ class OLP {
         OLP() {}
 
     public:
-        static bool HasReg(std::string label) 
+        static bool HasReg(std::string label)
         {
             return registers_by_name.count(label) >= 1;
         }
@@ -130,7 +130,7 @@ class OLP {
         // There might be multiple registers with the same index
         // If so a register you didnt intend to access might be accessed.
         // Use accessor based on label if possible
-        static std::string RegName(std::uint32_t index) 
+        static std::string RegName(std::uint32_t index)
         {
             if (HasReg(index))
                 return registers[registers_by_index.at(index)].name;
@@ -138,7 +138,7 @@ class OLP {
                 throw std::runtime_error("Non-existant overlay register index: " + std::to_string(index));
         }
 
-        static std::uint32_t RegIdx(std::string label) 
+        static std::uint32_t RegIdx(std::string label)
         {
             if (HasReg(label))
                 return registers[registers_by_name.at(label)].index;
@@ -146,7 +146,7 @@ class OLP {
                 throw std::runtime_error("Non-existant overlay register: " + std::string(label));
         }
 
-        static std::string RegInfo(std::string label) 
+        static std::string RegInfo(std::string label)
         {
             if (HasReg(label))
                 return registers[registers_by_name.at(label)].description;
@@ -156,7 +156,7 @@ class OLP {
 
         ////////////////////////////////////
 
-        static bool HasFld(std::string label) 
+        static bool HasFld(std::string label)
         {
             return fields_by_name.count(label) >= 1;
         }
@@ -166,7 +166,7 @@ class OLP {
             return fields;
         }
 
-        static std::uint32_t FldOff(std::string label) 
+        static std::uint32_t FldOff(std::string label)
         {
             if (HasFld(label))
                 return fields[fields_by_name.at(label)].offset;
@@ -174,7 +174,7 @@ class OLP {
                 throw std::runtime_error("Non-existant overlay field: " + std::string(label));
         }
 
-        static std::uint32_t FldW(std::string label) 
+        static std::uint32_t FldW(std::string label)
         {
             if (HasFld(label))
                 return fields[fields_by_name.at(label)].width;
@@ -182,7 +182,7 @@ class OLP {
                 throw std::runtime_error("Non-existant overlay field: " + std::string(label));
         }
 
-        static std::string FldInfo(std::string label) 
+        static std::string FldInfo(std::string label)
         {
             if (HasFld(label))
                 return fields[fields_by_name.at(label)].description;
@@ -192,18 +192,18 @@ class OLP {
 
         ////////////////////////////////////
 
-        static bool HasFld(std::string reg_label, std::string field_label) 
+        static bool HasFld(std::string reg_label, std::string field_label)
         {
-            return HasReg(reg_label) && 
+            return HasReg(reg_label) &&
                    (registers[registers_by_name.at(reg_label)].fields_by_name.count(field_label) >= 1);
         }
 
         // There might be multiple registers(fields) with the same index(offset)
         // If so a register(field) you didnt intend to access might be accessed.
         // Use accessor based on label if possible
-        static bool HasFld(std::uint32_t reg_index, std::uint32_t field_offset) 
+        static bool HasFld(std::uint32_t reg_index, std::uint32_t field_offset)
         {
-            return HasReg(reg_index) && 
+            return HasReg(reg_index) &&
                    (registers[registers_by_index.at(reg_index)].fields_by_offset.count(field_offset) >= 1);
         }
 
@@ -231,7 +231,7 @@ class OLP {
         // There might be multiple registers(fields) with the same index(offset)
         // If so a register(field) you didnt intend to access might be accessed.
         // Use accessor based on label if possible
-        static std::string FldName(std::uint32_t reg_index, std::uint32_t field_offset) 
+        static std::string FldName(std::uint32_t reg_index, std::uint32_t field_offset)
         {
             if (HasFld(reg_index, field_offset)) {
                 auto field_tmp = registers[registers_by_index.at(reg_index)].fields;
@@ -242,7 +242,7 @@ class OLP {
             }
         }
 
-        static std::uint32_t FldOff(std::string reg_label, std::string field_label) 
+        static std::uint32_t FldOff(std::string reg_label, std::string field_label)
         {
             if (HasFld(reg_label, field_label)) {
                 auto field_tmp = registers[registers_by_name.at(reg_label)].fields;
@@ -253,7 +253,7 @@ class OLP {
             }
         }
 
-        static std::uint32_t FldW(std::string reg_label, std::string field_label) 
+        static std::uint32_t FldW(std::string reg_label, std::string field_label)
         {
             if (HasFld(reg_label, field_label)) {
                 auto field_tmp = registers[registers_by_name.at(reg_label)].fields;
@@ -267,7 +267,7 @@ class OLP {
         // There might be multiple registers(fields) with the same index(offset)
         // If so a register(field) you didnt intend to access might be accessed.
         // Use accessor based on label if possible
-        static std::uint32_t FldW(std::uint32_t reg_index, std::uint32_t field_offset) 
+        static std::uint32_t FldW(std::uint32_t reg_index, std::uint32_t field_offset)
         {
             if (HasFld(reg_index, field_offset)) {
                 auto field_tmp = registers[registers_by_index.at(reg_index)].fields;
@@ -278,7 +278,7 @@ class OLP {
             }
         }
 
-        static std::string FldInfo(std::string reg_label, std::string field_label) 
+        static std::string FldInfo(std::string reg_label, std::string field_label)
         {
             if (HasFld(reg_label, field_label)) {
                 auto field_tmp = registers[registers_by_name.at(reg_label)].fields;
@@ -292,4 +292,3 @@ class OLP {
 };
 
 }
-

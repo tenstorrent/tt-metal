@@ -39,7 +39,7 @@ ATGETM:
         not held by any thread, or is held by the issuing thread.
         Otherwise, stalls issuing thread until mutex is acquired. When
         instruction completes, issuing thread holds the mutex, and it
-        must be released using instruction ATRELM.  
+        must be released using instruction ATRELM.
 
 ATRELM:
     instrn_type: LOCAL_CREGS
@@ -128,7 +128,7 @@ SEMWAIT:
         - name: sem_sel
           start_bit: 2
           field_type: DEC
-          description: "One-hot encoded semaphore 0..7 select"  
+          description: "One-hot encoded semaphore 0..7 select"
         - name: stall_res
           start_bit: 14
           field_type: HEX
@@ -803,7 +803,7 @@ UNPACR:
           field_type: BIN
           start_bit: 5
           description: "Will cause srcb rarefy to trigger on uncompress_done"
-          fcov_point_bool:         
+          fcov_point_bool:
         - name: SetDatValid
           field_type: BIN
           start_bit: 6
@@ -814,15 +814,15 @@ UNPACR:
           start_bit: 7
           description: "Use context ID instead of thread ID to select unpacker configuration"
           fcov_point_bool:
-        - name: AddrCntContextId 
+        - name: AddrCntContextId
           field_type: DEC
           start_bit: 8
           description: "Address counter context ID 0..2"
-        - name: CfgContextId  
+        - name: CfgContextId
           field_type: DEC
           start_bit: 10
           description: "Config context ID 0..7"
-        - name: CfgContextCntInc  
+        - name: CfgContextCntInc
           field_type: BIN
           start_bit: 13
           description: "Increment config context counter without performing search and unpack"
@@ -848,7 +848,7 @@ UNPACR_NOP: # Misc unpack instruction with side effect (skips actual search and 
         - name: NoOp
           field_type: DEC
           start_bit: 0
-          description: "0 - UNP_POP (freeing up data allocation buffer in noc overlay through side band signal. 
+          description: "0 - UNP_POP (freeing up data allocation buffer in noc overlay through side band signal.
                                  Amount of data to be freed is set through NOC_OVERLAY_MSG_CLEAR register)
                         1 - UNP_ZERO_SRC (clear srcA or srcB when unpack is done)
                         2 - UNP_NOP (inject cycle delay between back to back unpack)"
@@ -1949,4 +1949,3 @@ MOP_CFG:
         start_bit: 0
         field_type: HEX
         description: High 16-bit zmask for unpacker loop
-

@@ -111,13 +111,13 @@ void switch_perf_buffers_and_record_event(uint32_t event_id, uint32_t event_valu
          trisc_stalled = true;
          wait_for_dram_start_l = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_L);
          wait_for_dram_start_h = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_H);
-         
+
          while (ack_local <= dram_dump_req_local - 2) {}
-         
+
          wait_for_dram_end_l = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_L);
          wait_for_dram_end_h = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_H);
       }
-      
+
       dram_dump_req_local++;
       EPOCH_INFO_PTR->perf_dram_copy_req[thread_id] = dram_dump_req_local;
       perf_buf_base_id = 1 - perf_buf_base_id;

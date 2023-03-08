@@ -19,10 +19,10 @@ struct csfpu_params_t {
     bool sfpu_stoch_rnd;
 
     csfpu_params_t()
-        : leaky_slope(0x3dd1), format(0) {} 
+        : leaky_slope(0x3dd1), format(0) {}
 
 };
-    
+
 inline void sfpu_push_cc()
 {
     TTI_SFPPUSHC(0, 0, 0, 0);
@@ -123,27 +123,27 @@ inline void sfpu_set_cc_if_not_zero(uint reg)
 
 inline void sfpu_load_imm32(const uint dest, const uint upper16, const uint lower16)
 {
-        TTI_SFPLOADI(dest, 0xA, lower16);  // insmod == A will write the lower bits, and not affect the upper bits; 
-        TTI_SFPLOADI(dest, 0x8, upper16);  // insmod == 8 will write the upper bits, and not affect the lower bits; 
+        TTI_SFPLOADI(dest, 0xA, lower16);  // insmod == A will write the lower bits, and not affect the upper bits;
+        TTI_SFPLOADI(dest, 0x8, upper16);  // insmod == 8 will write the upper bits, and not affect the lower bits;
 }
 
 inline void sfpu_load_imm32(const uint dest, const uint val)
 {
-        TT_SFPLOADI(dest, 0xA, (val & 0xFFFF));  // insmod == A will write the lower bits, and not affect the upper bits; 
-        TT_SFPLOADI(dest, 0x8, (val>>16) & 0xFFFF);  // insmod == 8 will write the upper bits, and not affect the lower bits; 
+        TT_SFPLOADI(dest, 0xA, (val & 0xFFFF));  // insmod == A will write the lower bits, and not affect the upper bits;
+        TT_SFPLOADI(dest, 0x8, (val>>16) & 0xFFFF);  // insmod == 8 will write the upper bits, and not affect the lower bits;
 }
 
-inline void sfpu_access_even_cols() 
+inline void sfpu_access_even_cols()
 {
     // Using insmod == 5 means to use the immediate field as an AND mask; This restores the read/write columns to default value of 0 to point to even columns
-    TTI_SFPCONFIG(0xFF3F, 15, 0x5);              // #define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1) 
+    TTI_SFPCONFIG(0xFF3F, 15, 0x5);              // #define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1)
     TTI_SFPNOP;
 }
 
-inline void sfpu_access_odd_cols() 
+inline void sfpu_access_odd_cols()
 {
     // Using insmod == 3 means to use the immediate field as an OR mask; This will flip the read/write columns (bits 6 and 7)
-    TTI_SFPCONFIG(0x00C0, 15, 0x3);              // #define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1) 
+    TTI_SFPCONFIG(0x00C0, 15, 0x3);              // #define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1)
     TTI_SFPNOP;
 }
 
@@ -172,7 +172,7 @@ inline void sfpu_exp()
 
 //  TTI_SFPLOADI(1, 0, 0x3F80);  // 1.0077
 //  TTI_SFPMAD(3, 2, 6,  3, 0);   // lreg[6] has hard-coded value of 1.0077
-    TTI_SFPMAD(3, 2, p_sfpu::LCONST_1, 3, 0);   // lreg[10] has hard-coded value of 1.0 (0x3F80) 
+    TTI_SFPMAD(3, 2, p_sfpu::LCONST_1, 3, 0);   // lreg[10] has hard-coded value of 1.0 (0x3F80)
     TTI_SFPNOP;
 
     // Run predicated loop of squarings
@@ -280,21 +280,21 @@ inline void sfpu_reciprocal_lreg_reduced(const uint max_iter = 3)
     // This function performs reciprocal function without using LREG[1]
     // Perf penalty is that constant 2.0 is being reloaded every time we need it
     // Use this function as part of bigger procedure when one of LREGs keeps some other result
-    
+
     if (max_iter == 1)
     {
         // If we are only doing one iteration of the MAD loop, then we only need to use one LREG for the MAD instructions because we have our "first guess" in a hard-coded register
         // This allows us to avoid having to load back in the original value later on
-        
+
         // Extract exponent from original number to lreg[2]
         TTI_SFPEXEXP(0, 3, 2, 0);
     }
-    
+
     // invert sign on loaded value
     TTI_SFPMOV(0, 3, 3, 1);
     // Set exponent to 126 to make the number in 0.5-1 range in lreg[3]
     TTI_SFPSETEXP(126, 3, 3, 1);
-    
+
     // MT: keep loading 1.0 before it's used to keep LREG[1] unused
     //  TTI_SFPLOADI(1, 1, 0x4000); // Load 2.0 into lreg[1]
 
@@ -302,7 +302,7 @@ inline void sfpu_reciprocal_lreg_reduced(const uint max_iter = 3)
     {
         // If we are only doing one iteration of the MAD loop, then we only need to use one LREG for the MAD instructions because we have our "first guess" in a hard-coded register
         // This allows us to avoid having to load back in the original value later on
-        
+
         // lreg[0] = 2.0
         TTI_SFPLOADI(p_sfpu::LREG0, 1, 0x4000);
         // lreg[0] = lreg[3]*1.44 + lreg[0]
@@ -358,7 +358,7 @@ inline void sfpu_reciprocal_lreg_reduced(const uint max_iter = 3)
     // if (lreg[2] < 0) {
         // if rebiased exponent is negative, we need to saturate at 0.
         // This means the initial number was too big so reciprocal result should be 0
-        
+
         // Move 0 to lreg[0]
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         // Move 0 to lreg[2]
@@ -376,7 +376,7 @@ inline void sfpu_reciprocal_lreg_reduced(const uint max_iter = 3)
 
 inline void init_dropout_seed(uint16_t p2){
     FWLOG1("calculate_dropout() -- input seed:%x", p2);
-    
+
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
 
     uint16_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
@@ -385,7 +385,7 @@ inline void init_dropout_seed(uint16_t p2){
     uint16_t per_tensix_input_seed = p2 ^ (my_x << my_y);
 
     FWLOG1("calculate_dropout() -- calculated seed:%x", per_tensix_input_seed);
-    
+
     TTI_SFPMOV(0x0, 15, p_sfpu::LREG2, 0);                                                      // lreg[2] <= lreg15 (tile-id)
     TTI_SFPSHFT(10, 0, p_sfpu::LREG2, 1);                                                       //lreg2 <<=10
     TTI_SFPMOV(0x0, p_sfpu::LREG2, p_sfpu::LREG3, 0);                                           // lreg[3] <= lreg2 (tile-id)
@@ -407,29 +407,29 @@ inline void init_dropout_seed(uint16_t p2){
 
 inline void configure_programmable_constants(){
 
-    TTI_SFPLOADI(0, 0xA, 0x0000);          
+    TTI_SFPLOADI(0, 0xA, 0x0000);
     TTI_SFPLOADI(0, 0x8, 0xBF80);
     TTI_SFPCONFIG(0, p_sfpu::LCONST_neg1, 0);
 
-    TTI_SFPLOADI(0, 0xA, 0x6000);          
+    TTI_SFPLOADI(0, 0xA, 0x6000);
     TTI_SFPLOADI(0, 0x8, 0x3f31);
     TTI_SFPCONFIG(0, p_sfpu::LCONST_ln2, 0);
 
-    TTI_SFPLOADI(0, 0xA, 0xAA3B);          
+    TTI_SFPLOADI(0, 0xA, 0xAA3B);
     TTI_SFPLOADI(0, 0x8, 0x3FB8);
     TTI_SFPCONFIG(0, p_sfpu::LCONST_ln2_recip, 0);
 
-    TTI_SFPLOADI(0, 0xA, 0x0000);          
+    TTI_SFPLOADI(0, 0xA, 0x0000);
     TTI_SFPLOADI(0, 0x8, 0xBF00);
     TTI_SFPCONFIG(0, p_sfpu::LCONST_neg_point_5, 0);
 
-    TTI_SFPLOADI(0, 0xA, 0x0000);          
+    TTI_SFPLOADI(0, 0xA, 0x0000);
     TTI_SFPLOADI(0, 0x8, 0x0000);
 
 }
 
 template <bool APPROXIMATION_MODE>
-inline void sfpu_init(SfpuType operation, uint param0 = 0) 
+inline void sfpu_init(SfpuType operation, uint param0 = 0)
 {
     configure_programmable_constants();
     uint imm0;
@@ -485,7 +485,7 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
 template <bool APPROXIMATION_MODE, uint ADDR_MOD>
 inline void calculate_exponential_body()
 {
-    
+
     // TTI_SFPLOAD(3, 0, ADDR_MOD, 0); // load from dest
     if constexpr (APPROXIMATION_MODE)
     {
@@ -566,7 +566,7 @@ void calculate_exponential(uint16_t exp_base_scale_factor = 0)
     {
         TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD, 0); // load from dest
         if constexpr(SCALE_EN){
-            TT_SFPLOADI(p_sfpu::LREG0, 1, exp_base_scale_factor);   
+            TT_SFPLOADI(p_sfpu::LREG0, 1, exp_base_scale_factor);
             TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);  // input scaling: x * ln(a) = x * exp_base_scale_factor
             TTI_SFPNOP;
         }
@@ -577,7 +577,7 @@ void calculate_exponential(uint16_t exp_base_scale_factor = 0)
             TTI_SFPNOP;
 
             // Remove Exponent of 7 and bias the Mantissa to 127.
-            // LREG2 already holds 2's complement value so we simply do REG2 + REG3 
+            // LREG2 already holds 2's complement value so we simply do REG2 + REG3
             TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 0); // lreg3 = lreg2 + lreg3.
 
             // SHL to move integer bits to exponent
@@ -612,7 +612,7 @@ void calculate_exponential(uint16_t exp_base_scale_factor = 0)
             TTI_SFPLOAD(1, 0, ADDR_MOD, 0); // load from dest
 
             if constexpr(SCALE_EN){
-                TT_SFPLOADI(p_sfpu::LREG0, 1, exp_base_scale_factor);   
+                TT_SFPLOADI(p_sfpu::LREG0, 1, exp_base_scale_factor);
                 TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);  // input scaling: x * ln(a) = x * exp_base_scale_factor
                 TTI_SFPNOP;
             }
@@ -642,9 +642,9 @@ inline void calculate_gelu_core()
     constexpr uint imm2 = 0xFF00;
 
     TTI_SFPLOADI(0, 2, imm0); //reload lreg0
-    
-    // SFPU microcode: 
-    // result = (APPROX_MODE == 1) 
+
+    // SFPU microcode:
+    // result = (APPROX_MODE == 1)
     //   ? (1 + erf(x/sqrt(2)))
     //   : (1 + tanh( sqrt(2/pi) * (x + 0.44715*x^3) )
     if constexpr (APPROXIMATION_MODE)
@@ -680,7 +680,7 @@ inline void calculate_gelu_core()
     TTI_SFPNOP;
     TTI_SFPMULI(0x3f00, 3, 0); // lreg3 = lreg3*0.5
     TTI_SFPNOP;
-    
+
     // TTI_SFPSTORE(3, 0, 0);
 }
 
@@ -733,7 +733,7 @@ inline void calculate_gelu()
         TTI_SFPNOP;
         TTI_SFPMUL(1, 2, p_sfpu::LCONST_0, 3, 0); // lreg3 = 		lreg2*lreg1
         TTI_SFPNOP;
-        
+
         TTI_SFPSTORE(3, 0, ADDR_MOD, 0);
         TTI_INCRWC(0, 2, 0, 0);
     }
@@ -853,7 +853,7 @@ template <bool APPROXIMATION_MODE, uint ADDR_MOD>
 inline void calculate_gelu_derivative()
 {
     // SFPU microcode:
-    #pragma GCC unroll 0 
+    #pragma GCC unroll 0
     for (int d = 0; d < 8; d++)
     {
         // lreg[3] = x;
@@ -861,7 +861,7 @@ inline void calculate_gelu_derivative()
 
         // lreg[3] = lreg[3]^2
         TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
-        
+
         // Reload x to lreg[1] and keep it saved
         // lreg[1] = x;
         TTI_SFPLOAD(1, 0, ADDR_MOD, 0);
@@ -878,10 +878,10 @@ inline void calculate_gelu_derivative()
 
         // lreg[3] = lreg[3] * 1/sqrt(2*pi)
         TTI_SFPMULI(0x3ecc, 3, 0);TTI_SFPNOP;
-        
+
         // lreg[0] = lreg[3] * lreg[1]
         TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); TTI_SFPNOP;
-        
+
         // Store intermediate result
         TTI_SFPSTORE(0, 0, ADDR_MOD, 0);
 
@@ -891,8 +891,8 @@ inline void calculate_gelu_derivative()
 
         // lreg[3] = lreg[1]
         TTI_SFPMOV(0x0, 1, 3, 0);
-        
-        // lreg[3] = (APPROX_MODE == 1) 
+
+        // lreg[3] = (APPROX_MODE == 1)
         //   ? 0.5 * (1 + erf(x/sqrt(2)))
         //   : 0.5 * (1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) )
         calculate_gelu_core<true>();
@@ -1050,16 +1050,16 @@ inline void calculate_dropout(uint prob, uint scale)
         sfpu_load_imm32(p_sfpu::LREG2, prob);                                                       // lreg[2] <= prob
         TTI_SFPMOV(0x0, p_sfpu::LREG3, p_sfpu::LREG1, 0);                                           // lreg[1] <= current lfsr (lreg[3])
 
-        
+
         // Compare random num in lreg[3] and set cc
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG2, 0x2);                                         // lreg2 <= lreg1 - lreg2
 
-        
+
         sfpu_toggle_enable_cc();
         sfpu_set_cc_from_reg2_sign();
         TTI_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD, 0);                                             // Store (zero) to dest if random number (LFSR state) is less than prob (an integer)
         sfpu_toggle_enable_cc();
-        
+
         ////////////////////////
         // 16-bit PRNG update
         ///////////////////////
@@ -1069,7 +1069,7 @@ inline void calculate_dropout(uint prob, uint scale)
 
         TTI_SFPSHFT(0xFFF, 0, p_sfpu::LREG3, 0x1);                                                  // lreg3 = lreg3 >> 1
 
-        // if sign is negative 
+        // if sign is negative
         sfpu_toggle_enable_cc();
         sfpu_set_cc_if_not_zero(p_sfpu::LREG2);                                                     // Check LSB of LFSR before right shift
         TTI_SFPMOV(0x0, p_sfpu::LREG3, p_sfpu::LREG2, 0);                                           // lreg[2] <= current lfsr (lreg[3]) (shifted version)
@@ -1077,12 +1077,12 @@ inline void calculate_dropout(uint prob, uint scale)
         // XOR breakdown
         TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);                                             // lreg2 = lreg2 AND lreg0
         TTI_SFPNOT(0, p_sfpu::LREG2, p_sfpu::LREG2, 0);                                             // lreg2 = ~lreg2
-        
+
 
         TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);                                              // lreg3 = lreg3 OR lreg0
 
         TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);                                             // lreg3 = lreg2 AND lreg3
-        
+
         sfpu_toggle_enable_cc();
 
         TTI_INCRWC(0, 2, 0, 0);
@@ -1096,9 +1096,9 @@ inline void calculate_lrelu(uint slope)
     #pragma GCC unroll 0
     for (int d = 0; d < 8; d++) {
         TTI_SFPLOAD(2, 0, ADDR_MOD, 0);	// load from dest
-        
+
         TT_SFPLOADI(1, 0, slope);
-        
+
         sfpu_toggle_enable_cc();
         sfpu_set_cc_from_reg2_sign();
 
@@ -1106,7 +1106,7 @@ inline void calculate_lrelu(uint slope)
         TTI_SFPNOP;
 
         sfpu_toggle_enable_cc();
-        
+
         TTI_SFPSTORE(2, 0, ADDR_MOD, 0);
         TTI_INCRWC(0, 2, 0, 0);
     }
@@ -1162,7 +1162,7 @@ inline void calculate_log_body(const uint log_base_scale_factor)
     // set exponent to 127 (force the value to range 1-2)
     TTI_SFPSETEXP(127, p_sfpu::LREG3, p_sfpu::LREG3, 1);                             // set exp to exp bias (put in range of 1-2)
     // Subtract a 1 to account for ln(x+1) action
-    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LCONST_neg1, p_sfpu::LREG3, 0);  // Subtract 1 to get x in ln(x+1) 
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LCONST_neg1, p_sfpu::LREG3, 0);  // Subtract 1 to get x in ln(x+1)
 
     // Load coefficients for Horner form multiplication:
     // x* ( x* (A*x + B) + C) + D
@@ -1177,7 +1177,7 @@ inline void calculate_log_body(const uint log_base_scale_factor)
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG2, 0);
 
     // Lreg[2] holds the series result
-    
+
     ///////
     // Convert exponent to float
     ///////
@@ -1214,7 +1214,7 @@ inline void calculate_log_body(const uint log_base_scale_factor)
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);  // base correction: ln(x)*log_mult_const, log_mult_const is 1/ln(base)
         TTI_SFPNOP;
     }
-    
+
     ////////////////////////////
     // Base case when input is 0. ln(0) = -inf
     ////////////////////////////
@@ -1250,7 +1250,7 @@ inline void calculate_comp(uint exponent_size_8)
     // False = 0.0 = kCONST_0 (5/8-bit exponent format)
     // True  = 1.0 = kCONST_1_FP16B (8-bit exponent format)
     // SFPU uses 8-bit exponent in operations so loading these constants in 8-bit exponent format.
-    // Although a command flag can tell SFPU to re-bias a 5-bit exponent to 8-bit, we are loading 8-bit 
+    // Although a command flag can tell SFPU to re-bias a 5-bit exponent to 8-bit, we are loading 8-bit
     // exponent and telling SFPU to not add any bias to these constants.
     constexpr auto output_0 = invert_output ? p_sfpu::kCONST_0 : p_sfpu::kCONST_1_FP16B;
     constexpr auto output_1 = invert_output ? p_sfpu::kCONST_1_FP16B : p_sfpu::kCONST_0;
@@ -1270,7 +1270,7 @@ inline void calculate_comp(uint exponent_size_8)
         {
             if(!exponent_size_8)
             {
-                //this loads bias const into LREG[0] 
+                //this loads bias const into LREG[0]
                 //and modifies LREG[3]
                 sfpu_set_cc_from_reg3_if_zero();
             }
@@ -1283,7 +1283,7 @@ inline void calculate_comp(uint exponent_size_8)
             sfpu_set_cc_from_reg3_sign();
         }
         TTI_SFPLOADI(p_sfpu::LREG3, instr_mode, output_0);
-        // } 
+        // }
         // else {
         sfpu_comp_cc();
         TTI_SFPLOADI(p_sfpu::LREG3, instr_mode, output_1);
@@ -1330,7 +1330,7 @@ inline void calculate_comp(uint exponent_size_8)
                 // LREG3 = 0x3F80(1.0) if DST >= 0 else 0
                 // LREG2 = 0x3F80(1.0) if DST != 0 else 0
                 // Do a bitwise And (LREG2 & LREG3) to get > condition.
-                // LREG3 >= 0 AND LREG2 != 0 => DST is Greater than zero 
+                // LREG3 >= 0 AND LREG2 != 0 => DST is Greater than zero
                 // Result will be either 0x0000(0.0) or 0x3F80(1.0) in LREG3
                 TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
             }
@@ -1360,7 +1360,7 @@ inline void calculate_clamp(uint param0, uint param1, uint param2)
     for (int d = 0; d < 8; d++)
     {
         TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD, 0); // load from dest into lreg3
-        TT_SFPLOADI(p_sfpu::LREG2,format,param0); // Load param0 into lreg2 (format fp16_a or fp16_b) 
+        TT_SFPLOADI(p_sfpu::LREG2,format,param0); // Load param0 into lreg2 (format fp16_a or fp16_b)
 
         TTI_SFPMAD(p_sfpu::LREG2,p_sfpu::LCONST_neg1, p_sfpu::LREG3, p_sfpu::LREG2, 0); // lreg2 = lreg2*(-1) + lreg3
         TTI_SFPNOP;
@@ -1374,7 +1374,7 @@ inline void calculate_clamp(uint param0, uint param1, uint param2)
 
         sfpu_toggle_enable_cc();
 
-        TT_SFPLOADI(p_sfpu::LREG2,format,param1); // Load param1 into lreg2 (format fp16_a or fp16_b) 
+        TT_SFPLOADI(p_sfpu::LREG2,format,param1); // Load param1 into lreg2 (format fp16_a or fp16_b)
 
         TTI_SFPMAD(p_sfpu::LREG2,p_sfpu::LCONST_neg1, p_sfpu::LREG3, p_sfpu::LREG2, 0); // lreg2 = lreg2*(-1) + lreg3
         TTI_SFPNOP;
@@ -1502,9 +1502,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     else if constexpr (operation == SfpuType::gelu_derivative) {
         calculate_gelu_derivative<APPROXIMATION_MODE, ADDR_MOD>();
     }
-    else if constexpr ((operation == SfpuType::equal_zero) || 
+    else if constexpr ((operation == SfpuType::equal_zero) ||
                        (operation == SfpuType::not_equal_zero) ||
-                       (operation == SfpuType::less_than_zero) || 
+                       (operation == SfpuType::less_than_zero) ||
                        (operation == SfpuType::greater_than_equal_zero) ||
                        (operation == SfpuType::less_than_equal_zero) ||
                        (operation == SfpuType::greater_than_zero)) {

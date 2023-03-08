@@ -5,7 +5,7 @@
 struct hlk_args_t {
     std::int32_t per_core_tile_cnt;
 };
-  
+
 void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
     for(int b=0;b<args->per_core_tile_cnt;++b)
     {
@@ -26,5 +26,3 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
     }
 
 }
-
-

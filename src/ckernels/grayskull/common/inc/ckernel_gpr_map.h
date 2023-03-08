@@ -31,8 +31,8 @@ struct p_gpr_unpack
 // Math GPR thread
 struct p_gpr_math
 {
-    constexpr static uint PERF_DBUS_CNTL    = 4;   // Control debug bus perf counter selection 
-    constexpr static uint PERF_MEM_DUMP_CNTL_CLEAR= 5;   // Clear write to memory flag 
+    constexpr static uint PERF_DBUS_CNTL    = 4;   // Control debug bus perf counter selection
+    constexpr static uint PERF_MEM_DUMP_CNTL_CLEAR= 5;   // Clear write to memory flag
     constexpr static uint PERF_MEM_DUMP_CNTL_SET= 6;   // Set write to memory flag
     constexpr static uint PERF_CNT_START    = 7;   // Start perf counter
     constexpr static uint PERF_CNT_STOP     = 8;   // Stop perf counter

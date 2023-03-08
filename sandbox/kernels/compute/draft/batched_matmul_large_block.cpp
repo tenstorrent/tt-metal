@@ -51,7 +51,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
                                 hlk_copy_tile_to_dst(core_ptr, CB::c_intermed0, out_tile_offset, dst_tile_index);
                                 dst_tile_index++;
                             }
-                            m_tile_offset+=args->dst_tile_cols; 
+                            m_tile_offset+=args->dst_tile_cols;
                         }
                         hlk_mm_tile_init(core_ptr, false);
                     }
@@ -81,7 +81,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
                                 hlk_pack_tile_to_stream(core_ptr, dst_tile_index, CB::c_out0, out_tile_offset);
                                 dst_tile_index++;
                             }
-                            m_tile_offset+=args->dst_tile_cols; 
+                            m_tile_offset+=args->dst_tile_cols;
                         }
                         hlk_push_tiles(core_ptr, CB::c_out0, args->num_tiles_per_sub_block);
                     } else {
@@ -96,7 +96,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
                                 hlk_pack_tile_to_stream(core_ptr, dst_tile_index, CB::c_intermed0, out_tile_offset);
                                 dst_tile_index++;
                             }
-                            m_tile_offset+=args->dst_tile_cols; 
+                            m_tile_offset+=args->dst_tile_cols;
                         }
                         hlk_push_tiles(core_ptr, CB::c_intermed0, args->num_tiles_per_sub_block);
                     }
@@ -116,5 +116,3 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
         batch_offset += args->num_m_sub_blocks * args->num_tiles_per_m_sub_block * args->num_n_sub_blocks * args->num_tiles_per_n_sub_block;
     }
 }
-
-

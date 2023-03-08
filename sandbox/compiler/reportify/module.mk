@@ -19,4 +19,3 @@ $(COMPILER_REPORTIFY): $(COMPILER_GRAPH_LIB) $(COMPILER_REPORTIFY_OBJS)
 $(OBJDIR)/compiler/reportify/%.o: compiler/reportify/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(COMPILER_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(COMPILER_REPORTIFY_INCLUDES) -c -o $@ $<
-

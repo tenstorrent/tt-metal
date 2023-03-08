@@ -104,7 +104,7 @@ std::uint32_t data_format_byte_size(DataFormat df, int elements)
         case DataFormat::Float16_b:
         case DataFormat::Float16: return 2 * elements;
         case DataFormat::Bfp8_b:
-        case DataFormat::Bfp8: return (elements + elements/16); 
+        case DataFormat::Bfp8: return (elements + elements/16);
         case DataFormat::Bfp4_b:
         case DataFormat::Bfp4: return (elements / 2 + elements / 16);
         case DataFormat::Bfp2_b:
@@ -121,4 +121,3 @@ std::uint32_t data_format_byte_size(DataFormat df, int elements)
 }
 
 }
-

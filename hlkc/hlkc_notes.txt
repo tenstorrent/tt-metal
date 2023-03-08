@@ -39,9 +39,9 @@ void dispatch() {
 
 
 void unpack_main(void* void_args_ptr, void *void_unpack_args_ptr, int32_t loop_cnt) {
-    
+
     hlk_args_t args = (hlk_args_t*) void_args_ptr;
-    
+
     // tbd
   //  llk_configure_unpack(???);
 
@@ -55,4 +55,3 @@ void unpack_main(void* void_args_ptr, void *void_unpack_args_ptr, int32_t loop_c
     }
 }
 */
-

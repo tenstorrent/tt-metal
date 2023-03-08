@@ -210,7 +210,7 @@ inline uint reg_read_barrier(uint32_t addr)
 }
 
 
-// Same as above. Input address targets l1 
+// Same as above. Input address targets l1
 inline uint32_t l1_read_barrier(volatile uint32_t *addr)
 {
     uint32_t data = addr[0];
@@ -246,12 +246,12 @@ inline void wait(uint32_t cycles) {
     do {
        wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0]<<32);
     }
-    while (wall_clock < (wall_clock_timestamp+cycles));     
+    while (wall_clock < (wall_clock_timestamp+cycles));
 }
 
 // Clear dest
 inline void zeroacc() {
-    // Clear dest	
+    // Clear dest
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -341,10 +341,10 @@ template <uint CfgAddr32, uint Shamt, uint Mask, uint TmpGpr0, uint TmpGpr1>
 inline void cfg_reg_rmw_tensix(uint32_t val)
 {
     uint32_t wr_val = (val << Shamt) & Mask;
-    
+
     // TmpGpr0 = current GPR value
     TTI_RDCFG(TmpGpr0, CfgAddr32);
-    
+
     // TmpGpr1 = ~Mask
     TTI_SETDMAREG(0, (~Mask) & 0xffff, 0, LO_16(TmpGpr1));
     TTI_SETDMAREG(0, (~(Mask >> 16)) & 0xffff, 0, HI_16(TmpGpr1));
@@ -360,7 +360,7 @@ inline void cfg_reg_rmw_tensix(uint32_t val)
     TTI_BITWOPDMAREG(0, 1, TmpGpr0, TmpGpr0, TmpGpr1);
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    
+
     TTI_WRCFG(TmpGpr0, p_cfg::WRCFG_32b, CfgAddr32);
     TTI_NOP;TTI_NOP;
 

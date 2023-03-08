@@ -38,11 +38,9 @@ Set up after reboot
 -----------------------------
 
 Run the following commands manually by sshing into the node in order to restart the dashboard as
-well. **Note** these commands are only for nodes that are already set up and have only been rebooted. 
+well. **Note** these commands are only for nodes that are already set up and have only been rebooted.
 
 ..  code-block:: sh
 
     sudo docker restart grafana
     sudo docker restart prometheus
-
-

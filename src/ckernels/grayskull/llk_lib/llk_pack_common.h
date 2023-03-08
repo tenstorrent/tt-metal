@@ -69,8 +69,8 @@ inline void llk_init_packer_dest_offset_registers() {
        if constexpr (FaceLayout == ColMajor) {
           // Packer0 :  0,32,  1,33 ...  7, 39
           // Packer1 :  8,40,  9,41 ... 15, 47
-          // Packer2 : 16,48, 17,49 ... 23, 55		  
-          // Packer3 : 23,56, 24,57 ... 31, 63		  
+          // Packer2 : 16,48, 17,49 ... 23, 55
+          // Packer3 : 23,56, 24,57 ... 31, 63
           TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
           TT_SETDMAREG(0, 0x000 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
           TT_SETDMAREG(0, 0x000 + 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
@@ -79,11 +79,11 @@ inline void llk_init_packer_dest_offset_registers() {
           TT_SETDMAREG(0, 0x200 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
           TT_SETDMAREG(0, 0x200 + 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
           TT_SETDMAREG(0, 0x200 + 0x18, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
-       } else {		 
+       } else {
           // Packer0 :  0,16,  1,17 ...  7, 23
           // Packer1 :  8,24,  9,25 ... 15, 31
-          // Packer2 : 32,48, 33,49 ... 39, 55		  
-          // Packer3 : 40,56, 41,57 ... 47, 63		  
+          // Packer2 : 32,48, 33,49 ... 39, 55
+          // Packer3 : 40,56, 41,57 ... 47, 63
           TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
           TT_SETDMAREG(0, 0x000 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
           TT_SETDMAREG(0, 0x000 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
@@ -92,8 +92,8 @@ inline void llk_init_packer_dest_offset_registers() {
           TT_SETDMAREG(0, 0x200 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
           TT_SETDMAREG(0, 0x200 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
           TT_SETDMAREG(0, 0x200 + 0x28, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
-       }    
-    } else { 
+       }
+    } else {
        if constexpr (FaceLayout == ColMajor) {
            TT_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
            TT_SETDMAREG(0, 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
@@ -113,7 +113,7 @@ inline void llk_init_packer_dest_offset_registers() {
            TT_SETDMAREG(0, 0x200 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
            TT_SETDMAREG(0, 0x200 + 0x30, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
        }
-    }   
+    }
     select_packer_dest_registers<Dst>();
 }
 
@@ -131,7 +131,7 @@ template <bool mail2math=true, bool mail2pack=true>
 inline void llk_pack_release_tile(std::uint32_t operand) {
     if constexpr (mail2pack) {
        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
-    }   
+    }
 }
 
 inline void llk_pack_debug_dump(std::uint8_t *data, std::uint32_t byte_size) {

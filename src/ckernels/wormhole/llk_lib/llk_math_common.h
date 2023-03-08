@@ -95,5 +95,5 @@ template <bool mail2math=true, bool mail2pack=true>
 inline void llk_math_release_tile(std::uint32_t operand) {
     if constexpr (mail2math) {
        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
-    }   
+    }
 }

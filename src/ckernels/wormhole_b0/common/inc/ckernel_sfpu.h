@@ -75,7 +75,7 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in)
     vInt orig_exp = exexp(in);
     vInt new_exp = exexp(result);
 
-    // "Subtract" exponents, and re-bias.  
+    // "Subtract" exponents, and re-bias.
     // Execute: -1 - exp, then exp += 127
     new_exp -= orig_exp;
     new_exp += 126;
@@ -94,7 +94,7 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in)
 
 inline void init_dropout_seed(uint16_t p2){
     FWLOG1("calculate_dropout() -- input seed:%x", p2);
-    
+
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
 
     uint16_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
@@ -103,7 +103,7 @@ inline void init_dropout_seed(uint16_t p2){
     uint16_t per_tensix_input_seed = p2 ^ (my_x << my_y);
 
     FWLOG1("calculate_dropout() -- calculated seed:%x", per_tensix_input_seed);
-    
+
     LRegAssigner lra;
     vInt result = lra.assign(LRegs::LReg3);
 
@@ -163,7 +163,7 @@ inline void configure_programmable_constants(SfpuType operation)
 }
 
 template <bool APPROXIMATION_MODE>
-inline void sfpu_init(SfpuType operation, uint param0 = 0) 
+inline void sfpu_init(SfpuType operation, uint param0 = 0)
 {
     configure_programmable_constants<APPROXIMATION_MODE>(operation);
     uint imm0;
@@ -320,8 +320,8 @@ void calculate_exponential(uint16_t exp_base_scale_factor = 0)
 template <bool APPROXIMATION_MODE>
 inline vFloat calculate_gelu_core(vFloat in)
 {
-    // SFPU microcode: 
-    // result = (APPROX_MODE == 1) 
+    // SFPU microcode:
+    // result = (APPROX_MODE == 1)
     //   ? (1 + erf(x/sqrt(2)))
     //   : (1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) )
     vFloat result;
@@ -470,7 +470,7 @@ inline void calculate_gelu_derivative()
     vUInt l0 = lra.assign(LRegs::LReg0);
     vUInt l1 = lra.assign(LRegs::LReg1);
 
-    // SFPU microcode: 
+    // SFPU microcode:
     #pragma GCC unroll 0
     for (int d = 0; d < 8; d++)
     {
@@ -703,7 +703,7 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor)
     if constexpr (HAS_BASE_SCALING) {
         result *= s2vFloat16a(log_base_scale_factor);
     }
-    
+
     ////////////////////////////
     // Base case when input is 0. ln(0) = -inf
     ////////////////////////////
@@ -745,7 +745,7 @@ inline void calculate_comp(uint exponent_size_8)
     // False = 0.0 = kCONST_0 (5/8-bit exponent format)
     // True  = 1.0 = kCONST_1_FP16B (8-bit exponent format)
     // SFPU uses 8-bit exponent in operations so loading these constants in 8-bit exponent format.
-    // Although a command flag can tell SFPU to re-bias a 5-bit exponent to 8-bit, we are loading 8-bit 
+    // Although a command flag can tell SFPU to re-bias a 5-bit exponent to 8-bit, we are loading 8-bit
     // exponent and telling SFPU to not add any bias to these constants.
     constexpr float output_0 = invert_output ? 0.0f : 1.0f;
     constexpr float output_1 = invert_output ? 1.0f : 0.0f;
@@ -794,7 +794,7 @@ inline void calculate_comp(uint exponent_size_8)
                 // flag1 = 0x3F80(1.0) if DST >= 0 else 0
                 // flag2 = 0x3F80(1.0) if DST != 0 else 0
                 // Do a bitwise And (flag1 & flag2) to get > condition.
-                // flag2 >= 0 AND flag1 != 0 => DST is Greater than zero 
+                // flag2 >= 0 AND flag1 != 0 => DST is Greater than zero
                 // Result will be either 0x0000(0.0) or 0x3F80(1.0)
                 result = reinterpret<vFloat>(reinterpret<vUInt>(flag1) & reinterpret<vUInt>(flag2));
             }
@@ -927,9 +927,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     else if constexpr (operation == SfpuType::gelu_derivative) {
         calculate_gelu_derivative<APPROXIMATION_MODE>();
     }
-    else if constexpr ((operation == SfpuType::equal_zero) || 
+    else if constexpr ((operation == SfpuType::equal_zero) ||
                        (operation == SfpuType::not_equal_zero) ||
-                       (operation == SfpuType::less_than_zero) || 
+                       (operation == SfpuType::less_than_zero) ||
                        (operation == SfpuType::greater_than_equal_zero) ||
                        (operation == SfpuType::less_than_equal_zero) ||
                        (operation == SfpuType::greater_than_zero)) {

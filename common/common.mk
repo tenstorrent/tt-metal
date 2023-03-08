@@ -9,13 +9,13 @@ endif
 # QP - 'quiet piping' - to be used at the end of commands that print lots of stuff
 QP ?= > /dev/null
 
-# Q - 'quiet' - te be used at the beggining of a command, if you want to suppress the printout 
+# Q - 'quiet' - te be used at the beggining of a command, if you want to suppress the printout
 #               of the command itself. Set Q=@ to make everything quiet.
-Q ?= 
+Q ?=
 
 # Color related stuff
 # source: http://vmrob.com/colorized-makefiles/
-# 
+#
 # Set colors
 RED    =\033[0;31m
 GREEN  =\033[0;32m
@@ -51,7 +51,7 @@ BUILD_CMD = LOG=$$($(CMD) 2>&1) ; if [ $$? -eq 1 ]; then $(PRINT_ERROR); elif [ 
 
 # Paramters for diff to show columns and ignore // style comments
 #
-COLUMN_DIFF_ARGS=-W 24 --suppress-common-lines --side-by-side --ignore-all-space --ignore-matching-lines="^\/\/" 
+COLUMN_DIFF_ARGS=-W 24 --suppress-common-lines --side-by-side --ignore-all-space --ignore-matching-lines="^\/\/"
 
 OS := $(shell uname)
 ifeq ($(OS),Darwin)
@@ -72,7 +72,7 @@ else
  CXX_OPT=-O3
 endif
 
-# Some magic to get the directory of the 
+# Some magic to get the directory of the
 THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 CALLER_MAKEFILE_LIST := $(filter-out $(THIS_MAKEFILE),$(MAKEFILE_LIST))
 MAKEFILE_PATH := $(abspath $(lastword $(CALLER_MAKEFILE_LIST)))

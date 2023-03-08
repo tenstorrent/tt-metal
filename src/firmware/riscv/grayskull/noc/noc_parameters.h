@@ -81,7 +81,7 @@
 #define ROUTER_PORT_Y_OUT_VC_FULL_CREDIT_OUT_VC_STALL   0x22
 #define ROUTER_PORT_NIU_OUT_VC_FULL_CREDIT_OUT_VC_STALL 0x20
 
-#define NIU_SLV_POSTED_WR_REQ_STARTED             0x1D 
+#define NIU_SLV_POSTED_WR_REQ_STARTED             0x1D
 #define NIU_SLV_NONPOSTED_WR_REQ_STARTED          0x1C
 #define NIU_SLV_POSTED_WR_REQ_RECEIVED            0x1B
 #define NIU_SLV_NONPOSTED_WR_REQ_RECEIVED         0x1A
@@ -97,9 +97,9 @@
 #define NIU_SLV_WR_ACK_SENT                   0x11
 #define NIU_SLV_ATOMIC_RESP_SENT              0x10
 
-#define NIU_MST_NONPOSTED_ATOMIC_STARTED      0xF 
-#define NIU_MST_RD_REQ_STARTED                0xE 
-#define NIU_MST_POSTED_WR_REQ_STARTED         0xD 
+#define NIU_MST_NONPOSTED_ATOMIC_STARTED      0xF
+#define NIU_MST_RD_REQ_STARTED                0xE
+#define NIU_MST_POSTED_WR_REQ_STARTED         0xD
 #define NIU_MST_NONPOSTED_WR_REQ_STARTED      0xC
 #define NIU_MST_POSTED_WR_REQ_SENT            0xB
 #define NIU_MST_NONPOSTED_WR_REQ_SENT         0xA
@@ -122,9 +122,9 @@
 
 
 #define NIU_CFG_0     0x0   // 0 = clk gt enable, [7:1] = clk gt hysteresis, [8] = NIU mem parity enable, [11:9] = ECC interrupts enable, [12] = tile clock disable
-#define NIU_CFG_0_ECC_NIU_MEM_PARITY_EN 8 
+#define NIU_CFG_0_ECC_NIU_MEM_PARITY_EN 8
 #define NIU_CFG_0_ECC_MEM_PARITY_INT_EN 9
-#define NIU_CFG_0_ECC_HEADER_1B_INT_EN  10 
+#define NIU_CFG_0_ECC_HEADER_1B_INT_EN  10
 #define NIU_CFG_0_ECC_HEADER_2B_INT_EN  11
 #define NIU_CFG_0_TILE_CLK_OFF          12
 
@@ -133,9 +133,9 @@
 #define ROUTER_CFG_0_ECC_HEADER_CHKBITS_EN     17
 #define ROUTER_CFG_0_ECC_HEADER_SECDED_EN     18
 #define ROUTER_CFG_1  0x2   // broadcast disable row
-#define ROUTER_CFG_2  0x3   
+#define ROUTER_CFG_2  0x3
 #define ROUTER_CFG_3  0x4   // broadcast disable column
-#define ROUTER_CFG_4  0x5   
+#define ROUTER_CFG_4  0x5
 
 /////
 

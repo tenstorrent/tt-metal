@@ -13,8 +13,8 @@
 
 namespace ckernel::unpacker
 {
-   constexpr uint32_t OPERAND_BASE_ID = 0; 
-   constexpr uint32_t INTERMEDIATE_BASE_ID = 24; 
+   constexpr uint32_t OPERAND_BASE_ID = 0;
+   constexpr uint32_t INTERMEDIATE_BASE_ID = 24;
    constexpr uint32_t TILE_DESC_SIZE = 2; //Unpacker descriptor size in dwords
    constexpr uint32_t CONFIG_SIZE = 2; //Unpacker configuration size in dwords
 
@@ -38,14 +38,14 @@ namespace ckernel::unpacker
      uint32_t digest_type : 8;  // Not used
      uint32_t digest_size : 8;  // Not used
    } unpack_tile_descriptor_t; // Unpack configuration
-   
+
    static_assert(sizeof(unpack_tile_descriptor_t) == (sizeof(uint32_t) * 4));
 
    typedef union {
      uint32_t val[4];
      unpack_tile_descriptor_t f;
    } unpack_tile_descriptor_u;
-   
+
    // Unpack config
    typedef struct {
      // word 0
@@ -76,7 +76,7 @@ namespace ckernel::unpacker
    } unpack_config_t;
 
    static_assert(sizeof(unpack_config_t) == (sizeof(uint32_t) * 4));
-   
+
    typedef union {
      uint32_t val[4];
      unpack_config_t f;
@@ -113,7 +113,7 @@ namespace ckernel::unpacker
        TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1011);
        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
    }
-   
+
    inline void unpacker_iteration_cleanup(uint &context)
    {
        // Indicate that unpacker is done, and we can program the next one
@@ -125,37 +125,37 @@ namespace ckernel::unpacker
            TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
        }
    }
-   
+
    inline void unpacker_wrapup()
    {
        // Clear unpacker0 tile offset address
        TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_address_ADDR32);
        TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32);
-   
+
        // Clear unpacker1 tile offset address
        TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC1_REG7_Offset_address_ADDR32);
        TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC1_REG7_Offset_cntx1_address_ADDR32);
-   
+
        // Clear context offset and counter
        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x1010);
    }
-   
+
    inline uint unpack_16B_address(const uint addr)
    {
        return (addr << FIFO_BASE_ADDRESS_ALIGN_BITS) >> 4;
    }
-   
+
    inline void flush_xsearch_cache(const uint unpacker)
    {
        TTI_UNPACR(unpacker, 0, 0, 0, 0, 0, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 1, 0);
    }
-   
+
    // Wait for threshold of busy contexts to fall below total available contexts
    inline void wait_for_next_context(const uint num_contexts)
    {
        while (semaphore_read(semaphore::UNPACK_SYNC) >= num_contexts) {}
    }
-   
+
    inline void switch_config_context(uint &unp_cfg_context)
    {
       // Switch config context
@@ -174,7 +174,7 @@ namespace ckernel::unpacker
       unp_cfg_context = 0;
       TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
    }
-   
+
    // Sync on unpacker idle via waiting busy contexts counter 0
    inline void wait_for_idle()
    {
@@ -182,8 +182,8 @@ namespace ckernel::unpacker
    }
 
    inline void configure_unpack_AB(
-     uint unpA_operand, 
-     uint unpB_operand, 
+     uint unpA_operand,
+     uint unpB_operand,
      uint srca_face_height=16,
      uint srcb_face_height=16,
      bool row_pool=false,
@@ -191,9 +191,9 @@ namespace ckernel::unpacker
      bool is_fp32_dest_acc_en = false)
    {
       // Check that unpacker is done (all contexts freed up) before starting hw configuration
-      wait_for_idle();	     
+      wait_for_idle();
 
-      // Reset address counters	      
+      // Reset address counters
       unpacker_addr_counter_init();
 
       // Get pointer to registers for current state ID
@@ -205,14 +205,14 @@ namespace ckernel::unpacker
       uint unpB_ch1_y_stride = 16*srcb_face_height*unpB_ch1_x_stride;
       uint unpB_ch1_z_stride = 16*srcb_face_height*unpB_ch1_x_stride;
       uint exp_width = ((uint)unpack_dst_format[unpA_operand]>>2)&0x1; //0=5-bit, 1=8-bit
-   
+
       // Strides
       cfg[UNP0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpA_ch1_y_stride << UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
                                                     (            0 << UNP0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
       //cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =  // Z and W stride for dest address (ch1)
       cfg[UNP1_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpB_ch1_y_stride << UNP1_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
                                                     (            0 << UNP1_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
-      cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (0                 << UNP1_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT) | 
+      cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (0                 << UNP1_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT) |
                                                     (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT);  // Z and W stride for dest address (ch1)
 
       // Math ALU_FORMAT_REG
@@ -241,7 +241,7 @@ namespace ckernel::unpacker
 
       t6_mutex_release(mutex::REG_RMW);
 
-   
+
       // Set tile descriptor
       unpack_tile_descriptor_u tile_descriptor;
       for (uint i=0; i<TILE_DESC_SIZE; i++) {
@@ -249,15 +249,15 @@ namespace ckernel::unpacker
       }
       tile_descriptor.f.in_data_format  = (uint) unpack_src_format[unpA_operand];
       tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
-      tile_descriptor.f.x_dim        = 256; 
-      tile_descriptor.f.y_dim        = 1; 
-      tile_descriptor.f.z_dim        = 4; 
+      tile_descriptor.f.x_dim        = 256;
+      tile_descriptor.f.y_dim        = 1;
+      tile_descriptor.f.z_dim        = 4;
       //tile_descriptor.f.blobs_per_xy_plane = 0;
       //tile_descriptor.f.blobs_y_start = 0;
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
       tile_descriptor.f.in_data_format  = row_pool ? (uint) DataFormat::Float32 : unpack_src_format[unpB_operand];
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
-   
+
       // Set unpacker config
       unpack_config_u config;
       for (uint i=0; i<CONFIG_SIZE; i++) {
@@ -279,31 +279,30 @@ namespace ckernel::unpacker
       config.f.haloize_mode = 0;
 
       for (uint i=0; i<CONFIG_SIZE; i++) cfg[THCON_SEC1_REG2_Out_data_format_ADDR32+i]=config.val[i];
-      
+
       TTI_SETADCXX(p_setadc::UNP0, (srca_face_height << 4)-1, 0x0);
       if (row_pool) {
          TTI_SETADCXX(p_setadc::UNP1, (1 << 4)-1, 0x0);
       } else {
          TTI_SETADCXX(p_setadc::UNP1, (srcb_face_height << 4)-1, 0x0);
       }
-   
+
       // Program base address for all 2 sections (each section address is loaded to corresponding context)
       // Load dummy data to unused location if face height is 0
       const uint Dest_cntx0_address = srca_face_height == 0 ? 22*16 : 4 * 16;
-      const uint Dest_cntx1_address = srca_face_height == 0 ? 22*16 : 4 * 16; 
+      const uint Dest_cntx1_address = srca_face_height == 0 ? 22*16 : 4 * 16;
       cfg[THCON_SEC0_REG5_Dest_cntx0_address_ADDR32] = Dest_cntx0_address | (Dest_cntx1_address << 16);
-   
+
       // Program unpacker0 per context x_dim
       const uint Tile_x_dim = 256;
       cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = Tile_x_dim | (Tile_x_dim << 16);
-   
+
       // Clear context ID
       reset_config_context();
    }
 
-   inline uint32_t get_operand_id(uint32_t operand) 
+   inline uint32_t get_operand_id(uint32_t operand)
    {
       return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
    }
 }
-

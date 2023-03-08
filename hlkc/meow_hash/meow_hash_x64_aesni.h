@@ -2,23 +2,23 @@
 
    Meow - A Fast Non-cryptographic Hash
    (C) Copyright 2018-2019 by Molly Rocket, Inc. (https://mollyrocket.com)
-   
+
    See https://mollyrocket.com/meowhash for details.
-   
+
    ========================================================================
-   
+
    zlib License
-   
+
    (C) Copyright 2018-2019 Molly Rocket, Inc.
-   
+
    This software is provided 'as-is', without any express or implied
    warranty.  In no event will the authors be held liable for any damages
    arising from the use of this software.
-   
+
    Permission is granted to anyone to use this software for any purpose,
    including commercial applications, and to alter it and redistribute it
    freely, subject to the following restrictions:
-   
+
    1. The origin of this software must not be misrepresented; you must not
       claim that you wrote the original software. If you use this software
       in a product, an acknowledgment in the product documentation would be
@@ -26,31 +26,31 @@
    2. Altered source versions must be plainly marked as such, and must not be
       misrepresented as being the original software.
    3. This notice may not be removed or altered from any source distribution.
-   
+
    ========================================================================
-   
+
    FAQ
-   
+
    Q: What is it?
-   
+
    A: Meow is a 128-bit Level 3 hash taking 128 bytes of seed.  It operates
       at very high speeds on x64 processors, and potentially other processors
       that provide accelerated AES instructions.
-      
+
    Q: What is it GOOD for?
-   
+
    A: Quickly hashing any amount of data for comparison purposes such as
       block deduplication or change detection.  It is fast on all buffer
       sizes, and can generally be used anywhere you need fast Level 3
       hashing without worrying about how big or small the inputs tend to be.
-      
+
       However, substantial speed improvements could be made over Meow
       if you either a) know you are always hashing an exact, small number of bytes,
       or b) can always supply a small number of bytes in a buffer padded to some
       fixed multiple of 16.
-      
+
    Q: What is it BAD for?
-   
+
    A: Anything requiring Level 4 or Level 5 security guarantees (see
       http://nohatcoder.dk/2019-05-19-1.html#level3).  Also, note that
       Meow is a new hash and has not had the extensive community
@@ -60,14 +60,14 @@
       more extensively studied existing hash.  We have tried to design
       it to provide Level 3 security, but the possibility of the hash
       being broken in the future always exists.
-      
+
    Q: Why is it called the "Meow hash"?
-   
+
    A: It is named after a character in Meow the Infinite
       (https://meowtheinfinite.com)
-      
+
    Q: Who wrote it?
-   
+
    A: The final Meow Hash was created as a collaboration between
       JACOB CHRISTIAN MUNCH-ANDERSEN (https://twitter.com/nohatcoder) and
       CASEY MURATORI (https://caseymuratori.com).  Casey wrote the original
@@ -75,33 +75,33 @@
       game 1935 (https://molly1935.com).  Jacob was the first to analyze
       that implementation and determine the adversarial bit strength, which
       was weaker than they would have liked.
-      
+
       Following that, the two collaborated to figure out how the hash
       could be strengthened without reducing Meow's 16 bytes/cycle
       maximum theoretical throughput.  Jacob created the hash candidates
       and Casey did the performance validation.  After a long and
       exhaustive effort, Jacob found the unaligned aes/add/xor formulation
       that forms the current Meow hash core.
-      
+
       A number of valuable additions to Meow Hash were also contributed
       by other great folks along the way:
-      
+
       JEFF ROBERTS (https://radgametools.com) provided a super slick
       way to handle the residual end-of-buffer bytes that dramatically
       improved Meow's small hash performance.
-      
+
       MARTINS MOZEIKO (https://matrins.ninja) ported Meow to ARM and
       ANSI-C, and added the proper preprocessor dressing for clean
       compilation on a variety of compiler configurations.
-      
+
       FABIAN GIESEN (https://fgiesen.wordpress.com) analyzed many
       performance oddities that came up during development, and
       helped get the benchmarking working properly across a number
       of platforms.
-      
+
       ARAS PRANCKEVICIUS (https://aras-p.info) provided the allocation
       shim for compilation on Mac OS X.
-      
+
    ======================================================================== */
 
 //
@@ -260,30 +260,30 @@ MeowHash(void *Seed128Init, meow_umm Len, void *SourceInit)
 {
     meow_u128 xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7; // NOTE(casey): xmm0-xmm7 are the hash accumulation lanes
     meow_u128 xmm8, xmm9, xmm10, xmm11, xmm12, xmm13, xmm14, xmm15; // NOTE(casey): xmm8-xmm15 hold values to be appended (residual, length)
-    
+
     meow_u8 *rax = (meow_u8 *)SourceInit;
     meow_u8 *rcx = (meow_u8 *)Seed128Init;
-    
+
     //
 	// NOTE(casey): Seed the eight hash registers
     //
-    
+
     movdqu(xmm0, rcx + 0x00);
     movdqu(xmm1, rcx + 0x10);
     movdqu(xmm2, rcx + 0x20);
     movdqu(xmm3, rcx + 0x30);
-    
+
     movdqu(xmm4, rcx + 0x40);
     movdqu(xmm5, rcx + 0x50);
     movdqu(xmm6, rcx + 0x60);
     movdqu(xmm7, rcx + 0x70);
-    
+
     MEOW_DUMP_STATE("Seed", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     //
     // NOTE(casey): Hash all full 256-byte blocks
     //
-    
+
     meow_umm BlockCount = (Len >> 8);
     if(BlockCount > MEOW_PREFETCH_LIMIT)
     {
@@ -294,7 +294,7 @@ MeowHash(void *Seed128Init, meow_umm Len, void *SourceInit)
             prefetcht0(rax + MEOW_PREFETCH + 0x40);
             prefetcht0(rax + MEOW_PREFETCH + 0x80);
             prefetcht0(rax + MEOW_PREFETCH + 0xc0);
-            
+
             MEOW_MIX(xmm0,xmm4,xmm6,xmm1,xmm2, rax + 0x00);
             MEOW_MIX(xmm1,xmm5,xmm7,xmm2,xmm3, rax + 0x20);
             MEOW_MIX(xmm2,xmm6,xmm0,xmm3,xmm4, rax + 0x40);
@@ -303,7 +303,7 @@ MeowHash(void *Seed128Init, meow_umm Len, void *SourceInit)
             MEOW_MIX(xmm5,xmm1,xmm3,xmm6,xmm7, rax + 0xa0);
             MEOW_MIX(xmm6,xmm2,xmm4,xmm7,xmm0, rax + 0xc0);
             MEOW_MIX(xmm7,xmm3,xmm5,xmm0,xmm1, rax + 0xe0);
-            
+
             rax += 0x100;
         }
     }
@@ -320,27 +320,27 @@ MeowHash(void *Seed128Init, meow_umm Len, void *SourceInit)
             MEOW_MIX(xmm5,xmm1,xmm3,xmm6,xmm7, rax + 0xa0);
             MEOW_MIX(xmm6,xmm2,xmm4,xmm7,xmm0, rax + 0xc0);
             MEOW_MIX(xmm7,xmm3,xmm5,xmm0,xmm1, rax + 0xe0);
-            
+
             rax += 0x100;
         }
     }
-    
+
     MEOW_DUMP_STATE("PostBlocks", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     //
     // NOTE(casey): Load any less-than-32-byte residual
     //
-    
+
     pxor_clear(xmm9, xmm9);
     pxor_clear(xmm11, xmm11);
-    
+
     //
     // TODO(casey): I need to put more thought into how the end-of-buffer stuff is actually working out here,
     // because I _think_ it may be possible to remove the first branch (on Len8) and let the mask zero out the
     // result, but it would take a little thought to make sure it couldn't read off the end of the buffer due
     // to the & 0xf on the align computation.
     //
-    
+
     // NOTE(casey): First, we have to load the part that is _not_ 16-byte aligned
     meow_u8 *Last = (meow_u8 *)SourceInit + (Len & ~0xf);
     int unsigned Len8 = (Len & 0xf);
@@ -348,33 +348,33 @@ MeowHash(void *Seed128Init, meow_umm Len, void *SourceInit)
     {
         // NOTE(casey): Load the mask early
         movdqu(xmm8, &MeowMaskLen[0x10 - Len8]);
-        
+
         meow_u8 *LastOk = (meow_u8*)((((meow_umm)(((meow_u8 *)SourceInit)+Len - 1)) | (MEOW_PAGESIZE - 1)) - 16);
         int Align = (Last > LastOk) ? ((int)(meow_umm)Last) & 0xf : 0;
         movdqu(xmm10, &MeowShiftAdjust[Align]);
         movdqu(xmm9, Last - Align);
         pshufb(xmm9, xmm10);
-        
+
         // NOTE(jeffr): and off the extra bytes
         pand(xmm9, xmm8);
     }
-    
+
     // NOTE(casey): Next, we have to load the part that _is_ 16-byte aligned
     if(Len & 0x10)
     {
         xmm11 = xmm9;
         movdqu(xmm9, Last - 0x10);
     }
-    
+
     //
     // NOTE(casey): Construct the residual and length injests
     //
-    
+
     xmm8 = xmm9;
     xmm10 = xmm9;
     palignr(xmm8, xmm11, 15);
     palignr(xmm10, xmm11, 1);
-    
+
     // NOTE(casey): We have room for a 128-bit nonce and a 64-bit none here, but
     // the decision was made to leave them zero'd so as not to confuse people
     // about hwo to use them or what security implications they had.
@@ -384,17 +384,17 @@ MeowHash(void *Seed128Init, meow_umm Len, void *SourceInit)
     movq(xmm15, Len);
     palignr(xmm12, xmm15, 15);
     palignr(xmm14, xmm15, 1);
-    
+
     MEOW_DUMP_STATE("Residuals", xmm8, xmm9, xmm10, xmm11, xmm12, xmm13, xmm14, xmm15, 0);
-    
+
     // NOTE(casey): To maintain the mix-down pattern, we always Meow Mix the less-than-32-byte residual, even if it was empty
     MEOW_MIX_REG(xmm0, xmm4, xmm6, xmm1, xmm2,  xmm8, xmm9, xmm10, xmm11);
-    
+
     // NOTE(casey): Append the length, to avoid problems with our 32-byte padding
     MEOW_MIX_REG(xmm1, xmm5, xmm7, xmm2, xmm3,  xmm12, xmm13, xmm14, xmm15);
-    
+
     MEOW_DUMP_STATE("PostAppend", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     //
     // NOTE(casey): Hash all full 32-byte blocks
     //
@@ -406,15 +406,15 @@ MeowHash(void *Seed128Init, meow_umm Len, void *SourceInit)
     if(LaneCount == 0) goto MixDown; MEOW_MIX(xmm6,xmm2,xmm4,xmm7,xmm0, rax + 0x80); --LaneCount;
     if(LaneCount == 0) goto MixDown; MEOW_MIX(xmm7,xmm3,xmm5,xmm0,xmm1, rax + 0xa0); --LaneCount;
     if(LaneCount == 0) goto MixDown; MEOW_MIX(xmm0,xmm4,xmm6,xmm1,xmm2, rax + 0xc0); --LaneCount;
-    
+
     //
     // NOTE(casey): Mix the eight lanes down to one 128-bit hash
     //
-    
+
     MixDown:
-    
+
     MEOW_DUMP_STATE("PostLanes", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     MEOW_SHUFFLE(xmm0, xmm1, xmm2, xmm4, xmm5, xmm6);
     MEOW_SHUFFLE(xmm1, xmm2, xmm3, xmm5, xmm6, xmm7);
     MEOW_SHUFFLE(xmm2, xmm3, xmm4, xmm6, xmm7, xmm0);
@@ -427,9 +427,9 @@ MeowHash(void *Seed128Init, meow_umm Len, void *SourceInit)
     MEOW_SHUFFLE(xmm1, xmm2, xmm3, xmm5, xmm6, xmm7);
     MEOW_SHUFFLE(xmm2, xmm3, xmm4, xmm6, xmm7, xmm0);
     MEOW_SHUFFLE(xmm3, xmm4, xmm5, xmm7, xmm0, xmm1);
-    
+
     MEOW_DUMP_STATE("PostMix", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     paddq(xmm0, xmm2);
     paddq(xmm1, xmm3);
     paddq(xmm4, xmm6);
@@ -437,9 +437,9 @@ MeowHash(void *Seed128Init, meow_umm Len, void *SourceInit)
     pxor(xmm0, xmm1);
     pxor(xmm4, xmm5);
     paddq(xmm0, xmm4);
-    
+
     MEOW_DUMP_STATE("PostFold", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     return(xmm0);
 }
 
@@ -451,9 +451,9 @@ typedef struct meow_state
 {
     meow_u128 xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7;
     meow_u64 TotalLengthInBytes;
-    
+
     int unsigned BufferLen;
-    
+
     meow_u8 Buffer[256];
     meow_u128 Pad[2]; // NOTE(casey): So we know we can over-read Buffer as necessary
 } meow_state;
@@ -462,7 +462,7 @@ static void
 MeowBegin(meow_state *State, void *Seed128)
 {
     meow_u8 *rcx = (meow_u8 *)Seed128;
-    
+
     movdqu(State->xmm0, rcx + 0x00);
     movdqu(State->xmm1, rcx + 0x10);
     movdqu(State->xmm2, rcx + 0x20);
@@ -471,9 +471,9 @@ MeowBegin(meow_state *State, void *Seed128)
     movdqu(State->xmm5, rcx + 0x50);
     movdqu(State->xmm6, rcx + 0x60);
     movdqu(State->xmm7, rcx + 0x70);
-    
+
     MEOW_DUMP_STATE("Seed", State->xmm0, State->xmm1, State->xmm2, State->xmm3, State->xmm4, State->xmm5, State->xmm6, State->xmm7, 0);
-    
+
     State->BufferLen = 0;
     State->TotalLengthInBytes = 0;
 }
@@ -489,7 +489,7 @@ MeowAbsorbBlocks(meow_state *State, meow_umm BlockCount, meow_u8 *rax)
     meow_u128 xmm5 = State->xmm5;
     meow_u128 xmm6 = State->xmm6;
     meow_u128 xmm7 = State->xmm7;
-    
+
     if(BlockCount > MEOW_PREFETCH_LIMIT)
     {
         while(BlockCount--)
@@ -498,7 +498,7 @@ MeowAbsorbBlocks(meow_state *State, meow_umm BlockCount, meow_u8 *rax)
             prefetcht0(rax + MEOW_PREFETCH + 0x40);
             prefetcht0(rax + MEOW_PREFETCH + 0x80);
             prefetcht0(rax + MEOW_PREFETCH + 0xc0);
-            
+
             MEOW_MIX(xmm0,xmm4,xmm6,xmm1,xmm2, rax + 0x00);
             MEOW_MIX(xmm1,xmm5,xmm7,xmm2,xmm3, rax + 0x20);
             MEOW_MIX(xmm2,xmm6,xmm0,xmm3,xmm4, rax + 0x40);
@@ -507,7 +507,7 @@ MeowAbsorbBlocks(meow_state *State, meow_umm BlockCount, meow_u8 *rax)
             MEOW_MIX(xmm5,xmm1,xmm3,xmm6,xmm7, rax + 0xa0);
             MEOW_MIX(xmm6,xmm2,xmm4,xmm7,xmm0, rax + 0xc0);
             MEOW_MIX(xmm7,xmm3,xmm5,xmm0,xmm1, rax + 0xe0);
-            
+
             rax += 0x100;
         }
     }
@@ -523,11 +523,11 @@ MeowAbsorbBlocks(meow_state *State, meow_umm BlockCount, meow_u8 *rax)
             MEOW_MIX(xmm5,xmm1,xmm3,xmm6,xmm7, rax + 0xa0);
             MEOW_MIX(xmm6,xmm2,xmm4,xmm7,xmm0, rax + 0xc0);
             MEOW_MIX(xmm7,xmm3,xmm5,xmm0,xmm1, rax + 0xe0);
-            
+
             rax += 0x100;
         }
     }
-    
+
     State->xmm0 = xmm0;
     State->xmm1 = xmm1;
     State->xmm2 = xmm2;
@@ -543,7 +543,7 @@ MeowAbsorb(meow_state *State, meow_umm Len, void *SourceInit)
 {
     State->TotalLengthInBytes += Len;
     meow_u8 *Source = (meow_u8 *)SourceInit;
-    
+
     // NOTE(casey): Handle any buffered residual
     if(State->BufferLen)
     {
@@ -552,28 +552,28 @@ MeowAbsorb(meow_state *State, meow_umm Len, void *SourceInit)
         {
             Fill = (int unsigned)Len;
         }
-        
+
         Len -= Fill;
         while(Fill--)
         {
             State->Buffer[State->BufferLen++] = *Source++;
         }
-        
+
         if(State->BufferLen == sizeof(State->Buffer))
         {
             MeowAbsorbBlocks(State, 1, State->Buffer);
             State->BufferLen = 0;
         }
     }
-    
+
     // NOTE(casey): Handle any full blocks
     meow_u64 BlockCount = (Len >> 8);
     meow_u64 Advance = (BlockCount << 8);
     MeowAbsorbBlocks(State, BlockCount, Source);
-    
+
     Len -= Advance;
     Source += Advance;
-    
+
     // NOTE(casey): Store residual
     while(Len--)
     {
@@ -585,7 +585,7 @@ static meow_u128
 MeowEnd(meow_state *State, meow_u8 *Store128)
 {
     meow_umm Len = State->TotalLengthInBytes;
-    
+
     meow_u128 xmm0 = State->xmm0;
     meow_u128 xmm1 = State->xmm1;
     meow_u128 xmm2 = State->xmm2;
@@ -594,14 +594,14 @@ MeowEnd(meow_state *State, meow_u8 *Store128)
     meow_u128 xmm5 = State->xmm5;
     meow_u128 xmm6 = State->xmm6;
     meow_u128 xmm7 = State->xmm7;
-    
+
     meow_u128 xmm8, xmm9, xmm10, xmm11, xmm12, xmm13, xmm14, xmm15;
-    
+
     meow_u8 *rax = State->Buffer;
-    
+
     pxor_clear(xmm9, xmm9);
     pxor_clear(xmm11, xmm11);
-    
+
     meow_u8 *Last = (meow_u8 *)rax + (Len & 0xf0);
     int unsigned Len8 = (Len & 0xf);
     if(Len8)
@@ -610,36 +610,36 @@ MeowEnd(meow_state *State, meow_u8 *Store128)
         movdqu(xmm9, Last);
         pand(xmm9, xmm8);
     }
-    
+
     if(Len & 0x10)
     {
         xmm11 = xmm9;
         movdqu(xmm9, Last - 0x10);
     }
-    
+
     xmm8 = xmm9;
     xmm10 = xmm9;
     palignr(xmm8, xmm11, 15);
     palignr(xmm10, xmm11, 1);
-    
+
     pxor_clear(xmm12, xmm12);
     pxor_clear(xmm13, xmm13);
     pxor_clear(xmm14, xmm14);
     movq(xmm15, Len);
     palignr(xmm12, xmm15, 15);
     palignr(xmm14, xmm15, 1);
-    
+
     MEOW_DUMP_STATE("PostBlocks", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
     MEOW_DUMP_STATE("Residuals", xmm8, xmm9, xmm10, xmm11, xmm12, xmm13, xmm14, xmm15, 0);
-    
+
     // NOTE(casey): To maintain the mix-down pattern, we always Meow Mix the less-than-32-byte residual, even if it was empty
     MEOW_MIX_REG(xmm0, xmm4, xmm6, xmm1, xmm2,  xmm8, xmm9, xmm10, xmm11);
-    
+
     // NOTE(casey): Append the length, to avoid problems with our 32-byte padding
     MEOW_MIX_REG(xmm1, xmm5, xmm7, xmm2, xmm3,  xmm12, xmm13, xmm14, xmm15);
-    
+
     MEOW_DUMP_STATE("PostAppend", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     //
     // NOTE(casey): Hash all full 32-byte blocks
     //
@@ -651,15 +651,15 @@ MeowEnd(meow_state *State, meow_u8 *Store128)
     if(LaneCount == 0) goto MixDown; MEOW_MIX(xmm6,xmm2,xmm4,xmm7,xmm0, rax + 0x80); --LaneCount;
     if(LaneCount == 0) goto MixDown; MEOW_MIX(xmm7,xmm3,xmm5,xmm0,xmm1, rax + 0xa0); --LaneCount;
     if(LaneCount == 0) goto MixDown; MEOW_MIX(xmm0,xmm4,xmm6,xmm1,xmm2, rax + 0xc0); --LaneCount;
-    
+
     //
     // NOTE(casey): Mix the eight lanes down to one 128-bit hash
     //
-    
+
     MixDown:
-    
+
     MEOW_DUMP_STATE("PostLanes", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     MEOW_SHUFFLE(xmm0, xmm1, xmm2, xmm4, xmm5, xmm6);
     MEOW_SHUFFLE(xmm1, xmm2, xmm3, xmm5, xmm6, xmm7);
     MEOW_SHUFFLE(xmm2, xmm3, xmm4, xmm6, xmm7, xmm0);
@@ -672,9 +672,9 @@ MeowEnd(meow_state *State, meow_u8 *Store128)
     MEOW_SHUFFLE(xmm1, xmm2, xmm3, xmm5, xmm6, xmm7);
     MEOW_SHUFFLE(xmm2, xmm3, xmm4, xmm6, xmm7, xmm0);
     MEOW_SHUFFLE(xmm3, xmm4, xmm5, xmm7, xmm0, xmm1);
-    
+
     MEOW_DUMP_STATE("PostMix", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     if(Store128)
     {
         movdqu_mem(Store128 + 0x00, xmm0);
@@ -686,7 +686,7 @@ MeowEnd(meow_state *State, meow_u8 *Store128)
         movdqu_mem(Store128 + 0x60, xmm6);
         movdqu_mem(Store128 + 0x70, xmm7);
     }
-    
+
     paddq(xmm0, xmm2);
     paddq(xmm1, xmm3);
     paddq(xmm4, xmm6);
@@ -694,9 +694,9 @@ MeowEnd(meow_state *State, meow_u8 *Store128)
     pxor(xmm0, xmm1);
     pxor(xmm4, xmm5);
     paddq(xmm0, xmm4);
-    
+
     MEOW_DUMP_STATE("PostFold", xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, 0);
-    
+
     return(xmm0);
 }
 
@@ -730,7 +730,7 @@ MeowExpandSeed(meow_umm InputLen, void *Input, meow_u8 *SeedResult)
     meow_state State;
     meow_u64 LengthTab = (meow_u64)InputLen; // NOTE(casey): We need to always injest 8-byte lengths exactly, even on 32-bit builds, to ensure identical results
     meow_umm InjestCount = (256 / InputLen) + 2;
-    
+
     MeowBegin(&State, MeowDefaultSeed);
     MeowAbsorb(&State, sizeof(LengthTab), &LengthTab);
     while(InjestCount--)

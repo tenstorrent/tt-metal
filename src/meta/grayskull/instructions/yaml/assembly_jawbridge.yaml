@@ -1,10 +1,10 @@
-# Instruction types: 
+# Instruction types:
 #   This field only matters for verilog generation, it signifies which hierarchical decoder "owns" instruction
-#   LOCAL_CREGS  - 
+#   LOCAL_CREGS  -
 #   PC_MODIFYING -
 #   COMPUTE      -
 #   COMMON_CREGS - ???? Jel se ovo koristi? Nema ga us assembler.cpp
-# 
+#
 ATGETM:
     instrn_type: LOCAL_CREGS
     op_binary: 0xa0
@@ -141,14 +141,14 @@ SETC:
 
 FLUSH:
     op_binary: 0x81
-    instrn_type: PC_MODIFYING  
+    instrn_type: PC_MODIFYING
     arguments: null
     description: "Flush all buffers of oustanding instructions, reads/writes."
 
 JMPI:
     op_binary: 0x84
     instrn_type: PC_MODIFYING
-    arguments: 
+    arguments:
         - name: pc
           start_bit: 0
           field_type: HEX
@@ -251,7 +251,7 @@ SHIFTXB:
         - name: srcb_offset_0
           field_type: DEC
           start_bit: 0
-          description: srcb offset 
+          description: srcb offset
         - name: double_row
           field_type: DEC
           start_bit: 5
@@ -267,8 +267,8 @@ SHIFTXB:
         - name: addr_mode
           field_type: BIN
           start_bit: 15
-          description: Addressing mode (same as convolution instructions, only srcb increment used) 
-    description: "right-shift one or two registers from SRCB"  
+          description: Addressing mode (same as convolution instructions, only srcb increment used)
+    description: "right-shift one or two registers from SRCB"
 
 
 ZEROACC:
@@ -292,7 +292,7 @@ ZEROACC:
 ZEROSRC:
     op_binary: 0x11
     instrn_type: COMPUTE
-    arguments: 
+    arguments:
         - name: src_mask
           field_type: DEC
           start_bit: 0
@@ -310,7 +310,7 @@ MOVA2D:
         - name: dest_index
           field_type: DEC
           start_bit: 5
-          description: dest register index 
+          description: dest register index
         - name: move_size
           field_type: BIN
           start_bit: 13
@@ -344,7 +344,7 @@ MOVB2D:
         - name: dest_index
           field_type: DEC
           start_bit: 5
-          description: dest register index 
+          description: dest register index
         - name: move_mode3
           field_type: BIN
           start_bit: 13
@@ -359,7 +359,7 @@ TRNSPSRCA:
     op_binary: 0x14
     instrn_type: COMPUTE
     arguments: 0
-    description: "transpose SRCA main registers"  
+    description: "transpose SRCA main registers"
 
 A2SHIFT:
     op_binary: 0x15
@@ -384,8 +384,8 @@ A2SHIFT:
         - name: datum_enable
           field_type: DEC
           start_bit: 8
-          description: 16-bit enable mask        
-    description: "move 1 or 2 main SRCA words into SRCA shift reg, with or without shifting the rest"  
+          description: 16-bit enable mask
+    description: "move 1 or 2 main SRCA words into SRCA shift reg, with or without shifting the rest"
 
 SHIFT2A:
     op_binary: 0x16
@@ -406,8 +406,8 @@ SHIFT2A:
         - name: datum_enable
           field_type: DEC
           start_bit: 8
-          description: 16-bit enable mask        
-    description: "move SRCA shift register to main SRCA regs"  
+          description: 16-bit enable mask
+    description: "move SRCA shift register to main SRCA regs"
 
 SHIFTXA:
     op_binary: 0x17
@@ -458,8 +458,8 @@ ROTSWPB:
         - name: addr_mode
           field_type: BIN
           start_bit: 15
-          description: Addressing mode (same as convolution instructions, only srcb increment used) 
-    description: "180-rotate and/or swap one or two SRCB registers"  
+          description: Addressing mode (same as convolution instructions, only srcb increment used)
+    description: "180-rotate and/or swap one or two SRCB registers"
 
 SHIFTHALO:
     op_binary: 0x19
@@ -469,7 +469,7 @@ SHIFTHALO:
           field_type: DEC
           start_bit: 0
           description: Shift amount (1-8, encoded as 0-7)
-    description: "SRCA halo register shift"  
+    description: "SRCA halo register shift"
 
 SETASHRMH0:
     op_binary: 0x1A
@@ -527,7 +527,7 @@ SETPKEDGOF:
           field_type: DEC
           start_bit: 12
           description: ending datum index for Y
-    description: "Packer row/column offsets to zero out edges of X-Y plane"  
+    description: "Packer row/column offsets to zero out edges of X-Y plane"
 
 B2DSTOFF:
     op_binary: 0x1E
@@ -545,7 +545,7 @@ B2DSTOFF:
           field_type: BIN
           start_bit: 13
           description: 00 - move whole word, 01 - move half word, 10 - move zero, 11 - reserved
-    description: "Move word or half word from B to dest offset register"  
+    description: "Move word or half word from B to dest offset register"
 
 SETHLPTR:
     op_binary: 0x1F
@@ -554,7 +554,7 @@ SETHLPTR:
         - name: halo start pointer
           field_type: DEC
           start_bit: 0
-          description: 
+          description:
     description: "Set halo start row pointer"
 
 INCHLPTR:
@@ -566,7 +566,7 @@ INCHLPTR:
 STOREG:
     op_binary: 0x20
     instrn_type: COMPUTE
-    arguments: 
+    arguments:
         - name: Aidx
           field_type: DEC
           start_bit: 0
@@ -587,8 +587,8 @@ STOREG:
           field_type: HEX
           start_bit: 15
           description: Address in dataram to which to write the result
-    description: Store machine state (such as registers) to a given dataram address <StoreAddr>. 
-         
+    description: Store machine state (such as registers) to a given dataram address <StoreAddr>.
+
 MGSTAT:
     op_binary: 0x21
     instrn_type: COMPUTE
@@ -881,12 +881,12 @@ SETRWCINC:
     op_binary: 0x3A
     instrn_type: COMPUTE
     arguments: &SETRWCINC_ARGS
-        - name: prog_inc_value 
+        - name: prog_inc_value
           field_type: DEC
           start_bit: 0
-          description: Programable increment value 
+          description: Programable increment value
     description: "Set value used for programable increment"
-   
+
 SETMAXEXP:
     op_binary: 0x3B
     instrn_type: COMPUTE
@@ -904,7 +904,7 @@ SETMAXEXP:
           start_bit: 15
           description: "Last dest index whose max exp will be updated"
     description: "Initialize max exp array with a value for dynamic HF instructions"
-    
+
 ELWSUB:
     op_binary: 0x3C
     instrn_type: COMPUTE
@@ -923,12 +923,12 @@ XMOV:
     arguments:
         - name: Last
           field_type: BIN
-          start_bit: 0 
+          start_bit: 0
           description: "To be set to 0 for all invocations of XMOV except for the last in a task of assembling input data for     a thread (in which it should be set to 1). Causes data accumulation buffers in mover to flush  to memory"
         - name: Mov block selection
           field_type: BIN
           start_bit: 23
-          description: Select between two move blocks 
+          description: Select between two move blocks
     description: "Move data between L0 and L1"
 
 
@@ -985,7 +985,7 @@ UNPACR:
         - name: Unpack block selection
           field_type: BIN
           start_bit: 23
-          description: Select between two unpackers 
+          description: Select between two unpackers
     description: "Unpack row from tile in L0 to SRCA/SRCB registers (by UNPACK0/UNPACK1)"
 
 XSEARCH:
@@ -996,7 +996,7 @@ XSEARCH:
           field_type: BIN
           start_bit: 0
           description: Flush row pointer cache in the search block
-        - name: Row search 
+        - name: Row search
           field_type: BIN
           start_bit: 4
           description: "Search for start and end of selected row(s) within tile. If not set search is done per datum(s)"
@@ -1072,11 +1072,11 @@ REG2FLOP:
         - name: ByteOffset
           field_type: DEC
           start_bit: 18
-          description: "Offset (in bytes) into the 32 bit register location. Used for field extraction during 8 or 16 bit moves."          
+          description: "Offset (in bytes) into the 32 bit register location. Used for field extraction during 8 or 16 bit moves."
         - name: TargetSel
           field_type: DEC
           start_bit: 20
-          description: "Target Select. 0: TDMA Registers, 1: Local Registers, 2: Context Registers, 3: Reserved."          
+          description: "Target Select. 0: TDMA Registers, 1: Local Registers, 2: Context Registers, 3: Reserved."
         - name: SizeSel
           field_type: DEC
           start_bit: 22
@@ -1168,7 +1168,7 @@ INCADCXY:
         - name: Ch0_X
           field_type: DEC
           start_bit: 6
-          description: Channel 0 X value 
+          description: Channel 0 X value
         - name: Ch0_Y
           field_type: DEC
           start_bit: 9
@@ -1226,7 +1226,7 @@ ADDDMAREG:
         - name: ResultRegIndex
           field_type: DEC
           start_bit: 12
-          description: "TDMA 32b register index for result"          
+          description: "TDMA 32b register index for result"
     description: "Adds 32-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex and writes result to register ResultRegIndex"
 
 SUBDMAREG:
@@ -1256,11 +1256,11 @@ BITWOPDMAREG:
         - name: ResultRegIndex
           field_type: DEC
           start_bit: 12
-          description: "TDMA 32b register index for result"          
+          description: "TDMA 32b register index for result"
         - name: OpSel
           field_type: DEC
           start_bit: 18
-          description: "0 - AND, 1 - OR, 2 - XOR"          
+          description: "0 - AND, 1 - OR, 2 - XOR"
     description: "Performs bit-wise operation on 32-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex and writes result to register ResultRegIndex"
 
 SHIFTDMAREG:
@@ -1278,11 +1278,11 @@ SHIFTDMAREG:
         - name: ResultRegIndex
           field_type: DEC
           start_bit: 12
-          description: "TDMA 32b register index for result"          
+          description: "TDMA 32b register index for result"
         - name: OpSel
           field_type: DEC
           start_bit: 18
-          description: "0 - LEFT, 1 - RIGHT"          
+          description: "0 - LEFT, 1 - RIGHT"
     description: "Shifts OpARegIndex <<|>> OpBRegIndex and writes result to register ResultRegIndex"
 
 CMPDMAREG:
@@ -1300,25 +1300,25 @@ CMPDMAREG:
         - name: ResultRegIndex
           field_type: DEC
           start_bit: 12
-          description: "TDMA 32b register index for result"          
+          description: "TDMA 32b register index for result"
         - name: OpSel
           field_type: DEC
           start_bit: 18
-          description: "0 - A>B, 1 - A<B, 2 - A==B"          
+          description: "0 - A>B, 1 - A<B, 2 - A==B"
     description: "Compares values in OpARegIndex and OpBRegIndex registers and writes result 0 or 1 to register ResultRegIndex"
 
 SETADCXX:
     op_binary: 0x5E
     instrn_type: ADDRMOD
-    arguments: 
+    arguments:
         - name: x_start
           field_type: DEC
           start_bit: 0
-          description: x_start set value 
+          description: x_start set value
         - name: x_end2
           field_type: DEC
           start_bit: 10
-          description: x_end set value 
+          description: x_end set value
         - name: CntSetMask
           field_type: BIN
           start_bit: 21
@@ -1328,8 +1328,8 @@ SETADCXX:
 SETADCINC:
     op_binary: 0x5F
     instrn_type: ADDRMOD
-    arguments: 
-        - name: prog_inc_value 
+    arguments:
+        - name: prog_inc_value
           field_type: DEC
           start_bit: 0
           description: programable increment value
@@ -1527,7 +1527,7 @@ WRCFG:
           start_bit: 0
           field_type: DEC
           description: "gpr address to read data from"
-        - name: CfgReg  
+        - name: CfgReg
           start_bit: 16
           field_type: DEC
           description: "configuration register address to write data to"
@@ -1541,7 +1541,7 @@ RDCFG:
           start_bit: 0
           field_type: DEC
           description: "gpr address to write config data to"
-        - name: CfgReg  
+        - name: CfgReg
           start_bit: 16
           field_type: DEC
           description: "configuration register address to read data from"

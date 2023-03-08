@@ -1,4 +1,4 @@
-KERNELS_EVAL += kernels_eval/test_run_conv 
+KERNELS_EVAL += kernels_eval/test_run_conv
 
 KERNELS_EVAL_SRCS = $(addsuffix .cpp, $(KERNELS_EVAL))
 

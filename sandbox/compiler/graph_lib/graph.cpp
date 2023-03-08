@@ -64,7 +64,7 @@ Graph *Graph::clone(Graph *cloned_graph) const
             //Node *cloned_consumer = cloned_graph->node_by_id(cloned_consumer_node_id);
 
             Edge new_edge = Edge(
-                cloned_producer_node_id, 
+                cloned_producer_node_id,
                 operand_edge.producer_output_port_id,
                 cloned_consumer_node_id,
                 operand_edge.consumer_input_port_id,
@@ -363,9 +363,9 @@ void Graph::copy_node_attributes(Node *src, Node *dst)
     dst->set_epoch_type(src->get_epoch_type());
     dst->set_output_df(src->output_df());
     if (
-        ((dst->node_type() == NodeType::kBudaOp) && 
+        ((dst->node_type() == NodeType::kBudaOp) &&
         (src->node_type() == NodeType::kBudaOp) && src->as<OpNode>()->is_gradient_op()) ||
-        ((dst->node_type() == NodeType::kPyOp) && 
+        ((dst->node_type() == NodeType::kPyOp) &&
         (src->node_type() == NodeType::kPyOp) && src->as<OpNode>()->is_gradient_op())
        )
         dst->as<OpNode>()->set_gradient_op();
@@ -466,7 +466,7 @@ void Graph::copy_module_inputs(Graph *old_graph, const std::unordered_map<Node *
                     old_to_new.at(old_graph->node_by_id(id))->id());
         } catch (std::out_of_range &e) {
             TT_ASSERT(false);
-            // log_fatal("Node not mapped to new graph during lowering: {}", 
+            // log_fatal("Node not mapped to new graph during lowering: {}",
             //         old_graph->node_by_id(id)->name());
         }
     }
@@ -486,7 +486,7 @@ void Graph::copy_module_targets(Graph *old_graph, const std::unordered_map<Node 
                     old_to_new.at(old_graph->node_by_id(id))->id());
         } catch (std::out_of_range &e) {
             TT_ASSERT(false);
-            // log_fatal("Node not mapped to new graph during lowering: {}", 
+            // log_fatal("Node not mapped to new graph during lowering: {}",
             //         old_graph->node_by_id(id)->name());
         }
     }
@@ -514,7 +514,7 @@ void Graph::copy_module_outputs(Graph *old_graph, const std::unordered_map<Node 
                     old_to_new.at(old_graph->node_by_id(id))->id());
         } catch (std::out_of_range &e) {
             TT_ASSERT(false);
-            // log_fatal("Node not mapped to new graph during lowering: {}", 
+            // log_fatal("Node not mapped to new graph during lowering: {}",
             //         old_graph->node_by_id(id)->name());
         }
     }
@@ -571,7 +571,7 @@ std::vector<std::string> Graph::get_ordered_input_names() const {
     }
     return ordered_inputs;
 }
-    
+
 std::vector<std::string> Graph::get_ordered_target_names() const {
     std::vector<std::string> ordered_inputs;
     for (auto input_node_id : this->ordered_module_target_node_ids_) {
@@ -667,7 +667,7 @@ std::vector<Node *> Graph::get_constant_nodes(bool recurse) const {
         if (node->node_type() == NodeType::kInput)
         {
             InputNode* input_node = node->as<InputNode>();
-            if (auto const_eval_graph = input_node->get_consteval_graph(); const_eval_graph != nullptr and recurse) 
+            if (auto const_eval_graph = input_node->get_consteval_graph(); const_eval_graph != nullptr and recurse)
             {
                 std::vector<Node*> subgraph_constant_nodes = const_eval_graph->get_graph()->get_constant_nodes();
                 constants.insert(constants.end(), subgraph_constant_nodes.begin(), subgraph_constant_nodes.end());
@@ -764,7 +764,7 @@ std::vector<int> Graph::get_tile_broadcast_dims_for_bw_input(std::uint32_t outpu
     InputNode *input = get_node_by_name(gradient_names[output_index])->as<InputNode>();
     return input->get_tile_broadcast_dims();
 }
-    
+
 std::vector<int> Graph::get_tile_broadcast_dims_for_target(std::uint32_t target_index) const
 {
     TT_ASSERT(target_index < this->ordered_module_target_node_ids_.size());
@@ -800,7 +800,7 @@ std::unordered_map<int, std::vector<Node *>> Graph::get_gradient_nodes(Node *fwd
     return ret;
 }
 
-std::unordered_map<int, std::vector<Node *>> Graph::get_bwd_nodes(Node *fwd_node) const 
+std::unordered_map<int, std::vector<Node *>> Graph::get_bwd_nodes(Node *fwd_node) const
 {
     std::unordered_map<int, std::vector<Node *>> ret;
     for (Edge edge : user_edges(fwd_node)) {

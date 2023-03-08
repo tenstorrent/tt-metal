@@ -8,5 +8,3 @@ Data Movement
   ReadFromDeviceDRAMChannel
   WriteToDeviceL1
   ReadFromDeviceL1
-  
-  

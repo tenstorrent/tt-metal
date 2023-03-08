@@ -13,7 +13,7 @@ namespace epoch_queue {
     static constexpr std::int32_t EpochEndReached = 0xFFFFFFFF;
 
 
-/** 
+/**
  * @brief Silicon device epoch queue command interpreted by NCRISC/ERISC FW.
  */
     enum EpochQueueCmd

@@ -1,11 +1,11 @@
 #include <cstdint>
 #include "hostdevcommon/common_runtime_address_map.h"
-/** 
+/**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or other RISCs
- * Any two RISC processors cannot use the same CMD_BUF 
+ * Any two RISC processors cannot use the same CMD_BUF
  * non_blocking APIs shouldn't be mixed with slow noc.h APIs
  * explicit flushes need to be used since the calls are non-blocking
- * */ 
+ * */
 constexpr static std::uint32_t VALID = 0x1234;
 constexpr static std::uint32_t INVALID = 0x4321;
 void kernel_main() {
@@ -29,7 +29,7 @@ void kernel_main() {
     // src noc address
     std::uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
     // Local and remote register addresses (used for sync)
-    std::uint64_t local = get_noc_addr(stream_register_address); 
+    std::uint64_t local = get_noc_addr(stream_register_address);
     std::uint64_t remote= get_noc_addr(src_noc_x, src_noc_y, stream_register_address);
 
     std::uint32_t dst_buffer_addr = buffer_dst_addr;
@@ -40,7 +40,7 @@ void kernel_main() {
         noc_async_read_barrier();
 
         // DRAM NOC dst address
-        std::uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_buffer_addr); 
+        std::uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_buffer_addr);
         noc_async_write(l1_buffer_address, dst_noc_addr, transient_buffer_size_bytes);
 
         dst_buffer_addr += transient_buffer_size_bytes;

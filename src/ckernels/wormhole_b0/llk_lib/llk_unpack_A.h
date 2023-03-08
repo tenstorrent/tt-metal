@@ -162,7 +162,7 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
     if constexpr ((BType == BroadcastType::SCALAR) || (BType == BroadcastType::ROW)) {
         constexpr uint32_t srca_height = 1;
         constexpr uint32_t srcb_height = 1;
-        configure_unpack_AB(get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand), 
+        configure_unpack_AB(get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand),
                             srca_height, srcb_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en);
     } else if constexpr ((BType == BroadcastType::COL) || acc_to_dest) {
         // broadcast_type = p_movb2d::MOV_8_ROW_BRCST_D0_BRCST;

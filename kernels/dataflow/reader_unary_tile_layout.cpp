@@ -3,10 +3,10 @@
 
 void kernel_main() {
     // in0 tensor args
-    uint32_t in0_tensor_addr             = get_arg_val<uint32_t>(0); 
-    uint32_t in0_tensor_start_tile_id    = get_arg_val<uint32_t>(1); 
-    uint32_t in0_num_blocks              = get_arg_val<uint32_t>(2); 
-    uint32_t in0_block_num_tiles         = get_arg_val<uint32_t>(3); 
+    uint32_t in0_tensor_addr             = get_arg_val<uint32_t>(0);
+    uint32_t in0_tensor_start_tile_id    = get_arg_val<uint32_t>(1);
+    uint32_t in0_num_blocks              = get_arg_val<uint32_t>(2);
+    uint32_t in0_block_num_tiles         = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -27,7 +27,7 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
         for(uint32_t tile = 0; tile < in0_block_num_tiles; tile++) {
-            uint64_t in0_noc_addr = get_noc_addr_for_tile(tile_id, in0_tensor_addr, 
+            uint64_t in0_noc_addr = get_noc_addr_for_tile(tile_id, in0_tensor_addr,
                                             num_used_dram_ch, num_used_dram_ch_pow2_exponent, tile_size_pow2_exponent);
             noc_async_read(in0_noc_addr, l1_write_addr, tile_size_bytes);
             l1_write_addr += tile_size_bytes;

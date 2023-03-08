@@ -12,7 +12,7 @@ class ConvParameters {
         uint32_t V = 1;
         uint32_t PadH = 0;
         uint32_t PadW = 0;
-        ConvParameters(uint32_t r, uint32_t s,  uint32_t u,  uint32_t v,  uint32_t padH,  uint32_t padW) : 
+        ConvParameters(uint32_t r, uint32_t s,  uint32_t u,  uint32_t v,  uint32_t padH,  uint32_t padW) :
         R(r), S(s), U(u), V(v), PadH(padH), PadW(padW) {
             TT_ASSERT(U > 0 and V > 0);
             TT_ASSERT(R > 0 and S > 0);
@@ -32,7 +32,7 @@ std::vector<std::vector<T>> move_act_dram_to_l1(tt::Tensor<T> &input_nhwc, ConvP
 
     std::vector<std::pair<int, int>> increments;
     for (auto r=0; r<conv_params.R; r++) {
-        for(auto s =0; s<conv_params.S; s++) {    
+        for(auto s =0; s<conv_params.S; s++) {
             increments.push_back(std::make_pair(s, r));
         }
     }
@@ -52,7 +52,7 @@ std::vector<std::vector<T>> move_act_dram_to_l1(tt::Tensor<T> &input_nhwc, ConvP
                 output.push_back(row);
             }
         }
-        
+
     }
 
     return output;
@@ -75,8 +75,8 @@ std::vector<T> move_act_dram_to_l1_tilized(tt::Tensor<T> &input_nhwc, uint32_t d
 }
 
 template <typename T>
-std::vector<T> untilize_act(std::vector<T> tilized_act, 
-                                            std::uint32_t output_rows, 
+std::vector<T> untilize_act(std::vector<T> tilized_act,
+                                            std::uint32_t output_rows,
                                             std::uint32_t output_cols) {
     TT_ASSERT(output_rows % TILE_HEIGHT == 0);
     TT_ASSERT(output_cols % TILE_WIDTH == 0);
@@ -91,7 +91,7 @@ std::vector<T> untilize_act(std::vector<T> tilized_act,
                     for(auto fj = 0; fj < 2; fj++) {
                         for(auto j = 0; j < 16; j++) {
                             // determin index in tilized data. Tiles are arranged in col major order. But faces are row major order within the tile
-                            uint32_t index = c*TILE_HEIGHT*TILE_WIDTH*num_tiles_r + r*TILE_WIDTH*TILE_HEIGHT + fi*16*16*2 + fj*16*16 + i*16 + j;       
+                            uint32_t index = c*TILE_HEIGHT*TILE_WIDTH*num_tiles_r + r*TILE_WIDTH*TILE_HEIGHT + fi*16*16*2 + fj*16*16 + i*16 + j;
                             assert(index < tilized_act.size());
                             untilized_act.push_back(tilized_act.at(index));
                         }
@@ -104,10 +104,10 @@ std::vector<T> untilize_act(std::vector<T> tilized_act,
 }
 
 template <typename T>
-std::vector<std::vector<T>> untilize_weights(std::vector<T> tilized_weights, 
-                                            std::uint32_t output_rows, 
-                                            std::uint32_t output_cols, 
-                                            std::uint32_t row_tile_size, 
+std::vector<std::vector<T>> untilize_weights(std::vector<T> tilized_weights,
+                                            std::uint32_t output_rows,
+                                            std::uint32_t output_cols,
+                                            std::uint32_t row_tile_size,
                                             std::uint32_t col_tile_size) {
     uint32_t num_tiles_rows = std::ceil(output_rows / row_tile_size);
     uint32_t num_tiles_cols = std::ceil(output_cols / col_tile_size);
@@ -116,10 +116,10 @@ std::vector<std::vector<T>> untilize_weights(std::vector<T> tilized_weights,
         std::vector<T> row(output_cols, (uint32_t)0);
         untilized_weights.push_back(row);
     }
-    
+
     // 2d matrix is tilized. Tiles are arranged in row major order. Elements within tiles are in row major order.
     for (int tr = 0; tr < num_tiles_rows; tr++) {
-        for (int tc = 0; tc < num_tiles_cols; tc++) {        
+        for (int tc = 0; tc < num_tiles_cols; tc++) {
             for (int r = 0; r < row_tile_size; r++) {
                 for(int c = 0; c < col_tile_size; c++) {
                     uint32_t tilized_index = c + r * col_tile_size + tc * row_tile_size * col_tile_size + tr * num_tiles_cols * row_tile_size * col_tile_size;
@@ -151,7 +151,7 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
                 for(auto c = 0; c < num_tiles_c; c++) {
                     for(auto fj = 0; fj < 2; fj++) {
                         for(auto j = 0; j < 16; j++) {
-                            uint32_t index = r*TILE_HEIGHT*TILE_WIDTH*num_tiles_c + c*TILE_HEIGHT*TILE_WIDTH + fi*16*16*2 + fj*16*16 + i*16 + j;        
+                            uint32_t index = r*TILE_HEIGHT*TILE_WIDTH*num_tiles_c + c*TILE_HEIGHT*TILE_WIDTH + fi*16*16*2 + fj*16*16 + i*16 + j;
                             assert(index < data.size());
                             result.push_back(data.at(index));
                         }
@@ -198,7 +198,7 @@ std::vector<std::vector<T>> move_weights_dram_to_l1(tt::Tensor<T> &input_nhwc) {
     std::vector<std::vector<T>> output;
     std::array<uint32_t, 4> in_shape = input_nhwc.get_shape();
     const auto& input_nhwc_values = input_nhwc.get_values();
-    
+
     for(auto w = 0; w < in_shape[0]; w++) {
         std::vector<T> row;
         for(auto y = 0; y < in_shape[1]; y++) {
@@ -223,7 +223,7 @@ std::vector<std::vector<T>> move_weights_dram_to_l1_mm(tt::Tensor<T> &input_nhwc
     for(auto i = 0; i < num_rows; i++) {
         std::vector<T> row(in_shape[0], (uint32_t)0);
         output.push_back(row);
-    }    
+    }
     for(auto w = 0; w < in_shape[0]; w++) {
         uint32_t r = 0;
         for(auto y = 0; y < in_shape[1]; y++) {
@@ -257,7 +257,7 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
                         for(auto j = 0; j < 16; j++) { // face cols
                             // each tile has 4 faces of 16x16
                             // each row of tile has 2 faces of 16x16
-                            //int index = i + j * 16 
+                            //int index = i + j * 16
                             uint32_t x = i + fi * 16 + r * TILE_HEIGHT;
                             uint32_t y = j + fj * 16 + c * TILE_WIDTH;
                             uint32_t index = y + x * cols;
@@ -272,7 +272,7 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> gen_source_addresses_for_conv_act_layout_transform(
-                                                        std::array<uint32_t, 4> input_nhwc_shape, 
+                                                        std::array<uint32_t, 4> input_nhwc_shape,
                                                         ConvParameters conv_params,
                                                         uint32_t data_type_size_bytes) {
     auto N = input_nhwc_shape[0];
@@ -283,7 +283,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> gen_source_addre
     auto S = conv_params.S;
     auto U = conv_params.U;
     auto V = conv_params.V;
-    
+
     std::uint32_t output_rows = (((H - R) / U) + 1) * (((W - S) / V) + 1);
     std::uint32_t output_cols = R * S * C;
     assert(output_rows % TILE_HEIGHT == 0);
@@ -316,8 +316,8 @@ std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> gen_source_addre
                                     std::vector<std::vector<uint32_t>> faces(4, std::vector<uint32_t>());
                                     tiles_address_map[tile_index] = faces;
                                 }
-                                tiles_address_map[tile_index][face_index].push_back(start_dram_address*data_type_size_bytes);                             
-                                
+                                tiles_address_map[tile_index][face_index].push_back(start_dram_address*data_type_size_bytes);
+
                             }
                             out_col_index++;
                         }

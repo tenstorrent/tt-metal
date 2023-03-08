@@ -84,7 +84,7 @@ inline uint wait(int cycles){
 }
 
 inline void dbg_daisy_disable(
-    bool use_setc, 
+    bool use_setc,
       volatile uint * instrn_buf ,
         uint & debug_sel_reg
 )
@@ -100,7 +100,7 @@ inline void dbg_daisy_disable(
     }
 }
 inline void dbg_daisy_enable(
-    bool use_setc, 
+    bool use_setc,
       volatile uint * instrn_buf ,
         uint &debug_sel_reg
 )
@@ -196,11 +196,11 @@ inline void dbg_enable_mem_dump_l1(
     uint reg_value = start_addr;
     memory_write(reg, reg_value);
 
-    reg=reg+4; 
+    reg=reg+4;
     reg_value  = end_addr;
     memory_write(reg, reg_value);
 
-    reg=reg+4; 
+    reg=reg+4;
     reg_value  = mode;
     memory_write(reg, reg_value);
 //value = (value & ~mask) | (newvalue & mask);}
@@ -220,7 +220,7 @@ inline void dbg_enable_mem_dump_l0(
     reg_value = reg_value | lower_word;
     memory_write(reg, reg_value);
 
-    reg=reg+4; 
+    reg=reg+4;
     reg_value  = mode;
     memory_write(reg, reg_value);
 //value = (value & ~mask) | (newvalue & mask);}
@@ -237,7 +237,7 @@ inline void dbg_set_perf_cnt_params(
     memory_write(RISCV_DBG_PERF_CNT_INSTRN_THREAD0+4, mode);
 }
 inline void dbg_sig_sel(
-    bool use_setc, 
+    bool use_setc,
       volatile uint * instrn_buf ,
         uint & debug_sel_reg,
         uint    sig_sel
@@ -257,7 +257,7 @@ inline void dbg_sig_sel(
     }
 }
 inline void dbg_daisy_sel(
-    bool use_setc, 
+    bool use_setc,
       volatile uint * instrn_buf ,
         uint & debug_sel_reg,
         uint    daisy_sel

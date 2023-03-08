@@ -13,5 +13,3 @@ Kernel Compilation Flow
 
 Memory Model
 ********************************
-
-

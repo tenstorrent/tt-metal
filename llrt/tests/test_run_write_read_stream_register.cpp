@@ -22,8 +22,8 @@ std::vector<uint32_t> run_stream_register_write(tt_cluster *cluster, int chip_id
     // Kernel arguments
     std::uint32_t buffer_src_addr = 200 * 1024;
     std::uint32_t buffer_size = 4;
-    // blast kernel arguments to L1 in one-shot 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, src_core, 
+    // blast kernel arguments to L1 in one-shot
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, src_core,
         {buffer_dst_addr,
         (std::uint32_t)dst_core.x,
         (std::uint32_t)dst_core.y,
@@ -36,7 +36,7 @@ std::vector<uint32_t> run_stream_register_write(tt_cluster *cluster, int chip_id
     const tt::llrt::TensixRiscsOptions riscs_options = tt::llrt::TensixRiscsOptions::BRISC_NCRISC;
     tt::llrt::internal_::setup_riscs_on_specified_cores(cluster, chip_id, riscs_options, {src_core});
     tt::llrt::internal_::run_riscs_on_specified_cores(cluster, chip_id, riscs_options, {src_core});
-    vector<std::uint32_t> dst_vec = tt::llrt::read_hex_vec_from_core(cluster, chip_id, dst_core, buffer_dst_addr, buffer_size);  // read L1 
+    vector<std::uint32_t> dst_vec = tt::llrt::read_hex_vec_from_core(cluster, chip_id, dst_core, buffer_dst_addr, buffer_size);  // read L1
     return dst_vec;
 }
 
@@ -50,8 +50,8 @@ std::vector<uint32_t> run_stream_register_read(tt_cluster *cluster, int chip_id,
     // Kernel arguments
     std::uint32_t buffer_dst_addr = 300 * 1024;
     std::uint32_t buffer_size = 4;
-    // blast kernel arguments to L1 in one-shot 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, dst_core, 
+    // blast kernel arguments to L1 in one-shot
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, dst_core,
         {buffer_src_addr,
         (std::uint32_t)src_core.x,
         (std::uint32_t)src_core.y,
@@ -62,7 +62,7 @@ std::vector<uint32_t> run_stream_register_read(tt_cluster *cluster, int chip_id,
     const tt::llrt::TensixRiscsOptions riscs_options = tt::llrt::TensixRiscsOptions::BRISC_ONLY;
     tt::llrt::internal_::setup_riscs_on_specified_cores(cluster, chip_id, riscs_options, {dst_core});
     tt::llrt::internal_::run_riscs_on_specified_cores(cluster, chip_id, riscs_options, {dst_core});
-    vector<std::uint32_t> dst_vec = tt::llrt::read_hex_vec_from_core(cluster, chip_id, dst_core, buffer_dst_addr, buffer_size);  // read L1 
+    vector<std::uint32_t> dst_vec = tt::llrt::read_hex_vec_from_core(cluster, chip_id, dst_core, buffer_dst_addr, buffer_size);  // read L1
     return dst_vec;
 }
 
@@ -74,14 +74,14 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
-        
+        tt::llrt::utils::log_current_ai_clk(cluster);
+
         for(std::uint32_t stream_id = 0; stream_id < NUM_STREAMS; stream_id++) {
-            for(std::uint32_t register_id: REGISTERS) {                 
+            for(std::uint32_t register_id: REGISTERS) {
                 std::uint32_t stream_register_address = STREAM_REG_ADDR(stream_id, register_id);
                 std::cout<<stream_id<<", "<<register_id<<std::endl;
                 for(std::uint32_t i = 0; i < 10; i++) {
@@ -114,4 +114,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

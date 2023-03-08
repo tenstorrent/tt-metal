@@ -49,7 +49,7 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[8], boo
     DataFormat last_valid_format = DataFormat::Invalid;
     for (int i = 0; i < 8; i++) {
         // Special case where Float32 can pair with any exponent precision, skip checking
-        if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::Tf32) || 
+        if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::Tf32) ||
             (data_format[i] == DataFormat::RawUInt32) || (data_format[i] == DataFormat::RawUInt16) || (data_format[i] == DataFormat::RawUInt8)){
             continue;
         }
@@ -110,7 +110,7 @@ bool is_all_fp32_formats(const DataFormat data_format[8]) {
     for (int i = 0; i < 8; i++) {
         if (data_format[i] != DataFormat::Invalid && data_format[i] != DataFormat::Float32 && data_format[i] != DataFormat::Tf32) {
             return false;
-        } 
+        }
     }
     return true;
 }
@@ -157,7 +157,7 @@ void check_input_to_output_valid_conversion(DataFormat input_formats[8], DataFor
 //  All input buffers that get unpacked by different unpackers must only have the same -b- precision.
 
 void check_valid_in_out_data_formats(DataFormat input_formats[8], DataFormat output_formats[8], DataFormat param_formats[8], DataFormat intermed_formats[8]) {
-    
+
     // std::cout << "input format = " << std::endl;
     // dump_data_formats(input_formats);
     // std::cout << "output format = " << std::endl;
@@ -246,7 +246,7 @@ std::vector<DataFormat> get_unpack_src_formats(DataFormat input_formats[8], Data
                case DataFormat::RawUInt16: src_format = DataFormat::Float16; break;
                default: src_format = DataFormat::Lf8; break;
             }
-        }    
+        }
         unpack_src_format.push_back(src_format);
     }
     for (int i=0 ; i<8 ; i++) {
@@ -261,7 +261,7 @@ std::vector<DataFormat> get_unpack_src_formats(DataFormat input_formats[8], Data
 }
 
 const DataFormat get_single_unpack_dst_format(const DataFormat src_format, const DataFormat pack_format, const DataFormat unpack_conditional_dst_format){
-    
+
     DataFormat dst_format = src_format;
     if (src_format == DataFormat::Float32){
         TT_ASSERT((unpack_conditional_dst_format == DataFormat::Float16) || (unpack_conditional_dst_format == DataFormat::Float16_b) || (unpack_conditional_dst_format == DataFormat::Tf32));

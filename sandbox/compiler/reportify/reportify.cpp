@@ -267,7 +267,7 @@ json node_to_json(const graphlib::Node* node, const graphlib::Graph *graph) {
             ret_json["type"] = "Input::" + node->as<graphlib::InputNode>()->input_type_string();
         }
         ret_json["queue_type"] = node->as<graphlib::QueueNode>()->queue_type_string();
-        ret_json["is_cross_epoch_type"] = 
+        ret_json["is_cross_epoch_type"] =
             node->as<graphlib::QueueNode>()->is_epoch_to_epoch() and
             node->as<graphlib::EpochToEpochQueueNode>()->is_cross_epoch_type();
         ret_json["memory_access"] = node->as<graphlib::QueueNode>()->memory_access_type_string();
@@ -276,7 +276,7 @@ json node_to_json(const graphlib::Node* node, const graphlib::Graph *graph) {
     } else if (node->node_type() == graphlib::NodeType::kOutput) {
         ret_json["class"] = "Output";
         ret_json["queue_type"] = node->as<graphlib::QueueNode>()->queue_type_string();
-        ret_json["is_cross_epoch_type"] = 
+        ret_json["is_cross_epoch_type"] =
             node->as<graphlib::QueueNode>()->is_epoch_to_epoch() and
             node->as<graphlib::EpochToEpochQueueNode>()->is_cross_epoch_type();
         ret_json["memory_access"] = node->as<graphlib::QueueNode>()->memory_access_type_string();
@@ -316,7 +316,7 @@ json node_to_json(const graphlib::Node* node, const graphlib::Graph *graph) {
         //         for (const auto &op: schedule.ops)
         //         {
         //             auto sh = op.op_shape.outputs.at(0);
-        //             std::string shape = std::to_string(sh.w) + "," + std::to_string(sh.z) 
+        //             std::string shape = std::to_string(sh.w) + "," + std::to_string(sh.z)
         //                 + "," + std::to_string(sh.rt) + "," + std::to_string(sh.ct);
         //             sch.push_back(op.name + ": " + op.op_type.op + " (" + shape + "), out: " + std::to_string(op.output_buffer));
         //         }
@@ -338,7 +338,7 @@ json node_to_json(const graphlib::Node* node, const graphlib::Graph *graph) {
     {
         ret_json["class"] = "BudaDramQueue::";
         ret_json["queue_type"] = node->as<graphlib::QueueNode>()->queue_type_string();
-        ret_json["is_cross_epoch_type"] = 
+        ret_json["is_cross_epoch_type"] =
             node->as<graphlib::QueueNode>()->is_epoch_to_epoch() and
             node->as<graphlib::EpochToEpochQueueNode>()->is_cross_epoch_type();
         ret_json["memory_access"] = node->as<graphlib::QueueNode>()->memory_access_type_string();
@@ -425,7 +425,7 @@ void dump_consteval_graph(const std::string& test_name, const std::string& graph
 
 void dump_epoch_type_graphs(
         const std::string& test_name,
-        const std::string& graph_prefix, 
+        const std::string& graph_prefix,
         const graphlib::Graph *graph,
         // const placer::PlacerSolution *placer_solution,
         // std::shared_ptr<balancer::BalancerSolution> balancer_solution,
@@ -590,5 +590,5 @@ void dump_graph(
     dump_graph(default_dir, test_name, graph_prefix, graph, report_path);
 }
 
-}  // namespace reportify 
+}  // namespace reportify
 } // namespace tt

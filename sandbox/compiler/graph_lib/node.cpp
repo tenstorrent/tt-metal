@@ -65,7 +65,7 @@ void Node::set_node_type(NodeType node_type) { node_type_ = node_type; }
 
 void Node::set_shape(const Shape& shape) {
     TT_ASSERT(shape.is_valid());
-    shape_ = shape; 
+    shape_ = shape;
 }
 
 tt::DataFormat Node::output_df() const { return output_df_; }

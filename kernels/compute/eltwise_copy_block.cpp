@@ -6,7 +6,7 @@ struct hlk_args_t {
     std::int32_t block_num_tiles;
     std::int32_t num_blocks;
 };
-  
+
 void compute_main(const hlk_args_t *args) {
 
     for(int block = 0; block < args->num_blocks; ++block) {

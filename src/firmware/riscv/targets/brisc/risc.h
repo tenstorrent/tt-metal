@@ -13,7 +13,7 @@ typedef struct active_stream_info_t {
   uint8_t  dram_prefetch_stream_need_restart;
   uint16_t blob_start_offset;
   uint16_t flags;
-  uint32_t epoch_iters_remaining; 
+  uint32_t epoch_iters_remaining;
 } active_stream_info_t;
 
 

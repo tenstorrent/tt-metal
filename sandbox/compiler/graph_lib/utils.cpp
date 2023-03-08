@@ -37,7 +37,7 @@ std::vector<Node*> topological_sort(const Graph& graph, std::function<bool(Node*
 
     std::function<void(Node*)> VisitNode = [&](Node* node) {
         visited[node->id()] = true;
-        
+
         for (const Edge& operand_edge : graph.operand_edges(node)) {
             if (operand_edge.edge_type == EdgeType::kDataLoopback)
             {
@@ -193,7 +193,7 @@ std::pair<Edge, Edge> insert_node_on_edge(Graph *graph, Edge &edge, Node *node, 
     graph->copy_node_attributes(inherit_consumer_attrs ? consumer : producer, node);
 
     // Don't copy "gradient op" flag, since the last node is still the one accumulating
-    if ( (node->node_type() == NodeType::kBudaOp) || 
+    if ( (node->node_type() == NodeType::kBudaOp) ||
          (node->node_type() == NodeType::kPyOp) )
         node->as<graphlib::OpNode>()->set_gradient_op(false);
 
@@ -220,10 +220,10 @@ std::pair<Edge, Edge> insert_node_on_edge(Graph *graph, Edge &edge, Node *node, 
     bool edges_added = false;
     for (Edge &e : graph->operand_edges(consumer)) {
         // Adjust control & autograd edges
-        if ( (e.edge_type != EdgeType::kData) && (e.edge_type != EdgeType::kAutogradOutputToLoss) && 
+        if ( (e.edge_type != EdgeType::kData) && (e.edge_type != EdgeType::kAutogradOutputToLoss) &&
                 (e.edge_type != EdgeType::kAutogradInputToGradientOut) &&
                 (e.edge_type != EdgeType::kAutogradFwdToGradient)  &&
-                (e.edge_type != EdgeType::kAutogradFwdToRecompute) 
+                (e.edge_type != EdgeType::kAutogradFwdToRecompute)
 
                 ) {
             edges_added = true;
@@ -242,9 +242,9 @@ std::pair<Edge, Edge> insert_node_on_edge(Graph *graph, Edge &edge, Node *node, 
     {
         for (Edge &e : graph->operand_edges(producer)) {
             // Adjust control & autograd edges
-            if ( (e.edge_type == EdgeType::kAutogradFwdToBwd) || 
-                (e.edge_type == EdgeType::kAutogradFwdToOptimizer) || 
-                (e.edge_type == EdgeType::kAutogradFwdToGradient) ) 
+            if ( (e.edge_type == EdgeType::kAutogradFwdToBwd) ||
+                (e.edge_type == EdgeType::kAutogradFwdToOptimizer) ||
+                (e.edge_type == EdgeType::kAutogradFwdToGradient) )
             {
                 graph->add_edge(
                         graph->node_by_id(e.producer_node_id),
@@ -675,7 +675,7 @@ graphlib::Edge clone_input_forking_edge(graphlib::Graph *graph, graphlib::Edge u
 //         operand_shapes.push_back(operand_shape);
 //     }
 
-//     if ( (node->node_type() == graphlib::NodeType::kOutput) || (node->node_type() == graphlib::NodeType::kQueue) ) { 
+//     if ( (node->node_type() == graphlib::NodeType::kOutput) || (node->node_type() == graphlib::NodeType::kQueue) ) {
 //         // Graph shape from first, and only, operand
 //         TT_ASSERT(operand_shapes.size() == 1, "Node should have exactly one operand");
 //         node->set_shape(operand_shapes[0]);

@@ -39,4 +39,3 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
         }
     }
 }
-

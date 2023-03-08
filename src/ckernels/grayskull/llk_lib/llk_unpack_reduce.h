@@ -76,7 +76,7 @@ inline void llk_unpack_reduce_init() {
 
     tile_descriptor.f.in_data_format  = (uint) DataFormat::Float32;
     tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
-    tile_descriptor.f.x_dim        = 256; 
+    tile_descriptor.f.x_dim        = 256;
 
     unpack_config_u config = {0};
 
@@ -89,7 +89,7 @@ inline void llk_unpack_reduce_init() {
 
     uint32_t alu_config_data = gl_alu_format_spec_reg;
 
-    gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, ALU_FORMAT_SPEC_REG1_SrcB_SHAMT, ALU_FORMAT_SPEC_REG1_SrcB_MASK, 
+    gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, ALU_FORMAT_SPEC_REG1_SrcB_SHAMT, ALU_FORMAT_SPEC_REG1_SrcB_MASK,
             config.f.out_data_format,
             alu_config_data);
 

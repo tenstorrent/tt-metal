@@ -18,4 +18,3 @@ py_binary(
     name = "fwlog",
     srcs = ["fwlog.py"],
 )
-

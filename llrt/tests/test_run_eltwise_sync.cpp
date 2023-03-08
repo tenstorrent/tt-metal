@@ -15,10 +15,10 @@ using tt::llrt::CircularBufferConfigVec;
 constexpr static std::uint32_t INVALID = 0x4321;
 
 bool run_eltwise_sync(
-    tt_cluster* cluster, 
-    int chip_id, 
-    const tt_xy_pair& loader_core, 
-    const tt_xy_pair& compute_core, 
+    tt_cluster* cluster,
+    int chip_id,
+    const tt_xy_pair& loader_core,
+    const tt_xy_pair& compute_core,
     std::vector<uint32_t>& src_vec,
     const std::vector<bfloat16>& golden
 ) {
@@ -38,10 +38,10 @@ bool run_eltwise_sync(
     // Producer core
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, tt::llrt::TensixRiscsOptions::ALL_RISCS, {compute_core});
     string loader_op_path = "built_kernels/dram_loader_sync";
-    bool pass = tt::llrt::test_load_write_read_risc_binary(cluster, loader_op_path + "/brisc/brisc.hex", 0, loader_core, 0); // brisc 
+    bool pass = tt::llrt::test_load_write_read_risc_binary(cluster, loader_op_path + "/brisc/brisc.hex", 0, loader_core, 0); // brisc
     // Consumer core
     string compute_op_path = "built_kernels/eltwise_sync";
-    pass = tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/brisc/brisc.hex", 0, compute_core, 0); // brisc 
+    pass = tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/brisc/brisc.hex", 0, compute_core, 0); // brisc
     pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/ncrisc/ncrisc.hex", 0, compute_core, 1); // ncrisc
 
     pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, compute_op_path + "/tensix_thread0/tensix_thread0.hex", 0, compute_core, 0); // trisc0
@@ -53,20 +53,20 @@ bool run_eltwise_sync(
     tt_xy_pair dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_channel_id);
     // ---------------------------------------------------------------------------------------
     // Producer core:
-    // BRISC kernel arguments to L1 in one-shot 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, loader_core, 
-        { 
-            dram_buffer_src_addr, 
-            (std::uint32_t)dram_dst_noc_xy.x, 
-            (std::uint32_t)dram_dst_noc_xy.y, 
-            loader_buffer_address, 
-            (std::uint32_t)compute_core.x, 
+    // BRISC kernel arguments to L1 in one-shot
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, loader_core,
+        {
+            dram_buffer_src_addr,
+            (std::uint32_t)dram_dst_noc_xy.x,
+            (std::uint32_t)dram_dst_noc_xy.y,
+            loader_buffer_address,
+            (std::uint32_t)compute_core.x,
             (std::uint32_t)compute_core.y,
             stream_register_address,
             num_output_tiles,
             transient_buffer_size_tiles,
             transient_buffer_size_bytes
-        }, 
+        },
         BRISC_L1_ARG_BASE);
     // ---------------------------------------------------------------------------------------
     // Consumer core:
@@ -78,7 +78,7 @@ bool run_eltwise_sync(
     tt::llrt::write_circular_buffer_config_vector_to_core(cluster, chip_id, compute_core, circular_buffer_config_vec);
 
     // NCRISC kernel arguments to L1 in one-shot
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, compute_core, 
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, compute_core,
         {
             loader_buffer_address,
             (std::uint32_t)loader_core.x,
@@ -87,15 +87,15 @@ bool run_eltwise_sync(
             num_output_tiles,
             transient_buffer_size_tiles,
             transient_buffer_size_bytes
-        }, 
+        },
         NCRISC_L1_ARG_BASE);
 
-    // BRISC kernel arguments to L1 in one-shot 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, compute_core, 
-        { dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, (std::uint32_t)(num_output_tiles) }, 
+    // BRISC kernel arguments to L1 in one-shot
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, compute_core,
+        { dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, (std::uint32_t)(num_output_tiles) },
         BRISC_L1_ARG_BASE);
     // ---------------------------------------------------------------------------------------
-    
+
     // Initialize producer/consumer registers to "INVALID"
     tt::llrt::write_hex_vec_to_core(cluster, chip_id, loader_core, {INVALID}, stream_register_address);
     tt::llrt::write_hex_vec_to_core(cluster, chip_id, compute_core, {INVALID}, stream_register_address);
@@ -124,7 +124,7 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         const int chip_id = 0;
         tt_xy_pair loader_core = {1, 1};
@@ -166,4 +166,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

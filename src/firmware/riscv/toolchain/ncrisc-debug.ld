@@ -12,4 +12,3 @@ __firmware_stack_size = 1024;
 
 INCLUDE "ncrisc-sections.ld"
 INCLUDE "tensix-address.ld"
-

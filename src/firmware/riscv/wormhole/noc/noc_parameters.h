@@ -48,7 +48,7 @@
 #define NUM_HEADER_2B_ERR        (NOC_REGS_START_ADDR+0x48)
 #define ECC_CTRL                 (NOC_REGS_START_ADDR+0x4C)  // [2:0] = clear ECC interrupts, [5:3] = force ECC error
 
-#define NOC_CLEAR_OUTSTANDING_REQ_CNT  (NOC_REGS_START_ADDR+0x50) 
+#define NOC_CLEAR_OUTSTANDING_REQ_CNT  (NOC_REGS_START_ADDR+0x50)
 
 ////
 
@@ -57,7 +57,7 @@
 // IMPROVE: add offsets for misc. debug status regiters
 
 
-#define NIU_SLV_POSTED_WR_REQ_STARTED             0x3D 
+#define NIU_SLV_POSTED_WR_REQ_STARTED             0x3D
 #define NIU_SLV_NONPOSTED_WR_REQ_STARTED          0x3C
 #define NIU_SLV_POSTED_WR_REQ_RECEIVED            0x3B
 #define NIU_SLV_NONPOSTED_WR_REQ_RECEIVED         0x3A
@@ -76,9 +76,9 @@
 #define NIU_MST_WRITE_REQS_OUTGOING_ID(id)    (0x20 + (id))
 #define NIU_MST_REQS_OUTSTANDING_ID(id)       (0x10 + (id))
 
-#define NIU_MST_NONPOSTED_ATOMIC_STARTED      0xF 
-#define NIU_MST_RD_REQ_STARTED                0xE 
-#define NIU_MST_POSTED_WR_REQ_STARTED         0xD 
+#define NIU_MST_NONPOSTED_ATOMIC_STARTED      0xF
+#define NIU_MST_RD_REQ_STARTED                0xE
+#define NIU_MST_POSTED_WR_REQ_STARTED         0xD
 #define NIU_MST_NONPOSTED_WR_REQ_STARTED      0xC
 #define NIU_MST_POSTED_WR_REQ_SENT            0xB
 #define NIU_MST_NONPOSTED_WR_REQ_SENT         0xA
@@ -104,13 +104,13 @@
 // [7:1] = clk gt hysteresis
 // [8] = NIU mem parity enable
 // [11:9] = ECC interrupts enable
-// [12] = tile clock disable 
+// [12] = tile clock disable
 // [13] = (noc2axi only) header double store disable
 // [14] = enable coordinate translation
-#define NIU_CFG_0     0x0   
-#define NIU_CFG_0_ECC_NIU_MEM_PARITY_EN   8 
+#define NIU_CFG_0     0x0
+#define NIU_CFG_0_ECC_NIU_MEM_PARITY_EN   8
 #define NIU_CFG_0_ECC_MEM_PARITY_INT_EN   9
-#define NIU_CFG_0_ECC_HEADER_1B_INT_EN    10 
+#define NIU_CFG_0_ECC_HEADER_1B_INT_EN    10
 #define NIU_CFG_0_ECC_HEADER_2B_INT_EN    11
 #define NIU_CFG_0_TILE_CLK_OFF            12
 #define NIU_CFG_0_TILE_HEADER_STORE_OFF   13 // NOC2AXI only
@@ -122,9 +122,9 @@
 #define ROUTER_CFG_0_ECC_HEADER_CHKBITS_EN     17
 #define ROUTER_CFG_0_ECC_HEADER_SECDED_EN     18
 #define ROUTER_CFG_1  0x2   // broadcast disable row
-#define ROUTER_CFG_2  0x3   
+#define ROUTER_CFG_2  0x3
 #define ROUTER_CFG_3  0x4   // broadcast disable column
-#define ROUTER_CFG_4  0x5   
+#define ROUTER_CFG_4  0x5
 
 #define NOC_X_ID_TRANSLATE_TABLE_0  0x6 // entries 0-7 in the X ID translation table (total 32 x 4 bit entries)
 #define NOC_X_ID_TRANSLATE_TABLE_1  0x7 // entries 8-15 in the X ID translation table (total 32 x 4 bit entries)
@@ -135,7 +135,7 @@
 #define NOC_Y_ID_TRANSLATE_TABLE_1  0xB // entries 8-15 in the Y ID translation table (total 32 x 4 bit entries)
 #define NOC_Y_ID_TRANSLATE_TABLE_2  0xC // entries 16-23 in the Y ID translation table (total 32 x 4 bit entries)
 #define NOC_Y_ID_TRANSLATE_TABLE_3  0xD // entries 24-31 in the Y ID translation table (total 32 x 4 bit entries)
-   
+
 #define NOC_ID_LOGICAL            0xE  // logical coordinates of the local NOC NIU if ID translation is enabled (format = {logical_y[5:0], logical_x[5:0]})
 
 /////

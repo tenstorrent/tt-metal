@@ -81,7 +81,7 @@ struct tt_SocDescriptor {
   std::vector<int> get_dram_chan_map() const;
   bool is_worker_core(const tt_xy_pair &core) const;
   tt_xy_pair get_worker_core(const tt_xy_pair& core) const;
-  tt_xy_pair get_core_for_dram_channel(int dram_chan, int subchannel) const; 
+  tt_xy_pair get_core_for_dram_channel(int dram_chan, int subchannel) const;
   bool is_ethernet_core(const tt_xy_pair &core) const;
   bool get_channel_of_ethernet_core(const tt_xy_pair &core) const;
   int get_num_dram_subchans() const;

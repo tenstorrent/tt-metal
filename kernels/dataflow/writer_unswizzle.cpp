@@ -15,8 +15,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
 
     // single-tile ublocks
-    uint32_t ublock_size_bytes = get_tile_size(cb_id_out0); 
-    uint32_t ublock_size_tiles = 1; 
+    uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
+    uint32_t ublock_size_tiles = 1;
 
     uint32_t dram_address_block_row_beginning = dst_addr;
     for(uint32_t sb_m = 0; sb_m < num_sub_blocks_m; sb_m++) {
@@ -45,5 +45,3 @@ void kernel_main() {
         dram_address_block_row_beginning += stride_subblock_r; // move to next sub-block on r dim
     }
 }
-    
-

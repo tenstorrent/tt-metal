@@ -9,8 +9,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
 
     // single-tile ublocks
-    uint32_t ublock_size_bytes = get_tile_size(cb_id_out0); 
-    uint32_t ublock_size_tiles = 1; 
+    uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
+    uint32_t ublock_size_tiles = 1;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_addr);
@@ -26,5 +26,3 @@ void kernel_main() {
         dst_addr += ublock_size_bytes;
     }
 }
-    
-

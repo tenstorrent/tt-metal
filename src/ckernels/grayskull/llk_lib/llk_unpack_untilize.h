@@ -14,7 +14,7 @@ using namespace ckernel::unpacker;
 inline void llk_unpack_untilize_mop_config() {
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b01000001, 0, 0, 0, 0, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-        
+
     static constexpr uint unpack_addcr = TT_OP_ADDRCRZW(0b001, 0, 0, 0, 0, 0b0001);
     static constexpr uint unpack_addr_offset =
         TT_OP_ADDDMAREG(0, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_SIZE);

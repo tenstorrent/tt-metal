@@ -14,9 +14,9 @@ inline void llk_wait_tiles(src_op_id_e operand, std::uint32_t num_tiles);
 // Pop N tiles from the incoming stream
 inline void llk_pop_tiles(src_op_id_e operand, std::uint32_t num_tiles);
 
-// 
+//
 // Receiving from a local buffer
-//                                      
+//
 
 // Setup pipe for receiving data over local buffer
 inline void llk_setup_local_operand(src_op_id_e operand);
@@ -28,7 +28,7 @@ inline void llk_wait_local_tiles(src_op_id_e operand, std::uint32_t num_tiles);
 inline void llk_pop_local_tiles(src_op_id_e operand, std::uint32_t num_tiles);
 
 //
-// Write to stream output 
+// Write to stream output
 //
 
 // Setup pipe for writing output data to stream buffer
@@ -41,7 +41,7 @@ inline void llk_wait_for_free_tiles(out_op_id_e output, std::uint32_t num_tiles)
 inline void llk_push_tiles(out_op_id_e output, std::uint32_t num_tiles);
 
 //
-// Write to local output 
+// Write to local output
 //
 
 // Setup pipe for writing output data to local output

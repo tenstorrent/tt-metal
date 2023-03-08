@@ -6,7 +6,7 @@ struct hlk_args_t {
     std::int32_t per_core_block_cnt;
     std::int32_t per_core_block_dim;
 };
-  
+
 void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
     for(int block = 0; block < args->per_core_block_cnt; ++block) {
         hlk_wait_for_free_tiles(core_ptr, HlkOperand::out0, args->per_core_block_dim);

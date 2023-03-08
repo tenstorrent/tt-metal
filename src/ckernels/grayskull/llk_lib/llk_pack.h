@@ -85,7 +85,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_operand, const
     std::uint32_t new_operand_id = get_output_id(new_operand);
 
     if((pack_dst_format[old_operand_id] != pack_dst_format[new_operand_id])
-       && (pack_dst_format[old_operand_id] != (uint)DataFormat::Invalid) 
+       && (pack_dst_format[old_operand_id] != (uint)DataFormat::Invalid)
        && (pack_dst_format[new_operand_id] != (uint)DataFormat::Invalid)) {
         reconfig_packer_data_format(new_operand_id);
     }
@@ -145,7 +145,7 @@ template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untiliz
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
 
     std::uint8_t output_id = get_output_id(output);
-    constexpr std::uint8_t OUTPUT_BASE_ID = (std::uint8_t) get_output_base_id(); 
+    constexpr std::uint8_t OUTPUT_BASE_ID = (std::uint8_t) get_output_base_id();
 
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
 

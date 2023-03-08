@@ -23,7 +23,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
 
             // go across all inputs, pop a row and push the same row to out0
             for (int input_index = 0; input_index < args->num_input_buffers; input_index++) {
-                hlk_wait_for_free_tiles(core_ptr, HlkOperand::out0, args->block_shape_c);                
+                hlk_wait_for_free_tiles(core_ptr, HlkOperand::out0, args->block_shape_c);
                 // move the row from (HlkOperand::in0 + input_index) to out0
                 for (int tile_index_c = 0; tile_index_c < args->block_shape_c ; tile_index_c++) {
                     hlk_acquire_dst(core_ptr, DstMode::Half);

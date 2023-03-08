@@ -8,7 +8,7 @@
 
 
 struct tt_xy_pair {
-  
+
   constexpr tt_xy_pair() : x{}, y{} {}
   constexpr tt_xy_pair(std::size_t x, std::size_t y) : x(x), y(y) {}
   // explicit tt_xy_pair(const CommandAssembler::xy_pair &p) : tt_xy_pair(p.x, p.y) {}
@@ -72,4 +72,3 @@ struct hash<tt_cxy_pair> {
   }
 };
 }
-

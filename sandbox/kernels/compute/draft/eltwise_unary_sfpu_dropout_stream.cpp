@@ -27,7 +27,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
            hlk_copy_tile_to_dst(core_ptr, HlkOperand::in0, t, t);
            hlk_sfpu_dropout(core_ptr, t, args->prob);
        }
-       // Pop input and push to output 
+       // Pop input and push to output
        hlk_pop_tiles(core_ptr, HlkOperand::in0, args->block_tile_dim);
 
        // Wait for space in output

@@ -34,17 +34,17 @@ int main(int argc, char** argv)
     const tt_xy_pair core = {11, 3};
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
 
         std::uint32_t starting_l1_address = 250 * 1024;
         std::uint32_t starting_dram_address = 0;
 
         /*
-            Smaller test case: 
+            Smaller test case:
             - activation initially is (1, 16, 1, 1) with conv3x3
             - after padding it becomes (1, 16, 3, 3)
             - transform to DRAM layout (1, 3, 3, 16)
@@ -91,7 +91,7 @@ int main(int argc, char** argv)
         // print(dst_vec, "Result");
 
         pass &= golden_vector == dst_vec;
-            
+
         cluster->close_device();
         delete cluster;
 
@@ -113,4 +113,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

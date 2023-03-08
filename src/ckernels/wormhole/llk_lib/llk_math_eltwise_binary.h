@@ -27,9 +27,9 @@ inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false)
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
 
-        
+
         if constexpr (Dst == DstSync::SyncTile16) {
-            
+
             constexpr uint32_t ZERO_ACC_MODE = is_fp32_dest_acc_en ? (p_zeroacc::CLR_16_32B) : (p_zeroacc::CLR_16);
 
             if constexpr (eltwise_binary_type == ELWMUL) {
@@ -47,7 +47,7 @@ inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false)
                 }
             }
         }
-        
+
 
     } else {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);

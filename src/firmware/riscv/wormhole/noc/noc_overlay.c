@@ -16,5 +16,3 @@
 #define STREAM_READ_REG(id, reg_idx )        ( *( (volatile uint32_t*)( OVERLAY_REGS_START_ADDR + ((id)*STREAM_REG_SPACE_SIZE) + ((reg_idx)*4)) ) )
 
 #endif
-
-

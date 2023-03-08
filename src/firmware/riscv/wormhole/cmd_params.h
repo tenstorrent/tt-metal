@@ -82,7 +82,7 @@ struct PackOperation {
       std::cout << config_blob[i] << ", ";
     }
     std::cout << std::endl;
-    
+
     std::cout << "\t\tstream_ids=";
     for(unsigned i = 0; i < 4; i++) {
       std::cout << (unsigned)stream_ids[i] << ", ";
@@ -120,10 +120,10 @@ struct SfpuParams {
   std::uint8_t data_format_src;
   std::uint8_t sfpu_rnd_fmt;
   bool fp32_acc;
-  bool sfpu_rnd_unsigned_int; 
+  bool sfpu_rnd_unsigned_int;
   bool sfpu_stoch_rnd;
   bool sfpu_sort_rand_indx;
-  bool sfpu_signed_int16; 
+  bool sfpu_signed_int16;
   bool z_first_layout;
   bool sfpu_sort_col_major;
   std::uint32_t num_output_faces;
@@ -153,8 +153,8 @@ struct PackParams {
   bool pool_chk_data;
   std::uint32_t start_row;
 
-  //PackParams() { 
-  //  std::memset(this, 0, sizeof(*this)); 
+  //PackParams() {
+  //  std::memset(this, 0, sizeof(*this));
   //}
 
   void SetPackConfigBlob(int idx, std::array<std::uint32_t, 8> pack_config) {
@@ -175,7 +175,7 @@ struct PackParams {
     unpack_to_dest = unpack_field(command_data[3], 1, 1);
     result32b = unpack_field(command_data[3], 1, 2);
     tile_id_offset_by_packer = unpack_field(command_data[3], 16, 16);
-     
+
     sfpu_params.leaky_slope = unpack_field(command_data[4], 16, 0);
 
     sfpu_params.sfpu_scale_val = unpack_field(command_data[5], 32, 0);
@@ -228,8 +228,8 @@ struct PackParams {
     cmd[6] =  pack_32b_field(sfpu_params.sfpu_half_rows, 1, 25)         |
               pack_32b_field(pool_chk_data, 1, 24)                      |
               pack_32b_field(pool_idx, 1, 23)                           |
-              pack_32b_field(sfpu_params.sfpu_sort_col_major, 1, 22)    | 
-              pack_32b_field(sfpu_params.z_first_layout, 1, 21)         | 
+              pack_32b_field(sfpu_params.sfpu_sort_col_major, 1, 22)    |
+              pack_32b_field(sfpu_params.z_first_layout, 1, 21)         |
               pack_32b_field(sfpu_params.sfpu_signed_int16, 1, 20)      |
               pack_32b_field(sfpu_params.sfpu_sort_rand_indx, 1, 19)    |
               pack_32b_field(sfpu_params.sfpu_stoch_rnd, 1, 18)         |
@@ -238,7 +238,7 @@ struct PackParams {
               pack_32b_field(sfpu_params.sfpu_rnd_fmt, 8, 8)            |
               pack_32b_field(sfpu_params.data_format_src, 8, 0)         ;
 
-    cmd[7] =  pack_32b_field(sfpu_params.num_output_faces, 9, 0)        ; 
+    cmd[7] =  pack_32b_field(sfpu_params.num_output_faces, 9, 0)        ;
     cmd[8] =  sfpu_params.log_mult_const;
     cmd[9] =  sfpu_params.dropout_prob;
     cmd[10] = start_row;
@@ -424,13 +424,13 @@ struct StreamConvParams {
     cmd[4] = pack_32b_field(unpack_weights_offset, 16, 0) |
              pack_32b_field(math_Z_dim_ratio_log2, 16, 16);
 
-    cmd[5] = pack_32b_field(num_output_tiles, 16, 16) | 
-             pack_32b_field(output_tile_id_offset, 16, 0); 
+    cmd[5] = pack_32b_field(num_output_tiles, 16, 16) |
+             pack_32b_field(output_tile_id_offset, 16, 0);
 
     cmd[6] = pack_32b_field(num_input_tiles, 16, 16) |
              pack_32b_field(halo_y_spec(), 16, 0);
 
-    cmd[7] = pack_32b_field(halo_dim, 4, 20) | 
+    cmd[7] = pack_32b_field(halo_dim, 4, 20) |
              pack_32b_field(input_phase_id, 20, 0);
 
     return cmd;
@@ -439,21 +439,21 @@ struct StreamConvParams {
 };
 
 struct UnaryOperationParams
-{  
+{
   // UnaryOperationParams() { std::memset(this, 0, sizeof(UnaryOperationParams));}
   std::uint32_t math_fidelity;
   std::uint32_t result32b;
   std::uint32_t repack_Z_dim_ratio_log2;
-    
+
   std::uint32_t kernel_id_unpacker;
   std::uint32_t kernel_id_math;
   std::uint32_t kernel_id_packer;
-  
+
   std::uint32_t num_activation_tiles;
 
   std::uint32_t input_A_stream_id;
   //std::uint32_t input_A_phase_id;
-  
+
   std::uint32_t output_stream_id[4];
   //std::uint32_t output_phase_id[4];
 
@@ -461,7 +461,7 @@ struct UnaryOperationParams
   std::uint32_t unpacker_kernel_address;
   std::uint32_t math_kernel_address;
   std::uint32_t packer_kernel_address;
-  
+
   std::uint32_t input_A_section_id;
   std::uint32_t input_A_fifo_address;
 
@@ -510,7 +510,7 @@ struct StreamUnaryBinaryCommonParams {
   std::uint8_t  realign_y_offset = 0;
 
   bool tile_id_passthrough = false;
-  
+
   // Used for all math kernels that concats in Z whenever there is multiple
   // tiles unpacked per math iteration.
   std::uint16_t math_Z_dim_ratio_log2;
@@ -786,7 +786,7 @@ struct StreamPoolParams {
     avg_pool_coeff        = unpack_field(command_data[6], 16, 0);
     int8_mode             = unpack_field(command_data[6], 1, 16);
 
-    
+
 
     if (halo_y_bot == 0) {
       halo_y_top = 16 - y_start;
@@ -808,7 +808,7 @@ struct StreamPoolParams {
   std::array<std::uint32_t, 8> create_cmd_stream_pool() {
     std::array<std::uint32_t, 8> cmd;
     cmd.fill(0);
-    
+
 
     cmd[0] = pack_32b_field(kernel_id_math, 16, 0) |
              pack_32b_field(math_fidelity, 3, 16) |
@@ -838,7 +838,7 @@ struct StreamPoolParams {
 
     cmd[6] = pack_32b_field(avg_pool_coeff, 16, 0) |
              pack_32b_field(int8_mode, 1, 16);
-    
+
 
     return cmd;
   }

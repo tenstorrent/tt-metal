@@ -55,8 +55,8 @@ Shape Shape::to_buda(const Shape &other)
     }
 
     // Snap to tile sizes
-    for (std::size_t dim = 2; dim <= 3; dim++) 
-        if (dims[dim] % BUDA_TILE_DIM != 0) 
+    for (std::size_t dim = 2; dim <= 3; dim++)
+        if (dims[dim] % BUDA_TILE_DIM != 0)
         {
             dims[dim] += BUDA_TILE_DIM - (dims[dim] % BUDA_TILE_DIM);
         }
@@ -112,7 +112,7 @@ std::string Shape::as_string() const {
 }
 
 std::ostream &operator<<(std::ostream &out, const Shape &s) {
-    if (!s.is_valid()) 
+    if (!s.is_valid())
         return out << "{INVALID_SHAPE}";
 
     const std::vector<std::uint32_t> dims_ = s.as_vector();
@@ -126,7 +126,7 @@ std::ostream &operator<<(std::ostream &out, const Shape &s) {
     return out;
 }
 
-std::uint32_t Shape::volume() const 
+std::uint32_t Shape::volume() const
 {
     std::uint32_t v = 1;
     for (auto i : dims_)
@@ -184,7 +184,7 @@ std::vector<DimBroadcast> Shape::broadcast_dims(const Shape &other) const
             if (type_ == FREE)
                 TT_ASSERT(my_dim == 1, "Invalid broadcast shapes: " + as_string() + " vs " + other.as_string());
             else
-                TT_ASSERT( 
+                TT_ASSERT(
                     ((i >= 2) && my_dim == BUDA_TILE_DIM) ||
                     ((i < 2) && my_dim == 1), "Invalid broadcast shapes: " + as_string() + " vs " + other.as_string());
             ret.push_back(std::make_tuple(0, dims_.size() - 1 - i, other_dim));
@@ -193,30 +193,30 @@ std::vector<DimBroadcast> Shape::broadcast_dims(const Shape &other) const
     return ret;
 }
 
-std::uint32_t Shape::rt() const 
-{ 
-    TT_ASSERT(valid_, "Shape is not set."); 
+std::uint32_t Shape::rt() const
+{
+    TT_ASSERT(valid_, "Shape is not set.");
     TT_ASSERT(type_ == BUDA, "Accessing buda dimensions in non-buda shape.");
-    return dims_[2] / BUDA_TILE_DIM; 
+    return dims_[2] / BUDA_TILE_DIM;
 }
 
-std::uint32_t Shape::ct() const 
-{ 
-    TT_ASSERT(valid_, "Shape is not set."); 
+std::uint32_t Shape::ct() const
+{
+    TT_ASSERT(valid_, "Shape is not set.");
     TT_ASSERT(type_ == BUDA, "Accessing buda dimensions in non-buda shape.");
-    return dims_[3] / BUDA_TILE_DIM; 
+    return dims_[3] / BUDA_TILE_DIM;
 }
 
-std::uint32_t Shape::z() const 
-{ 
-    TT_ASSERT(valid_, "Shape is not set."); 
+std::uint32_t Shape::z() const
+{
+    TT_ASSERT(valid_, "Shape is not set.");
     TT_ASSERT(type_ == BUDA, "Accessing buda dimensions in non-buda shape.");
     return dims_[1];
 }
 
-std::uint32_t Shape::w() const 
-{ 
-    TT_ASSERT(valid_, "Shape is not set."); 
+std::uint32_t Shape::w() const
+{
+    TT_ASSERT(valid_, "Shape is not set.");
     TT_ASSERT(type_ == BUDA, "Accessing buda dimensions in non-buda shape.");
     return dims_[0];
 }

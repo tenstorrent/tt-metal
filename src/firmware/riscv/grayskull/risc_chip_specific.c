@@ -10,4 +10,3 @@ int get_epoch_table_x(int my_x, int my_y) {
 int get_epoch_table_y(int my_x, int my_y) {
   return 0;
 }
-

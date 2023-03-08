@@ -95,7 +95,7 @@ inline void matmul_configure_mop(bool transpose) {
         ckernel_template tmp(NUM_FIDELITY_PHASES, 8, TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0));
         if (transpose) {
             tmp.set_start_op(TT_OP_TRNSPSRCA);
-        } 
+        }
         tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0));
         tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0));
         tmp.program(instrn_buffer);
@@ -104,7 +104,7 @@ inline void matmul_configure_mop(bool transpose) {
         ckernel_template tmp(2, 8, TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0));
         if (transpose) {
             tmp.set_start_op(TT_OP_TRNSPSRCA);
-        } 
+        }
         tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0));
         tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0));
         tmp.program(instrn_buffer);

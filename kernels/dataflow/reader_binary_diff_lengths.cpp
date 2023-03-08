@@ -18,7 +18,7 @@ void kernel_main() {
     uint32_t ublock_size_bytes_0 = get_tile_size(cb_id_in0);
     uint32_t ublock_size_bytes_1 = get_tile_size(cb_id_in1);
     uint32_t ublock_size_tiles = 1;
-    
+
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
 

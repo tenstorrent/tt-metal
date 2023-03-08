@@ -21,12 +21,12 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         const int chip_id = 0;
         cluster->open_device(arch, target_type, {chip_id}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
         tt::llrt::LoadFirmwareFlag load_firmware_flag = true;
         tt_xy_pair dest_core = {11, 3};
         tt_xy_pair src_core = {1, 1};
@@ -56,7 +56,7 @@ int main(int argc, char** argv)
         // std::ofstream results_file;
         // results_file.open ("sweep.csv");
         // results_file<<"N, C, H, W, R, S, U, V, PadH, PadW, Total L1 (MB), Read BW (GB/sec), L1 to Dram (sec)\n";
-        for(auto test_case: test_cases) {  
+        for(auto test_case: test_cases) {
             auto shape = std::get<0>(test_case);
             auto conv_params = std::get<1>(test_case);
 
@@ -82,10 +82,10 @@ int main(int argc, char** argv)
             std::array<std::uint32_t, 4> nchw = {padded_shape[0], padded_shape[1], padded_shape[2], padded_shape[3]};
             std::vector<tt::llrt::CopyPatternSpec> specs = {
                 tt::llrt::create_copy_pattern_spec(
-                    dest_core, 
-                    starting_dest_address, 
-                    src_core, 
-                    starting_src_address, 
+                    dest_core,
+                    starting_dest_address,
+                    src_core,
+                    starting_src_address,
                     nchw,
                     {conv_params.R, conv_params.S, conv_params.U, conv_params.V}, // RSUV
                     2,
@@ -94,7 +94,7 @@ int main(int argc, char** argv)
                 )
             };
             bool load_blanks = load_firmware_flag;
-            
+
             auto start = std::chrono::steady_clock::now();
             tt::llrt::run_copy_pattern_kernel_with_specs(cluster, chip_id, specs, load_blanks);
             auto end = std::chrono::steady_clock::now();
@@ -107,7 +107,7 @@ int main(int argc, char** argv)
             double read_bw_gbps = total_GB/dram_to_l1_seconds.count();
             log_info(tt::LogVerif, "Bytes read: {}, GB read: {}", total_bytes, total_GB);
             log_info(tt::LogVerif, "Read speed GB/s: {}", read_bw_gbps);
-      
+
             std::vector<std::uint32_t> dst_vec_packed = tt::llrt::read_hex_vec_from_core(cluster, chip_id, dest_core, starting_dest_address, total_buffer_size);
             auto dst_vec_unpacked = unpack_uint32_vec_into_bfloat16_vec(dst_vec_packed);
             TT_ASSERT(golden_vector.size() == dst_vec_unpacked.size());
@@ -139,4 +139,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

@@ -42,13 +42,13 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
     }
 
     // Pack out
-    hlk_wait_for_free_tiles(core_ptr, HlkOperand::intermed0, args->out_block_tile_cnt); 
+    hlk_wait_for_free_tiles(core_ptr, HlkOperand::intermed0, args->out_block_tile_cnt);
     for(int i=0 ; i<args->out_block_tile_cnt;++i)
     {
         hlk_pack_tile_to_stream(core_ptr, i, HlkOperand::intermed0);
     }
 
-    hlk_push_tiles(core_ptr, HlkOperand::intermed0, args->out_block_tile_cnt); 
+    hlk_push_tiles(core_ptr, HlkOperand::intermed0, args->out_block_tile_cnt);
 
     hlk_release_dst(core_ptr, DstMode::Full);
 
@@ -70,11 +70,11 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
 
     hlk_pop_tiles(core_ptr, HlkOperand::intermed0, args->out_block_tile_cnt);
 
-    hlk_wait_for_free_tiles(core_ptr, HlkOperand::out0, args->out_block_tile_cnt); 
+    hlk_wait_for_free_tiles(core_ptr, HlkOperand::out0, args->out_block_tile_cnt);
     for(int i = 0; i < args->out_block_tile_cnt ; ++i) {
         hlk_pack_tile_to_stream(core_ptr, i, HlkOperand::out0);
     }
     hlk_push_tiles(core_ptr, HlkOperand::out0, args->out_block_tile_cnt);
-    
+
     hlk_release_dst(core_ptr, DstMode::Full);
 }

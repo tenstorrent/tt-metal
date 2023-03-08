@@ -24,17 +24,17 @@ int main(int argc, char** argv)
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         const int chip_id = 0;
         cluster->open_device(arch, target_type, {chip_id}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
         tt::llrt::LoadFirmwareFlag load_firmware_flag = true;
         tt_xy_pair core = {11, 3};
         int dram_channel_id = 0;
         std::uint32_t starting_dram_address = 0;
-        
+
 
         SHAPE shape = {1, 16, 32, 32};
         tt::Tensor<std::uint32_t> tensor = tt::initialize_tensor<std::uint32_t>(shape, tt::Initialize::INCREMENT);
@@ -79,4 +79,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

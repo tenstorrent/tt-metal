@@ -29,8 +29,8 @@ constexpr int DEBUG_PRINT_TYPEID_TIMER   = 13;
 // the read and write ptrs to 0 in DebugPrinter() constructor. This check is actually done every time
 // a DebugPrinter() object is created (which can be many times), but results in resetting the pointers
 // only once.
-constexpr int DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x12341234; 
-constexpr int DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0x23455432; 
+constexpr int DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x12341234;
+constexpr int DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0x23455432;
 
 // In case a single argument to operator << (such as a string) is larger than the buffer size
 // (making it impossible to print) we will instead print this message.

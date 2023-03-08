@@ -13,7 +13,7 @@ struct hlk_args_t {
     std::int32_t gradient_op;
     std::int32_t transpose;
 };
-  
+
 void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
     for(int block = 0; block < args->block_cnt; ++block) {
        hlk_acquire_dst(core_ptr, DstMode::Half);
@@ -24,7 +24,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args) {
        for(int t = 0; t < args->block_tile_dim; ++t) {
            hlk_copy_tile_to_dst(core_ptr, HlkOperand::in0, t, t);
        }
-       // Pop input and push to output 
+       // Pop input and push to output
        hlk_pop_tiles(core_ptr, HlkOperand::in0, args->block_tile_dim);
 
        // Wait for space in output

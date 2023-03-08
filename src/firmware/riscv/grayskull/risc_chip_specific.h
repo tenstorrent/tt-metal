@@ -14,4 +14,3 @@ inline uint16_t op_pack_tiles_ptr_add(uint16_t a, uint16_t b) {
 inline uint16_t op_pack_tiles_ptr_sub(uint16_t a, uint16_t b) {
   return a - b;
 }
-

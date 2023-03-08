@@ -21,4 +21,3 @@ void kernel_main() {
     noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
     noc_async_write_barrier();
 }
-

@@ -161,7 +161,7 @@ void load_core_descriptors_from_device_descriptor(
     worker_routing_coords_x.insert(core_descriptor.coord.x);
     worker_routing_coords_y.insert(core_descriptor.coord.y);
   }
-  
+
   int func_x_start = 0;
   int func_y_start = 0;
   std::set<int>::iterator it;
@@ -245,13 +245,13 @@ void map_workers_to_dram_banks(tt_SocDescriptor *soc_descriptor) {
 
 std::unique_ptr<tt_SocDescriptor> load_soc_descriptor_from_yaml(std::string device_descriptor_file_path) {
   std::unique_ptr<tt_SocDescriptor> soc_descriptor = std::unique_ptr<tt_SocDescriptor>(new tt_SocDescriptor());
-  
+
   std::ifstream fdesc(device_descriptor_file_path);
   if (fdesc.fail()) {
       throw std::runtime_error("Error: device descriptor file " + device_descriptor_file_path + " does not exist!");
   }
   fdesc.close();
-  
+
   YAML::Node device_descriptor_yaml = YAML::LoadFile(device_descriptor_file_path);
   std::vector<std::size_t> trisc_sizes = {l1_mem::address_map::TRISC0_SIZE,
                                           l1_mem::address_map::TRISC1_SIZE,
@@ -275,4 +275,3 @@ std::unique_ptr<tt_SocDescriptor> load_soc_descriptor_from_yaml(std::string devi
   map_workers_to_dram_banks(soc_descriptor.get());
   return soc_descriptor;
 }
-

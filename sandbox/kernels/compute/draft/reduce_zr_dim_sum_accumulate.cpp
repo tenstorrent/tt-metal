@@ -3,7 +3,7 @@
 #include "compute_hlk_api.h"
 
 struct hlk_args_t {
-    int num_reductions; 
+    int num_reductions;
 
     // per-batch params
     int per_core_in_r;
@@ -24,7 +24,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
         for(int in_block_idx=0; in_block_idx < args->per_core_in_block_cnt; ++in_block_idx)
         {
             hlk_wait_tiles(core_ptr, HlkOperand::in0, args->per_core_in_block_size);
-            
+
             int input_tile_index = 0;
             for(int r=0;r < args->per_core_in_r; ++r)
             {

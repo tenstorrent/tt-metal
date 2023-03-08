@@ -19,19 +19,19 @@ inline void llk_math_clear_dst<Dst>();
 
 //
 // LLK pack tile to output stream - using row tables
-// 
+//
 inline void llk_pack_stream_row_tables_init();
 inline void llk_pack_stream_row_tables(std::uint32_t dst_tile_index);
 
 //
 // LLK pack tile to output stream - using tile tables
-// 
+//
 inline void llk_pack_stream_tile_tables_init();
 inline void llk_pack_stream_tile_tables(std::uint32_t dst_tile_index);
 
 
 //
 // LLK pack tile to local L1 buffer - using row tables
-// 
+//
 inline void llk_pack_local_row_tables_init();
 inline void llk_pack_local_row_tables(std::uint32_t dst_tile_index);

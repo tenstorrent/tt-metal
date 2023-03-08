@@ -20,4 +20,3 @@ $(COMPILER_GRAPH_UTILS): $(COMPILER_GRAPH_LIB) $(COMPILER_REPORTIFY) $(COMPILER_
 $(OBJDIR)/compiler/graph_utils/%.o: compiler/graph_utils/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(COMPILER_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(COMPILER_GRAPH_UTILS_INCLUDES) -c -o $@ $<
-

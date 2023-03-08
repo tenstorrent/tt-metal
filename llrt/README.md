@@ -2,7 +2,7 @@
 
 Central location for Versim and Silicon device backend code. Core components are runtime, loader, and cluster.
 
-Architecture level documentation is done on Sharepoint. 
+Architecture level documentation is done on Sharepoint.
 - [Overview](https://tenstorrent.sharepoint.com/:w:/s/Software/EdNy2TJnUiFNmWVQnFW88bEB0zv6vE_a_4MOW2potQkSDQ?e=eI7b6J)
 
 ## Directory structure
@@ -54,7 +54,7 @@ The philosophy is to leave OP testing to OP owners, similarly for net2pipe/pipeg
 As a result, numerical accuracy of a kernel is not the goal of our tests. Some of our tests may not even pop outputs to check results. Eg. `test_queue_state.cpp` only checks final state of queues (rdptr, wrptr, etc) but does not pop the contents for checking.
 
 We should also minimize the amount of custom test only code in loader components, if they are included in core components, there should be NO performance impact.
-   
+
 ### CI and Regressions
 
 Test suites location for Buda Backend: $ROOT/ci/test-lists
@@ -65,7 +65,7 @@ Current runtime test lists:
 
 Kibana dashboard is used for monitoring run results, custom views can be created and saved using 'Share->Permalinks'
 - [Master Dashboard](http://yyz-elk/goto/80b5ea9c27ce1dfbb7b3911f8aa44709) - master branch recent runs
-- [User Dashboard](yyz-elk/goto/77a747bf2434c01b261ccf1b90f3670b), user specific runs on all branches, tzhou as example here 
+- [User Dashboard](yyz-elk/goto/77a747bf2434c01b261ccf1b90f3670b), user specific runs on all branches, tzhou as example here
 
 For more info see CI doc:
 - https://tenstorrent.sharepoint.com/:p:/s/Software/EcVDiJXTT8pDiWI6_4Q0RDMBADqqZiV8xLIfG_kQeI8yLw?e=Fs5H3Z
@@ -76,7 +76,7 @@ For more info see CI doc:
 - No code formatters, they often do a worse job than humans. It's only useful for standardizing code base for a larger team of collaborators.
 - Split hpp/cpp unless code is trivial or types only, this greatly reduces recompile cost and also keeps header files clean.
 - When in doubt, follow the same style of the code being edited. Even if it does not conform to overall code style. This is better for consistency, and perserving git blame history by avoiding large reformatting changes.
-- We write performance critical code, understand data structures and their performance. Eg. unordered version strictly dominates their ordered counterparts, typically [O(1) vs. O(logn)](http://supercomputingblog.com/windows/ordered-map-vs-unordered-map-a-performance-study/) 
+- We write performance critical code, understand data structures and their performance. Eg. unordered version strictly dominates their ordered counterparts, typically [O(1) vs. O(logn)](http://supercomputingblog.com/windows/ordered-map-vs-unordered-map-a-performance-study/)
 - We write applications that run for a long time, DO NOT LEAK MEMORY! Run valgrind on the codebase from time to time
 ```shell
 valgrind --leak-check=full <test command>
@@ -146,6 +146,3 @@ Extending with new types:
 
 On the device you'll need to add a new ID to debug_print_common.h, then add a template instantiation DebugPrintTypeToId in debug_print.h.
 On the host you'll need to modify tt_debug_print_server.cpp, look for the switch statement that parses for instance DEBUG_PRINT_TYPEID_FLOAT32 and add a new clause.
-
-
-

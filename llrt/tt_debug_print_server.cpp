@@ -329,7 +329,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     unlock_stream();
                     TT_ASSERT(sz == 1);
                 break;
- 
+
                 case DEBUG_PRINT_TYPEID_UINT32:
                     lock_stream();
                     stream << *reinterpret_cast<uint32_t*>(ptr);
@@ -464,4 +464,3 @@ void tt_start_debug_print_server(
     cluster->on_close_device(tt_stop_debug_print_server_per_device);
     cluster->on_destroy(tt_stop_debug_print_server);
 }
-

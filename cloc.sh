@@ -1,7 +1,7 @@
 function count_loc {
-    dir="$1"  
-    
-    shift 
+    dir="$1"
+
+    shift
     exclude_dirs="$*"
     exclude_option=""
     if [ -n "$exclude_dirs" ]; then
@@ -14,7 +14,7 @@ function count_loc {
 }
 
 # count_loc <dir> <exclude_dirs> # exclude_dirs comma separated
-# code 
+# code
 
 # core
 echo "Core code:"
@@ -50,16 +50,16 @@ echo "Tests:"
 count_loc ll_buda/tests
 count_loc build_kernels_for_riscv/tests
 count_loc llrt/tests
-count_loc programming_examples 
+count_loc programming_examples
 count_loc python_api_testing
 count_loc tensor # testing lib
-echo 
+echo
 echo
 
 # device
 echo "Device:"
 count_loc device
-echo 
+echo
 echo
 
 # LLK/firmware
@@ -69,7 +69,7 @@ count_loc src/firmware/riscv/common
 count_loc src/firmware/riscv/grayskull
 count_loc src/firmware/riscv/targets erisc
 count_loc src/firmware/riscv/toolchain
-echo 
+echo
 echo
 
 # external libraries
@@ -82,7 +82,7 @@ echo
 # other stuff
 echo "third party:"
 count_loc third_party
-echo 
+echo
 echo
 
 echo "unused LLK/FW:"
@@ -95,5 +95,3 @@ echo
 
 echo "sandbox:"
 count_loc sandbox
-
-

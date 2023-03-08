@@ -19,7 +19,7 @@ bool run_add_two_ints(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) 
     std::vector<uint32_t> test_mailbox_init_val = {INIT_VALUE};
     tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, test_mailbox_init_val, test_mailbox_addr);
     log_info(tt::LogVerif, "initialized test_maxilbox");
-    
+
     std::vector<uint32_t> test_mailbox_init_val_check;
     test_mailbox_init_val_check = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, test_mailbox_addr, sizeof(uint32_t));  // read a single uint32_t
     TT_ASSERT(test_mailbox_init_val_check[0] == INIT_VALUE);
@@ -44,9 +44,9 @@ bool run_add_two_ints(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) 
     // TODO: add time-out to this loop
     while(!brisc_done) {
         test_mailbox_read_val = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, test_mailbox_addr, sizeof(uint32_t));  // read a single uint32_t
-      
-        TT_ASSERT(test_mailbox_read_val[0] == INIT_VALUE || test_mailbox_read_val[0] == DONE_VALUE); // ensure no corruption 
-      
+
+        TT_ASSERT(test_mailbox_read_val[0] == INIT_VALUE || test_mailbox_read_val[0] == DONE_VALUE); // ensure no corruption
+
         brisc_done = test_mailbox_read_val[0] == DONE_VALUE;
 
         tt::llrt::internal_::assert_enable_core_mailbox_is_valid_for_core(cluster, chip_id, core);
@@ -70,14 +70,14 @@ int main(int argc, char** argv)
     const TargetDevice target_type = TargetDevice::Silicon;
     const tt::ARCH arch = tt::ARCH::GRAYSKULL;
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
-    
+
 
     try {
-        tt_device_params default_params; 
+        tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
-        tt::llrt::utils::log_current_ai_clk(cluster); 
+        tt::llrt::utils::log_current_ai_clk(cluster);
 
         // tt::llrt::print_worker_cores(cluster);
 
@@ -108,4 +108,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

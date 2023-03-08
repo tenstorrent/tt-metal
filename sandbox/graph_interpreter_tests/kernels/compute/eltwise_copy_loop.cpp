@@ -6,7 +6,7 @@ struct hlk_args_t {
     std::int32_t per_core_tile_cnt;
     std::int32_t num_repetitions;
 };
-  
+
 void compute_main(const hlk_args_t *args) {
     for (int count = 0; count < args->num_repetitions; count++) {
         for(int b=0;b<args->per_core_tile_cnt;++b)

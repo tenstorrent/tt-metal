@@ -110,8 +110,8 @@ template<> const OutputNode* Node::as<OutputNode>() const
 template<> QueueNode* Node::as<QueueNode>()
 {
     TT_ASSERT(
-        (this->node_type() == NodeType::kQueue) || 
-        (this->node_type() == NodeType::kInput) || 
+        (this->node_type() == NodeType::kQueue) ||
+        (this->node_type() == NodeType::kInput) ||
         (this->node_type() == NodeType::kOutput));
     return dynamic_cast<QueueNode *>(this);
 }
@@ -119,8 +119,8 @@ template<> QueueNode* Node::as<QueueNode>()
 template<> const QueueNode* Node::as<QueueNode>() const
 {
     TT_ASSERT(
-        (this->node_type() == NodeType::kQueue) || 
-        (this->node_type() == NodeType::kInput) || 
+        (this->node_type() == NodeType::kQueue) ||
+        (this->node_type() == NodeType::kInput) ||
         (this->node_type() == NodeType::kOutput));
     return dynamic_cast<QueueNode const *>(this);
 }
@@ -377,8 +377,8 @@ bool EdgeAttributes::has_broadcast_dims() const
     return std::find_if(tms.begin(), tms.end(), [](const OpType &o) { return o.op == "broadcast"; }) != tms.end();
 }
 
-void EdgeAttributes::clear_broadcast_dims() 
-{ 
+void EdgeAttributes::clear_broadcast_dims()
+{
     tms.erase(std::remove_if(tms.begin(), tms.end(), [](const OpType &o) { return o.op == "broadcast"; }), tms.end());
 }
 
@@ -404,7 +404,7 @@ void EdgeAttributes::clear_broadcast_dims()
 
 std::string QueueNode::queue_type_string() const
 {
-    switch (queue_type_) 
+    switch (queue_type_)
     {
         case QueueNodeType::EpochToEpoch: return "epoch_to_epoch";
         case QueueNodeType::GradAccumulator: return "grad_accumulator";

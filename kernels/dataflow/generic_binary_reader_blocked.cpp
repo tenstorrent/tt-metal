@@ -21,12 +21,12 @@ void kernel_main() {
     std::uint32_t src1_num_bytes_per_block = get_arg_val<uint32_t>(11);
     std::uint32_t src0_num_tiles_per_block = get_arg_val<uint32_t>(12);
     std::uint32_t src1_num_tiles_per_block = get_arg_val<uint32_t>(13);
-    
+
     constexpr uint32_t cb0_id = 0;
     constexpr uint32_t cb1_id = 1;
 
     volatile std::uint32_t* source_addresses = (volatile uint32_t*)(address_map_l1_addr);
-    
+
     uint32_t source_addresses_list_index = 0;
     // We push one block of tiles of src0 and src1.
     // src0 and src1 can have different number of tiles per block.
@@ -38,7 +38,7 @@ void kernel_main() {
         std::uint64_t dram_buffer_src1_noc_addr = get_noc_addr(dram_src1_noc_x, dram_src1_noc_y, dram_buffer_src1_addr);
         // src1 is already tilized in DRAM. Read the whole block of tiles in a single DRAM read access.
         noc_async_read(dram_buffer_src1_noc_addr, l1_write1_addr, src1_num_bytes_per_block);
-        // src0 is not tilized in DRAM. 
+        // src0 is not tilized in DRAM.
         // For src0, Do multiple DRAM read accesses using addresses provided in "source_addresses" to produce one block of tiles
         // The source addresses in the list must be in the order of tiles
         for(uint32_t i = 0; i < src0_num_reads_per_block; i++) {

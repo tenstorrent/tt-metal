@@ -3,7 +3,7 @@
 #include "compute_hlk_api.h"
 
 struct hlk_args_t {
-    int batch_size; 
+    int batch_size;
 
     // per-batch params
     int per_block_m_tiles;
@@ -25,7 +25,7 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
         {
             hlk_wait_tiles(core_ptr, CB::c_in0, args->in0_block_tile_cnt);
             hlk_wait_tiles(core_ptr, CB::c_in1, args->in1_block_tile_cnt);
-            
+
             int dst_tile_index = 0;
             int in0_block_tile_index = 0;
 
@@ -48,13 +48,13 @@ void hlk_main(tt_core *core_ptr, const hlk_args_t *args)
         }
 
         // Pack out
-        hlk_wait_for_free_tiles(core_ptr, CB::c_out0, args->out_block_tile_cnt); 
+        hlk_wait_for_free_tiles(core_ptr, CB::c_out0, args->out_block_tile_cnt);
         for(int i=0 ; i<args->out_block_tile_cnt;++i)
         {
             hlk_pack_tile_to_stream(core_ptr, i, CB::c_out0);
         }
 
-        hlk_push_tiles(core_ptr, CB::c_out0, args->out_block_tile_cnt); 
+        hlk_push_tiles(core_ptr, CB::c_out0, args->out_block_tile_cnt);
 
         hlk_release_dst(core_ptr, DstMode::Full);
     }

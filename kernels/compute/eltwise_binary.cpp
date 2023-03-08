@@ -6,7 +6,7 @@ struct hlk_args_t {
     std::int32_t per_core_block_cnt;
     std::int32_t per_core_block_size;
 };
-  
+
 void compute_main(const hlk_args_t *args) {
 
     for(int block = 0; block < args->per_core_block_cnt; ++block) {

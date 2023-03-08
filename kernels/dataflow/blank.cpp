@@ -2,5 +2,3 @@
 void kernel_main() {
 
 }
-    
-
