@@ -7,43 +7,43 @@ Host Side
 
 Host API is profiled by wrapping the portion of the code that needs profiling with start and end
 markers with the same timer name. After the execution of the wrapped code, the start, end and the
-delta in between them for all the timers is recorded in a CSV for further post processing. 
+delta in between them for all the timers is recorded in a CSV for further post processing.
 
 Setup
 ------------------------
 
 For profiling any module on the host side, an object of the of the ``Profiler`` class is needed
 in order to record the marked times and dump the result to a CSV. The ``Profiler`` is defined under
-the ``tools/profiler/profiler.hpp`` header which can be include as follows. 
+the ``tools/profiler/profiler.hpp`` header which can be include as follows.
 
 ..  code-block:: C++
 
-    #include "tools/profiler/profiler.hpp" 
+    #include "tools/profiler/profiler.hpp"
 
 The module Make procedure should also include the profiler library. This can be done by adding the
 the ``-lprofiler`` flag to the ``LDFLAG`` argument in the ``module.mk`` of that module. For example
-for tests under ``ll_buda``, which uses the profiler, the following is the ``LDFLAG`` line in ``ll_buda/tests/module.mk``.
+for tests under ``tt_metal``, which uses the profiler, the following is the ``LDFLAG`` line in ``tt_metal/tests/module.mk``.
 
 ..  code-block:: MAKEFILE
 
-    LL_BUDA_TESTS_LDFLAGS = -lll_buda_impl -lll_buda -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -lhlkc_api -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
+    TT_METAL_TESTS_LDFLAGS = -ltt_metal_impl -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -lhlkc_api -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
 
 With the instance of the ``Profiler`` class, ``markStart`` and ``markStop`` functions can be used to
-profile the module. Again taking ``ll_buda`` as an example, ``ll_buda_profiler`` is
-instantiated as a static member of the module ``ll_buda/ll_buda.cpp`` as follows.
+profile the module. Again taking ``tt_metal`` as an example, ``tt_metal_profiler`` is
+instantiated as a static member of the module ``tt_metal/tt_metal.cpp`` as follows.
 
 ..  code-block:: C++
 
-    static Profiler ll_buda_profiler = Profiler();
+    static Profiler tt_metal_profiler = Profiler();
 
 In functions such as ``LaunchKernels`` the entire code within the function is wrapped under the
-``markStart`` and ``markStop`` calls with the timer name ``"LaunchKernels"``. 
+``markStart`` and ``markStop`` calls with the timer name ``"LaunchKernels"``.
 
 ..  code-block:: C++
 
     bool LaunchKernels(Device *device, Program *program) {
 
-        ll_buda_profiler.markStart("LaunchKernels");
+        tt_metal_profiler.markStart("LaunchKernels");
         bool pass = true;
 
         auto cluster = device->cluster();
@@ -52,21 +52,21 @@ In functions such as ``LaunchKernels`` the entire code within the function is wr
 
         cluster->broadcast_remote_tensix_risc_reset(pcie_slot, TENSIX_ASSERT_SOFT_RESET);
 
-        ll_buda_profiler.markStop("LaunchKernels");
+        tt_metal_profiler.markStop("LaunchKernels");
         return pass;
     }
 
 After the execution of all wrapped code. A call to  ``dumpResults`` will process the deltas on all
 timers and dump the results into a CSV in the current directory called ``profile_log.csv``. In
-``ll_buda`` this function is wrapped under another function called ``dumpProfilerResults`` to
-simplify the decision of when to generate the CSV on tests that are using the ``ll_buda`` API. 
+``tt_metal`` this function is wrapped under another function called ``dumpProfilerResults`` to
+simplify the decision of when to generate the CSV on tests that are using the ``tt_metal`` API.
 
 The ``dumpResults`` also flushes all the timers data after the dump. This is so that the same
 object can be used to perform multiple consecutive measurements on the same timer name. The ``name_append`` argument adds
 a ``Section name`` column to the CSV that demonstrates which ``dumpResults`` a row in the CSV
-belongs to.  
+belongs to.
 
-``ll_buda\tests\test_add_two_ints.cpp`` is a good example that demonstrates this scenario.
+``tt_metal\tests\test_add_two_ints.cpp`` is a good example that demonstrates this scenario.
 ``LaunchKernels`` is called twice in this test, if we only dump results once at the end of the
 execution, we will only get the results on the last call to that function. With the use of sections
 names we can call ``dumpProfilerResults`` twice and get and output such as the following in the
@@ -97,7 +97,7 @@ Setup
 ------------------------
 
 On the host side, a single version of the print server must be running. The function
-``tt_start_debug_print_server`` starts the print server. For ``ll_buda`` tests, this function is
+``tt_start_debug_print_server`` starts the print server. For ``tt_metal`` tests, this function is
 called under ``ConfigureDeviceWithProgram`` as follows.
 
 ..  code-block:: C++
@@ -128,7 +128,7 @@ is recorded in the CSV to show which mark the readings belong to. The function i
     #include "tools/profiler/kernel_profiler.hpp"
 
 The ``kernels/add_two_ints.cpp`` is a simple example that demonstrates how to mark the beginning
-and the end of a kernel. 
+and the end of a kernel.
 
 ..  code-block:: C++
 
@@ -145,11 +145,11 @@ and the end of a kernel.
         kernel_profiler::mark_time(1);
     }
 
-This kernel is launched twice as part of the ``ll_buda/tests/test_add_two_ints.cpp`` test. **Note**
-that the committed code on master for this ``ll_buda`` test asks for the non-profiled version of
-the kernel. 
+This kernel is launched twice as part of the ``tt_metal/tests/test_add_two_ints.cpp`` test. **Note**
+that the committed code on master for this ``tt_metal`` test asks for the non-profiled version of
+the kernel.
 
-The resulting CSV for the test is as follows. 
+The resulting CSV for the test is as follows.
 
 ..  code-block:: c++
 
@@ -177,6 +177,6 @@ Limitations
   taken when doing such measurements
 
 * TRISC0,1,2 measurements are not supported. Further development on underlying APIs are required
-  inorder to bring profiling to these cores. 
+  inorder to bring profiling to these cores.
 
 * Other DPRINT messages can not used in kernels that are being profiled.

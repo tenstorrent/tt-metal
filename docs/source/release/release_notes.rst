@@ -4,10 +4,10 @@ Release Notes
 
 Release Notes 0.1 - Jan 13th, 2023
 ****************************************
-This is the very first release of the programming model. 
-Program examples are located in the /ll_buda/tests/ folder.
+This is the very first release of the programming model.
+Program examples are located in the /tt_metal/tests/ folder.
 
-.. list-table:: 
+.. list-table::
    :widths: 25 25
    :header-rows: 1
 
@@ -19,11 +19,11 @@ Program examples are located in the /ll_buda/tests/ folder.
      - 1
    * - Number of simultanious programs running on the same device
      - 1
-   * - Data format 
+   * - Data format
      - Float16_b
    * - Matrix engine compute Fidelity
      - High fidelity
-     
+
 
 
 

@@ -31,7 +31,7 @@ To use debug printing capability, it is first required to start the debug print 
   - If the server isn't started, then the prints will not show up and do nothing.
 - Tests test_debug_print_br/nc.cpp and test_run_test_debug_print.cpp show an example of using debug prints in a complete running kernel example::
 
-    auto device = ll_buda::CreateDevice(ll_buda::DeviceType::Grayskull, pci_express_slot);
+    auto device = tt_metal::CreateDevice(tt_metal::DeviceType::Grayskull, pci_express_slot);
     ...
     vector<tt_xy_pair> cores = {{1,1}};
     int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
@@ -64,5 +64,3 @@ For instance, the signal id could be computed as ``core_idx*5+thread_id`` to cre
 Not all types are by default supported by ``DPRINT << variable;`` syntax. However the code framework was designed with ease of extensibility in mind.
 To add a new type, on the device you'll need to add a new ID to debug_print_common.h, then add a template instantiation DebugPrintTypeToId in debug_print.h.
 On the host you'll need to modify tt_debug_print_server.cpp, look for the switch statement that parses, for instance, DEBUG_PRINT_TYPEID_FLOAT32, and add a new switch branch.
-
-

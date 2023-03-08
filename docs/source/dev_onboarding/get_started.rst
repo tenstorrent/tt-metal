@@ -35,28 +35,28 @@ with the dependencies in ``python_env/requirements.txt``, the Python setup
 doesn't really matter. Please refer to ``python_env/module.mk`` for further
 technical details.
 
-Run ll-buda programs
---------------------
+Run tt-metal programs
+---------------------
 
-We can now run an individual ll-buda program, like so
+We can now run an individual tt-metal program, like so
 
 ::
 
-    make ll_buda/tests
+    make tt_metal/tests
     export BUDA_HOME=<this repo dir>
-    ./build/test/ll_buda/tests/test_sfpu
+    ./build/test/tt_metal/tests/test_sfpu
 
 which will run an example SFPU test that will compile, load, and run the
 necessary kernels.
 
-You can also run all the ll-buda tests as a regression script using a vanilla
+You can also run all the tt-metal tests as a regression script using a vanilla
 Python installation:
 
 ::
 
-    make ll_buda/tests
+    make tt_metal/tests
     export BUDA_HOME=<this repo dir>
-    python -m reg_scripts.run_ll_buda
+    python -m reg_scripts.run_tt_metal
 
 .. only:: not html
 
