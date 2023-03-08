@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "tensix.h"
 #include "fw_debug.h"
-#include "epoch.h"
 
 #include "ckernel_perf_include.h"
 
@@ -97,7 +96,7 @@ inline void adjust_timestamp_upper_32b(uint32_t timestamp_upper_32b) {
 inline void record_perf_dump_end() {
    if (perf_index < perf_end) {
       perf_buf_base[perf_buf_base_id][perf_index] = PERF_DUMP_END_SIGNAL;
-      perf_index += 1;      
+      perf_index += 1;
    }
 }
 

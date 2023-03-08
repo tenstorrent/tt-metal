@@ -2,7 +2,6 @@
 #include "ckernel_include.h"
 #include "ckernel_globals.h"
 #include "ckernel.h"
-#include "epoch.h"
 #include "stream_interface.h"
 #ifdef PERF_DUMP
 #include "ckernel_perf_unpack_pack.h"
@@ -118,7 +117,7 @@ inline void llk_pop_tiles(
              operands[input].f.fifo_rd_base_ptr = operands[input].f.fifo_rd_ptr; //inc base ptr
           } else {
              operands[input].f.fifo_rd_ptr = operands[input].f.fifo_rd_base_ptr; //set rd prt to base ptr
-          } 
+          }
           operands[input].f.curr_block=0;
        }
     }

@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "tensix.h"
 #include "fw_debug.h"
-#include "epoch.h"
 
 #include "ckernel_perf_include.h"
 
@@ -63,7 +62,7 @@ struct cperf_cnt_block_sel
 struct cperf_dbg_daisy_id
 {
     constexpr static uint32_t DEBUG_DAISY_INSTRN_THREAD = 1; // Thread specific perf counters
-    constexpr static uint32_t DEBUG_DAISY_INSTRN_ISSUE_0 = 4; // TDMA+math  
+    constexpr static uint32_t DEBUG_DAISY_INSTRN_ISSUE_0 = 4; // TDMA+math
     constexpr static uint32_t DEBUG_DAISY_INSTRN_ISSUE_1 = 5; // math+instruction issue
     constexpr static uint32_t DEBUG_DAISY_TENSIX  = 7; // FPU and L1 perf counters
 };
@@ -72,7 +71,7 @@ struct cperf_dbg_dump_to_mem_mode
 {
     constexpr static uint32_t DEBUG_MEM_MODE_MANUAL_WR = 0;
     constexpr static uint32_t DEBUG_MEM_MODE_AUTO_WR = 1;
-    constexpr static uint32_t DEBUG_MEM_MODE_MANUAL_RD = 2; 
+    constexpr static uint32_t DEBUG_MEM_MODE_MANUAL_RD = 2;
     constexpr static uint32_t DEBUG_MEM_MODE_AUTO_RD = 3;
 };
 
@@ -223,7 +222,7 @@ inline void dbg_enable_dump_to_mem(uint32_t start_addr, uint32_t end_addr) {
    TT_SETDMAREG(0, debug_l1_reg2_lo, 0, LO_16(p_gpr_math::TMP0));
    TT_SETDMAREG(0, debug_l1_reg2_hi, 0, HI_16(p_gpr_math::TMP0));
    TTI_STOREREG(p_gpr_math::TMP0, (RISCV_DEBUG_REG_DBG_L1_MEM_REG2 >> 2) & 0x3ffff);
-   
+
    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::THCON);
 }
 
@@ -263,7 +262,7 @@ inline void switch_perf_buffers_for_math_thread() {
       TT_SETDMAREG(0, dram_req_lo, 0, LO_16(p_gpr_math::NUM_DRAM_REQS));
       TT_SETDMAREG(0, dram_req_hi, 0, HI_16(p_gpr_math::NUM_DRAM_REQS));
       TTI_STOREIND(1, 1, 0, LO_16(p_gpr_math::PERF_EPOCH_OFFSET), p_ind::INC_NONE, p_gpr_math::NUM_DRAM_REQS, p_gpr_math::PERF_EPOCH_BASE_ADDR);
-      
+
       perf_buf_base_id = 1 - perf_buf_base_id;
       perf_index = 0;
       dbg_enable_dump_to_mem((uint32_t)&perf_buf_base[perf_buf_base_id][0], (uint32_t)&perf_buf_base[perf_buf_base_id][perf_end]);

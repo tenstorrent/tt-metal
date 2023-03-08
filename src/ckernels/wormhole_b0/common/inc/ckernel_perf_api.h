@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "tensix.h"
 #include "fw_debug.h"
-#include "epoch.h"
 
 #ifdef PERF_DUMP
 #include "perf_events_target_inputs.h"
@@ -80,7 +79,7 @@ inline void pack_record_input_end_time() {
       t6_semaphore_get<p_stall::PACK>(semaphore::PACK_DONE);
       while (semaphore_read(semaphore::PACK_DONE) > 0) {}
       uint32_t event_id = perf::get_event_id(0, 0, perf::EventType::PACK_EACH_INPUT, current_outer_loop_iter);
-      record_timestamp_64b(event_id);      
+      record_timestamp_64b(event_id);
    }
 }
 

@@ -8,7 +8,7 @@ PERF_DUMP ?= 0
 INTERMED_DUMP ?= 0
 PERF_DUMP_LEVEL ?= 0
 
-DEFINES = 
+DEFINES =
 
 SOURCES = \
 	ncrisc.cc \
@@ -38,7 +38,7 @@ INCLUDES = -I$(BUDA_HOME)/src/firmware/riscv/targets/ncrisc \
 	-I$(KERNEL_INC)
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-  INCLUDES += -I$(BUDA_HOME)/src/firmware/riscv/wormhole/noc 
+  INCLUDES += -I$(BUDA_HOME)/src/firmware/riscv/wormhole/noc
 else
   INCLUDES += -I$(BUDA_HOME)/src/firmware/riscv/$(ARCH_NAME)/noc
 endif
@@ -58,9 +58,6 @@ DEFINES += $(addprefix -DPERF_DUMP=, $(PERF_DUMP))
 DEFINES += $(addprefix -DPERF_DUMP_LEVEL=, $(PERF_DUMP_LEVEL))
 endif
 
-#ifeq ($(DEVICE_RUNNER),silicon)
-#DEFINES += -DRISC_GSYNC_ENABLED
-#endif
 ifeq ($(INTERMED_DUMP), 1)
 DEFINES += $(addprefix -DINTERMED_DUMP=, $(INTERMED_DUMP))
 endif

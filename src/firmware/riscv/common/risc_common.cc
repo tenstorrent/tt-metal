@@ -1,52 +1,7 @@
 
 #include "risc_common.h"
 #include "noc_nonblocking_api.h"
-#include "epoch.h"
 #include "stream_interface.h"
-
-#ifdef RISC_GSYNC_ENABLED
-void global_sync_init(volatile uint32_t &gsync_epoch, volatile uint32_t &epochs_in_progress) {
-
-  gsync_epoch = 0xFFFFFFFF;
-  epochs_in_progress = 0;
-
-}
-
-// For this to work it is assumed that core 1-1 will do all epochs
-void global_sync(volatile uint32_t &gsync_epoch, volatile uint32_t &epochs_in_progress) {
-  if (my_x[0] == 1 && my_y[0] == 1) {
- 
-    while (epochs_in_progress);
-
-    gsync_epoch = RISC_EPOCH_INFO_PTR->active_streams[0]->epoch_start_phase >> 10;
-
-    uint64_t dest_addr = NOC_MULTICAST_ADDR(0, 0, noc_size_x-1, noc_size_y-1, ((uint32_t)(&gsync_epoch))); // NOC id conversion isnt necessary since we target entire grid
-    while (!ncrisc_noc_fast_write_ok_l1(loading_noc, NCRISC_WR_REG_CMD_BUF));
-    ncrisc_noc_fast_write_l1(loading_noc, NCRISC_WR_REG_CMD_BUF, ((uint32_t)(&gsync_epoch)), dest_addr, 4,
-                          4, true, false, NUM_TENSIXES-1);
-
-  } else {
-
-    while (gsync_epoch == 0xFFFFFFFF);
-    while (gsync_epoch < (RISC_EPOCH_INFO_PTR->active_streams[0]->epoch_start_phase >> 10));
-
-    uint64_t dest_addr = NOC_XY_ADDR(NOC_X(1), NOC_Y(1), ((uint32_t)(&epochs_in_progress)));
-    while (!ncrisc_noc_fast_write_ok_l1(loading_noc, NCRISC_AT_CMD_BUF));
-    noc_fast_atomic_increment_l1(loading_noc, NCRISC_AT_CMD_BUF, dest_addr, 1, 31, false); // Inc by 1
-
-  }
-}
-
-void global_sync_update(volatile uint32_t &gsync_epoch, volatile uint32_t &epochs_in_progress) {
-  if (!(my_x[0] == 1 && my_y[0] == 1)) {
-
-    uint64_t dest_addr = NOC_XY_ADDR(NOC_X(1), NOC_Y(1), ((uint32_t)(&epochs_in_progress)));
-    while (!ncrisc_noc_fast_write_ok(loading_noc, NCRISC_AT_CMD_BUF));
-    noc_fast_atomic_increment(loading_noc, NCRISC_AT_CMD_BUF, dest_addr, 0xffffffff, 31, false); // dec by 1
-
-  }
-}
-#endif
 
 void risc_reset_check()
 {
@@ -132,31 +87,3 @@ void __attribute__((section("code_l1"))) tile_header_buffer_init() {
   while (!ncrisc_noc_nonposted_writes_flushed_l1(header_buf_init_noc));
 }
 */
-
-void risc_get_next_epoch() {
-  while (!RISC_EPOCH_INFO_PTR->all_streams_ready && !RISC_EPOCH_INFO_PTR->end_program)
-  {
-    risc_reset_check();
-  }
-
-  // Detect case when core is not used for this epoch
-  if (RISC_EPOCH_INFO_PTR->all_streams_ready == 0xba) {
-    volatile uint32_t* test_mailbox_ptr = (volatile uint32_t*)(l1_mem::address_map::FIRMWARE_BASE + TEST_MAILBOX_ADDRESS);
-    test_mailbox_ptr[0] = 0xabcd1234;
-    while(true) {
-      risc_reset_check();
-    }
-  }
-}
-
-
-void risc_signal_epoch_done() {
-  RISC_EPOCH_INFO_PTR->all_streams_and_kernels_done = 1;
-
-  // Wait for ncrisc to "accept" kernel completion
-  while (RISC_EPOCH_INFO_PTR->all_streams_ready == 1)
-  {
-    risc_reset_check();
-  }
-}
-

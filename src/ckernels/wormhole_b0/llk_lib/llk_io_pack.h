@@ -2,7 +2,6 @@
 #include "ckernel_include.h"
 #include "ckernel_globals.h"
 #include "ckernel.h"
-#include "epoch.h"
 #include "ckernel_gpr_map.h"
 #include "stream_interface.h"
 #include "stream_io_map.h"
@@ -120,8 +119,8 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
               }
               outputs[output].f.fifo_wr_base_ptr = outputs[shared_output].f.fifo_wr_ptr;
               outputs[output].f.fifo_wr_ptr = outputs[shared_output].f.fifo_wr_ptr;
-           } 
-        }    
+           }
+        }
     } else if (wait_for_blocks || (brisc_pack && !legacy_pack)) {
         std::int32_t free_tiles;
 #if defined(PERF_DUMP) && PERF_DUMP_LEVEL > 0
@@ -309,7 +308,7 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
              outputs[output].f.fifo_wr_base_ptr = outputs[output].f.fifo_wr_ptr; //inc base ptr
           } else {
              outputs[output].f.fifo_wr_ptr = outputs[output].f.fifo_wr_base_ptr; //set wr prt to base ptr
-          } 
+          }
           outputs[output].f.curr_block=0;
        }
     } else if (push_blocks) {

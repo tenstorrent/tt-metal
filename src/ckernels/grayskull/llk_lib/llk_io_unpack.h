@@ -2,7 +2,6 @@
 #include "ckernel_include.h"
 #include "ckernel_globals.h"
 #include "ckernel.h"
-#include "epoch.h"
 #include "stream_interface.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_unpack_common.h"
@@ -16,13 +15,13 @@ void write_to_local_mem_barrier(uint32_t data) {
 }
 
 inline void llk_setup_cb_read_interface() {
- 
+
     volatile std::uint32_t* buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
-    
+
     for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
 
         // write_to_local_mem_barrier are needed on GS because of the RTL bug
-        // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words! 
+        // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
         std::uint32_t fifo_addr = buffer_config_addr[0];
         std::uint32_t fifo_size = buffer_config_addr[1];
         std::uint32_t fifo_size_tiles = buffer_config_addr[2]; // not used atm
@@ -37,7 +36,7 @@ inline void llk_setup_cb_read_interface() {
     }
 }
 
-// "llk_setup_operands" is the old function name that HLKC emits 
+// "llk_setup_operands" is the old function name that HLKC emits
 inline void llk_setup_operands() {
     llk_setup_cb_read_interface();
 }
@@ -50,10 +49,10 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
 
     std::uint16_t tiles_received;
-    
+
     uint16_t num_tiles_recv;
     do {
-        tiles_received = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_received_ptr); 
+        tiles_received = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - cb_read_interface[input].tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 }

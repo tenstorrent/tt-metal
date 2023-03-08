@@ -19,9 +19,6 @@ extern "C" {
 
 extern void call_with_cpu_flush_args(
   void * pFunction,
-#ifdef RISC_GSYNC_ENABLED
-  void *gsync_epoch, void *epochs_in_progress,
-#endif
   void *num_dram_input_streams, void *num_dram_output_streams, void *num_active_streams, void *num_active_dram_queues, void *num_dram_prefetch_streams,
   void *dram_q_state, void *dram_input_stream_state, void *dram_output_stream_state, void *active_stream_info,
   void *dram_prefetch_epoch_stream_info, void *dram_prefetch_active_stream_info

@@ -1,11 +1,16 @@
 #ifndef _RISC_COMMON_H_
 #define _RISC_COMMON_H_
 
+#include <cstdint>
 #include <stdint.h>
 
 #include "noc_parameters.h"
 #include "tensix.h"
 #include "risc.h"
+#include "l1_address_map.h"
+#include "eth_l1_address_map.h"
+#include "noc_overlay_parameters.h"
+#include "stream_io_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 
 #define NOC_X(x) (loading_noc == 0 ? (x) : (noc_size_x-1-(x)))
@@ -71,7 +76,7 @@ inline __attribute__((always_inline)) uint32_t dram_io_local_empty(uint32_t loca
 
   uint32_t case1 = rd_ptr < wr_ptr && (local_rd_ptr < rd_ptr || local_rd_ptr >= wr_ptr);
   uint32_t case2 = rd_ptr > wr_ptr && wr_ptr <= local_rd_ptr && local_rd_ptr < rd_ptr;
-  
+
   return case1 || case2;
 }
 
@@ -140,7 +145,7 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
     return a * TILE_WORD_2_BIT;
   else if (special_b == TILE_WORD_32_BIT)
     return a * TILE_WORD_32_BIT;
-  
+
   RISC_POST_STATUS(0xDEAD0002);
   while(true);
   return 0;
@@ -166,17 +171,11 @@ void __attribute__((section("code_l1"))) replicate_l1(uint32_t noc_id, uint32_t 
 void tile_header_buffer_init();
 
 // This call blocks until NCRISC indicates that all epoch start state
-// has been loaded from DRAM to L1. 
+// has been loaded from DRAM to L1.
 void risc_get_next_epoch();
 // This call signals to NCRISC that the current epoch is done and can
-// be overwritten with the next epoch state from DRAM. 
+// be overwritten with the next epoch state from DRAM.
 void risc_signal_epoch_done();
-
-#ifdef RISC_GSYNC_ENABLED
-void global_sync_init(volatile uint32_t &gsync_epoch, volatile uint32_t &epochs_in_progress);
-void global_sync(volatile uint32_t &gsync_epoch, volatile uint32_t &epochs_in_progress)__attribute__((section("code_l1")));
-void global_sync_update(volatile uint32_t &gsync_epoch, volatile uint32_t &epochs_in_progress);
-#endif
 
 // Returns the buffer address for current thread+core. Differs for NC/BR/TR0-2.
 inline uint8_t* get_debug_print_buffer() {
@@ -193,18 +192,18 @@ inline uint8_t* get_debug_print_buffer() {
 inline void breakpoint_(uint32_t line) {
     /*
         When called, writes the stack pointer to a known location
-        in memory (unique for each core) and then hangs until the 
+        in memory (unique for each core) and then hangs until the
         user explicitly continues
     */
     uint32_t BREAKPOINT;
     uint32_t LNUM;
     volatile uint32_t* bp;
-    volatile uint32_t* lnum; 
+    volatile uint32_t* lnum;
 
     #define MACRO_SP_AUX(SP) #SP
     #define MACRO_SP(SP) MACRO_SP_AUX(SP)
 
-    // Need to use macros for inline assembly in order to create a string literal 
+    // Need to use macros for inline assembly in order to create a string literal
     #if defined(COMPILE_FOR_NCRISC)
         asm("li t0, " MACRO_SP(NCRISC_SP_MACRO));
         BREAKPOINT = NCRISC_BREAKPOINT;
@@ -245,4 +244,3 @@ inline void breakpoint_(uint32_t line) {
 #define breakpoint() breakpoint_(__LINE__);
 
 #endif
-

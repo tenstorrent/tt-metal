@@ -26,6 +26,10 @@
 #include "ckernel_include.h"
 #include "fw_debug.h"
 #include "tensix.h"
+#include "l1_address_map.h"
+#include "eth_l1_address_map.h"
+#include "noc_overlay_parameters.h"
+#include "stream_io_map.h"
 #include <l1_address_map.h>
 #include "hostdevcommon/common_runtime_address_map.h"
 // #include <cstring>

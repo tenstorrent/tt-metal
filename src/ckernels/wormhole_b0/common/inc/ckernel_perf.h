@@ -4,7 +4,6 @@
 #include <l1_address_map.h>
 #include "tensix.h"
 #include "fw_debug.h"
-#include "epoch.h"
 
 #ifdef PERF_DUMP
 #include "perf_events_target_inputs.h"
@@ -80,7 +79,7 @@ struct cperf_cnt_block_sel
 struct cperf_dbg_daisy_id
 {
     constexpr static uint32_t DEBUG_DAISY_INSTRN_THREAD = 1; // Thread specific perf counters
-    constexpr static uint32_t DEBUG_DAISY_INSTRN_ISSUE_0 = 4; // TDMA+math  
+    constexpr static uint32_t DEBUG_DAISY_INSTRN_ISSUE_0 = 4; // TDMA+math
     constexpr static uint32_t DEBUG_DAISY_INSTRN_ISSUE_1 = 5; // math+instruction issue
     constexpr static uint32_t DEBUG_DAISY_TENSIX  = 7; // FPU and L1 perf counters
 };
@@ -89,7 +88,7 @@ struct cperf_dbg_dump_to_mem_mode
 {
     constexpr static uint32_t DEBUG_MEM_MODE_MANUAL_WR = 0;
     constexpr static uint32_t DEBUG_MEM_MODE_AUTO_WR = 1;
-    constexpr static uint32_t DEBUG_MEM_MODE_MANUAL_RD = 2; 
+    constexpr static uint32_t DEBUG_MEM_MODE_MANUAL_RD = 2;
     constexpr static uint32_t DEBUG_MEM_MODE_AUTO_RD = 3;
 };
 
@@ -182,7 +181,7 @@ inline void adjust_timestamp_upper_32b(uint32_t timestamp_upper_32b) {
 inline void record_perf_dump_end() {
    if (perf_index < perf_end) {
       perf_buf_base[perf_buf_base_id][perf_index] = PERF_DUMP_END_SIGNAL;
-      perf_index += 1;      
+      perf_index += 1;
    }
 }
 
@@ -209,13 +208,13 @@ inline void switch_perf_buffers_and_record_event(uint32_t event_id, uint32_t eve
          trisc_stalled = true;
          wait_for_dram_start_l = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_L);
          wait_for_dram_start_h = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_H);
-         
+
          while (ack_local <= dram_dump_req_local - 2) {}
-         
+
          wait_for_dram_end_l = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_L);
          wait_for_dram_end_h = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_H);
       }
-      
+
       dram_dump_req_local++;
       EPOCH_INFO_PTR->perf_dram_copy_req[thread_id] = dram_dump_req_local;
       // perf_buf_base[perf_buf_base_id][perf_index] = 0xabcde0;
@@ -448,7 +447,7 @@ inline void dbg_enable_dump_to_mem(uint32_t start_addr, uint32_t end_addr) {
    TT_SETDMAREG(0, debug_l1_reg2_lo, 0, LO_16(p_gpr_math::TMP0));
    TT_SETDMAREG(0, debug_l1_reg2_hi, 0, HI_16(p_gpr_math::TMP0));
    TTI_STOREREG(p_gpr_math::TMP0, (RISCV_DEBUG_REG_DBG_L1_MEM_REG2 >> 2) & 0x3ffff);
-   
+
    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::THCON);
 }
 
@@ -488,7 +487,7 @@ inline void switch_perf_buffers_for_math_thread() {
       TT_SETDMAREG(0, dram_req_lo, 0, LO_16(p_gpr_math::NUM_DRAM_REQS));
       TT_SETDMAREG(0, dram_req_hi, 0, HI_16(p_gpr_math::NUM_DRAM_REQS));
       TTI_STOREIND(1, 1, 0, LO_16(p_gpr_math::PERF_EPOCH_OFFSET), p_ind::INC_NONE, p_gpr_math::NUM_DRAM_REQS, p_gpr_math::PERF_EPOCH_BASE_ADDR);
-      
+
       perf_buf_base_id = 1 - perf_buf_base_id;
       perf_index = 0;
       dbg_enable_dump_to_mem((uint32_t)&perf_buf_base[perf_buf_base_id][0], (uint32_t)&perf_buf_base[perf_buf_base_id][perf_end]);
@@ -636,7 +635,7 @@ inline void pack_record_input_end_time_and_num_tiles() {
       while (semaphore_read(semaphore::PACK_DONE) > 0) {}
       uint32_t event_id = perf::get_event_id(0, 0, perf::EventType::PACK_EACH_INPUT, current_outer_loop_iter);
       record_timestamp_64b(event_id);
-      
+
       uint32_t event_id_num_tiles = perf::get_event_id(0, 0, perf::EventType::NUM_TILES, current_outer_loop_iter);
       record_perf_value_and_check_overflow(event_id_num_tiles, perf_total_num_tiles[0]);
    }
