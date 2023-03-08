@@ -148,180 +148,10 @@ void create_cb_in_L1(ll_buda::Program *program, ll_buda::Device* device, tt_xy_p
     );
 }
 
-/*
-std::vector<uint32_t> calculate_unary_op(string sfpu_name, std::vector<uint32_t> &operand_1, uint32_t single_tile_size, uint32_t num_tiles, uint32_t dram_buffer_size, ll_buda::Device* device) {
-    bool pass = true;
-    try {
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
-
-        ll_buda::Program *program = new ll_buda::Program();
-
-        tt_xy_pair core = {0, 0};
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      DRAM Setup
-        ////////////////////////////////////////////////////////////////////////////
-
-        uint32_t dram_buffer_src_addr = 0;
-        int dram_src_channel_id = 0;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
-
-        auto src_dram_buffer = ll_buda::CreateDramBuffer(dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-        auto dst_dram_buffer = ll_buda::CreateDramBuffer(dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
-
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates(device);
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates(device);
-
-        // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
-        // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
-        uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 200 * 1024;
-        uint32_t num_input_tiles = 8;
-        auto cb_src0 = ll_buda::CreateCircularBuffer(
-            program,
-            src0_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            src0_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 300 * 1024;
-        uint32_t num_output_tiles = 1;
-        auto cb_output = ll_buda::CreateCircularBuffer(
-            program,
-            ouput_cb_index,
-            core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
-        auto unary_reader_kernel = ll_buda::CreateDataMovementKernel(
-            program,
-            "kernels/dataflow/reader_unary_push_4.cpp",
-            core,
-            ll_buda::DataMovementProcessor::RISCV_1,
-            ll_buda::NOC::RISCV_1_default);
-
-        auto unary_writer_kernel = ll_buda::CreateDataMovementKernel(
-            program,
-            "kernels/dataflow/writer_unary.cpp",
-            core,
-            ll_buda::DataMovementProcessor::RISCV_0,
-            ll_buda::NOC::RISCV_0_default);
-
-        void *hlk_args = new unary_datacopy::hlk_args_t{
-            .per_core_block_cnt = num_tiles,
-            .per_core_block_dim = 1
-        };
-        ll_buda::ComputeKernelArgs *eltwise_unary_args = ll_buda::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(unary_datacopy::hlk_args_t));
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
-        string hlk_kernel_name = "kernels/compute/eltwise_sfpu.cpp";
-        auto eltwise_unary_kernel = ll_buda::CreateComputeKernel(
-            program,
-            hlk_kernel_name,
-            core,
-            eltwise_unary_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
-        );
-        const string hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
-        eltwise_unary_kernel->add_define("SFPU_OP", hlk_op_name);
-        //sfpu_name
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////
-
-        pass &= ll_buda::WriteToDeviceDRAM(device, src_dram_buffer, operand_1);
-
-        pass &= ll_buda::ConfigureDeviceWithProgram(device, program);
-
-        ll_buda::WriteRuntimeArgsToDevice(
-            device,
-            unary_reader_kernel,
-            core,
-            {
-                dram_buffer_src_addr,
-                (std::uint32_t)dram_src_noc_xy.x,
-                (std::uint32_t)dram_src_noc_xy.y,
-                num_tiles
-            }
-        );
-
-        ll_buda::WriteRuntimeArgsToDevice(
-            device,
-            unary_writer_kernel,
-            core,
-            {
-                dram_buffer_dst_addr,
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
-                num_tiles
-            }
-        );
-
-        // tt::ll_buda::tt_gdb(device, 0, program->cores(), program->cores_to_ops());
-        pass &= ll_buda::LaunchKernels(device, program);
-
-        std::vector<uint32_t> result_vec;
-        ll_buda::ReadFromDeviceDRAM(device, dst_dram_buffer, result_vec, dst_dram_buffer->size());
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Validation & Teardown
-        ////////////////////////////////////////////////////////////////////////////
-
-        std::vector<uint32_t> golden = sfpu(operand_1, sfpu_op_to_function.at(sfpu_name));
-
-        pass &= packed_uint32_t_vector_comparison(result_vec, golden, sfpu_op_to_comparison_function.at(sfpu_name));
-
-        if (not pass) {
-            std::cout << "GOLDEN" << std::endl;
-            print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles);
-
-            std::cout << "RESULT" << std::endl;
-            print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
-        }
-        else{
-             log_info(LogTest, "Test Passed");
-        }
-
-        TT_ASSERT(pass);
-
-        return result_vec;
-
-    } catch (const std::exception &e) {
-        pass = false;
-        // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        log_fatal(LogTest, "System error message: {}", std::strerror(errno));
-
-        throw;
-    }
-}*/
-
 auto core_count(const ll_buda::CoreRange& cores)
 {
     return (cores.second.x - cores.first.x + 1) * (cores.second.y - cores.first.y + 1);
 }
-
 
 tt_binary_program_t create_binary_op_program(
     const char* op_define,
@@ -490,7 +320,6 @@ bool execute_binary_op(
     }
 }
 
-
 std::vector<uint32_t> calculate_golden(
     std::vector<uint32_t>& src0_vec,
     std::vector<uint32_t>& src1_vec,
@@ -505,11 +334,9 @@ std::vector<uint32_t> calculate_golden(
     return golden_mul;
 }
 
-
 bool is_close_0p1(float a, float b) {
     return is_close(a, b, 0.1f);
 }
-
 
 int main(int argc, char **argv) {
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -599,7 +426,6 @@ int main(int argc, char **argv) {
     //                      Execute ops
     ////////////////////////////////////////////////////////////////////////////
     log_info(LogTest, "Executing ops");
-    // const char* op_id_to_op_define[] = {"add_tiles", "sub_tiles", "mul_tiles"};
 
     ll_buda_profiler.markStart("Execute Graph");
 
