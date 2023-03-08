@@ -1,4 +1,4 @@
-#include "ll_buda/host_api.hpp"
+#include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 
 /*
@@ -8,7 +8,7 @@
 * 3. Host reads from buffer written to in step 2.
 */
 
-using namespace tt::ll_buda;
+using namespace tt::tt_metal;
 
 int main(int argc, char **argv) {
     bool pass = true;

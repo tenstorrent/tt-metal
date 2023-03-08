@@ -1,8 +1,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ll_buda/host_api.hpp"
-#include "ll_buda/tensor/tensor.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/tensor/tensor.hpp"
 
 namespace py = pybind11;
 

@@ -2,16 +2,13 @@ PROGRAMMING_EXAMPLES_TESTDIR = $(OUT)/programming_examples
 PROGRAMMING_EXAMPLES_OBJDIR = $(OBJDIR)/programming_examples
 
 PROGRAMMING_EXAMPLES_INCLUDES = $(COMMON_INCLUDES)
-PROGRAMMING_EXAMPLES_LDFLAGS = -lll_buda_impl -lll_buda -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -lhlkc_api -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
+PROGRAMMING_EXAMPLES_LDFLAGS = -ltt_metal_impl -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -lhlkc_api -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
 
-include programming_examples/basic_empty_program/module.mk
 include programming_examples/loopback/module.mk
 include programming_examples/eltwise_binary/module.mk
 
 programming_examples: programming_examples/loopback \
-                      programming_examples/basic_empty_program \
                       programming_examples/eltwise_binary
 
 programming_examples/loopback: $(PROGRAMMING_EXAMPLES_TESTDIR)/loopback;
-programming_examples/basic_empty_program: $(PROGRAMMING_EXAMPLES_TESTDIR)/basic_empty_program;
 programming_examples/eltwise_binary: $(PROGRAMMING_EXAMPLES_TESTDIR)/eltwise_binary;

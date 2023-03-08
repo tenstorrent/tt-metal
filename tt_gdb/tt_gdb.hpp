@@ -1,7 +1,7 @@
 #include <string>
 #include "llrt/tt_cluster.hpp"
 #include "llrt/llrt.hpp"
-#include "ll_buda/impl/device/device.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 namespace tt_gdb {
 // Debugger info for UI
@@ -29,7 +29,7 @@ inline std::string get_second_token(std::string &input);
 
 // Commands
 void print_cmd(
-    tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core, 
+    tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core,
     std::string variable, std::string thread_type, std::string op);
 void continue_cmd(tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core, std::string thread_type);
 void quit_cmd();
@@ -47,14 +47,14 @@ void nicely_display_commands();
 // Debugger driver and python UI
 void launch_core_map(PythonCoreMapInfo info);
 void breakpoint_subroutine(
-    tt_cluster* cluster, int chip_id, const tt_xy_pair &core, 
+    tt_cluster* cluster, int chip_id, const tt_xy_pair &core,
     std::string thread_type, std::string op);
 
 void tt_gdb(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> worker_cores, vector<string> ops);
 } // end namespace tt_gdb
 
 namespace tt {
-namespace ll_buda {
+namespace tt_metal {
 
 void tt_gdb(Device* device, int chip_id, const vector<tt_xy_pair> logical_cores, vector<string> ops);
 

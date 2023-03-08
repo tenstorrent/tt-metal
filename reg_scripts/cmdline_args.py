@@ -23,7 +23,7 @@ def add_test_type_specific_args_(argparser, test_suite_type=TestSuiteType.UNKNOW
         argparser.add_argument("--num_processes", help="Use specified number of processes", dest="num_processes", type=int, default=1)
     elif test_suite_type == TestSuiteType.LLRT:
         argparser.add_argument("--skip-driver-tests", action="store_true", default=False, help="Skip long-running silicon driver tests")
-    elif test_suite_type == TestSuiteType.LL_BUDA:
+    elif test_suite_type == TestSuiteType.TT_METAL:
         pass
     else:
         raise Exception("You must specify a test type")
@@ -74,4 +74,4 @@ def get_build_kernels_for_riscv_specific_args_from_parsed_args_(parsed_args):
 
 get_llrt_arguments_from_cmdline_args = partial(get_full_arg_list_with_specific_args_, get_llrt_specific_args_from_parsed_args_)
 get_build_kernels_for_riscv_arguments_from_cmdline_args = partial(get_full_arg_list_with_specific_args_, get_build_kernels_for_riscv_specific_args_from_parsed_args_)
-get_ll_buda_arguments_from_cmdline_args = partial(get_full_arg_list_with_specific_args_, get_empty_args_from_parsed_args_)
+get_tt_metal_arguments_from_cmdline_args = partial(get_full_arg_list_with_specific_args_, get_empty_args_from_parsed_args_)

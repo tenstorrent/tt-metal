@@ -34,7 +34,7 @@ class ReleaseConstants:
                 "sandbox/",
                 "compiler/tests/",
                 "llrt/tests/",
-                "ll_buda/tests/",
+                "tt_metal/tests/",
                 "build_kernels_for_riscv/tests/",
                 "gpai/tests/",
                 "release/",

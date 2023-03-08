@@ -118,7 +118,7 @@ LIBS_TO_BUILD = \
 	build_kernels_for_riscv \
 	device \
 	llrt \
-	ll_buda \
+	tt_metal \
 	tt_gdb \
 	tensor \
 	tools \
@@ -176,8 +176,8 @@ include src/firmware/module.mk
 include hlkc/module.mk
 include llrt/module.mk
 include build_kernels_for_riscv/module.mk
-include ll_buda/module.mk
-include tt_gdb/module.mk # needs to compiled after llrt and ll_buda
+include tt_metal/module.mk
+include tt_gdb/module.mk # needs to compiled after llrt and tt_metal
 include common/common.mk
 include tensor/module.mk
 include tools/module.mk
@@ -188,7 +188,7 @@ include gpai/module.mk
 ifdef GPAI_ENV_IS_DEV
 include build_kernels_for_riscv/tests/module.mk
 include llrt/tests/module.mk
-include ll_buda/tests/module.mk
+include tt_metal/tests/module.mk
 include git_hooks/module.mk
 endif
 

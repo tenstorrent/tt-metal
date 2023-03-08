@@ -12,7 +12,7 @@ from operator import ne
 class TestSuiteType(Enum):
     BUILD_KERNELS_FOR_RISCV = auto()
     LLRT = auto()
-    LL_BUDA = auto()
+    TT_METAL = auto()
     PROGRAMMING_EXAMPLE = auto()
     UNKNOWN = auto()
 
@@ -31,7 +31,7 @@ def namespace_to_test_suite_type(namespace: str) -> TestSuiteType:
 
 
 def is_test_suite_type_that_uses_silicon(test_suite_type: TestSuiteType) -> bool:
-    return test_suite_type in (TestSuiteType.LLRT, TestSuiteType.LL_BUDA)
+    return test_suite_type in (TestSuiteType.LLRT, TestSuiteType.TT_METAL)
 
 
 def run_process_and_get_result(command, extra_env={}, capture_output=True):
@@ -66,7 +66,7 @@ def default_build_full_path_to_test(namespace, executable_name, extra_params):
 
 
 def build_executable_command_for_test(namespace: str, test_entry: TestEntry, timeout, build_full_path_to_test):
-    assert namespace in ("build_kernels_for_riscv", "llrt", "ll_buda", "programming_example")
+    assert namespace in ("build_kernels_for_riscv", "llrt", "tt_metal", "programming_example")
 
     test_name = test_entry.test_name
     executable_name = test_entry.executable_name

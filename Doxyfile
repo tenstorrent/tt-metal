@@ -918,7 +918,7 @@ WARN_LOGFILE           =
 # Note: If this tag is empty the current directory is searched.
 
 INPUT                  = src/firmware/riscv/common/dataflow_api.h \
-                         ll_buda/host_api.hpp \
+                         tt_metal/host_api.hpp \
                          kernels/hostdevcommon/compute_hlk_api.h
 
 # This tag can be used to specify the character encoding of the source files

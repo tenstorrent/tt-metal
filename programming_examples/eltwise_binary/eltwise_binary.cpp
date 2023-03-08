@@ -2,11 +2,11 @@
 #include <functional>
 #include <random>
 
-#include "ll_buda/host_api.hpp"
+#include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 
 using namespace tt;
-using namespace tt::ll_buda;
+using namespace tt::tt_metal;
 
 /*
 * 1. Host creates two vectors of data.

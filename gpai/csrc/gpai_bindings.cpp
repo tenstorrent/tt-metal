@@ -1,14 +1,14 @@
-#include "ll_buda/op_library/eltwise_binary/eltwise_binary_op.hpp"
-#include "ll_buda/op_library/bmm/bmm_op.hpp"
-#include "ll_buda/op_library/pad_h_rm/pad_h_rm_op.hpp"
-#include "ll_buda/op_library/bcast/bcast_op.hpp"
-#include "ll_buda/op_library/reduce/reduce_op.hpp"
-#include "ll_buda/op_library/transpose/transpose_op.hpp"
-#include "ll_buda/op_library/transpose_rm/transpose_rm_op.hpp"
-#include "ll_buda/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "ll_buda/op_library/tilize/tilize_op.hpp"
-#include "ll_buda/op_library/untilize/untilize_op.hpp"
-#include "ll_buda/op_library/reshape/reshape_op.hpp"
+#include "tt_metal/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "tt_metal/op_library/bmm/bmm_op.hpp"
+#include "tt_metal/op_library/pad_h_rm/pad_h_rm_op.hpp"
+#include "tt_metal/op_library/bcast/bcast_op.hpp"
+#include "tt_metal/op_library/reduce/reduce_op.hpp"
+#include "tt_metal/op_library/transpose/transpose_op.hpp"
+#include "tt_metal/op_library/transpose_rm/transpose_rm_op.hpp"
+#include "tt_metal/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_metal/op_library/tilize/tilize_op.hpp"
+#include "tt_metal/op_library/untilize/untilize_op.hpp"
+#include "tt_metal/op_library/reshape/reshape_op.hpp"
 
 #include "gpai_bindings.hpp"
 #include "gpai/csrc/type_caster.hpp"
@@ -17,7 +17,7 @@ namespace py = pybind11;
 
 namespace tt {
 
-namespace ll_buda {
+namespace tt_metal {
 
 extern void SetForceRecompiles(int newval);
 extern int  GetForceRecompiles();
@@ -209,7 +209,7 @@ void DeviceModule(py::module &m_device) {
 
 }
 
-} // end namespace ll_buda
+} // end namespace tt_metal
 } // end namespace tt
 
 
@@ -218,9 +218,9 @@ PYBIND11_MODULE(_C, m) {
     m.attr("__name__") = "gpai._C";
     m.doc() = "General purpose AI python bindings";
 
-    py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an ll_buda tensor");
-    tt::ll_buda::TensorModule(m_tensor);
+    py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an tt_metal tensor");
+    tt::tt_metal::TensorModule(m_tensor);
 
     py::module_ m_device = m.def_submodule("device", "Submodule defining a host or device");
-    tt::ll_buda::DeviceModule(m_device);
+    tt::tt_metal::DeviceModule(m_device);
 }

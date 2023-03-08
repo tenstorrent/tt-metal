@@ -1,0 +1,214 @@
+#include "tt_metal/op_library/bcast/bcast_op.hpp"
+#include "tt_metal/tensor/tensor.hpp"
+#include "tt_metal/host_api.hpp"
+
+#include "constants.hpp"
+
+// TODO(AP): duplication
+namespace bcast_op_params {
+// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
+struct hlk_args_t {
+    uint32_t B;
+    uint32_t Ht;
+    uint32_t Wt;
+};
+}
+
+
+using namespace tt::tt_metal;
+using namespace tt::constants;
+using u32 = std::uint32_t;
+
+namespace {
+const char* get_reader_name(BcastOpDim::Enum bcast_dim) {
+    if (bcast_dim == BcastOpDim::H) {
+        return "kernels/dataflow/reader_bcast_h_8bank.cpp";
+    } else if (bcast_dim == BcastOpDim::W) {
+        return "kernels/dataflow/reader_bcast_w_8bank.cpp";
+    } if (bcast_dim == BcastOpDim::HW) {
+        return "kernels/dataflow/reader_bcast_hw_8bank.cpp";
+    }
+    TT_ASSERT(false && "Unexpected bcast_dim!");
+    return "";
+}
+
+const char* get_compute_name(BcastOpDim::Enum bcast_dim) {
+    switch (bcast_dim) {
+        case BcastOpDim::H:  return "kernels/compute/bcast_h.cpp";
+        case BcastOpDim::W:  return "kernels/compute/bcast_w.cpp";
+        case BcastOpDim::HW: return "kernels/compute/bcast_hw.cpp";
+        default:           TT_ASSERT(false && "Unexpected bcast_dim!");
+    }
+    return "";
+}
+
+const char* math_to_op_define[] = { "add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast" };
+
+}
+
+
+namespace tt {
+
+namespace tt_metal {
+
+Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
+
+    const auto ashape = a.shape();
+    const auto bshape = b.shape();
+    u32 N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
+    u32 bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
+    u32 NC = N*C;
+    u32 HW = H*W;
+
+    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
+    TT_ASSERT(H > 0 && W > 0 && NC > 0);
+    TT_ASSERT(a.volume() % TILE_HW == 0);
+
+    TT_ASSERT((bN*bC == 1 || (bN == N && bC == C)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
+    // validate input dimensions
+    if (bcast_dim == BcastOpDim::W)
+        TT_ASSERT(H == bH && bW == TILE_WIDTH);
+    if (bcast_dim == BcastOpDim::H)
+        TT_ASSERT(W == bW && bH == TILE_HEIGHT);
+    if (bcast_dim == BcastOpDim::HW)
+        TT_ASSERT(bW == TILE_WIDTH && bH == TILE_HEIGHT);
+
+    u32 Wt = W/TILE_WIDTH;
+    u32 Ht = H/TILE_HEIGHT;
+
+    uint32_t num_tensor_tiles = NC*Ht*Wt;
+    uint32_t num_btensor_tiles = NC*bH*bW / TILE_HW;
+
+    tt_metal::Program *program = new tt_metal::Program();
+
+    tt_xy_pair core = {0, 0};
+
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(a.device() != nullptr and b.device() != nullptr, "Operands to eltwise binary need to be on device!");
+    TT_ASSERT(a.device() == b.device(), "Operands to bcast need to be on the same device!");
+    TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
+
+    uint32_t single_tile_size = 2 * 1024;
+
+    // This should allocate a DRAM buffer on the device
+    tt_metal::Device *device = a.device();
+    tt_metal::Tensor output = Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
+
+    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_addr = 200 * 1024;
+    uint32_t num_input_tiles = 2;
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        src0_cb_index,
+        core,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        src0_cb_addr,
+        DataFormat::Float16_b
+    );
+
+    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_addr = 300 * 1024;
+    auto cb_src1 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        src1_cb_index,
+        core,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        src1_cb_addr,
+        DataFormat::Float16_b
+    );
+
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_addr = 400 * 1024;
+    uint32_t num_output_tiles = 2;
+    auto cb_output = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        ouput_cb_index,
+        core,
+        num_output_tiles,
+        num_output_tiles * single_tile_size,
+        output_cb_addr,
+        DataFormat::Float16_b
+    );
+
+    const char* reader_name = ::get_reader_name(bcast_dim);
+    tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        reader_name,
+        core,
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_1_default);
+
+    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "kernels/dataflow/writer_unary_8bank.cpp",
+        core,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_0_default);
+
+    // TODO(AP): add dimensions and op params
+    void *hlk_args = new bcast_op_params::hlk_args_t { .B = NC, .Ht = Ht, .Wt = Wt };
+    tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(bcast_op_params::hlk_args_t));
+
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    const char* compute_name = ::get_compute_name(bcast_dim);
+    auto bcast_kernel = tt_metal::CreateComputeKernel(
+        program,
+        compute_name,
+        core,
+        compute_args,
+        MathFidelity::HiFi4,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+    bcast_kernel->add_define("BCAST_OP", ::math_to_op_define[int(bcast_math)]);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Compile Application
+    ////////////////////////////////////////////////////////////////////////////
+    bool skip_hlkc = false;
+    tt_metal::CompileProgram(device, program, skip_hlkc);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Execute Application
+    ////////////////////////////////////////////////////////////////////////////
+
+        uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
+        tt_metal::WriteRuntimeArgsToDevice(
+            device,
+            binary_reader_kernel,
+            core,
+            {a.buffer()->address(), // 0
+            0, // 1
+            0, // 2
+            num_tensor_tiles, // 3
+            b.buffer()->address(), // 4
+            0, // 5
+            0, // 6
+            num_btensor_tiles, NC*Ht*Wt, NC, Ht, Wt, bnc1}); // 7 8 9 10 11 12
+
+        tt_metal::WriteRuntimeArgsToDevice(
+            device,
+            unary_writer_kernel,
+            core,
+            { output.buffer()->address(),
+              0, 0, num_tensor_tiles});
+
+    tt_metal::ConfigureDeviceWithProgram(device, program);
+
+    tt_metal::LaunchKernels(device, program);
+
+    delete program;
+
+    // output does not hold any data, contains pointer to buffer on device with the data
+    return output;
+}
+
+}  // namespace tt_metal
+
+}  // namespace tt

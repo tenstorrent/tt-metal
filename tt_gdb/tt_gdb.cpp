@@ -7,7 +7,7 @@
 #include <thread>
 
 #include "hostdevcommon/common_runtime_address_map.h"
-#include "ll_buda/impl/device/device.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 #include "tt_gdb.hpp"
 
@@ -46,7 +46,7 @@ const std::map<string, uint32_t> thread_type_to_bp_addr = {
 bool is_print_command(string input) {
     // The complex part '[a-z]+[a-z0-9_]*' just matches a string that starts with a letter and then
     // has any combination of letters, integers, and underscores
-    std::regex self_regex("[ ]*p[ ]+[a-z_]+[a-z0-9_]*[ ]*", 
+    std::regex self_regex("[ ]*p[ ]+[a-z_]+[a-z0-9_]*[ ]*",
             std::regex_constants::ECMAScript | std::regex_constants::icase);
     return std::regex_match(input, self_regex);
 }
@@ -119,7 +119,7 @@ void print_cmd(tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core, string va
     int ret = system(cmd.c_str());
 
     // Error
-    if (ret) { 
+    if (ret) {
         std::cout << "Could not find variable " << variable << std::endl;
         return;
     }
@@ -138,7 +138,7 @@ void print_cmd(tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core, string va
         std::cout << "Could not find offset from frame pointer" << std::endl;
         return;
     }
-    
+
     try {
         variable_offset = variable_offset_info[variable];
     } catch (std::invalid_argument& e){
@@ -152,7 +152,7 @@ void print_cmd(tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core, string va
     std::uint32_t debug_addr = thread_type_to_sp_pointer_addr.at(thread_type);
 
     uint32_t sp_pointer = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, debug_addr, sizeof(uint32_t)).at(0);
-    
+
     uint32_t val = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, sp_pointer + offset_from_frame_pointer + variable_offset, sizeof(uint32_t)).at(0);
     std::cout << val << std::endl;
 }
@@ -321,7 +321,7 @@ void launch_core_map(PythonCoreMapInfo info) {
     TT_ASSERT(ret == 0, "tt_gdb_table.py must have 0 exit code");
 }
 
-void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> cores, vector<string> ops) { 
+void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> cores, vector<string> ops) {
 
     const vector<std::tuple<string, uint32_t, uint32_t>> breakpoint_addresses = {
         std::tuple("ncrisc", NCRISC_BREAKPOINT, NCRISC_BP_LNUM),
@@ -334,12 +334,12 @@ void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> cores, v
     std::filesystem::remove("core_debug_info.json");
 
     // This program loops indefinitely, however should be launched as a detached thread so that its resources are freed after the main thread terminates
-    while (true) { 
+    while (true) {
 
         vector<tt_xy_pair> breakpoint_cores;
         vector<map<string, int>> breakpoint_lines;
         std::ifstream core_debug_info("core_debug_info.json", std::ifstream::binary);
-        
+
         tt_xy_pair current_core = {0, 0};
         bool reenter = false;
         string current_risc = "trisc0";
@@ -378,8 +378,8 @@ void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> cores, v
             TT_ASSERT(not breakpoint_lines.empty(), "If breakpoint_cores is not empty, breakpoint_lines cannot be either");
             PythonCoreMapInfo info = {
                 // This info is provided by C++
-                breakpoint_cores, 
-                breakpoint_lines, 
+                breakpoint_cores,
+                breakpoint_lines,
                 ops,
 
                 // This info is state received from python from last exit
@@ -425,7 +425,7 @@ void tt_gdb(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> worker_co
 } // end namespace tt_gdb
 
 namespace tt {
-namespace ll_buda {
+namespace tt_metal {
 
 void tt_gdb(Device* device, int chip_id, const vector<tt_xy_pair> logical_cores, vector<string> ops) {
     vector<tt_xy_pair> worker_cores;
@@ -437,5 +437,5 @@ void tt_gdb(Device* device, int chip_id, const vector<tt_xy_pair> logical_cores,
     tt_gdb::tt_gdb(device->cluster_, chip_id, worker_cores, ops);
 }
 
-} // end namespace ll_buda
+} // end namespace tt_metal
 } // end namespace tt
