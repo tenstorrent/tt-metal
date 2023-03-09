@@ -35,7 +35,7 @@ if __name__ == "__main__":
     shape = [N,C,H,W]
     torch.manual_seed(123)
     x = (torch.randn((N,C,H,W))+0.01).to(torch.bfloat16).to(torch.float32)
-    xt = ttmetal.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttmetal.tensor.DataType.FLOAT32, ttmetal.tensor.Layout.TILE, device)
+    xt = ttmetal.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
     tt_res = ttmetal.tensor.gelu(xt)
     tt_host_rm = tt_res.to(host).data()
 

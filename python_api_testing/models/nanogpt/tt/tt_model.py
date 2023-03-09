@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from gpai import gpai
+from pymetal import tt_metal as ttm
 from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
@@ -73,37 +73,37 @@ class CausalSelfAttention(nn.Module):
 
         assert(self.n_embd % self.n_head == 0)
         # Used to scale down the input to the softmax
-        self.reciprocal_of_sqrt_hidden_dim_tensor = gpai.tensor.Tensor(
+        self.reciprocal_of_sqrt_hidden_dim_tensor = ttm.tensor.Tensor(
             [1 / math.sqrt(self.n_embd/self.n_head)] + [0 for _ in range(32 * 32 - 1)],
             [1, 1, 32, 32],
-            gpai.tensor.DataType.FLOAT32,
-            gpai.tensor.Layout.TILE,
+            ttm.tensor.DataType.FLOAT32,
+            ttm.tensor.Layout.TILE,
             device
         )
 
     # (N,1,s,e)->(N,s,h,e/h)->(N,h,s,e/h)
     def make_heads(self, x, num_heads):
-        untilized_x = gpai.tensor.untilize(x)
-        reshaped_unt = gpai.tensor.reshape(untilized_x, x.shape()[0], x.shape()[2], num_heads, x.shape()[3] // num_heads)
-        transposed = gpai.tensor.transpose_hc_rm(reshaped_unt)
-        retilized = gpai.tensor.tilize(transposed)
+        untilized_x = ttm.tensor.untilize(x)
+        reshaped_unt = ttm.tensor.reshape(untilized_x, x.shape()[0], x.shape()[2], num_heads, x.shape()[3] // num_heads)
+        transposed = ttm.tensor.transpose_hc_rm(reshaped_unt)
+        retilized = ttm.tensor.tilize(transposed)
         return retilized
 
     def unmake_heads(self, x):
-        untilized_x = gpai.tensor.untilize(x)
-        ctx = gpai.tensor.transpose_hc_rm(untilized_x)
+        untilized_x = ttm.tensor.untilize(x)
+        ctx = ttm.tensor.transpose_hc_rm(untilized_x)
         ushape = ctx.shape()
-        reshaped = gpai.tensor.reshape(ctx, 1, ushape[0], ushape[1], ushape[2]*ushape[3])
+        reshaped = ttm.tensor.reshape(ctx, 1, ushape[0], ushape[1], ushape[2]*ushape[3])
         #set_FR(1)
-        retval = gpai.tensor.tilize(reshaped)
+        retval = ttm.tensor.tilize(reshaped)
         return retval
 
     def multiply_by_sqrt_hidden_dim(self, x):
-        return gpai.tensor.bcast(
+        return ttm.tensor.bcast(
             x,
             self.reciprocal_of_sqrt_hidden_dim_tensor,
-            gpai.tensor.BcastOpMath.MUL,
-            gpai.tensor.BcastOpDim.HW
+            ttm.tensor.BcastOpMath.MUL,
+            ttm.tensor.BcastOpDim.HW
         )
 
     def forward(self, x, seq):
@@ -123,8 +123,8 @@ class CausalSelfAttention(nn.Module):
         kh = self.make_heads(k, self.n_head)
         vh = self.make_heads(v, self.n_head)
         # make_heads: (N,1,s,e)->(N,s,h,e/h)->(N,h,s,e/h)
-        kth = gpai.tensor.transpose(kh) # (N,h,s,e/h) -> (N,h,e/h,s)
-        qkt = gpai.tensor.bmm(qh, kth) # e/h is contracted -> (N,h,s,s)
+        kth = ttm.tensor.transpose(kh) # (N,h,s,e/h) -> (N,h,e/h,s)
+        qkt = ttm.tensor.bmm(qh, kth) # e/h is contracted -> (N,h,s,s)
 
         # N,C,H,W <-> batch, heads, sequence, emb/head
         N, C, H, W = qkt.shape()
@@ -132,16 +132,16 @@ class CausalSelfAttention(nn.Module):
         attention_score_input = self.multiply_by_sqrt_hidden_dim(qkt)
 
         # create a mask out the sequences to a multiple of 32 (at this point W-T)
-        padded_seq_masku = gpai.tensor.fill_rm(N, C, H, W, seq, seq, x, 0x0, 0xc7c3) # 0.0 and -100000 in bf16
-        padded_seq_mask = gpai.tensor.tilize(padded_seq_masku)
+        padded_seq_masku = ttm.tensor.fill_rm(N, C, H, W, seq, seq, x, 0x0, 0xc7c3) # 0.0 and -100000 in bf16
+        padded_seq_mask = ttm.tensor.tilize(padded_seq_masku)
 
         # add -100000 to mask out the scores
-        attention_score_input_masked = gpai.tensor.add(attention_score_input, padded_seq_mask)
+        attention_score_input_masked = ttm.tensor.add(attention_score_input, padded_seq_mask)
 
         attention_scores = softmax(attention_score_input_masked)
 
         # Apply attention to value matrix
-        weighted_activation = gpai.tensor.bmm(attention_scores, vh)
+        weighted_activation = ttm.tensor.bmm(attention_scores, vh)
         unmade_heads = self.unmake_heads(weighted_activation) # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
         retval = self.c_proj(unmade_heads)
         #print_diff_tt_pyt(retval, d['atty'+si].unsqueeze(1))
@@ -165,7 +165,7 @@ class MLP(nn.Module):
     def forward(self, x):
         x1 = self.c_fc(x)
         #print_diff_tt_pyt(x1, d["mlp_cfc"+self.si])
-        x2 = gpai.tensor.gelu(x1) # was: new_gelu
+        x2 = ttm.tensor.gelu(x1) # was: new_gelu
         #print_diff_tt_pyt(x2, d["mlp_gelu"+self.si])
         x3 = self.c_proj(x2)
         #print_diff_tt_pyt(x3, d["mlp_cproj"+self.si])
@@ -205,14 +205,14 @@ class Block(nn.Module):
         ln1 = self.ln_1(x, seq) # , d["blockx"+self.sbi], self.debug_gamma)
         #print_diff_tt_pyt(ln1, d["ln1x"+self.sbi].unsqueeze(1), "LN1 out"+self.sbi)
         att1 = self.attn(ln1, seq)
-        x1 = gpai.tensor.add(x, att1)
+        x1 = ttm.tensor.add(x, att1)
 
         #print_diff_tt_pyt(x1, d["ln2x"+self.sbi].unsqueeze(1), "LN2 in"+self.sbi)
         ln2 = self.ln_2(x1, seq)
         #print_diff_tt_pyt(ln2, d["ln2y"+self.sbi].unsqueeze(1), "LN2 out"+self.sbi)
         mlp = self.mlp(ln2)
         #print_diff_tt_pyt(mlp, d["mlpy"+self.sbi].unsqueeze(1), "MLP out"+self.sbi)
-        x2 = gpai.tensor.add(x1, mlp)
+        x2 = ttm.tensor.add(x1, mlp)
         return x2
 
 
@@ -286,8 +286,8 @@ class TTGPT(nn.Module):
         # convert x from pytorch to tt 4D tensor
         x1 = pad_weight(x.unsqueeze(1))
         x_tilized = tilize_to_list(x1)
-        x_tt = gpai.tensor.Tensor(
-            x_tilized, x1.shape, gpai.tensor.DataType.FLOAT32,  gpai.tensor.Layout.TILE, self.device)
+        x_tt = ttm.tensor.Tensor(
+            x_tilized, x1.shape, ttm.tensor.DataType.FLOAT32,  ttm.tensor.Layout.TILE, self.device)
         #print_diff_tt_pyt(x_tt, d["tokpos"].unsqueeze(1), "Embeddings")
         for block in self.transformer.h:
             x_tt = block(x_tt, t)
@@ -307,7 +307,7 @@ class TTGPT(nn.Module):
             #print_diff_tt_pyt(tt_logits, d["logits"], "lmhead out")
             loss = None
 
-        logits_tt_host = tt_logits.to(gpai.device.GetHost())
+        logits_tt_host = tt_logits.to(ttm.device.GetHost())
         logits_tt_py = untilize(torch.Tensor(logits_tt_host.data()).reshape(x.shape[0], 1, x1.shape[2], -1))
         logits_tt_py1 = logits_tt_py[:, :, seqlen-1, 0:self.config.vocab_size] # seqlen-1 corresponds to :-1: slice
 

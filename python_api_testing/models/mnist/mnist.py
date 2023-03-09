@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
-from gpai import gpai
+from pymetal import tt_metal as ttm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 
@@ -51,7 +51,7 @@ class TtMnistModel(torch.nn.Module):
 
         # We are doing identity since back to back matmul and activation produces garbage results...
         # probably reading from wrong address
-        self.act = gpai.tensor.relu
+        self.act = ttm.tensor.relu
 
 
     def forward(self, X):
@@ -66,7 +66,7 @@ class TtMnistModel(torch.nn.Module):
         x_ = tilize_to_list(x)
 
         # x is a pytorch tensor,... need to convert to a buda tensor
-        inp = gpai.tensor.Tensor(x_, x.shape, gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
+        inp = ttm.tensor.Tensor(x_, x.shape, ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
 
         lin1_out = self.lin1(inp)
         lin1_out_act = self.act(lin1_out)
@@ -146,8 +146,8 @@ def run_mnist_inference():
 
 if __name__ == "__main__":
     # Initialize the device
-    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-    gpai.device.InitializeDevice(device)
-    host = gpai.device.GetHost()
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    ttm.device.InitializeDevice(device)
+    host = ttm.device.GetHost()
     run_mnist_inference()
-    gpai.device.CloseDevice(device)
+    ttm.device.CloseDevice(device)

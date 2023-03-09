@@ -10,7 +10,7 @@ import torch
 from transformers import BertTokenizer, BertForQuestionAnswering
 import numpy as np
 
-from gpai import gpai
+from pymetal import tt_metal as ttm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 # from utility_functions import get_FR, set_FR
 from fused_ops.linear import Linear as TtLinear
@@ -30,11 +30,11 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     )
 
     # Used to scale down the input to the softmax
-    reciprocal_of_sqrt_hidden_dim_tensor = gpai.tensor.Tensor(
+    reciprocal_of_sqrt_hidden_dim_tensor = ttm.tensor.Tensor(
         [1 / math.sqrt(hidden_dim)] + [0 for _ in range(32 * 32 - 1)],
         [1, 1, 32, 32],
-        gpai.tensor.DataType.BFLOAT16,
-        gpai.tensor.Layout.TILE,
+        ttm.tensor.DataType.BFLOAT16,
+        ttm.tensor.Layout.TILE,
         device
     )
 
@@ -48,13 +48,13 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             #        x = x.view(new_x_shape)
             #        return x.permute(0, 2, 1, 3)
 
-            untilized_x = gpai.tensor.untilize(x)
-            reshaped_unt = gpai.tensor.reshape(untilized_x, x.shape()[0], x.shape()[2], num_heads, x.shape()[3] // num_heads)
+            untilized_x = ttm.tensor.untilize(x)
+            reshaped_unt = ttm.tensor.reshape(untilized_x, x.shape()[0], x.shape()[2], num_heads, x.shape()[3] // num_heads)
 
             # N, 128, 2, 64
-            transposed = gpai.tensor.transpose_hc_rm(reshaped_unt)
+            transposed = ttm.tensor.transpose_hc_rm(reshaped_unt)
             # N, 2, 128, 64
-            retilized = gpai.tensor.tilize(transposed)
+            retilized = ttm.tensor.tilize(transposed)
             return retilized
 
     def unmake_attention_heads(x):
@@ -69,19 +69,19 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
             outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
             """
-            untilized_x = gpai.tensor.untilize(x)
-            ctx = gpai.tensor.transpose_hc_rm(untilized_x)
+            untilized_x = ttm.tensor.untilize(x)
+            ctx = ttm.tensor.transpose_hc_rm(untilized_x)
             ushape = ctx.shape()
-            reshaped = gpai.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2]*ushape[3])
-            retval = gpai.tensor.tilize(reshaped)
+            reshaped = ttm.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2]*ushape[3])
+            retval = ttm.tensor.tilize(reshaped)
             return retval
 
     def multiply_by_sqrt_hidden_dim(x):
-        return gpai.tensor.bcast(
+        return ttm.tensor.bcast(
             x,
             reciprocal_of_sqrt_hidden_dim_tensor,
-            gpai.tensor.BcastOpMath.MUL,
-            gpai.tensor.BcastOpDim.HW
+            ttm.tensor.BcastOpMath.MUL,
+            ttm.tensor.BcastOpDim.HW
         )
 
     def mha_(activation):
@@ -92,20 +92,20 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         Q_heads = make_attention_heads(Q)
         K_heads = make_attention_heads(K)
         V_heads = make_attention_heads(V)
-        K_T_heads = gpai.tensor.transpose(K_heads)
+        K_T_heads = ttm.tensor.transpose(K_heads)
 
-        qkt = gpai.tensor.bmm(Q_heads, K_T_heads)
+        qkt = ttm.tensor.bmm(Q_heads, K_T_heads)
 
         # Attention scores computation
         N, C, H, W = qkt.shape() # Need to reshape right now since multi-C not supported for broadcast yet
         new_shape = [N, 1, C*H, W]
-        gpai.tensor.reshape(qkt, *new_shape)
+        ttm.tensor.reshape(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
         attention_scores = softmax(attention_score_input)
-        gpai.tensor.reshape(attention_scores, N, C, H, W) # Reshape back to original shape
+        ttm.tensor.reshape(attention_scores, N, C, H, W) # Reshape back to original shape
 
         # Apply attention to value matrix
-        weighted_activation = gpai.tensor.bmm(attention_scores, V_heads)
+        weighted_activation = ttm.tensor.bmm(attention_scores, V_heads)
         return unmake_attention_heads(weighted_activation) # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
 
     return mha_
@@ -164,7 +164,7 @@ def run_mha_inference():
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
 
     tt_mha_input = tilize_to_list(pad_activation(mha_input))
-    tt_mha_input = gpai.tensor.Tensor(tt_mha_input, mha_input.shape, gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
+    tt_mha_input = ttm.tensor.Tensor(tt_mha_input, mha_input.shape, ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
 
     tt_out = tt_mha_model(tt_mha_input).to(host)
     tt_out1 = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
@@ -174,8 +174,8 @@ def run_mha_inference():
 
 if __name__ == "__main__":
     # Initialize the device
-    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-    gpai.device.InitializeDevice(device)
-    host = gpai.device.GetHost()
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    ttm.device.InitializeDevice(device)
+    host = ttm.device.GetHost()
     run_mha_inference()
-    gpai.device.CloseDevice(device)
+    ttm.device.CloseDevice(device)

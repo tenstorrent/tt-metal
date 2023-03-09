@@ -5,7 +5,7 @@ sys.path.append(f"{f}/..")
 
 import numpy as np
 
-from gpai import gpai
+from pymetal import tt_metal as ttm
 from models.utility_functions import tilize
 
 def run_tilize_test(nb, nc, nh, nw):
@@ -14,14 +14,14 @@ def run_tilize_test(nb, nc, nh, nw):
 
     inp = np.random.rand(*shape)
 
-    a = gpai.tensor.Tensor(
+    a = ttm.tensor.Tensor(
         inp.flatten().tolist(),
         shape,
-        gpai.tensor.DataType.BFLOAT16,
-        gpai.tensor.Layout.ROW_MAJOR,
+        ttm.tensor.DataType.BFLOAT16,
+        ttm.tensor.Layout.ROW_MAJOR,
         device
     )
-    b = gpai.tensor.tilize(a)
+    b = ttm.tensor.tilize(a)
     c = np.array(b.to(host).data(), dtype=float).reshape(*shape)
 
     tilized_inp = tilize(inp.reshape(*shape))
@@ -29,9 +29,9 @@ def run_tilize_test(nb, nc, nh, nw):
     assert (abs(tilized_inp - c) < 0.02).all(), "Max abs difference for tilize can be 0.02 due to bfloat conversions"
 
 if __name__ == "__main__":
-    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-    gpai.device.InitializeDevice(device)
-    host = gpai.device.GetHost()
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    ttm.device.InitializeDevice(device)
+    host = ttm.device.GetHost()
     run_tilize_test(5, 2, 4, 8) # fast power of 2 width path
     run_tilize_test(5, 2, 4, 7) # slow non-power of 2 width path
-    gpai.device.CloseDevice(device)
+    ttm.device.CloseDevice(device)

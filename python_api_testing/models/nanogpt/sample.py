@@ -30,7 +30,7 @@ import torch
 import tiktoken
 from ref.model import GPTConfig, GPT
 from tt.tt_model import TTGPT
-from gpai import gpai
+from pymetal import tt_metal as ttm
 
 path_prefix = 'python_api_testing/models/nanogpt/'
 
@@ -58,9 +58,9 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torc
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 # TT init
-tt_device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-gpai.device.InitializeDevice(tt_device)
-tt_host = gpai.device.GetHost()
+tt_device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+ttm.device.InitializeDevice(tt_device)
+tt_host = ttm.device.GetHost()
 
 # model
 if init_from == 'resume':
@@ -135,4 +135,4 @@ with torch.no_grad():
 
 
 # TT finalize
-gpai.device.CloseDevice(tt_device)
+ttm.device.CloseDevice(tt_device)

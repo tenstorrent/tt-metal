@@ -27,7 +27,7 @@ if __name__ == "__main__":
     x[:, :, :fillH, :fillW] = 1.0
     xp = pad_weight(x)
 
-    xt = ttmetal.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], ttmetal.tensor.DataType.FLOAT32, ttmetal.tensor.Layout.TILE, device)
+    xt = ttmetal.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
     xtt = ttmetal.tensor.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
     assert(xtt.shape() == [N,C,H,W])
 

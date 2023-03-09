@@ -6,13 +6,13 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-from gpai import gpai
+from pymetal import tt_metal as ttm
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight
 
 # Initialize the device
-device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-gpai.device.InitializeDevice(device)
-host = gpai.device.GetHost()
+device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+ttm.device.InitializeDevice(device)
+host = ttm.device.GetHost()
 
 def tile_major_reshape():
     N = 3
@@ -22,20 +22,20 @@ def tile_major_reshape():
     x = torch.randn((N,C,H,W))
     xp = pad_weight(x)
 
-    xtt = gpai.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
-    gpai.tensor.reshape(xtt, 5, 3, 96, 64)
+    xtt = ttm.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
+    ttm.tensor.reshape(xtt, 5, 3, 96, 64)
     assert(xtt.shape() == [5,3,96,64])
-    gpai.tensor.reshape(xtt, 3, 5, 64, 96)
+    ttm.tensor.reshape(xtt, 3, 5, 64, 96)
     assert(xtt.shape() == [3,5,64,96])
-    gpai.tensor.reshape(xtt, -1, 5, 64, 96)
+    ttm.tensor.reshape(xtt, -1, 5, 64, 96)
     assert(xtt.shape() == [3,5,64,96])
-    gpai.tensor.reshape(xtt, 3, -1, 64, 96)
+    ttm.tensor.reshape(xtt, 3, -1, 64, 96)
     assert(xtt.shape() == [3,5,64,96])
-    gpai.tensor.reshape(xtt, 3, 5, -1, 96)
+    ttm.tensor.reshape(xtt, 3, 5, -1, 96)
     assert(xtt.shape() == [3,5,64,96])
-    gpai.tensor.reshape(xtt, 3, 5, 64, -1)
+    ttm.tensor.reshape(xtt, 3, 5, 64, -1)
     assert(xtt.shape() == [3,5,64,96])
-    gpai.tensor.reshape(xtt, 3, 5, 32, -1)
+    ttm.tensor.reshape(xtt, 3, 5, 32, -1)
     assert(xtt.shape() == [3,5,32,96*2])
 
     xtt_data = xtt.to(host).data()
@@ -53,14 +53,14 @@ def row_major_reshape():
     W = 128
     x = torch.rand(N*C*H*W).reshape(N, C, H, W).float()
     xp = pad_activation(x).view(-1).tolist()
-    xtt = gpai.tensor.Tensor(
+    xtt = ttm.tensor.Tensor(
         xp, [N, C, H, W],
-        gpai.tensor.DataType.BFLOAT16,
-        gpai.tensor.Layout.ROW_MAJOR,
+        ttm.tensor.DataType.BFLOAT16,
+        ttm.tensor.Layout.ROW_MAJOR,
         device
     )
 
-    reshaped = gpai.tensor.reshape(xtt, 1, 128, 2, 64)
+    reshaped = ttm.tensor.reshape(xtt, 1, 128, 2, 64)
     reshaped = torch.Tensor(reshaped.to(host).data()).reshape(reshaped.shape())
     torch_reshaped = torch.Tensor(x).reshape(1, 128, 2, 64)
     assert (abs(torch_reshaped - reshaped) < 0.02).all().item(), "Failure"
@@ -69,4 +69,4 @@ if __name__ == "__main__":
     tile_major_reshape()
     row_major_reshape()
 
-gpai.device.CloseDevice(device)
+ttm.device.CloseDevice(device)

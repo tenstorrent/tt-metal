@@ -36,7 +36,7 @@ class ReleaseConstants:
                 "llrt/tests/",
                 "tt_metal/tests/",
                 "build_kernels_for_riscv/tests/",
-                "gpai/tests/",
+                "pymetal/tests/",
                 "release/",
                 "reg_scripts/",
                 "kernels/compute/draft/",

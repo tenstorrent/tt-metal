@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../..")
 import torch
 from transformers import BertForQuestionAnswering
 
-from gpai import gpai
+from pymetal import tt_metal as ttm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
 from fused_ops.linear import Linear as TtLinear
 
@@ -18,7 +18,7 @@ def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_b
         hidden_dim, ffn_dim, ff1_weighta, ff1_biasa, device
     )
 
-    ff1_out_activation_fn = gpai.tensor.gelu
+    ff1_out_activation_fn = ttm.tensor.gelu
 
     # FF2 init
     ff2 = TtLinear(
@@ -105,7 +105,7 @@ def run_ffn_inference():
     pytorch_out = pytorch_ffn_model(ffn_input)
 
     tilized_ffn_input = tilize_to_list(pad_activation(ffn_input))
-    tilized_ffn_input = gpai.tensor.Tensor(tilized_ffn_input, ffn_input.shape, gpai.tensor.DataType.BFLOAT16,  gpai.tensor.Layout.TILE, device)
+    tilized_ffn_input = ttm.tensor.Tensor(tilized_ffn_input, ffn_input.shape, ttm.tensor.DataType.BFLOAT16,  ttm.tensor.Layout.TILE, device)
 
     tt_out = tt_ffn_model(tilized_ffn_input).to(host)
     tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
@@ -128,8 +128,8 @@ def run_ffn_inference():
 
 if __name__ == "__main__":
     # Initialize the device
-    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-    gpai.device.InitializeDevice(device)
-    host = gpai.device.GetHost()
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    ttm.device.InitializeDevice(device)
+    host = ttm.device.GetHost()
     run_ffn_inference()
-    gpai.device.CloseDevice(device)
+    ttm.device.CloseDevice(device)

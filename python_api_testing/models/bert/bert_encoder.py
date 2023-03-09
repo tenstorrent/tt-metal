@@ -1,7 +1,7 @@
 import torch
 from transformers import BertForQuestionAnswering
 
-from gpai import gpai
+from pymetal import tt_metal as ttm
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
 from python_api_testing.fused_ops.add_and_norm import AddAndNorm
@@ -65,16 +65,16 @@ def run_bert_encoder_inference():
     pytorch_out = pytorch_bert_model(bert_encoder_input.squeeze(1)).unsqueeze(1)
 
     tt_bert_encoder_input = tilize_to_list(pad_activation(bert_encoder_input))
-    tt_bert_encoder_input = gpai.tensor.Tensor(tt_bert_encoder_input, bert_encoder_input.shape, gpai.tensor.DataType.BFLOAT16,  gpai.tensor.Layout.TILE, device)
+    tt_bert_encoder_input = ttm.tensor.Tensor(tt_bert_encoder_input, bert_encoder_input.shape, ttm.tensor.DataType.BFLOAT16,  ttm.tensor.Layout.TILE, device)
 
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input).to(host)
     tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
     assert np.allclose(pytorch_out.detach().numpy(), tt_out.numpy(), 1e-5, 0.17)
 
 if __name__ == "__main__":
-    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     # Initialize the device
-    gpai.device.InitializeDevice(device)
-    host = gpai.device.GetHost()
+    ttm.device.InitializeDevice(device)
+    host = ttm.device.GetHost()
     run_bert_encoder_inference()
-    gpai.device.CloseDevice(device)
+    ttm.device.CloseDevice(device)

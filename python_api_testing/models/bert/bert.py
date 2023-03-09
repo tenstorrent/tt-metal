@@ -2,7 +2,7 @@ from abc import abstractmethod
 import torch
 from transformers import BertForQuestionAnswering
 
-from gpai import gpai
+from ttm import gttm
 from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
@@ -31,7 +31,7 @@ class TtBertShared(torch.nn.Module):
         embeddings = self.embeddings(x)
         # Convert to ll buda tensor
         tt_embeddings = tilize_to_list(pad_activation(embeddings))
-        tt_embeddings = gpai.tensor.Tensor(tt_embeddings, (embeddings.shape[0], 1, embeddings.shape[-2], embeddings.shape[-1]), gpai.tensor.DataType.BFLOAT16,  gpai.tensor.Layout.TILE, self.device)
+        tt_embeddings = ttm.tensor.Tensor(tt_embeddings, (embeddings.shape[0], 1, embeddings.shape[-2], embeddings.shape[-1]), gttmtensor.DataType.BFLOAT16,  gpttmensor.Layout.TILE, self.device)
 
         encoder_output = self.encoders(tt_embeddings)
         return encoder_output
@@ -101,8 +101,8 @@ if __name__ == "__main__":
     # Initialize the device
     #enable_binary_cache()
     #enable_compile_cache()
-    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-    gpai.device.InitializeDevice(device)
-    host = gpai.device.GetHost()
+    device = ttm.device.CreateDevice(gttmdevice.Arch.GRAYSKULL, 0)
+    ttm.device.InitializeDevice(device)
+    host = ttm.device.GetHost()
     run_bert_question_and_answering_inference()
-    gpai.device.CloseDevice(device)
+    ttm.device.CloseDevice(device)
