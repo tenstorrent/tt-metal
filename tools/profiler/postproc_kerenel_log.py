@@ -51,16 +51,18 @@ def print_stats_outfile(timerStats, timerStatsCores):
 
 
 def print_stats(timerStats, timerStatsCores):
+
     numberWidth = 12
     sampleCores = list(timerStatsCores.keys())
-    if sampleCores:
-        sampleCore = sampleCores[0]
-    for duration in timerStatsCores[sampleCore].keys():
+    durationTypes = set()
+    for coreDurations in timerStatsCores.values():
+        for durationType in coreDurations.keys():
+            durationTypes.add(durationType)
+    for duration in durationTypes:
         print()
         print(f"=================== {duration} ===================")
         for stat in timerStats[duration].keys():
-            if "Title" != stat:
-                print(f"  {timerStats[duration][stat]}")
+            print(f"{stat:>20} = {timerStats[duration][stat]}")
         print()
         for core_y in range(-3, 11):
             # Print row number
@@ -86,7 +88,7 @@ def print_stats(timerStats, timerStatsCores):
                         core = f"{core_x},{core_y}"
                         if core_y > 5:
                             core = f"{core_x},{core_y-1}"
-                        if core in timerStatsCores.keys():
+                        if core in timerStatsCores.keys() and duration in timerStatsCores[core].keys():
                             print(
                                 f"{timerStatsCores[core][duration]:>{numberWidth},}",
                                 end="",
@@ -130,7 +132,10 @@ def main(args):
     if len(args) == 1:
         try:
             setup = getattr(plot_setup, args[0])()
-            setup.timerAnalysis.update(setup.timerAnalysisBase)
+            try:
+                setup.timerAnalysis.update(setup.timerAnalysisBase)
+            except Exception:
+                setup.timerAnalysis = setup.timerAnalysisBase
         except Exception:
             print_help()
             return
@@ -189,13 +194,13 @@ def main(args):
                 setupMaxStrLen = len(timerAnalysisSetup)
 
         for timerAnalysisSetup in setup.timerAnalysis.keys():
-            analysisTime = -1
             analysisTimeMax = 0
             analysisTimeMin = (1 << 64) - 1
             analysisTimeSum = 0
 
             countAnalysisTime = 0
             for core in timerVals.keys():
+                analysisTime = -1
                 setupType = setup.timerAnalysis[timerAnalysisSetup]["type"]
                 if setupType == "single":
                     risc = setup.timerAnalysis[timerAnalysisSetup]["risc"]
@@ -239,10 +244,9 @@ def main(args):
                 analysisTimeAverage = analysisTimeSum / countAnalysisTime
 
             timerStats[timerAnalysisSetup] = {
-                "Title": f"{timerAnalysisSetup} :",
-                "Average [cycles]": f"Average = {analysisTimeAverage:<14,.2f}",
-                "Min [cycles]": f"Max = {analysisTimeMax:<11,}",
-                "Max [cycles]": f"Min = {analysisTimeMin:<11,}",
+                "Average [cycles]": f"{analysisTimeAverage:<14,.2f}",
+                "Min [cycles]": f"{analysisTimeMin:<11,}",
+                "Max [cycles]": f"{analysisTimeMax:<11,}",
             }
 
         print_stats(timerStats, timerStatsCores)
