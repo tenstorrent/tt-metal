@@ -6,19 +6,19 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-from gpai import gpai
+import ttmetal
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight
 
 # Initialize the device
-device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-gpai.device.InitializeDevice(device)
-host = gpai.device.GetHost()
-gpai.device.StartDebugPrintServer(device)
+device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
+ttmetal.device.InitializeDevice(device)
+host = ttmetal.device.GetHost()
+ttmetal.device.StartDebugPrintServer(device)
 
-RSUM = gpai.tensor.ReduceOpMath.SUM
-RW = gpai.tensor.ReduceOpDim.W
-RH = gpai.tensor.ReduceOpDim.H
-RHW = gpai.tensor.ReduceOpDim.HW
+RSUM = ttmetal.tensor.ReduceOpMath.SUM
+RW = ttmetal.tensor.ReduceOpDim.W
+RH = ttmetal.tensor.ReduceOpDim.H
+RHW = ttmetal.tensor.ReduceOpDim.HW
 
 if __name__ == "__main__":
     N = 7
@@ -28,8 +28,8 @@ if __name__ == "__main__":
     torch.manual_seed(123)
     x = (torch.randn((N,C,H,W))+0.05).to(torch.bfloat16).to(torch.float32)
 
-    xt = gpai.tensor.Tensor(tilize_to_list(x), [N, C, H, W], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
-    tt_res = gpai.tensor.transpose(xt)
+    xt = ttmetal.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
+    tt_res = ttmetal.tensor.transpose(xt)
     assert(tt_res.shape() == [N,C,W,H])
     tt_host_rm = tt_res.to(host).data()
 
@@ -43,4 +43,4 @@ if __name__ == "__main__":
 
     assert(allok)
 
-gpai.device.CloseDevice(device)
+ttmetal.device.CloseDevice(device)

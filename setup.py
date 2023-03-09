@@ -25,21 +25,21 @@ class MyBuild(build_ext):
                 continue
             full_lib_path = build_lib + "/" + filename
 
-            src = "build/lib/libgpai_csrc.so"
+            src = "build/lib/libpymetal_csrc.so"
             self.copy_file(src, full_lib_path)
 
-gpai_C = TTExtension("gpai._C")
+pymetal_C = TTExtension("ttmetal._C")
 
-ext_modules = [gpai_C]
+ext_modules = [pymetal_C]
 
-packages = ["gpai"]
+packages = ["ttmetal"]
 
 short_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
 date = subprocess.check_output(['git', 'show', '-s', '--format=%cd', "--date=format:%y%m%d", 'HEAD']).decode('ascii').strip()
 version = "0.1." + date + "+dev.gs." + short_hash
 
 setup(
-    name='gpai',
+    name='ttmetal',
     version=version,
     author='Tenstorrent',
     url="http://www.tenstorrent.com",
@@ -47,7 +47,7 @@ setup(
     description='General compute framework for Tenstorrent devices',
     python_requires='>=3.8',
     packages=packages,
-    package_dir={"gpai": "gpai/gpai"},
+    package_dir={"ttmetal": "pymetal/ttmetal"},
     long_description_content_type="text/markdown",
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=MyBuild),
