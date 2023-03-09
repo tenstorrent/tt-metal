@@ -1,10 +1,10 @@
 from setuptools import setup
 
 setup(
-    name="ttmetal",
+    name="gpai",
     version="0.1",
     description="",
     python_requires='>=3.8',
-    packages=["ttmetal"],
-    package_dir={"ttmetal": "ttmetal"},
+    packages=["gpai"],
+    package_dir={"gpai": "gpai"},
 )
