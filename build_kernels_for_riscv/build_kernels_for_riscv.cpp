@@ -35,6 +35,10 @@ void add_kernel_compile_time_args_to_make_cmd(std::stringstream &make_cmd, const
 void generate_binary_for_brisc(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string &out_dir_path, const std::string& arch_name, const std::uint8_t noc_index, const std::vector<std::uint32_t>& kernel_compile_time_args, bool profile_kernel) {
     log_info(tt::LogBuildKernels, "Compiling BRISC");
 
+    string root_dir = std::getenv("TT_METAL_HOME");
+    auto old_cwd = fs::current_path(); //getting path
+    fs::current_path(root_dir); //setting path
+
     stringstream make_clean_cmd;
     stringstream make_cmd;
     std::string make_flags = " OUTPUT_DIR=" + fs::absolute(out_dir_path).string() + "/brisc ";
@@ -95,6 +99,8 @@ void generate_binary_for_brisc(tt::build_kernel_for_riscv_options_t* build_kerne
         log_fatal(tt::LogBuildKernels, " BRISC Build failed -- cmd: {}", make_cmd.str());
         exit(1);
     }
+
+    fs::current_path(old_cwd); // restore cwd
 }
 
 
@@ -104,6 +110,11 @@ void generate_binary_for_brisc(tt::build_kernel_for_riscv_options_t* build_kerne
 
 void generate_binary_for_ncrisc(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string &out_dir_path, const std::string& arch_name, const std::uint8_t noc_index, const std::vector<std::uint32_t>& kernel_compile_time_args, bool profile_kernel) {
     log_info(tt::LogBuildKernels, "Compiling NCRISC");
+
+    string root_dir = std::getenv("TT_METAL_HOME");
+    auto old_cwd = fs::current_path();
+    fs::current_path(root_dir); // make build work from any cwd
+
     stringstream make_clean_cmd;
     stringstream make_cmd;
     std::string make_flags = " OUTPUT_DIR=" + fs::absolute(out_dir_path).string() + "/ncrisc ";
@@ -171,6 +182,7 @@ void generate_binary_for_ncrisc(tt::build_kernel_for_riscv_options_t* build_kern
         log_fatal(tt::LogBuildKernels, " NCRISC Build failed -- cmd: {}", make_cmd.str());
         exit(1);
     }
+    fs::current_path(old_cwd); // restore cwd
 }
 
 

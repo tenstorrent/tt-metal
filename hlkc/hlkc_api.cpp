@@ -46,6 +46,10 @@ std::string compile_hlk(
         tt_metal_home = string(getenv("TT_METAL_HOME"));
         hlkc_path = tt_metal_home + "/build/bin/hlkc";
     }
+
+    auto old_cwd = fs::current_path();
+    fs::current_path(tt_metal_home); // make build work for any cwd
+
     cout << "    HLK file name: " << input_hlk_file_path << " HLKC_PATH " << hlkc_path << endl;
     string root_dir = "";       // drago - this should be ok since input_hlk_file_path and out_dir_path will be passed with TT_METAL_HOME included
     string out_file_name_base = "chlkc";
@@ -130,6 +134,8 @@ std::string compile_hlk(
         sys_lambda(compile_pack, 2);
     }
 
+    fs::current_path(old_cwd); // restore cwd
+
     return input_hlk_with_defines;
 }
 
@@ -152,6 +158,9 @@ void compile_generate_struct_init_header(
         tt_metal_home = string(getenv("TT_METAL_HOME"));
         hlkc_path = tt_metal_home + "/build/bin/hlkc";
     }
+
+    auto old_cwd = fs::current_path();
+    fs::current_path(tt_metal_home); // make build work for any cwd
 
     string generate_struct_init_cpp = out_dir_path + "/" + out_file_name_base + "_gen.cpp";
     string generate_struct_init_log = out_dir_path + "/" + out_file_name_base + "_gen.log";
@@ -179,6 +188,8 @@ void compile_generate_struct_init_header(
     status = system(create_shared_obj_generator_cmd.c_str());
     assert(status==0 && "Error: struct init generator g++ compile shared object failed.");
     //status = system("g++ -shared -Wl,-soname,eltwise_unary_struct_init_gen.so.1 -o out/llks/eltwise_unary_struct_init_gen.so.1.0 out/llks/eltwise_unary_struct_init_gen.o -lc");
+
+    fs::current_path(old_cwd); // restore cwd
 }
 
 int run_generate_struct_init_header(

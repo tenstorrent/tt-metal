@@ -31,8 +31,14 @@ vector <uint32_t> get_risc_binary(string path, uint32_t id) {
     string path_to_bin = path;
     fs::path bin_file(path_to_bin);
     if (!fs::exists(bin_file)) {
-        std::cout << " Error: " << bin_file.c_str() << " doesn't exist" << endl;
-        TT_ASSERT(false);
+        string tt_metal_home = string(getenv("TT_METAL_HOME"));
+        // try loading from home in case cwd isn't home
+        path_to_bin = tt_metal_home + "/" + path_to_bin;
+        fs::path bin_file_h(path_to_bin);
+        if (!fs::exists(bin_file_h)) {
+            std::cout << " Error: " << bin_file.c_str() << " doesn't exist" << endl;
+            TT_ASSERT(false);
+        }
     }
     std::ifstream hex_istream(path_to_bin);
     ll_api::memory mem = ll_api::memory::from_discontiguous_risc_hex(hex_istream, id==1 ? ll_api::memory::NCRISC: ll_api::memory::BRISC);
@@ -58,8 +64,14 @@ vector<uint32_t> get_trisc_binary(string path, uint32_t trisc_id) {
 
     fs::path bin_file(path_to_bin);
     if (!fs::exists(bin_file)) {
-        std::cout << " Error: " << bin_file.c_str() << " doesn't exist" << endl;
-        TT_ASSERT(false);
+        string tt_metal_home = string(getenv("TT_METAL_HOME"));
+        // try loading from home in case cwd isn't home
+        path_to_bin = tt_metal_home + "/" + path_to_bin;
+        fs::path bin_file_h(path_to_bin);
+        if (!fs::exists(bin_file_h)) {
+            std::cout << " Error: " << bin_file.c_str() << " doesn't exist" << endl;
+            TT_ASSERT(false);
+        }
     }
     std::ifstream hex_istream(path_to_bin);
     ll_api::memory mem = ll_api::memory::from_discontiguous_risc_hex(hex_istream, (ll_api::memory::risc_type_t)((int)ll_api::memory::TRISC0+trisc_id));
