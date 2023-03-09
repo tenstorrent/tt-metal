@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <vector>
 #include "common/assert.hpp"
+#include "tile_math.hpp"
 
 enum TensorLayout {
     LIN_ROW_MAJOR = 0, // standard element-wise row-major
@@ -199,9 +200,4 @@ inline vector<T> convert_layout(const vector<T>& inp, const vector<uint32_t>& sh
             TT_ASSERT(false && "Unsupported conversion");
     }
     return vector<T>();
-}
-
-inline uint32_t divup(uint32_t a, uint32_t b) {
-    TT_ASSERT(b > 0);
-    return static_cast<uint32_t>((a+b-1)/b);
 }

@@ -14,6 +14,7 @@ TT_METAL_SRCS = \
 	tt_metal/op_library/eltwise_unary/single_core/eltwise_unary_op_single_core.cpp \
 	tt_metal/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp \
 	tt_metal/op_library/pad_h_rm/pad_h_rm_op.cpp \
+	tt_metal/op_library/fill_rm/fill_rm_op.cpp \
 	tt_metal/op_library/transpose/transpose_op.cpp \
 	tt_metal/op_library/transpose_rm/transpose_rm_op.cpp \
 	tt_metal/op_library/reduce/reduce_op.cpp \

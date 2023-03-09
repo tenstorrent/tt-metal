@@ -45,9 +45,9 @@ class TtMnistModel(torch.nn.Module):
         fc3_weight = tilize_to_list(fc3_weight)
         fc3_bias = tilize_to_list(fc3_bias)
 
-        self.lin1 = TtLinear(*fc1_weight_shape[-2:], fc1_weight, fc1_bias, device)
-        self.lin2 = TtLinear(*fc2_weight_shape[-2:], fc2_weight, fc2_bias, device)
-        self.lin3 = TtLinear(*fc3_weight_shape[-2:], fc3_weight, fc3_bias, device)
+        self.lin1 = TtLinear(fc1_weight, *fc1_weight_shape[-2:], fc1_bias, device)
+        self.lin2 = TtLinear(fc2_weight, *fc2_weight_shape[-2:], fc2_bias, device)
+        self.lin3 = TtLinear(fc3_weight, *fc3_weight_shape[-2:], fc3_bias, device)
 
         # We are doing identity since back to back matmul and activation produces garbage results...
         # probably reading from wrong address

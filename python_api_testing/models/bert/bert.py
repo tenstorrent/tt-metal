@@ -7,8 +7,6 @@ from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
 from python_api_testing.models.bert.bert_encoder import TtBertEncoder
-from python_api_testing.fused_ops.layernorm import Layernorm
-from python_api_testing.fused_ops.add_and_norm import AddAndNorm
 from python_api_testing.fused_ops.linear import Linear
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
 from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled
@@ -52,7 +50,7 @@ class TtBertForQuestionAnswering(TtBertShared):
         bias   = tilize_to_list(pad_weight(state_dict["qa_outputs.bias"]))
 
         # QA linear
-        self.qa_linear = Linear(32, hidden_size, weight, bias, device)
+        self.qa_linear = Linear(hidden_size, 32, weight, bias, device)
 
     def forward(self, x):
         encoder_output = super().forward(x)

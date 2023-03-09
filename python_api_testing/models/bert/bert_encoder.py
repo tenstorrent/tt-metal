@@ -4,7 +4,6 @@ from transformers import BertForQuestionAnswering
 from gpai import gpai
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
-from python_api_testing.fused_ops.layernorm import Layernorm
 from python_api_testing.fused_ops.add_and_norm import AddAndNorm
 from python_api_testing.fused_ops.linear import Linear
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
@@ -22,16 +21,20 @@ class TtBertEncoder(torch.nn.Module):
         self.attention_output = Linear(hidden_dim, hidden_dim, attention_output_weight, attention_output_bias, device)
 
         # MHA layernorm part
-        mha_gamma = tilize_to_list(pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.weight"]))
-        mha_beta = tilize_to_list(pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.bias"]))
+        gamma0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.weight"]
+        beta0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.bias"]
+        mha_gamma = tilize_to_list(pad_weight(gamma0))
+        mha_beta = tilize_to_list(pad_weight(beta0))
         self.mha_add_and_norm = AddAndNorm(mha_gamma, mha_beta, 1e-12, 128, 128, device)
 
         # FFN part
         self.ffn = TtFeedForwardModel(encoder_idx, state_dict, device)
 
         # FFN layernorm part
-        ffn_gamma = tilize_to_list(pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.weight"]))
-        ffn_beta = tilize_to_list(pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.bias"]))
+        gamma1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.weight"]
+        beta1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.bias"]
+        ffn_gamma = tilize_to_list(pad_weight(gamma1))
+        ffn_beta = tilize_to_list(pad_weight(beta1))
         self.ffn_add_and_norm = AddAndNorm(ffn_gamma, ffn_beta, 1e-12, 128, 128, device)
 
     def forward(self, activation):

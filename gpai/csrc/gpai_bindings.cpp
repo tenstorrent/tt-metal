@@ -1,6 +1,7 @@
 #include "tt_metal/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_metal/op_library/bmm/bmm_op.hpp"
 #include "tt_metal/op_library/pad_h_rm/pad_h_rm_op.hpp"
+#include "tt_metal/op_library/fill_rm/fill_rm_op.hpp"
 #include "tt_metal/op_library/bcast/bcast_op.hpp"
 #include "tt_metal/op_library/reduce/reduce_op.hpp"
 #include "tt_metal/op_library/transpose/transpose_op.hpp"
@@ -97,6 +98,8 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("sub", &sub);
     m_tensor.def("mul", &mul);
 
+    m_tensor.def("fill_ones_rm", &fill_ones_rm);
+    m_tensor.def("fill_rm", &fill_rm);
     m_tensor.def("pad_h_rm", &pad_h_rm);
     m_tensor.def("transpose_hc_rm", &transpose_hc_rm);
 

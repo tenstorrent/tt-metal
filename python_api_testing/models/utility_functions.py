@@ -2,6 +2,7 @@ import math
 
 import torch
 import numpy as np
+import struct
 
 from gpai import gpai
 
@@ -151,7 +152,14 @@ def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag = 2.0, max_mag_fraction = 0.02)
         print("absdiff=", absdiff.reshape(-1)[debug_index])
     return torch.all( or_abs_rel )
 
-def print_diff_argmax(a, b):
+
+def print_diff_tt_pyt(a, b, annotation = ""):
+    # first convert a pytorch tensor argument b to tt
+    padded_b = pad_weight(b)
+    pyt_a = tt2torch(a) # untilizes also
+    return print_diff_argmax(pyt_a, padded_b, annotation)
+
+def print_diff_argmax(a, b, annotation = ""):
     """
     Prints out the value of both tensors at a point where the absolute difference is the largest.
     """
@@ -160,9 +168,11 @@ def print_diff_argmax(a, b):
     diff = absdiff.reshape(-1)[argmax]
     rela = a.abs()/(torch.max(a.abs(), b.abs()))
     relb = b.abs()/(torch.max(a.abs(), b.abs()))
-    print("Abs diff=", diff, " at ", argmax)
-    print("Rel a=", rela.reshape(-1)[argmax], " at ", argmax)
-    print("Rel b=", relb.reshape(-1)[argmax], " at ", argmax)
+    print("Abs diff=", diff, " at ", argmax, " --- ", annotation)
+    print("  (a=", a.reshape(-1)[argmax].item(), ")")
+    print("  (b=", b.reshape(-1)[argmax].item(), ")")
+    print("  Rel a=", rela.reshape(-1)[argmax], " at ", argmax)
+    print("  Rel b=", relb.reshape(-1)[argmax], " at ", argmax)
     return diff.item()
 
 
@@ -199,8 +209,18 @@ def get_FR():
 
 def set_FR(new_val):
     # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    host = gpai.device.SetForceRecompiles(new_val)
+    gpai.device.SetForceRecompiles(new_val)
     print("Force recompiles=", get_FR())
+
+def divup(a, b):
+    return (a+b-1)//b
+
+def roundup(a, b):
+    result = divup(a, b)*b
+    return result
+
+def roundup32(a):
+    return roundup(a, 32)
 
 
 def tt2torch(ttx):
@@ -224,6 +244,20 @@ def tt2torch_rm(ttx):
     tt_out = ttx.to(host)
     torch_out = torch.Tensor(tt_out.data()).reshape(shp)
     return torch_out
+
+def ttP(x, count=4, offset=0, stride=1):
+    if type(x) == torch.Tensor:
+        t1 = x.reshape(-1)
+    else:
+        host = gpai.device.GetHost()
+        shp = x.shape()
+        tt_out = x.to(host)
+        torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
+        t1 = torch_out.reshape(-1)
+    print("Tensor vals: (", end="")
+    for j in range(offset, offset+count*stride, stride):
+        print(t1[j].item(), " ", end="")
+    print(")")
 
 def enable_compile_cache():
     """
@@ -260,3 +294,8 @@ def get_binary_cache_enabled():
     Returns the current state of binary loading cache on/off switch.
     """
     return gpai.device.GetBinaryCacheEnabled()
+
+
+def float_to_bits(x):
+    s = struct.pack('>f', x)
+    return struct.unpack('>l', s)[0]

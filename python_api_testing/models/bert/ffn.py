@@ -15,14 +15,14 @@ def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_b
 
     # FF1 init
     ff1 = TtLinear(
-        ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, device
+        hidden_dim, ffn_dim, ff1_weighta, ff1_biasa, device
     )
 
     ff1_out_activation_fn = gpai.tensor.gelu
 
     # FF2 init
     ff2 = TtLinear(
-        hidden_dim, ffn_dim, ff2_weighta, ff2_biasa, device
+        ffn_dim, hidden_dim, ff2_weighta, ff2_biasa, device
     )
 
     def feed_forward_(activation):

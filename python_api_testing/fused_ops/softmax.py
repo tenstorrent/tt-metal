@@ -8,6 +8,7 @@ import torch
 
 from gpai import gpai
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
+from python_api_testing.models.utility_functions import tt2torch, tt2torch_rm
 
 
 def softmax(x, stable=False):
