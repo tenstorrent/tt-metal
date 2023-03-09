@@ -6,21 +6,13 @@
 #include "common/bfloat16.hpp"
 
 #include "llrt/llrt.hpp"
+#include "llrt/tests/test_libs/debug_mailbox.hpp"
 
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
-
-namespace unary_datacopy {
-//#include "hlks/eltwise_copy.cpp"
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    int32_t per_core_block_cnt; // Number of blocks of size 1xN tiles (1 rows and N cols)
-    int32_t per_core_block_tile_cnt; // Block tile count = (1xN)
-};
-}
 
 inline vector<uint32_t> gold_standard_tilize(std::vector<uint32_t> src_vec, vector<uint32_t> shape) {
     vector<uint32_t> dst_vec;
@@ -142,17 +134,17 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new unary_datacopy::hlk_args_t{
-            .per_core_block_cnt = 1,
-            .per_core_block_tile_cnt = (int) num_tiles_c
+        vector<uint32_t> compute_kernel_args = {
+            1, // per_core_block_cnt
+            uint(num_tiles_c) // per_core_block_tile_cnt
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(unary_datacopy::hlk_args_t));
+        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/tilize.cpp",
+            "kernels/compute/3T/tilize",
             core,
             eltwise_unary_args,
             MathFidelity::HiFi4,
@@ -168,7 +160,7 @@ int main(int argc, char **argv) {
             dram_buffer_size, false);
 
         vector<uint32_t> golden = gold_standard_tilize(src_vec, {num_tiles_r * 32, num_tiles_c * 32});
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgramNew(device, program, skip_hlkc);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -215,6 +207,8 @@ int main(int argc, char **argv) {
             std::cout << "RESULT" << std::endl;
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
         }
+        tt_xy_pair debug_core = {1, 1};
+        read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
 
         pass &= tt_metal::CloseDevice(device);
 

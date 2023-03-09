@@ -17,14 +17,6 @@ using u32 = std::uint32_t;
 using u16 = std::uint16_t;
 using std::vector;
 
-namespace hlk_transpose_wh {
-// clone of hlk args from "kernels/compute/eltwise_copy.cpp"
-// FIXME:copy pasted the args here from the blank kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t NHtWt; // can be interpreted as "num blocks", "num tensors", "z-dim", or "batch" loop
-};
-}
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // Tests transpose kernel in HW dimensions
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -123,8 +115,10 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new hlk_transpose_wh::hlk_args_t{ .NHtWt = int(Ht*Wt*NC) };
-        tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(reduce_args::hlk_args_t));
+        vector<uint32_t> compute_kernel_args = {
+            uint(Ht*Wt*NC)
+        };
+        tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto reduce_w_compute_kernel = tt_metal::CreateComputeKernel(

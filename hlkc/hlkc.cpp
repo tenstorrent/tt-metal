@@ -108,10 +108,6 @@ void generate_unpack(SgProject *project, string llk_args_file_name, bool perf_du
 
     patch_main_decl_for_llk(project, "unpack_main");
 
-    if (hlk_ops.size() > 0) {
-        insert_outer_loop(project, "hlk_main", perf_dump_en, 0);
-    }
-
     if (std::getenv("HACK_FOR_GRAPH_INTERPRETER") != nullptr) {
         for (auto& op : hlk_ops) {
             replace_hlk_inits_and_insert_hw_configure(project, op, "unpack");
@@ -260,10 +256,6 @@ void generate_math(SgProject *project, string llk_args_file_name, bool perf_dump
     }
     remove_call_statements(project, {"hlk_acquire_dst", "hlk_release_dst", "hlk_debug_dump", "hlk_flush_tiles"});
 
-    if (hlk_ops.size() > 0) {
-        insert_outer_loop(project, "hlk_main", perf_dump_en, 1); // FIXME: should be using unpack_main, but function "unpack_main" can't be found
-    }
-
     if (multi_op) {
         vector<string> hlk_init_list = {};
         vector<string> llk_init_list = {};
@@ -387,10 +379,6 @@ void generate_pack(SgProject *project, string llk_args_file_name, bool perf_dump
         insert_void_argless_func_calls_after_func_call(project, "hlk_main", "hlk_release_dst", {hlk_matrix_op->get_pack_dest_section_done()});
     }
     remove_call_statements(project, {"hlk_acquire_dst", "hlk_release_dst"});
-
-    if (hlk_ops.size() > 0) {
-        insert_outer_loop(project, "hlk_main", perf_dump_en, 2); // FIXME: should be using unpack_main, but function "unpack_main" can't be found
-    }
 
     // pack shifted is always done in col major face layout
     string llk_pack_dest_init;

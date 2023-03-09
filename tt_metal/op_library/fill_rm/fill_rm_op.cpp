@@ -61,8 +61,10 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
         program, "kernels/dataflow/blank.cpp",
         core, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new blank_hlk::hlk_args_t{ .dummy = 0 };
-    tt_metal::ComputeKernelArgs *blank_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(blank_hlk::hlk_args_t));
+    vector<uint32_t> compute_args = {
+        0 // dummy
+    };
+    tt_metal::ComputeKernelArgs *blank_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

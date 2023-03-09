@@ -9,27 +9,6 @@
 
 using namespace tt;
 
-namespace eltwise_binary {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t per_core_block_cnt;
-    std::int32_t per_core_block_size;
-};
-}
-
-namespace matmul {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    int block_tile_dim;
-    int dst_tile_rows;
-    int dst_tile_cols;
-    int block_cnt;
-    int in0_block_tile_cnt;
-    int in1_block_tile_cnt;
-    int out_block_tile_cnt;
-};
-}
-
 tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair &core, uint32_t single_tile_size) {
     tt_metal::Program *program = new tt_metal::Program();
 
@@ -88,11 +67,11 @@ tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair 
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new eltwise_binary::hlk_args_t{
-        .per_core_block_cnt = 1,
-        .per_core_block_size = 1
+    vector<uint32_t> compute_kernel_args = {
+        1, // per_core_block_cnt
+        1 // per_core_block_size
     };
-    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(eltwise_binary::hlk_args_t));
+    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
@@ -167,16 +146,16 @@ tt_metal::Program *setup_program_two(tt_metal::Device *device, const tt_xy_pair 
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new matmul::hlk_args_t{
-        .block_tile_dim = 1,
-        .dst_tile_rows = 1,
-        .dst_tile_cols = 1,
-        .block_cnt = 1,
-        .in0_block_tile_cnt = 1,
-        .in1_block_tile_cnt = 1,
-        .out_block_tile_cnt = 1
+    vector<uint32_t> compute_kernel_args = {
+        1, // block_tile_dim
+        1, // dst_tile_rows
+        1, // dst_tile_cols
+        1, // block_cnt
+        1, // in0_block_tile_cnt
+        1, // in1_block_tile_cnt
+        1 // out_block_tile_cnt
     };
-    tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(matmul::hlk_args_t));
+    tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(

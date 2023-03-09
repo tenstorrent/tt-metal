@@ -2,17 +2,16 @@
 
 #include "compute_hlk_api.h"
 
-struct hlk_args_t {
-    std::int32_t per_core_block_cnt;
-    std::int32_t per_core_block_dim;
-};
-
-void compute_main(const hlk_args_t *args) {
+void compute_main() {
     // expands to hlk_relu_config(nullptr, 1); for relu only
+
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+
     INIT_RELU
-    for (int block_index = 0; block_index < args->per_core_block_cnt; block_index++) {
-        cb_reserve_back(CB::c_out0, args->per_core_block_dim);
-        for(int tile_index = 0; tile_index < args->per_core_block_dim; ++tile_index) {
+    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        cb_reserve_back(CB::c_out0, per_core_block_dim);
+        for(uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             acquire_dst(DstMode::Half);
 
             // Pop tile after tile, copy to DST and pack
@@ -30,7 +29,7 @@ void compute_main(const hlk_args_t *args) {
 
             release_dst(DstMode::Half);
         }
-        cb_push_back(CB::c_out0, args->per_core_block_dim);
+        cb_push_back(CB::c_out0, per_core_block_dim);
     }
     DEINIT_RELU
     // expands to hlk_relu_config(nullptr, 0); for relu only

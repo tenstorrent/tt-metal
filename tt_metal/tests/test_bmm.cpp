@@ -10,16 +10,6 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace bmm_kernel {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    uint32_t batch; // batch
-    uint32_t Mt; // number of tiles in M
-    uint32_t Kt; // number of tiles in K
-    uint32_t Nt; // number of tiles in N
-};
-}
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -113,8 +103,14 @@ int main(int argc, char **argv) {
             "kernels/dataflow/writer_bmm_8bank.cpp",
             core, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
-        void *hlk_args = new bmm_kernel::hlk_args_t{ .batch = B, .Mt = Mt, .Kt = Kt, .Nt = Nt };
-        tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(bmm_kernel::hlk_args_t));
+        vector<uint32_t> compute_kernel_args = {
+            B, // batch
+            Mt, // Mt
+            Kt, // Kt
+            Nt // Nt
+        };
+
+        tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;

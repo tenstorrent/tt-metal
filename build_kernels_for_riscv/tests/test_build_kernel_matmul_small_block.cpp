@@ -28,19 +28,17 @@ int main(int argc, char* argv[]) {
 
     log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
 
-    // HLK args
-    void *hlk_args = new matmul::hlk_args_t{
-        .block_tile_dim = 1,
-        .dst_tile_rows = 1,
-        .dst_tile_cols = 1,
-        .block_cnt = 1,
-        .in0_block_tile_cnt = 1,
-        .in1_block_tile_cnt = 1,
-        .out_block_tile_cnt = 1
+    std::vector<uint32_t> compute_kernel_args = {
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
     };
 
     // HLK config
-    build_kernel_for_riscv_options.set_hlk_args_all_cores(hlk_args, sizeof(matmul::hlk_args_t));
     build_kernel_for_riscv_options.set_hlk_file_name_all_cores("kernels/compute/matmul.cpp");
     build_kernel_for_riscv_options.set_hlk_math_fidelity_all_cores(MathFidelity::HiFi4);
 
@@ -62,7 +60,7 @@ int main(int argc, char* argv[]) {
         skip_hlkc = true;
     }
 
-    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc};
+    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc, .compute_kernel_compile_time_args = compute_kernel_args};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 
     return 0;

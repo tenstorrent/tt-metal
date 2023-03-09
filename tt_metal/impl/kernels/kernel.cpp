@@ -61,6 +61,13 @@ size_t DataMovementKernel::compile_time_args_hash(const tt_xy_pair &logical_core
     return DataMovementKernelArgsHash{logical_core}(*kernel_args_);
 }
 
+std::vector<uint32_t> ComputeKernel::compile_time_args(const tt_xy_pair &logical_core) const {
+    if (not is_on_logical_core(logical_core)) {
+        TT_THROW("Cannot access compile time args for " + name() + " because it is not on core " + logical_core.str());
+    }
+    return kernel_args_->compile_time_args(logical_core);
+}
+
 size_t ComputeKernel::compile_time_args_hash(const tt_xy_pair &logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
@@ -95,8 +102,7 @@ void DataMovementKernel::configure_for_compilation(build_kernel_for_riscv_option
 
 void ComputeKernel::configure_for_compilation(build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
     auto compute_kernel_args = kernel_args_->compile_time_args(logical_core);
-    auto compute_kernel_args_size = kernel_args_->compile_time_args_size(logical_core);
-    build_kernel_for_riscv_options->set_hlk_args_all_cores(compute_kernel_args, compute_kernel_args_size);
+    // build_kernel_for_riscv_options->set_hlk_args_all_cores(compute_kernel_args, compute_kernel_args_size);
     build_kernel_for_riscv_options->set_hlk_file_name_all_cores(kernel_path_file_name_);
     build_kernel_for_riscv_options->set_hlk_math_fidelity_all_cores(math_fidelity_);
     build_kernel_for_riscv_options->fp32_dest_acc_en = fp32_dest_acc_en_;

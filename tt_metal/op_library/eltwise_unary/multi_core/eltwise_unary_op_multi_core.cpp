@@ -109,11 +109,11 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
             tt_metal::NOC::RISCV_0_default);
         unary_writer_kernels.push_back(unary_writer_kernel);
 
-        void *hlk_args = new eltwise_unary::hlk_args_t{
-            .per_core_block_cnt = num_tiles_per_core[i],
-            .per_core_block_size = 1
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_tiles_per_core[i]), // per_core_block_cnt
+            1 // per_core_block_size
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(eltwise_unary::hlk_args_t));
+        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;

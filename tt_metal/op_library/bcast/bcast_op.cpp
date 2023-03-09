@@ -151,8 +151,12 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
         tt_metal::NOC::RISCV_0_default);
 
     // TODO(AP): add dimensions and op params
-    void *hlk_args = new bcast_op_params::hlk_args_t { .B = NC, .Ht = Ht, .Wt = Wt };
-    tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(bcast_op_params::hlk_args_t));
+    vector<uint32_t> compute_kernel_args = {
+        NC, // B
+        Ht, // Ht
+        Wt  // Wt
+    };
+    tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

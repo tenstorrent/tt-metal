@@ -33,7 +33,15 @@ void generate_binaries_for_triscs(
         const std::string &out_dir_path,
         const std::string& arch_name,
         bool skip_hlkc=false,
-        bool parallel = false);
+        bool parallel = false,
+        std::vector<uint32_t> kernel_compile_time_args = {});
+
+void generate_binaries_for_triscs_new(
+        tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
+        const std::string &out_dir_path,
+        const std::string& arch_name,
+        bool parallel = false,
+        std::vector<uint32_t> kernel_compile_time_args = {});
 
 struct generate_binaries_params_t {
     bool            skip_hlkc = false;
@@ -50,6 +58,7 @@ struct generate_binaries_params_t {
 
     std::vector<std::uint32_t> br_kernel_compile_time_args = {};
     std::vector<std::uint32_t> nc_kernel_compile_time_args = {};
+    std::vector<std::uint32_t> compute_kernel_compile_time_args = {};
 };
 
 void generate_binaries_all_riscs(

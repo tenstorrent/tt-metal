@@ -14,16 +14,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-namespace unary_datacopy {
-//#include "hlks/eltwise_copy.cpp"
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    int32_t per_core_tile_cnt;
-    // int32_t per_core_block_cnt;
-    // int32_t per_core_block_tile_cnt;
-};
-}
-
 inline vector<uint32_t> gold_standard_tilize(std::vector<uint32_t> src_vec, vector<uint32_t> shape) {
     vector<uint32_t> dst_vec;
 
@@ -191,10 +181,10 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new unary_datacopy::hlk_args_t{
-            .per_core_tile_cnt = num_output_tiles,
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_output_tiles)
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(unary_datacopy::hlk_args_t));
+        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -383,12 +373,10 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new unary_datacopy::hlk_args_t{
-            .per_core_tile_cnt = num_output_tiles,
-            // .per_core_block_cnt = 1,
-            // .per_core_block_tile_cnt = num_output_tiles
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_output_tiles)
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(unary_datacopy::hlk_args_t));
+        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;

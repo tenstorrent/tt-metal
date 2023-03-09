@@ -24,10 +24,9 @@ int main(int argc, char* argv[]) {
 
     log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
 
-    void *hlk_args = new unary_datacopy::hlk_args_t{
-        .per_core_tile_cnt = 96*4*5 // TODO(AP): this has to be in sync with tensor size in test_run_transpose_hc.cpp
+    std::vector<uint32_t> compute_kernel_args = {
+        96*4*5
     };
-    build_kernel_for_riscv_options.set_hlk_args_all_cores(hlk_args, sizeof(unary_datacopy::hlk_args_t));
     build_kernel_for_riscv_options.set_hlk_file_name_all_cores("kernels/compute/eltwise_copy.cpp");
 
     build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(tt::HlkOperand::in0, tt::DataFormat::Float16_b);
@@ -42,7 +41,7 @@ int main(int argc, char* argv[]) {
     if (argc > 1) {
         skip_hlkc = true;
     }
-    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc};
+    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc, .compute_kernel_compile_time_args = compute_kernel_args};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 
     return 0;

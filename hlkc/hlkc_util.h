@@ -1236,9 +1236,6 @@ void patch_main_decl_for_llk(SgProject *project, string new_main_name) {
     // TODO: should also remove the symbol
 
     // create a const void ptr arg for llk_args
-
-    // create a const int arg for outer_loop_cnt
-    append_arg_to_func_decl(main_decl, "outer_loop_cnt", buildConstType(buildIntType()));
 }
 
 void insert_var_decl_with_static_cast_assign_initializer(SgProject *project, string func_name, string new_var_name_str, string ref_var_name_str, SgType *type) {

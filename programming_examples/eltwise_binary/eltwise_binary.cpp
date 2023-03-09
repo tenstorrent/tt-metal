@@ -129,11 +129,11 @@ int main(int argc, char **argv) {
         /*
          * Set the parameters that the compute kernel will use.
          */
-        void *compute_kernel_args = new eltwise_binary::compute_kernel_args_t{
-            .per_core_block_cnt = 2048,
-            .per_core_block_size = 1
+        vector<uint32_t> compute_kernel_args = {
+            2048, // per_core_block_cnt
+            1 // per_core_block_size
         };
-        ComputeKernelArgs *eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args, sizeof(eltwise_binary::compute_kernel_args_t));
+        ComputeKernelArgs *eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         constexpr bool fp32_dest_acc_en = false;
         constexpr bool math_approx_mode = false;
@@ -270,13 +270,14 @@ int main(int argc, char **argv) {
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default);
 
-        eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args, sizeof(eltwise_binary::compute_kernel_args_t));
+        eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         eltwise_binary_kernel = CreateComputeKernel(
             program_mul,
             "kernels/compute/eltwise_binary.cpp",
             core,
             eltwise_binary_args,
+
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

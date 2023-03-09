@@ -2,12 +2,9 @@
 
 #include "compute_hlk_api.h"
 
-struct hlk_args_t {
-    std::int32_t per_core_tile_cnt;
-};
-
-void compute_main(const hlk_args_t *args) {
-    for(int b=0;b<args->per_core_tile_cnt;++b)
+void compute_main() {
+    uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    for(uint32_t b=0;b<per_core_tile_cnt;++b)
     {
         acquire_dst(DstMode::Half);
 

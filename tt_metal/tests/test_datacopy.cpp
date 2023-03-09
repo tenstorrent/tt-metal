@@ -99,16 +99,16 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new unary_datacopy::hlk_args_t{
-            .per_core_tile_cnt = (int) num_tiles,
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_tiles) // per_core_tile_cnt
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(unary_datacopy::hlk_args_t));
+        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/eltwise_copy.cpp",
+            "kernels/compute/3T/eltwise_copy",
             core,
             eltwise_unary_args,
             MathFidelity::HiFi4,
@@ -119,8 +119,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgramNew(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

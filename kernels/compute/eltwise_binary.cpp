@@ -2,18 +2,16 @@
 
 #include "compute_hlk_api.h"
 
-struct hlk_args_t {
-    std::int32_t per_core_block_cnt;
-    std::int32_t per_core_block_size;
-};
+void compute_main() {
 
-void compute_main(const hlk_args_t *args) {
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    uint32_t per_core_block_size = get_compile_time_arg_val(1);
 
-    for(int block = 0; block < args->per_core_block_cnt; ++block) {
+    for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
-        cb_reserve_back(CB::c_out0, args->per_core_block_size);
+        cb_reserve_back(CB::c_out0, per_core_block_size);
 
-        for(int t = 0; t < args->per_core_block_size; ++t)
+        for(uint32_t t = 0; t < per_core_block_size; ++t)
         {
             acquire_dst(DstMode::Half);
 
@@ -30,6 +28,6 @@ void compute_main(const hlk_args_t *args) {
             release_dst(DstMode::Half);
         }
 
-        cb_push_back(CB::c_out0, args->per_core_block_size);
+        cb_push_back(CB::c_out0, per_core_block_size);
     }
 }

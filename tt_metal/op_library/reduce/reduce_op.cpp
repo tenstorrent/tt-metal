@@ -3,22 +3,13 @@
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
 
-namespace reduce_args {
-// FIXME:copy pasted the args here from the kernel file
-struct hlk_args_t {
-    // per-batch params
-    int Ht; // number of tiles in H to expect (expected to be a full tensor by this kernel)
-    int Wt; // number of tiles in W to expect (can be a partial tensor), always <= DSTt
-    int NC;
-    float scaler;
-};
-}
-
 namespace {
-const char* dim_to_kernel_name[] = {
-    "kernels/compute/reduce_h.cpp",
-    "kernels/compute/reduce_w.cpp",
-    "kernels/compute/reduce_hw.cpp" };
+
+// Only used when scaler is not 1.0
+const char* dim_to_llk_kernel_name[] = {
+    "kernels/compute/3T/reduce_h_sum",
+    "kernels/compute/3T/reduce_w_sum",
+    "kernels/compute/3T/reduce_hw_sum" };
 }
 
 using namespace tt::constants;
@@ -38,7 +29,7 @@ Tensor reduce(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum r
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
     if (reduce_dim == ReduceOpDim::HW)
-        TT_ASSERT(scaler == 1.0f && "Reduce_HW currently only works correctly with scaler == 1.0f!");
+        TT_ASSERT(scaler == 1.0f && "ReduceHW currently only works correctly with scaler == 1.0f!");
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 
@@ -109,14 +100,22 @@ Tensor reduce(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum r
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new reduce_args::hlk_args_t{ .Ht = int(Ht), .Wt = int(Wt), .NC = int(NC), .scaler = scaler };
-    tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(reduce_args::hlk_args_t));
+    vector<uint32_t> compute_kernel_args = {
+        uint(*reinterpret_cast<uint32_t*>(&scaler)), // scaler
+        uint(Ht), // Ht
+        uint(Wt), // Wt
+        uint(NC), // NC
+    };
+    tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     TT_ASSERT(int(reduce_dim) >= 0 && int(reduce_dim) <= ReduceOpDim::all().size());
+
+    string compute_kernel = ::dim_to_llk_kernel_name[int(reduce_dim)];
+
     auto reduce_h_compute_kernel = tt_metal::CreateComputeKernel(
         program,
-        ::dim_to_kernel_name[int(reduce_dim)],
+        compute_kernel,
         core,
         compute_args,
         MathFidelity::HiFi4,
@@ -125,14 +124,15 @@ Tensor reduce(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum r
     );
 
     bool do_max = false;
+    TT_ASSERT(do_max == false, "Max not yet supported");
     // TOOD(AP): need a sync with Reduce::Max from HLK headers
     reduce_h_compute_kernel->add_define("REDUCE_OP", reduce_op == ReduceOpMath::MAX ? 2 : 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+    tt_metal::CompileProgramNew(device, program);
+
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

@@ -6,14 +6,6 @@
 
 #include "llrt/tests/test_libs/debug_mailbox.hpp"
 
-namespace tilize {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    int32_t per_core_block_cnt; // Number of blocks of size 1xN tiles (1 rows and N cols)
-    int32_t per_core_block_tile_cnt; // Block tile count = (1xN)
-};
-}
-
 using namespace tt::constants;
 
 namespace tt {
@@ -119,17 +111,17 @@ Tensor tilize(const Tensor &a) {
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new tilize::hlk_args_t{
-        .per_core_block_cnt = int32_t(num_sticks / 32),
-        .per_core_block_tile_cnt = int32_t(stick_s / 32)
+    vector<uint32_t> compute_args = {
+        uint32_t(num_sticks / 32), // per_core_block_cnt
+        uint32_t(stick_s / 32) // per_core_block_tile_cnt
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(tilize::hlk_args_t));
+    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto tilize_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/tilize.cpp",
+        "kernels/compute/3T/tilize",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,
@@ -141,7 +133,7 @@ Tensor tilize(const Tensor &a) {
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
     bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+    tt_metal::CompileProgramNew(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
@@ -277,17 +269,17 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new tilize::hlk_args_t{
-        .per_core_block_cnt = int32_t(num_sticks / 32),
-        .per_core_block_tile_cnt = int32_t(stick_s / 32)
+    vector<uint32_t> compute_kernel_args = {
+        uint32_t(num_sticks / 32),
+        uint32_t(stick_s / 32)
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(tilize::hlk_args_t));
+    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto tilize_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/tilize.cpp",
+        "kernels/compute/3T/tilize",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,
@@ -299,7 +291,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
     bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+    tt_metal::CompileProgramNew(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

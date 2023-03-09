@@ -25,28 +25,45 @@ inline void llk_unpack_tilize_mop_config() {
 inline void llk_unpack_tilize_hw_configure(const llk_unpack_tilize_params_t *unpack_tilize_params) {
     configure_unpack_AB(
         get_operand_id(unpack_tilize_params->unpA_operand), get_operand_id(unpack_tilize_params->unpA_operand));
+}
+
+inline void llk_unpack_tilize_hw_configure_disaggregated(
+    const std::uint32_t unpA_operand) {
+    const llk_unpack_tilize_params_t unpack_tilize_params = {
+        .unpA_operand = unpA_operand,
+    };
+    llk_unpack_tilize_hw_configure(&unpack_tilize_params);
+}
+
+inline void llk_unpack_tilize_uninit() {
+    // Undo tilize if added
+    volatile uint *cfg = get_cfg_pointer();
+    unpack_config_u config;
+
+    config.val[0] = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0];
+    config.f.tileize_mode = 0;
+    config.f.shift_amount = 0;
+    cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0] = config.val[0];
+    cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = 256 | (256 << 16);
+}
+
+inline void llk_unpack_tilize_init(const uint32_t unpA_operand, const uint32_t unpA_block_c_tiles) {
+    llk_unpack_tilize_mop_config();
+    // Only doing this to bypass need to pass in args to this func. Too difficult to
+    // do in HLKC right now, and we're going to make clean APIs without need of
+    // HLKC anyways, so good enough for time being.
+
     // Override default settings
-    std::uint32_t input = get_operand_id(unpack_tilize_params->unpA_operand);
+    std::uint32_t input = get_operand_id(unpA_operand);
     unpack_config_u config;
     volatile uint *cfg = get_cfg_pointer();
     config.val[0] = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0];
     config.f.tileize_mode = 1;
     config.f.shift_amount =
-        (SCALE_DATUM_SIZE((uint)unpack_src_format[input], unpack_tilize_params->unpA_block_c_tiles << 5)) >> 4;
+        (SCALE_DATUM_SIZE((uint)unpack_src_format[input], unpA_block_c_tiles << 5)) >> 4;
     cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0] = config.val[0];
     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = 16 | (16 << 16);
 }
-
-inline void llk_unpack_tilize_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpA_block_c_tiles) {
-    const llk_unpack_tilize_params_t unpack_tilize_params = {
-        .unpA_operand = unpA_operand,
-        .unpA_block_c_tiles = unpA_block_c_tiles,
-    };
-    llk_unpack_tilize_hw_configure(&unpack_tilize_params);
-}
-
-inline void llk_unpack_tilize_init() { llk_unpack_tilize_mop_config(); }
 
 inline void llk_unpack_tilize_(std::uint32_t operand, std::uint32_t block_c_tiles) {
 
@@ -85,15 +102,6 @@ inline void llk_unpack_tilize_(std::uint32_t operand, std::uint32_t block_c_tile
 
             // Stall unpacker until pending CFG writes from Trisc have completed
             TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-
-    #ifdef PERF_DUMP
-        if (record_perf_events && !first_unpack_recorded) {
-            uint32_t event_id_first_unpack = perf::get_event_id(
-                0, 0, perf::EventType::UNPACK_FIRST_INSTRUCTION, current_outer_loop_iter);
-            record_timestamp_64b(event_id_first_unpack);
-            first_unpack_recorded = true;
-        }
-    #endif
 
             // Run MOP
             mop_run(0, 2);

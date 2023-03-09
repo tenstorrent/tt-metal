@@ -154,6 +154,7 @@ class ComputeKernel : public Kernel {
         fp32_dest_acc_en_(fp32_dest_acc_en),
         math_approx_mode_(math_approx_mode) {}
 
+    std::vector<uint32_t> compile_time_args(const tt_xy_pair &logical_core) const;
     size_t compile_time_args_hash(const tt_xy_pair &logical_core) const;
     size_t define_args_hash(const tt_xy_pair& logical_core) const;
 

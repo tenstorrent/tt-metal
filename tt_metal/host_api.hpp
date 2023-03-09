@@ -143,7 +143,7 @@ DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const CoreBl
  * | compile_time_args      | A pointer to the struct containing the args. Struct definition is located in the *.cpp file of the kernel | void *             |                   | Yes      |
  * | compile_time_args_size | Size of struct containing the kernel arguments                                                            | size_t             | 0 to 512 Bytes    | Yes      |
  */
-ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const tt_xy_pair &logical_core, void *compile_time_args, size_t compile_time_args_size);
+ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const tt_xy_pair &logical_core, const vector<uint32_t> &compile_time_args);
 
 /**
  * Creates the same kernel arguments for a range of cores
@@ -156,7 +156,7 @@ ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const tt_xy_pair &logi
  * | compile_time_args      | A pointer to the struct containing the args. Struct definition is located in the *.cpp file of the kernel | void *                                                |                                                        | Yes      |
  * | compile_time_args_size | Size of struct containing the kernel arguments                                                            | size_t                                                | 0 to 512 Bytes                                         | Yes      |
  */
-ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreRange &core_range, void *compile_time_args, size_t compile_time_args_size);
+ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreRange &core_range, const vector<uint32_t> &compile_time_args);
 
 /**
  * Creates kernel arguments specified by a combination of single core co-ordinates or a range of core co-ordinates
@@ -169,8 +169,7 @@ ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreRange &core_
  * | compile_time_args      | A collection of pointers to structs containing the args. Struct definition is located in the *.cpp file of the kernel.                     | const std::vector<void *> &                                           | Same size as core_blocks. Args are assigned to core or range of cores from core_blocks in order of compile_time_args. | Yes      |
  * | compile_time_args_size | Size of struct containing the kernel arguments                                                                                             | size_t                                                                | 0 to 512 Bytes                                                                                                        | Yes      |
  */
-ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<void *> &compile_time_args, size_t compile_time_args_size);
-
+ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args_spec);
 /**
  * Creates a single core data movement kernel and adds it to the program.
  *
@@ -281,6 +280,15 @@ ComputeKernel *CreateComputeKernel(
     bool fp32_dest_acc_en,
     bool math_approx_mode);
 
+ComputeKernel *CreateComputeKernelNew(
+    Program *program,
+    const std::string &file_name,
+    const tt_xy_pair &core,
+    ComputeKernelArgs *kernel_args,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    bool math_approx_mode);
+
 /**
  * Creates a multi-core compute kernel object, and adds it to the program.
  *
@@ -382,6 +390,12 @@ bool CompileProgram(
     Program *program,               // Program
     bool skip_hlkc,                 // Skips HLK to LLK compilation for all compute kernels
     bool profile_kernel = false);   // Set the compile flag for kernels to report profiling timer marks
+
+bool CompileProgramNew(
+    Device *device,
+    Program *program,
+    bool profile_kernel = false);
+
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores

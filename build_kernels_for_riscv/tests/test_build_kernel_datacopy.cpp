@@ -2,15 +2,6 @@
 
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 
-
-namespace unary_datacopy {
-//#include "hlks/eltwise_copy.cpp"
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t per_core_tile_cnt;
-};
-}
-
 int main(int argc, char* argv[]) {
 
     std::string root_dir = tt::utils::get_root_dir();
@@ -21,13 +12,11 @@ int main(int argc, char* argv[]) {
 
     log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
 
-    // HLK args
-    void *hlk_args = new unary_datacopy::hlk_args_t{
-        .per_core_tile_cnt = 2048,
+    std::vector<uint32_t> compute_kernel_args = {
+        2048
     };
 
     // HLK config
-    build_kernel_for_riscv_options.set_hlk_args_all_cores(hlk_args, sizeof(unary_datacopy::hlk_args_t));
     build_kernel_for_riscv_options.set_hlk_file_name_all_cores("kernels/compute/eltwise_copy.cpp");
 
     // data-copy has one input operand and one output operand
@@ -47,7 +36,7 @@ int main(int argc, char* argv[]) {
         skip_hlkc = true;
     }
 
-    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc};
+    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc, .compute_kernel_compile_time_args = compute_kernel_args};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 
     return 0;

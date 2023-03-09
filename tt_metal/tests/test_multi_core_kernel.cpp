@@ -12,14 +12,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-namespace unary_datacopy {
-//#include "hlks/eltwise_copy.cpp"
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t per_core_tile_cnt;
-};
-}
-
 tt_metal::Device *initialize_device() {
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -287,10 +279,10 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(tt_metal::Device
     //                  Compile Time Args Setup
     ////////////////////////////////////////////////////////////////////////////
     // Same compile time args for all cores
-    void *hlk_args = new unary_datacopy::hlk_args_t{
-        .per_core_tile_cnt = num_tiles,
+    vector<uint32_t> compute_kernel_args = {
+        uint(num_tiles) // per_core_tile_cnt
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, hlk_args, sizeof(unary_datacopy::hlk_args_t));
+    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile and Execute Program
@@ -349,11 +341,10 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
     ////////////////////////////////////////////////////////////////////////////
-
-    void *hlk_args = new unary_datacopy::hlk_args_t{
-        .per_core_tile_cnt = num_tiles,
+    vector<uint32_t> compute_kernel_args = {
+        uint(num_tiles) // per_core_tile_cnt
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, hlk_args, sizeof(unary_datacopy::hlk_args_t));
+    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile and Execute Program
@@ -428,23 +419,16 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
     ////////////////////////////////////////////////////////////////////////////
-    void *hlk_args_1 = new unary_datacopy::hlk_args_t{
-        .per_core_tile_cnt = num_tiles_1,
-    };
-
-    void *hlk_args_2 = new unary_datacopy::hlk_args_t{
-        .per_core_tile_cnt = num_tiles_2,
-    };
-
-    void *hlk_args_3 = new unary_datacopy::hlk_args_t{
-        .per_core_tile_cnt = num_tiles_3,
+    vector<vector<uint32_t>> compute_kernel_args_for_all_cores = {
+        {uint(num_tiles_1)},
+        {uint(num_tiles_2)},
+        {uint(num_tiles_3)}
     };
 
     // Difference in number of tiles read/written specified by different compile time args on compute kernel
     tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(
         core_blocks,
-        {hlk_args_1, hlk_args_2, hlk_args_3},
-        sizeof(unary_datacopy::hlk_args_t)
+        compute_kernel_args_for_all_cores
     );
 
     ////////////////////////////////////////////////////////////////////////////

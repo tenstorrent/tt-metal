@@ -30,21 +30,16 @@ class DataMovementKernelArgs {
 
 class ComputeKernelArgs {
    public:
-    ComputeKernelArgs() : compile_time_args_size_(0) {}
+    ComputeKernelArgs() {}
 
-    ComputeKernelArgs(const tt_xy_pair &logical_core, void *compile_time_args, size_t compile_time_args_size) : compile_time_args_size_(compile_time_args_size) {
-        core_to_compile_time_args_.insert({logical_core, compile_time_args});
-    }
+    ComputeKernelArgs(const tt_xy_pair &logical_core, const std::vector<uint32_t> &compile_time_args);
 
-    ComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<void *> &compile_time_args_spec, size_t compile_time_args_size);
+    ComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args_spec);
 
-    void *compile_time_args(const tt_xy_pair &logical_core) const;
-
-    size_t compile_time_args_size(const tt_xy_pair &logical_core) const { return compile_time_args_size_; }
+    vector<uint32_t> compile_time_args(const tt_xy_pair &logical_core) const;
 
    private:
-    std::unordered_map<tt_xy_pair, void *> core_to_compile_time_args_;
-    size_t compile_time_args_size_;
+    std::unordered_map<tt_xy_pair, std::vector<uint32_t>> core_to_compile_time_args_;
 };
 
 struct DataMovementKernelArgsHash {

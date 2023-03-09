@@ -260,8 +260,13 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tensor_tiles});
 
-        void *hlk_args = new bcast_op_params::hlk_args_t { .B = NC, .Ht = Ht, .Wt = Wt };
-        tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(bcast_op_params::hlk_args_t));
+        vector<uint32_t> compute_kernel_args = {
+            uint(NC),
+            uint(Ht),
+            uint(Wt)
+        };
+
+        tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;

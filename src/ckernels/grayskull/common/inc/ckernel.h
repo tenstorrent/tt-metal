@@ -53,6 +53,8 @@ inline uint8_t* get_debug_print_buffer() {
 namespace ckernel
 {
 
+#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_ ## arg_idx
+
 constexpr uint PACK_FLUSH_COUNTERS = // counters flush
     (1 << PACK_COUNTERS_SEC2_pack_per_xy_plane_SHAMT) |
     (1 << PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_SHAMT) |

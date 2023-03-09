@@ -107,11 +107,11 @@ Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_ty
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new eltwise_binary::hlk_args_t{
-        .per_core_block_cnt = num_tiles,
-        .per_core_block_size = 1
+    vector<uint32_t> compute_args = {
+        uint32_t(num_tiles), // per_core_block_cnt
+        1, // per_core_block_size
     };
-    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(eltwise_binary::hlk_args_t));
+    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

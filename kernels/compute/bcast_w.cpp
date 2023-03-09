@@ -2,19 +2,18 @@
 
 #include "compute_hlk_api.h"
 
-struct hlk_args_t {
-    uint32_t B;
-    uint32_t Ht;
-    uint32_t Wt;
-};
 
-void compute_main(const hlk_args_t *args) {
+void compute_main() {
     uint32_t w = 0;
     constexpr uint32_t onetile = 1;
-    for (uint32_t b = 0; b < args->B; b++) {
-    for (uint32_t h = 0; h < args->Ht; h++) {
+    uint32_t B = get_compile_time_arg_val(0);
+    uint32_t Ht = get_compile_time_arg_val(1);
+    uint32_t Wt = get_compile_time_arg_val(2);
+
+    for (uint32_t b = 0; b < B; b++) {
+    for (uint32_t h = 0; h < Ht; h++) {
         cb_wait_front(CB::c_in1, onetile);
-        for (uint32_t w = 0; w < args->Wt; w++) {
+        for (uint32_t w = 0; w < Wt; w++) {
 
             cb_reserve_back(CB::c_out0, onetile);
 

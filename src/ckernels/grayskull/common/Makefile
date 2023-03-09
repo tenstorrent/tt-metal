@@ -27,6 +27,9 @@ DEFINES += $(addprefix -DINTERMED_DUMP=, $(INTERMED_DUMP))
 endif
 DEFINES += $(addprefix -DPERF_DUMP_LEVEL=, $(PERF_DUMP_LEVEL)) -DARCH_GRAYSKULL
 
+KERNEL_COMPILE_TIME_ARGS := $(filter KERNEL_COMPILE_TIME_ARG_%,$(.VARIABLES))
+DEFINES += $(foreach var,$(KERNEL_COMPILE_TIME_ARGS),-D$(var)=$($(var)))
+
 CKERNEL_DIR  = $(TT_METAL_HOME)/src/ckernels
 CKERNEL_INC_DIR  = $(TT_METAL_HOME)/build/src/ckernels
 FIRMWARE_RISCV_DIR = $(TT_METAL_HOME)/src/firmware/riscv

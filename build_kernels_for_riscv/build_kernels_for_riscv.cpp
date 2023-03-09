@@ -28,6 +28,16 @@ void add_kernel_compile_time_args_to_make_cmd(std::stringstream &make_cmd, const
     }
 }
 
+void add_kernel_compile_time_args_to_make_cmd(std::string &make_cmd_string, const std::vector<std::uint32_t>& kernel_compile_time_args) {
+    stringstream make_cmd;
+    for (int i = 0; i<kernel_compile_time_args.size(); i++) {
+        make_cmd << " KERNEL_COMPILE_TIME_ARG_" << i << "=" << std::to_string(kernel_compile_time_args[i]);
+    }
+    make_cmd_string += make_cmd.str() + " ";
+}
+
+
+
 //////////////////
 // BRISC       //
 //////////////////
@@ -191,15 +201,14 @@ void generate_binary_for_ncrisc(tt::build_kernel_for_riscv_options_t* build_kern
 //////////////////
 
 // fwd declarations (these funcs are used only in this file)
-void compile_ckernels_for_all_triscs(string, string root, string chlkc_src_dir);
+void compile_ckernels_for_all_triscs(string, string root, string chlkc_src_dir, vector<uint32_t> kernel_compile_time_args);
 void compile_ckernels_for_trisc(string chlkc_src_dir, string output_dir, string make_src_args, string make_args, uint32_t trisc_mailbox_addr, int thread_id, string kernel_file_name);
 void generate_data_format_descriptors(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
 void generate_loop_count_file(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, int epoch, string out_dir_path);
 void generate_math_approx_mode_descriptor(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
 void generate_math_fidelity_descriptor(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
 
-void generate_binaries_for_triscs(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const string &out_dir_path, const string& arch_name, bool skip_hlkc, bool parallel) {
-
+void generate_binaries_for_triscs(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const string &out_dir_path, const string& arch_name, bool skip_hlkc, bool parallel, std::vector<uint32_t> kernel_compile_time_args) {
 
     string root_dir = std::getenv("TT_METAL_HOME");
 
@@ -207,7 +216,6 @@ void generate_binaries_for_triscs(tt::build_kernel_for_riscv_options_t* build_ke
 
     // currently assuming HLK is the same across all cores
     string hlk_file_name = build_kernel_for_riscv_options->hlk_desc.get_hlk_file_name();
-    void* hlk_args = build_kernel_for_riscv_options->hlk_desc.get_hlk_args();
     auto hlk_defines = build_kernel_for_riscv_options->hlk_defines;
 
     // we have a directory per op in the output directory
@@ -230,19 +238,97 @@ void generate_binaries_for_triscs(tt::build_kernel_for_riscv_options_t* build_ke
             build_kernel_for_riscv_options->fp32_dest_acc_en,
             parallel);
 
-        compile_generate_struct_init_header(hlk_file_name, op_path, "hlk_args_struct_init", false); // enable_cache=false
-        run_generate_struct_init_header(op_path, "hlk_args_struct_init", hlk_args);
-
         generate_data_format_descriptors(build_kernel_for_riscv_options, op_path);
         generate_math_fidelity_descriptor(build_kernel_for_riscv_options, op_path);
         generate_math_approx_mode_descriptor(build_kernel_for_riscv_options, op_path);
         generate_loop_count_file(build_kernel_for_riscv_options, 1 , op_path); // loop_count = 1
     }
 
-    compile_ckernels_for_all_triscs(arch_name, root_dir, op_path);
+    compile_ckernels_for_all_triscs(arch_name, root_dir, op_path, kernel_compile_time_args);
 }
 
-void compile_ckernels_for_all_triscs(string arch_name, string root, string chlkc_src_dir) {
+void generate_binaries_for_triscs_new(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const string &out_dir_path, const string& arch_name, bool parallel, std::vector<uint32_t> kernel_compile_time_args) {
+
+    string root_dir = std::getenv("TT_METAL_HOME");
+
+    // Right now, to support compiling multiple threads, I am overloading
+    // the concept of hlk filename to point to a directory with llks
+    // Really need to refactor soon, however fastest change to check in
+    // critical work
+    string llk_directory_name = build_kernel_for_riscv_options->hlk_desc.get_hlk_file_name();
+
+    auto hlk_defines = build_kernel_for_riscv_options->hlk_defines;
+
+    // we have a directory per op in the output directory
+    string op_path = out_dir_path;
+    fs::create_directories(op_path);
+
+    log_debug(tt::LogBuildKernels, "build_kernel_for_riscv_options->fp32_dest_acc_en = {}", build_kernel_for_riscv_options->fp32_dest_acc_en);
+
+    // Copy llks into new folder
+    fs::copy(llk_directory_name + "/chlkc_unpack.cpp", op_path + "/chlkc_unpack.cpp", fs::copy_options::overwrite_existing);
+    fs::copy(llk_directory_name + "/chlkc_math.cpp", op_path + "/chlkc_math.cpp", fs::copy_options::overwrite_existing);
+    fs::copy(llk_directory_name + "/chlkc_pack.cpp", op_path + "/chlkc_pack.cpp", fs::copy_options::overwrite_existing);
+
+    generate_data_format_descriptors(build_kernel_for_riscv_options, op_path);
+    generate_math_fidelity_descriptor(build_kernel_for_riscv_options, op_path);
+    generate_math_approx_mode_descriptor(build_kernel_for_riscv_options, op_path);
+
+    // For time being
+    const string make_ckernels_compile_dir = root_dir + "/src/ckernels/" + arch_name + "/common";
+    const string make_ckernels_link_dir = root_dir + "/src/ckernels";
+
+    string make_src_args = "-C ";
+    make_src_args += make_ckernels_compile_dir;
+    make_src_args += " HLKC_KERNELS=1 ";
+    make_src_args += " -j8 ";
+
+    add_kernel_compile_time_args_to_make_cmd(make_src_args, kernel_compile_time_args);
+    // TODO: commonize this with runtime_common.hpp?
+    uint32_t TRISC_BASE = l1_mem::address_map::TRISC_BASE;
+    uint32_t TRISC_L1_MAILBOX_OFFSET = l1_mem::address_map::TRISC_L1_MAILBOX_OFFSET;
+
+    uint32_t trisc_sizes[3] = {
+        l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE};
+
+    uint32_t trisc_mailbox_addresses[3] = {
+        TRISC_BASE + TRISC_L1_MAILBOX_OFFSET,
+        TRISC_BASE + trisc_sizes[0] + TRISC_L1_MAILBOX_OFFSET,
+        TRISC_BASE + trisc_sizes[0] + trisc_sizes[1] + TRISC_L1_MAILBOX_OFFSET};
+
+    string make_args = "-C ";
+    make_args += make_ckernels_link_dir;
+    // Add Trisc sizes to Make arg command
+    make_args += " TRISC0_SIZE=" + to_string(trisc_sizes[0]) + " TRISC1_SIZE=" + to_string(trisc_sizes[1]) +
+                 " TRISC2_SIZE=" + to_string(trisc_sizes[2]);
+    make_args += " ARCH_NAME=" + arch_name;
+    // make_args += " DEVICE_RUNNER=" + (model|versim|silicon);
+    make_args += " TRISC_BASE=" + to_string(TRISC_BASE);
+
+    string used_kernels[3] = {"chlkc_unpack", "chlkc_math", "chlkc_pack"};
+
+    std::vector<std::thread> ths(3);
+    for (int thread_id = 0; thread_id < 3; thread_id++) {
+        stringstream ckernels_compile_output_dir;
+        ckernels_compile_output_dir << op_path << "/tensix_thread" << (uint)thread_id;
+
+        ths[thread_id] = std::thread(
+            compile_ckernels_for_trisc,
+            op_path,
+            ckernels_compile_output_dir.str(),
+            make_src_args,
+            make_args,
+            trisc_mailbox_addresses[thread_id],
+            thread_id,
+            used_kernels[thread_id]
+            );
+    }
+    for (int thread_id = 0; thread_id < 3; thread_id++) {
+        ths[thread_id].join();
+    }
+}
+
+void compile_ckernels_for_all_triscs(string arch_name, string root, string chlkc_src_dir, vector<uint32_t> kernel_compile_time_args) {
     fs::remove("hlk_ckernels_compile.log");  // clean the log file
 
     const string make_ckernels_compile_dir = root + "/src/ckernels/" + arch_name + "/common";
@@ -252,6 +338,9 @@ void compile_ckernels_for_all_triscs(string arch_name, string root, string chlkc
     make_src_args += make_ckernels_compile_dir;
     make_src_args += " HLKC_KERNELS=1 ";
     make_src_args += " -j8 ";
+
+    add_kernel_compile_time_args_to_make_cmd(make_src_args, kernel_compile_time_args);
+
 
     // TODO: commonize this with runtime_common.hpp?
     uint32_t TRISC_BASE = l1_mem::address_map::TRISC_BASE;
@@ -615,7 +704,7 @@ void generate_binaries_all_riscs(
 {
     std::vector<std::thread*> threads;
     std::function<void()> lambdas[] = {
-        [build_kernel_for_riscv_options, out_dir_path, arch_name, p] () { generate_binaries_for_triscs(build_kernel_for_riscv_options, out_dir_path, arch_name, p.skip_hlkc, p.parallel_hlk); },
+        [build_kernel_for_riscv_options, out_dir_path, arch_name, p] () { generate_binaries_for_triscs(build_kernel_for_riscv_options, out_dir_path, arch_name, p.skip_hlkc, p.parallel_hlk, p.compute_kernel_compile_time_args); },
         [build_kernel_for_riscv_options, out_dir_path, arch_name, p] () { generate_binary_for_ncrisc(build_kernel_for_riscv_options, out_dir_path, arch_name, p.nc_noc_index, p.nc_kernel_compile_time_args); },
         [build_kernel_for_riscv_options, out_dir_path, arch_name, p] () { generate_binary_for_brisc(build_kernel_for_riscv_options, out_dir_path, arch_name, p.br_noc_index, p.br_kernel_compile_time_args); },
     };

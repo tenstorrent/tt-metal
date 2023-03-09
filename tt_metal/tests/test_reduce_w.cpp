@@ -120,13 +120,27 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new reduce_args::hlk_args_t{ .Ht = int(Ht), .Wt = int(Wt), .NC = int(NC), .scaler = scaler };
-        tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(reduce_args::hlk_args_t));
+        vector<uint32_t> compute_kernel_args = {
+            *reinterpret_cast<uint32_t*>(&scaler),
+            uint(Ht),
+            uint(Wt),
+            uint(NC),
+
+        };
+        tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
+
+        string compute_kernel;
+        if (do_max) {
+            compute_kernel = "kernels/compute/reduce_w.cpp";
+        } else {
+            compute_kernel = "kernels/compute/3T/reduce_w_sum";
+        }
+
         auto reduce_w_compute_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/reduce_w.cpp",
+            compute_kernel,
             core,
             compute_args,
             MathFidelity::HiFi4,
@@ -140,7 +154,11 @@ int main(int argc, char **argv) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        if (do_max) {
+            pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        } else {
+            pass &= tt_metal::CompileProgramNew(device, program, skip_hlkc);
+        }
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

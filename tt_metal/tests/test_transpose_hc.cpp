@@ -12,14 +12,6 @@
 
 using namespace tt;
 
-namespace hlk_copy_binary {
-// clone of hlk args from "kernels/compute/eltwise_copy.cpp"
-// FIXME:copy pasted the args here from the blank kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t per_core_tile_cnt;
-};
-}
-
 using u32 = std::uint32_t;
 using u16 = std::uint16_t;
 
@@ -125,8 +117,10 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new hlk_copy_binary::hlk_args_t{ .per_core_tile_cnt = int(num_tensor_tiles) };
-        tt_metal::ComputeKernelArgs *kernel_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(hlk_copy_binary::hlk_args_t));
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_tensor_tiles)
+        };
+        tt_metal::ComputeKernelArgs *kernel_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto blank_binary_kernel = tt_metal::CreateComputeKernel(

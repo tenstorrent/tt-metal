@@ -5,20 +5,6 @@
 
 #include "tools/cpuprof/cpuprof.h"
 
-namespace hlk_copy_binary {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t num_tensor_tiles;
-};
-}
-
-namespace hlk_transpose_wh {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t NHtWt;
-};
-}
-
 using u32 = std::uint32_t;
 using namespace tt::constants;
 
@@ -109,8 +95,10 @@ Tensor transpose_wh(const Tensor &a) {
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new hlk_transpose_wh::hlk_args_t{ .NHtWt = int(Ht*Wt*NC) };
-    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(hlk_transpose_wh::hlk_args_t));
+    vector<uint32_t> compute_args = {
+        Ht*Wt*NC // NHtWt
+    };
+    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -260,8 +248,10 @@ Tensor transpose_wh_multi_core(const Tensor &a) {
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new hlk_transpose_wh::hlk_args_t{ .NHtWt = int(1*1*NC) }; // 1 core is doing 1 tile per channel
-    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, hlk_args, sizeof(hlk_transpose_wh::hlk_args_t));
+    vector<uint32_t> compute_kernel_args = {
+        uint(NC)
+    };
+    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -411,8 +401,10 @@ Tensor transpose_hc(const Tensor &a) {
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new hlk_copy_binary::hlk_args_t{ .num_tensor_tiles = int(num_tensor_tiles) };
-    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(hlk_transpose_wh::hlk_args_t));
+    vector<uint32_t> compute_args = {
+        num_tensor_tiles // num_tensor_tiles
+    };
+    tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

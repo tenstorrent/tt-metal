@@ -29,7 +29,6 @@ struct llk_unpack_reduce_params_t {
 
 struct llk_unpack_tilize_params_t {
     std::uint32_t unpA_operand;
-    std::uint32_t unpA_block_c_tiles;
 };
 
 struct llk_unpack_untilize_params_t {

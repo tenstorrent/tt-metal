@@ -13,23 +13,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-namespace matmul {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    int in0_block_w;
-    int in0_num_subblocks;
-    int in0_block_num_tiles;
-    int in0_subblock_num_tiles;
-    int in1_num_subblocks;
-    int in1_block_num_tiles;
-    int in1_per_core_w;
-    int num_blocks;
-    int out_subblock_h;
-    int out_subblock_w;
-    int out_subblock_num_tiles;
-};
-}
-
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -269,24 +252,25 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
 
     int out_subblock_num_tiles = out_subblock_h*out_subblock_w;
 
-    void *hlk_args = new matmul::hlk_args_t{
-        .in0_block_w = in0_block_w,
-        .in0_num_subblocks = in0_num_subblocks,
-        .in0_block_num_tiles = in0_block_num_tiles,
-        .in0_subblock_num_tiles = in0_subblock_num_tiles,
+    vector<uint32_t> compute_kernel_args = {
+        uint(in0_block_w),
+        uint(in0_num_subblocks),
+        uint(in0_block_num_tiles),
+        uint(in0_subblock_num_tiles),
 
-        .in1_num_subblocks = in1_num_subblocks,
-        .in1_block_num_tiles = in1_block_num_tiles,
-        .in1_per_core_w = in1_per_core_w,
+        uint(in1_num_subblocks),
+        uint(in1_block_num_tiles),
+        uint(in1_per_core_w),
 
-        .num_blocks = num_blocks,
+        uint(num_blocks),
 
-        .out_subblock_h = out_subblock_h,
-        .out_subblock_w = out_subblock_w,
-        .out_subblock_num_tiles = out_subblock_num_tiles
+        uint(out_subblock_h),
+        uint(out_subblock_w),
+        uint(out_subblock_num_tiles)
     };
 
-    tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, hlk_args, sizeof(matmul::hlk_args_t));
+
+    tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(

@@ -71,19 +71,19 @@ DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const CoreBl
     return kernel_args;
 }
 
-ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const tt_xy_pair &logical_core, void *compile_time_args, size_t compile_time_args_size) {
-    ComputeKernelArgs *kernel_args = new ComputeKernelArgs(logical_core, compile_time_args, compile_time_args_size);
+ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const tt_xy_pair &logical_core, const vector<uint32_t> &compile_time_args) {
+    ComputeKernelArgs *kernel_args = new ComputeKernelArgs(logical_core, compile_time_args);
     return kernel_args;
 }
 
-ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreRange &core_range, void *compile_time_args, size_t compile_time_args_size) {
+ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreRange &core_range, const vector<uint32_t> &compile_time_args) {
     CoreBlocks core_blocks = {core_range};
-    ComputeKernelArgs *kernel_args = new ComputeKernelArgs(core_blocks, {compile_time_args}, compile_time_args_size);
+    ComputeKernelArgs *kernel_args = new ComputeKernelArgs(core_blocks, {compile_time_args});
     return kernel_args;
 }
 
-ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<void *> &compile_time_args, size_t compile_time_args_size) {
-    ComputeKernelArgs *kernel_args = new ComputeKernelArgs(core_blocks, compile_time_args, compile_time_args_size);
+ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args_spec) {
+    ComputeKernelArgs *kernel_args = new ComputeKernelArgs(core_blocks, compile_time_args_spec);
     return kernel_args;
 }
 
@@ -222,7 +222,44 @@ bool GenerateBinaries(
     std::string arch_name = tt::get_string_lowercase(device->arch());
 
     if (kernel_group.compute != nullptr) {
-        generate_binaries_for_triscs(build_kernel_for_riscv_options, op_path, arch_name, skip_hlkc, true);
+        generate_binaries_for_triscs(build_kernel_for_riscv_options, op_path, arch_name, skip_hlkc, true, kernel_group.compute->compile_time_args(logical_core));
+    }
+
+    std::thread br_comp([build_kernel_for_riscv_options, op_path, arch_name, kernel_group, logical_core, profile_kernel]() {
+        generate_binary_for_brisc(
+            build_kernel_for_riscv_options,
+            op_path,
+            arch_name,
+            kernel_group.riscv_0->noc(),
+            kernel_group.riscv_0->compile_time_args(logical_core),
+            profile_kernel);
+    });
+
+    std::thread nc_comp([build_kernel_for_riscv_options, op_path, arch_name, kernel_group, logical_core, profile_kernel]() {
+        generate_binary_for_ncrisc(
+            build_kernel_for_riscv_options,
+            op_path,
+            arch_name,
+            kernel_group.riscv_1->noc(),
+            kernel_group.riscv_1->compile_time_args(logical_core),
+            profile_kernel);
+    });
+    br_comp.join();
+    nc_comp.join();
+    return true;
+}
+
+bool GenerateBinariesNew(
+    Device *device,
+    build_kernel_for_riscv_options_t *build_kernel_for_riscv_options,
+    const std::string &op_path,
+    bool profile_kernel,
+    const KernelGroup &kernel_group,
+    const tt_xy_pair &logical_core) {
+    std::string arch_name = tt::get_string_lowercase(device->arch());
+
+    if (kernel_group.compute != nullptr) {
+        generate_binaries_for_triscs_new(build_kernel_for_riscv_options, op_path, arch_name, true, kernel_group.compute->compile_time_args(logical_core));
     }
 
     std::thread br_comp([build_kernel_for_riscv_options, op_path, arch_name, kernel_group, logical_core, profile_kernel]() {
@@ -433,6 +470,62 @@ bool CompileProgram(Device *device, Program *program, bool skip_hlkc, bool profi
     }
 
     tt_metal_profiler.markStop("CompileProgram");
+    return pass;
+}
+
+bool CompileProgramNew(Device *device, Program *program, bool profile_kernel) {
+    bool pass = true;
+    tt_metal_profiler.markStart("CompileProgramNew");
+
+    std::string out_dir_path = tt::utils::get_root_dir() + "/built_kernels/";
+    CompileBlankKernel(device, out_dir_path);
+
+    // Compute kernels generate dependencies for data movement kernels
+    // Kernels running on a core need to be grouped together for compilation
+    // The same group of kernels shouldn't be compiled multiple times
+    std::unordered_set<size_t> compiled_hashes;
+    auto op_idx = 0;
+    for (auto &[logical_core, kernel_group] : program->core_to_kernel_group()) {
+        ValidateL1Buffers(device, program, logical_core);
+
+        ValidateKernelGroup(kernel_group, logical_core);
+
+        // Modifies kernel_group to have blank data movement kernels if they are not present
+	    PopulateKernelGroupWithDataMovementKernels(program, kernel_group, logical_core);
+
+        auto dummy_op_name = GetOpName(kernel_group);
+        build_kernel_for_riscv_options_t dummy_op("dummy_type", dummy_op_name + std::to_string(op_idx++));
+
+        auto kernel_group_hash = KernelGroupCompileHash(kernel_group, logical_core, dummy_op_name);
+        std::string op_path = out_dir_path + dummy_op_name + "/" + std::to_string(kernel_group_hash);
+
+        SetCircularBufferDataFormat(program, logical_core, &dummy_op, op_path);
+
+        ConfigureForCompilation(kernel_group.compute, &dummy_op, logical_core, op_path);
+        ConfigureForCompilation(kernel_group.riscv_0, &dummy_op, logical_core, op_path);
+        ConfigureForCompilation(kernel_group.riscv_1, &dummy_op, logical_core, op_path);
+
+        if (compiled_hashes.find(kernel_group_hash) != compiled_hashes.end()) {
+            continue;
+        }
+
+        // TODO(AP): this is a hack to speed up the debugging process
+        bool path_exists = false;
+        if (enable_compile_cache)
+            path_exists = std::filesystem::exists(op_path);
+        if (!path_exists || force_recompiles > 0) {
+            //if (enable_compile_cache)
+            //    cout << "======= Compiling" << std::endl;
+            GenerateBinariesNew(device, &dummy_op, op_path, profile_kernel, kernel_group, logical_core);
+            force_recompiles = std::max(0, force_recompiles-1);
+        } else {
+            //if (enable_compile_cache)
+            //    cout << "======= Skipping compiling..." << std::endl;
+        }
+        compiled_hashes.insert(kernel_group_hash);
+    }
+
+    tt_metal_profiler.markStop("CompileProgramNew");
     return pass;
 }
 

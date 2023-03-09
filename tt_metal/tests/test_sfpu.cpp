@@ -14,16 +14,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-namespace unary_datacopy {
-//#include "hlks/eltwise_copy.cpp"
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::uint32_t per_core_block_cnt;
-    std::uint32_t per_core_block_dim;
-
-};
-}
-
 bool run_sfpu_test(string sfpu_name) {
     bool multibank = true;
     bool pass = true;
@@ -107,11 +97,11 @@ bool run_sfpu_test(string sfpu_name) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new unary_datacopy::hlk_args_t{
-            .per_core_block_cnt = num_tiles,
-            .per_core_block_dim = 1
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_tiles),
+            1
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(unary_datacopy::hlk_args_t));
+        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         string hlk_kernel_name = "kernels/compute/eltwise_sfpu.cpp";

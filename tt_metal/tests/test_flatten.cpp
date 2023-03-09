@@ -13,14 +13,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-namespace unary_datacopy {
-//#include "hlks/eltwise_copy.cpp"
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::uint32_t per_core_tile_cnt;
-};
-}
-
 uint32_t prod(vector<uint32_t> &shape) {
     uint32_t shape_prod = 1;
 
@@ -153,10 +145,10 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new unary_datacopy::hlk_args_t{
-            .per_core_tile_cnt = num_tiles * 32,
+        vector<uint32_t> compute_kernel_args = {
+            num_tiles * 32 // per_core_tile_cnt
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(unary_datacopy::hlk_args_t));
+        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;

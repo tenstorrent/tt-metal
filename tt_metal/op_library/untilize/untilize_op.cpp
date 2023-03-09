@@ -116,11 +116,11 @@ Tensor untilize(const Tensor &a) {
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new untilize::hlk_args_t{
-        .per_core_block_cnt = int32_t(num_sticks / 32),
-        .per_core_block_tile_cnt = int32_t(a.shape()[3] / 32)
+    vector<uint32_t> compute_args = {
+        uint32_t(num_sticks / 32), // per_core_block_cnt
+        uint32_t(a.shape()[3] / 32) // per_core_block_tile_cnt
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(untilize::hlk_args_t));
+    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

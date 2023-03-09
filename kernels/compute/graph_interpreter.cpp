@@ -2,21 +2,18 @@
 
 #include "compute_hlk_api.h"
 
+void compute_main() {
 
-struct hlk_args_t {
-    std::int32_t per_core_tile_cnt;
-    std::int32_t num_ops;
-};
-
-void compute_main(const hlk_args_t *args) {
+    uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    uint32_t num_ops = get_compile_time_arg_val(1);
 
     // Need to pre-initialize an op_info struct and pass into get_next_op_info and modify in that func, since hlkc doesn't support funcs returning vals yet
     op_info_t op_info = {0, 0, 0, 0, 0, 0, 0};
 
-    for (int op_idx = 0; op_idx < args->num_ops; op_idx++) {
+    for (uint32_t op_idx = 0; op_idx < num_ops; op_idx++) {
         hlk_get_next_op_info(core_ptr, op_info);
 
-        for (int idx = 0; idx < args->per_core_tile_cnt; idx++) {
+        for (uint32_t idx = 0; idx < per_core_tile_cnt; idx++) {
             cb_reserve_back(op_info.cb_out_id, 1);
             acquire_dst(DstMode::Half);
             cb_wait_front(op_info.cb_in0_id, 1);

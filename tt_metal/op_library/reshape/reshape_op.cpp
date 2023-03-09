@@ -130,11 +130,11 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
         tt_metal::NOC::RISCV_0_default);
 
     // No compute required, so using blank kernel
-    void *hlk_args = new eltwise_unary::hlk_args_t{
-        .per_core_block_cnt = int(a.volume() / TILE_HW),
-        .per_core_block_size = 1
+    vector<uint32_t> compute_args = {
+        uint(a.volume() / TILE_HW), // per_core_block_cnt
+        1 // per_core_block_size
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(eltwise_unary::hlk_args_t));
+    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

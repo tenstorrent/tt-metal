@@ -5,7 +5,7 @@ sys.path.append(f"{f}/..")
 
 import numpy as np
 
-from pymetal import tt_metal as ttm
+from pymetal import ttmetal as ttm
 from models.utility_functions import untilize
 
 def run_untilize_test(nb, nc, nh, nw):

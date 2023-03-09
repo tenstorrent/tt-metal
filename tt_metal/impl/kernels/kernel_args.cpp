@@ -67,8 +67,11 @@ void DataMovementKernelArgs::set_runtime_args(const tt_xy_pair &logical_core, co
     core_to_runtime_args_.insert_or_assign(logical_core, runtime_args);
 }
 
-ComputeKernelArgs::ComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<void *> &compile_time_args_spec, size_t compile_time_args_size)
-    : compile_time_args_size_(compile_time_args_size) {
+ComputeKernelArgs::ComputeKernelArgs(const tt_xy_pair &logical_core, const std::vector<uint32_t> &compile_time_args) {
+    core_to_compile_time_args_.insert({logical_core, compile_time_args});
+}
+
+ComputeKernelArgs::ComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args_spec) {
     TT_ASSERT(core_blocks.size() == compile_time_args_spec.size());
     for (auto index = 0; index < core_blocks.size(); index++) {
         auto core = core_blocks.at(index);
@@ -92,27 +95,19 @@ ComputeKernelArgs::ComputeKernelArgs(const CoreBlocks &core_blocks, const std::v
     }
 }
 
-void *ComputeKernelArgs::compile_time_args(const tt_xy_pair &logical_core) const {
+vector<uint32_t> ComputeKernelArgs::compile_time_args(const tt_xy_pair &logical_core) const {
     if (core_to_compile_time_args_.find(logical_core) != core_to_compile_time_args_.end()) {
         return core_to_compile_time_args_.at(logical_core);
     }
-    return nullptr;
+    return {};
 }
 
 size_t DataMovementKernelArgsHash::operator()(const DataMovementKernelArgs& dmk_args) const {
     return tt::utils::vector_hash<uint32_t>{}(dmk_args.compile_time_args(logical_core));
 }
 
-size_t ComputeKernelArgsHash::operator()(const ComputeKernelArgs &c_args) const {
-    size_t hash_value = 0;
-    void *args = c_args.compile_time_args(logical_core);
-    size_t args_size = c_args.compile_time_args_size(logical_core);
-    if (args != nullptr and args_size > 0) {
-        hash_hlk_args(hash_value, args, args_size);
-    } else if ((args != nullptr and args_size == 0) or (args == nullptr and args_size != 0)) {
-        TT_ASSERT("Mismatching values, either hlk_args == nullptr and hlk_args_size == 0 or hlk_args != nullptr and hlk_args_size > 0!");
-    }
-    return hash_value;
+size_t ComputeKernelArgsHash::operator()(const ComputeKernelArgs &ck_args) const {
+        return tt::utils::vector_hash<uint32_t>{}(ck_args.compile_time_args(logical_core));
 }
 
 size_t ComputeKernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {

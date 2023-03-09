@@ -42,13 +42,6 @@ void run_compile_blank() {
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 }
 
-namespace graph_interpreter {
-struct hlk_args_t {
-    std::uint32_t per_core_tile_cnt;
-    std::uint32_t num_ops;
-};
-}
-
 const map<string, tt::OpCode> sfpu_name_to_op_code = {
     {"exponential", tt::OpCode::Exponential},
     {"reciprocal",  tt::OpCode::Reciprocal},
@@ -228,11 +221,11 @@ bool run_chained_sfpu_test(int chain_length) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new graph_interpreter::hlk_args_t{
-            .per_core_tile_cnt = num_tiles,
-            .num_ops = (uint32_t) chain_length
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_tiles),
+            uint(chain_length)
         };
-        tt_metal::ComputeKernelArgs *graph_interpreter_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(graph_interpreter::hlk_args_t));
+        tt_metal::ComputeKernelArgs *graph_interpreter_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -495,11 +488,12 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-         void *hlk_args = new graph_interpreter::hlk_args_t{
-            .per_core_tile_cnt = num_tiles,
-            .num_ops = (uint32_t) chain_length
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_tiles),
+            uint(chain_length)
         };
-        tt_metal::ComputeKernelArgs *graph_interpreter_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(graph_interpreter::hlk_args_t));
+
+        tt_metal::ComputeKernelArgs *graph_interpreter_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -771,11 +765,11 @@ bool run_forked_binary_test() {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new graph_interpreter::hlk_args_t{
-            .per_core_tile_cnt = num_tiles,
-            .num_ops = (uint32_t) chain_length
+        vector<uint32_t> compute_kernel_args = {
+            uint(num_tiles),
+            uint(chain_length)
         };
-        tt_metal::ComputeKernelArgs *graph_interpreter_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(graph_interpreter::hlk_args_t));
+        tt_metal::ComputeKernelArgs *graph_interpreter_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;

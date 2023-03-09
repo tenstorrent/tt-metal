@@ -13,20 +13,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-namespace matmul {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    int block_tile_dim;
-    int dst_tile_rows;
-    int dst_tile_cols;
-    int block_cnt;
-    int in0_block_tile_cnt;
-    int in1_block_tile_cnt;
-    int out_block_tile_cnt;
-    int with_bias;
-};
-}
-
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -239,17 +225,18 @@ bool run_matmul(const bool with_bias) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new matmul::hlk_args_t{
-            .block_tile_dim = 1, // within block, how many tiles are on the K dim
-            .dst_tile_rows = (int)M, // M
-            .dst_tile_cols = (int)N, // N
-            .block_cnt = (int)K, // across blocks, how many tiles are on the K dim
-            .in0_block_tile_cnt = (int)M, // M * block_tile_dim
-            .in1_block_tile_cnt = (int)N, // N * block_tile_dim
-            .out_block_tile_cnt = (int)(M * N),
-            .with_bias=with_bias
+        vector<uint32_t> compute_kernel_args = {
+            1, // block_tile_dim, within block, how many tiles are on the K dim
+            M, // dst_tile_rows
+            N, // dst_tile_cols
+            K, // block_cnt, across blocks, how many tiles are on the K dim
+            M, // in0_block_tile_cnt, M * block_tile_dim
+            N, // in1_block_tile_cnt,  N * block_tile_dim
+            (M * N), // out_block_tile_cnt
+            with_bias // whether or not to use bias
         };
-        tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(matmul::hlk_args_t));
+
+        tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
 

@@ -31,7 +31,7 @@ using namespace tt;
 //////////////////////
 
 // Compute kernel entry point declaration
-#define compute_main(arg)                                                                          hlk_main(tt_core *core_ptr, arg)
+#define compute_main()                                                                          hlk_main(tt_core *core_ptr)
 
 #define cb_reserve_back(cb_id, num_tiles)                                                          hlk_wait_for_free_tiles(nullptr, cb_id, num_tiles)
 #define cb_wait_front(cb_id, num_tiles)                                                            hlk_wait_tiles(nullptr, cb_id, num_tiles)
@@ -476,6 +476,8 @@ void hlk_release_tile(tt_core* core_ptr, int stream);
 
 void hlk_debug_dump(tt_core* core_ptr, unsigned char *data, int size);
 
+// New API for time being, will remove soon
+const uint32_t get_compile_time_arg_val(int idx);
 
 // math
 void hlk_copy_tile_to_dst(tt_core* core_ptr, int stream, int index, int dstindex);

@@ -12,19 +12,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-namespace matmul {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    int block_tile_dim;
-    int dst_tile_rows;
-    int dst_tile_cols;
-    int block_cnt;
-    int in0_block_tile_cnt;
-    int in1_block_tile_cnt;
-    int out_block_tile_cnt;
-};
-}
-
 int main(int argc, char **argv) {
     bool pass = true;
 
@@ -119,16 +106,16 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 
-        void *hlk_args = new matmul::hlk_args_t{
-            .block_tile_dim = 1,
-            .dst_tile_rows = 1,
-            .dst_tile_cols = 1,
-            .block_cnt = 1,
-            .in0_block_tile_cnt = 1,
-            .in1_block_tile_cnt = 1,
-            .out_block_tile_cnt = 1
+        vector<uint32_t> compute_kernel_args = {
+            1, // block_tile_dim
+            1, // dst_tile_rows
+            1, // dst_tile_cols
+            1, // block_cnt
+            1, // in0_block_tile_cnt
+            1, // in1_block_tile_cnt
+            1 // out_block_tile_cnt
         };
-        tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(matmul::hlk_args_t));
+        tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto mm_kernel = tt_metal::CreateComputeKernel(

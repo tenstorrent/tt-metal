@@ -129,7 +129,13 @@ Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
                 core, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
             void *hlk_args = new bmm_kernel::hlk_args_t{ .batch = B, .Mt = Mt, .Kt = Kt, .Nt = Nt };
-            tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(bmm_kernel::hlk_args_t));
+            vector<uint32_t> compute_args = {
+                B, // B
+                Mt, // Mt
+                Kt, // Kt
+                Nt // Nt
+            };
+            tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
 
             bool fp32_dest_acc_en = false;
             bool math_approx_mode = false;

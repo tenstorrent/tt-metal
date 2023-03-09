@@ -21,8 +21,6 @@ TT_METAL_TESTS += \
 		 tt_metal/tests/test_add_two_ints \
 		 tt_metal/tests/test_dram_to_l1_multicast \
 		 tt_metal/tests/test_dram_to_l1_multicast_loopback_src \
-		 tt_metal/tests/test_dram_loopback_multi_core \
-		 tt_metal/tests/test_dram_loopback_multi_core_db \
 		 tt_metal/tests/test_dram_loopback_single_core \
 		 tt_metal/tests/test_dram_loopback_single_core_db \
 		 tt_metal/tests/test_eltwise_binary \
@@ -39,25 +37,25 @@ TT_METAL_TESTS += \
 		 tt_metal/tests/test_dataflow_cb \
 		 tt_metal/tests/test_flatten \
 		 tt_metal/tests/test_transpose_hc \
-		 tt_metal/tests/test_reduce_h \
-		 tt_metal/tests/test_reduce_w \
-		 tt_metal/tests/test_reduce_hw \
 		 tt_metal/tests/test_transpose_wh \
-		 tt_metal/tests/test_sfpu \
 		 tt_metal/tests/test_multiple_programs \
 		 tt_metal/tests/test_multi_core_kernel \
 		 tt_metal/tests/test_unpack_tilize \
 		 tt_metal/tests/test_unpack_untilize \
 		 tt_metal/tests/test_graph_interpreter \
-		 tt_metal/tests/test_bcast \
 		 tt_metal/tests/test_interleaved_layouts \
-		 tt_metal/tests/test_3x3conv_as_matmul_large_block \
-		 tt_metal/tests/test_generic_binary_reader_matmul_large_block \
+		 tt_metal/tests/test_bcast \
 		 tt_metal/tests/test_dtx \
 		 tt_metal/tests/test_dtx_tilized_row_to_col_major \
+		 tt_metal/tests/test_sfpu \
+		 tt_metal/tests/test_generic_binary_reader_matmul_large_block \
+		 tt_metal/tests/test_3x3conv_as_matmul_large_block \
 		 tt_metal/tests/test_pipeline_across_rows \
 		 tt_metal/tests/test_l1_to_l1_multi_core \
 		 tt_metal/tests/test_dram_copy_sticks_multi_core \
+		 tt_metal/tests/test_reduce_h \
+		 tt_metal/tests/test_reduce_w \
+		 tt_metal/tests/test_reduce_hw \
 
 TT_METAL_TESTS_SRCS = $(addsuffix .cpp, $(TT_METAL_TESTS))
 
