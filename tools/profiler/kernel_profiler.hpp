@@ -3,7 +3,9 @@
 #define MAIN_FUNCT_MARKER   (1U << 0)
 #define KERNEL_FUNCT_MARKER (1U << 1)
 
-#define PROFILER_OPTIONS KERNEL_FUNCT_MARKER
+#define PROFILER_OPTIONS KERNEL_FUNCT_MARKER | MAIN_FUNCT_MARKER
+
+//TODO: Add mechanism for selecting PROFILER markers
 
 #include <climits>
 

@@ -2,6 +2,7 @@
 
 import os
 import sys
+import csv
 
 import plotly.graph_objects as go
 from dash import Dash, dcc, html, Input, Output
@@ -13,6 +14,12 @@ CYCLE_COUNT_TO_MILISECS = 1.2e6
 BASE_HEIGHT = 200
 PER_CORE_HEIGHT = 90
 
+REARRANGED_TIME_CSV = "device_arranged_timestamps.csv"
+DEVICE_STATS_TXT = "device_stats.txt"
+DEVICE_PERF_HTML = "device_perf.html"
+DEVICE_TIME_CSV = "profile_log_kernel.csv"
+
+DEVICE_PERF_RESULTS = "device_perf_results.tar"
 
 def coreCompare(coreStr):
     x = int(coreStr.split(",")[0])
@@ -42,9 +49,45 @@ def generate_analysis_table(analysisData):
     )
 
 
+def return_available_timer(riscTimers, timerID):
+    if timerID in riscTimers.keys():
+        return riscTimers[timerID]
+    else:
+        return ""
+
+
+def print_arranged_csv(timerVals, timerIDLabels, pcie_slot, freq_text):
+    with open(REARRANGED_TIME_CSV, "w") as timersCSV:
+        header = ["core_x", "core_y"]
+        timeWriter = csv.writer(timersCSV, delimiter=",")
+
+        timeWriter.writerow(["Clock Frequency [GHz]", freq_text])
+        timeWriter.writerow(["PCIe slot",pcie_slot])
+        timeWriter.writerow(
+            ["core x", "core y"]
+            + [f"BRISC {timerIDLabel[1]}" for timerIDLabel in timerIDLabels]
+            + [f"NCRISC {timerIDLabel[1]}" for timerIDLabel in timerIDLabels]
+        )
+        for core in sorted(timerVals.keys(), key=coreCompare):
+            coreSplit = core.split(",")
+            core_x = coreSplit[0].strip()
+            core_y = coreSplit[1].strip()
+            timeWriter.writerow(
+                [core_x, core_y]
+                + [
+                    return_available_timer(timerVals[core]["BRISC"], timerIDLabel[0])
+                    for timerIDLabel in timerIDLabels
+                ]
+                + [
+                    return_available_timer(timerVals[core]["NCRISC"], timerIDLabel[0])
+                    for timerIDLabel in timerIDLabels
+                ]
+            )
+
+
 def print_stats_outfile(timerStats, timerStatsCores):
     original_stdout = sys.stdout
-    with open("device_stats.txt", "w") as statsFile:
+    with open(DEVICE_STATS_TXT, "w") as statsFile:
         sys.stdout = statsFile
         print_stats(timerStats, timerStatsCores)
         sys.stdout = original_stdout
@@ -88,7 +131,10 @@ def print_stats(timerStats, timerStatsCores):
                         core = f"{core_x},{core_y}"
                         if core_y > 5:
                             core = f"{core_x},{core_y-1}"
-                        if core in timerStatsCores.keys() and duration in timerStatsCores[core].keys():
+                        if (
+                            core in timerStatsCores.keys()
+                            and duration in timerStatsCores[core].keys()
+                        ):
                             print(
                                 f"{timerStatsCores[core][duration]:>{numberWidth},}",
                                 end="",
@@ -154,12 +200,14 @@ def main(args):
     external_stylesheets = ["https://codepen.io/chriddyp/pen/bWLwgP.css"]
     app = Dash(__name__, external_stylesheets=external_stylesheets)
 
-    with open("./profile_log_kernel.csv", "r") as csvfile:
-        freq = csvfile.readline()
+    freq_text = ""
+    with open(DEVICE_TIME_CSV, "r") as csvfile:
+        freq_text = csvfile.readline().split('at ')[-1].split(' ')[0].strip()
         fields = csvfile.readline()
         for line in csvfile.readlines():
             vals = line.split(",")
             if len(vals) == 6:
+                pcie_slot = vals[0].strip()
                 col = vals[1].strip()
                 row = vals[2].strip()
                 risc = vals[3].strip()
@@ -174,6 +222,8 @@ def main(args):
                         timerVals[core][risc] = {timerID: cycleCount}
                 else:
                     timerVals[core] = {risc: {timerID: cycleCount}}
+
+    print_arranged_csv(timerVals, setup.timerIDLabels, pcie_slot, freq_text)
 
     if timerVals:
         maxTime = 0
@@ -321,9 +371,7 @@ def main(args):
                             orientation="h",
                             name=combo[3],
                             showlegend=showlegend,
-                            marker=dict(
-                                color=color,
-                            ),
+                            marker=dict(color=color),
                         )
                     )
         fig.add_trace(
@@ -340,11 +388,15 @@ def main(args):
             barmode="stack", height=BASE_HEIGHT + PER_CORE_HEIGHT * len(yVals)
         )
 
-        fig.write_html("kernel_perf.html")
+        fig.write_html(DEVICE_PERF_HTML)
+
+        os.system(
+            f"tar -czf {DEVICE_PERF_RESULTS} {DEVICE_TIME_CSV} {DEVICE_STATS_TXT} {DEVICE_PERF_HTML} {REARRANGED_TIME_CSV}"
+        )
 
         app.layout = html.Div(
             [
-                html.H1("Kernel Profiler Plot"),
+                html.H1("Device Performance"),
                 html.Br(),
                 html.H3("Stats Table"),
                 generate_analysis_table(timerStats),

@@ -95,7 +95,7 @@ void Profiler::kernelProfilerCallback(
     if (add_header)
     {
         stream << "Chip clock is at 1.2 GHz" << std::endl;
-        stream << "chip_id, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]" << std::endl;
+        stream << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]" << std::endl;
     }
     constexpr int DRAM_ROW = 6;
     if (core_y > DRAM_ROW){

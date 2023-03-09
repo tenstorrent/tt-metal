@@ -68,12 +68,12 @@ After this setup, default markers will be generated and can be post-processed.
 
 Default markers are:
 
-1. Kernel start with timer_id 2
-2. Kernel end with timer_id 3
+1. Kernel start
+2. Kernel end
 
-The generated csv is `profile_log_kernel.csv` is saved under `tools/profiler/` byt default.
+The generated csv is `profile_log_kernel.csv` is saved under `tools/profiler/` by default.
 
-Sample generated csv for running a kernel on coer 0,0:
+Sample generated csv for running a kernel on core 0,0:
 
 ```
 0, 0, 0, BRISC, 2, 46413751954532
@@ -82,27 +82,9 @@ Sample generated csv for running a kernel on coer 0,0:
 0, 0, 0, NCRISC, 3, 46413751955414
 ```
 
-<!--`test_matmul_multi_core_multi_dram.cpp` is a good example that demonstrates how to grab kernel side-->
-<!--profiler time. Both kernels `writer_matmul_tile_layout.cpp` and  `reader_matmul_tile_layout.cpp`-->
-<!--used by these tests are modified to measure their entire execution period.-->
 
-<!--Once the `tt_metal` test that runs the kernel under profile finishes, `profile_log_kernel.csv` is-->
-<!--generated.-->
+### Post-processing kernel profiler
 
-<!--The following is the sample result for the `test_add_two_ints.cpp`. You can see that inline with-->
-<!--the host side example above, same markers are recorded twice as the same kernel runs on the same cores with different args.-->
-
-<!--```-->
-<!--0 ,1 ,1 ,BRISC ,0 ,1892410749640-->
-<!--0 ,1 ,1 ,BRISC ,1 ,1892410749851-->
-<!--0 ,1 ,1 ,BRISC ,0 ,1892694762480-->
-<!--0 ,1 ,1 ,BRISC ,1 ,1892694762683-->
-<!--```-->
-
-### Postprocessing kernel profiler
-
-<!--Plotting kernel profiler data requires setting up the `plot_steup.py`. Sample tests are added to this file. The setup is based on timer ID and which risc type they come from. In `test_add_two_ints` for examples shows the plotting of its `brisc`-->
-<!--kernel profiling results. -->
 
 1. Set up the environment for running the plotter:
 
@@ -121,4 +103,9 @@ cd tools/profiler/
 
 3. Navigate to `<machine IP>:8050` to view output chart.
 
-4. `kernel_perf.html` and `device_stats.txt` are generated that contain the plot and the chart for the stats.
+4. The following artifact will also be generated under the `tools/profiler/` folder:
+    - `device_perf.html` contains the interactive time series plot
+    - `device_stats.txt` contains the extended stats for the run
+    - `device_arranged_timestamps.csv` contains all timestamps arranged by each row dedicated to cores
+
+5. For convenience all of these files are tarball into `device_perf_results.tar`
