@@ -75,3 +75,6 @@ data/
 
 # exclude pytorch binaries
 *.pt
+
+# Remove stuff from before, get rid of later
+gpai/
