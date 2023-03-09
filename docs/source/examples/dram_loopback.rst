@@ -3,7 +3,7 @@
 DRAM Loopback
 =============
 
-We will build a program in TT-Accel that will simply copy data from one DRAM
+We will build a program in TT-Metal that will simply copy data from one DRAM
 buffer to another, using the compute engine and an intermediate L1 buffer to do
 so. We call this concept "loopback".
 

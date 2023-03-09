@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.abspath('.'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'TT-Accel'
+project = 'TT-Metal'
 copyright = 'Tenstorrent'
 author = 'Tenstorrent'
 
@@ -81,5 +81,5 @@ def setup(app):
     app.add_css_file('tt_theme.css')
 
 # Breathe configs
-breathe_projects = {"gpaidoxygen": "../doxygen_build/xml/"}
-breathe_default_project = "gpaidoxygen"
+breathe_projects = {"ttmetaldoxygen": "../doxygen_build/xml/"}
+breathe_default_project = "ttmetaldoxygen"

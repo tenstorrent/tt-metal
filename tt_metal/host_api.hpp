@@ -21,7 +21,7 @@
 
 /** @file */
 
-/** \mainpage gp.ai Internal C++ Documentation
+/** \mainpage tt-metal Internal C++ Documentation
  *
  * Welcome. Please navigate using the Files menu. All APIs are documented
  * under the files listed in the Files menu.

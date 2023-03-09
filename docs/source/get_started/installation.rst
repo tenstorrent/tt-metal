@@ -7,10 +7,10 @@ https://github.com/tenstorrent-accel/gp.ai
 To be added to the repo, please contact Jasmina or Davor at:
 jvasiljevic@tenstorrent.com, dcapalija@tenstorrent.com.
 
-Running TT-Accel on a cloud machine
+Running TT-Metal on a cloud machine
 -----------------------------------
 
-Run the following commands to set up the TT-Accel project:
+Run the following commands to set up the TT-Metal project:
 
 ::
 
@@ -18,7 +18,7 @@ Run the following commands to set up the TT-Accel project:
     make build
     source build/python_env/bin/activate
 
-Compile and execute an example TT-Accel application on Grayskull:
+Compile and execute an example TT-Metal application on Grayskull:
 
 ::
 

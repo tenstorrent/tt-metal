@@ -51,8 +51,8 @@ CONFIG_CFLAGS += -DTT_ENABLE_CODE_TIMERS
 endif
 
 # Gate certain dev env requirements behind this
-ifeq ("$(GPAI_ENV)", "dev")
-GPAI_ENV_IS_DEV = 1
+ifeq ("$(TT_METAL_ENV)", "dev")
+TT_METAL_ENV_IS_DEV = 1
 endif
 
 OBJDIR 		= $(OUT)/obj
@@ -125,7 +125,7 @@ LIBS_TO_BUILD = \
 	python_env \
 	gpai
 
-ifdef GPAI_ENV_IS_DEV
+ifdef TT_METAL_ENV_IS_DEV
 LIBS_TO_BUILD += \
 	python_env/dev \
 	git_hooks
@@ -185,7 +185,7 @@ include python_env/module.mk
 include gpai/module.mk
 
 # only include these modules if we're in development
-ifdef GPAI_ENV_IS_DEV
+ifdef TT_METAL_ENV_IS_DEV
 include build_kernels_for_riscv/tests/module.mk
 include llrt/tests/module.mk
 include tt_metal/tests/module.mk
