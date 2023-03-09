@@ -22,8 +22,8 @@ count_loc build_kernels_for_riscv tests
 count_loc common
 count_loc hlkc meow_hash
 count_loc hostdevcommon
-count_loc ll_buda tests,op_library
-count_loc ll_buda_bindings
+count_loc tt_metal tests,op_library
+count_loc pymetal
 count_loc llrt tests
 echo
 echo
@@ -31,7 +31,7 @@ echo
 # kernels
 echo "Kernels/OPs:"
 count_loc kernels
-count_loc ll_buda/op_library
+count_loc tt_metal/op_library
 echo
 echo
 
@@ -47,7 +47,7 @@ echo
 
 # tests
 echo "Tests:"
-count_loc ll_buda/tests
+count_loc tt_metal/tests
 count_loc build_kernels_for_riscv/tests
 count_loc llrt/tests
 count_loc programming_examples
