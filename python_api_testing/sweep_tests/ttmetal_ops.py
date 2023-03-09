@@ -1,5 +1,5 @@
 import torch
-from pymetal import tt_metal as ttm
+from pymetal import ttmetal as ttm
 from python_api_testing.models.utility_functions import (
     tilize_to_list,
     untilize,

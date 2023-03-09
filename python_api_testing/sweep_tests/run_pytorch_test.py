@@ -78,7 +78,7 @@ def run_pytorch_test(args):
                     test_name,
                     input_shapes,
                     data_seed,
-                    op_map[test_name]["ll_buda_op"],
+                    op_map[test_name]["ttmetal_op"],
                     op_map[test_name]["pytorch_op"],
                     input_shapes,
                     datagen_funcs,
