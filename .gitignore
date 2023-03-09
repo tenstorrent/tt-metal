@@ -66,7 +66,7 @@ release/machine_setup/assets/
 
 # PyBind extensions and wheel setup
 *.egg-info/
-gpai/gpai/*.so
+pymetal/ttmetal/*.so
 .installed.cfg
 *.egg
 

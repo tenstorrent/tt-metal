@@ -10,8 +10,8 @@
 #include "tt_metal/op_library/untilize/untilize_op.hpp"
 #include "tt_metal/op_library/reshape/reshape_op.hpp"
 
-#include "gpai_bindings.hpp"
-#include "gpai/csrc/type_caster.hpp"
+#include "pymetal_bindings.hpp"
+#include "pymetal/csrc/type_caster.hpp"
 
 namespace py = pybind11;
 
@@ -215,7 +215,7 @@ void DeviceModule(py::module &m_device) {
 
 PYBIND11_MODULE(_C, m) {
 
-    m.attr("__name__") = "gpai._C";
+    m.attr("__name__") = "ttmetal._C";
     m.doc() = "General purpose AI python bindings";
 
     py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an tt_metal tensor");

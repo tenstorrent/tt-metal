@@ -1,13 +1,13 @@
-from gpai import gpai
+import ttmetal
 import torch
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
 def test_matmul():
 
-    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-    gpai.device.InitializeDevice(device)
-    host = gpai.device.GetHost()
-    gpai.device.StartDebugPrintServer(device)
+    device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
+    ttmetal.device.InitializeDevice(device)
+    host = ttmetal.device.GetHost()
+    ttmetal.device.StartDebugPrintServer(device)
 
     torch.manual_seed(1234)
 
@@ -21,10 +21,10 @@ def test_matmul():
     A = torch.randn((batch,1,M,K))
     B = torch.randn((1,1,K,N)) - 0.95
 
-    t0 = gpai.tensor.Tensor(tilize_to_list(A), [batch, 1, M, K], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
-    t1 = gpai.tensor.Tensor(tilize_to_list(B), [1, 1, K, N], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
+    t0 = ttmetal.tensor.Tensor(tilize_to_list(A), [batch, 1, M, K], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
+    t1 = ttmetal.tensor.Tensor(tilize_to_list(B), [1, 1, K, N], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
 
-    t2 = gpai.tensor.matmul(t0, t1)
+    t2 = ttmetal.tensor.matmul(t0, t1)
     assert(t2.shape() == [batch, 1, M, N])
     tt_host_rm = t2.to(host).data()
     pyt_got_back = torch.Tensor(tt_host_rm).reshape((batch,1,M,N))
@@ -42,10 +42,10 @@ def test_matmul():
     A = torch.randn((batch,C,M,K))
     B = torch.randn((batch,C,K,N)) - 0.95
 
-    t0 = gpai.tensor.Tensor(tilize_to_list(A), [batch, C, M, K], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
-    t1 = gpai.tensor.Tensor(tilize_to_list(B), [batch, C, K, N], gpai.tensor.DataType.BFLOAT16, gpai.tensor.Layout.TILE, device)
+    t0 = ttmetal.tensor.Tensor(tilize_to_list(A), [batch, C, M, K], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
+    t1 = ttmetal.tensor.Tensor(tilize_to_list(B), [batch, C, K, N], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
 
-    t2 = gpai.tensor.bmm(t0, t1)
+    t2 = ttmetal.tensor.bmm(t0, t1)
     assert(t2.shape() == [batch, C, M, N])
     tt_host_rm = t2.to(host).data()
     pyt_got_back = torch.Tensor(tt_host_rm).reshape((batch,C,M,N))
@@ -57,7 +57,7 @@ def test_matmul():
     match = is_close(pyt_got_back_rm, ref_bmm, 0.07, 0.07, maxmag, 0.01)
     print("Match=", match.item())
 
-    gpai.device.CloseDevice(device)
+    ttmetal.device.CloseDevice(device)
     return
 
 if __name__ == "__main__":

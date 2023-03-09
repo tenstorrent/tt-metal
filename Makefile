@@ -123,7 +123,7 @@ LIBS_TO_BUILD = \
 	tensor \
 	tools \
 	python_env \
-	gpai
+	pymetal
 
 ifdef TT_METAL_ENV_IS_DEV
 LIBS_TO_BUILD += \
@@ -182,7 +182,7 @@ include common/common.mk
 include tensor/module.mk
 include tools/module.mk
 include python_env/module.mk
-include gpai/module.mk
+include pymetal/module.mk
 
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV
