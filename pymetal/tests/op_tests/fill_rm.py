@@ -6,14 +6,14 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-from gpai import gpai
+import ttmetal
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight
 from python_api_testing.models.utility_functions import tt2torch
 
 # Initialize the device
-device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-gpai.device.InitializeDevice(device)
-host = gpai.device.GetHost()
+device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
+ttmetal.device.InitializeDevice(device)
+host = ttmetal.device.GetHost()
 
 if __name__ == "__main__":
     N = 2
@@ -27,8 +27,8 @@ if __name__ == "__main__":
     x[:, :, :fillH, :fillW] = 1.0
     xp = pad_weight(x)
 
-    xt = gpai.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], gpai.tensor.DataType.FLOAT32, gpai.tensor.Layout.TILE, device)
-    xtt = gpai.tensor.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
+    xt = ttmetal.tensor.Tensor(tilize_to_list(xp), [N, C, H, W], ttmetal.tensor.DataType.FLOAT32, ttmetal.tensor.Layout.TILE, device)
+    xtt = ttmetal.tensor.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
     assert(xtt.shape() == [N,C,H,W])
 
     xtt_data = xtt.to(host).data()
@@ -38,4 +38,4 @@ if __name__ == "__main__":
     print("reshape() max absdiff=")
     print_diff_argmax(tt_got_back, xp)
 
-gpai.device.CloseDevice(device)
+ttmetal.device.CloseDevice(device)

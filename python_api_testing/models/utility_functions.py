@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import struct
 
-from gpai import gpai
+import ttmetal
 
 def nearest_32(x):
     return math.ceil(x / 32) * 32
@@ -205,11 +205,11 @@ def get_oom_of_float(float_lst):
 
 def get_FR():
     # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    return gpai.device.GetForceRecompiles()
+    return ttmetal.device.GetForceRecompiles()
 
 def set_FR(new_val):
     # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    gpai.device.SetForceRecompiles(new_val)
+    ttmetal.device.SetForceRecompiles(new_val)
     print("Force recompiles=", get_FR())
 
 def divup(a, b):
@@ -227,8 +227,8 @@ def tt2torch(ttx):
     """
     Converts an llbuda tiled tensor to torch tensor.
     """
-    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-    host = gpai.device.GetHost()
+    device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
+    host = ttmetal.device.GetHost()
     shp = ttx.shape()
     tt_out = ttx.to(host)
     torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
@@ -238,8 +238,8 @@ def tt2torch_rm(ttx):
     """
     Converts an llbuda row-major tensor to torch tensor.
     """
-    device = gpai.device.CreateDevice(gpai.device.Arch.GRAYSKULL, 0)
-    host = gpai.device.GetHost()
+    device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
+    host = ttmetal.device.GetHost()
     shp = ttx.shape()
     tt_out = ttx.to(host)
     torch_out = torch.Tensor(tt_out.data()).reshape(shp)
@@ -249,7 +249,7 @@ def ttP(x, count=4, offset=0, stride=1):
     if type(x) == torch.Tensor:
         t1 = x.reshape(-1)
     else:
-        host = gpai.device.GetHost()
+        host = ttmetal.device.GetHost()
         shp = x.shape()
         tt_out = x.to(host)
         torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
@@ -263,37 +263,37 @@ def enable_compile_cache():
     """
     Enables the compiler caching.
     """
-    gpai.device.EnableCompileCache()
+    ttmetal.device.EnableCompileCache()
 
 def disable_compile_cache():
     """
     Disables the compiler caching.
     """
-    gpai.device.DisableCompileCache()
+    ttmetal.device.DisableCompileCache()
 
 def get_compile_cache_enabled():
     """
     Returns the current state of compile cache on/off switch.
     """
-    return gpai.device.GetCompileCacheEnabled()
+    return ttmetal.device.GetCompileCacheEnabled()
 
 def enable_binary_cache():
     """
     Enables the binary loading cache.
     """
-    gpai.device.EnableBinaryCache()
+    ttmetal.device.EnableBinaryCache()
 
 def disable_binary_cache():
     """
     Disables the binary loading cache.
     """
-    gpai.device.DisableBinaryCache()
+    ttmetal.device.DisableBinaryCache()
 
 def get_binary_cache_enabled():
     """
     Returns the current state of binary loading cache on/off switch.
     """
-    return gpai.device.GetBinaryCacheEnabled()
+    return ttmetal.device.GetBinaryCacheEnabled()
 
 
 def float_to_bits(x):
