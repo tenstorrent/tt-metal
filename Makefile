@@ -73,30 +73,13 @@ else
 	BASE_INCLUDES=-Isrc/firmware/riscv/$(ARCH_NAME)
 endif
 
-CCACHE := $(shell command -v ccache 2> /dev/null)
-
-# Ccache setup
-ifneq ($(CCACHE),)
-	export CCACHE_DIR=$(HOME)/.ccache
-	export CCACHE_MAXSIZE=10
-	export CCACHE_UMASK=002
-	export CCACHE_COMPRESS=true
-	export CCACHE_NOHARDLINK=true
-	export CCACHE_DIR_EXISTS=$(shell [ -d $(CCACHE_DIR) ] && echo "1")
-	ifneq ($(CCACHE_DIR_EXISTS), 1)
-	CCACHE_CMD=
-	else
-	CCACHE_CMD=$(CCACHE)
-	endif
-endif
-
 BASE_INCLUDES+=-Ithird_party/yaml-cpp/include
 BASE_INCLUDES+=-I./ # to be able to include modules relative to root level from any module in the project
 
 #WARNINGS ?= -Wall -Wextra
 WARNINGS ?= -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter
-CC ?= $(CCACHE_CMD) gcc
-CXX ?= $(CCACHE_CMD) g++
+CC ?= gcc
+CXX ?= g++
 CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\" -DFMT_HEADER_ONLY -Ithird_party/fmt
 CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden
 LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) -Ldevice/lib -ldl #-l/usr/include/python3.8
@@ -133,39 +116,9 @@ endif
 
 build: $(LIBS_TO_BUILD)
 
-valgrind: $(VG_EXE)
-	valgrind --show-leak-kinds=all \
-	--leak-check=full \
-	--show-leak-kinds=all \
-	--track-origins=yes \
-	--verbose \
-	--log-file=valgrind-out.txt $(VG_ARGS) $(VG_EXE)
-
-
 clean_fw: src/firmware/clean
 clean: src/ckernels/clean clean_fw
 	rm -rf $(OUT)
-
-install: build
-ifeq ($(PREFIX), $(OUT))
-	@echo "To install you must set PREFIX, e.g."
-	@echo ""
-	@echo "  PREFIX=/usr CONFIG=release make install"
-	@echo ""
-	@exit 1
-endif
-	cp -r $(LIBDIR)/* $(PREFIX)/lib/
-	cp -r $(INCDIR)/* $(PREFIX)/include/
-	cp -r $(BINDIR)/* $(PREFIX)/bin/
-
-package:
-	tar czf spatial2_$(shell git rev-parse HEAD).tar.gz --exclude='*.d' --exclude='*.o' --exclude='*.a' --transform 's,^,spatial2_$(shell git rev-parse HEAD)/,' -C $(OUT) .
-
-gitinfo:
-	mkdir -p $(OUT)
-	rm -f $(OUT)/.gitinfo
-	@echo $(GIT_BRANCH) >> $(OUT)/.gitinfo
-	@echo $(GIT_HASH) >> $(OUT)/.gitinfo
 
 # These must be in dependency order (enforces no circular deps)
 include common/module.mk
