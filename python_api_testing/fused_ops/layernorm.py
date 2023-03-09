@@ -59,7 +59,7 @@ def Layernorm(gamma, beta, epsilon: float, H, W, device, num_dims = 2):
         beta_ = ttm.tensor.Tensor(
             beta,
             [1, 1, padded_h, padded_w],
-            ttm.tensor.DataType.FLOAT32,
+            ttm.tensor.DataType.BFLOAT16,
             ttm.tensor.Layout.TILE,
             device
         )

@@ -10,7 +10,7 @@ import torch
 from transformers import BertTokenizer, BertForQuestionAnswering
 import numpy as np
 
-from pymetal import tt_metal as ttm
+from pymetal import ttmetal as ttm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 # from utility_functions import get_FR, set_FR
 from fused_ops.linear import Linear as TtLinear

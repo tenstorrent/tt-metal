@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import struct
 
-import ttmetal
+from pymetal import ttmetal as ttm
 
 def nearest_32(x):
     return math.ceil(x / 32) * 32
@@ -205,11 +205,11 @@ def get_oom_of_float(float_lst):
 
 def get_FR():
     # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    return ttmetal.device.GetForceRecompiles()
+    return ttm.device.GetForceRecompiles()
 
 def set_FR(new_val):
     # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    ttmetal.device.SetForceRecompiles(new_val)
+    ttm.device.SetForceRecompiles(new_val)
     print("Force recompiles=", get_FR())
 
 def divup(a, b):
@@ -227,8 +227,8 @@ def tt2torch(ttx):
     """
     Converts an llbuda tiled tensor to torch tensor.
     """
-    device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
-    host = ttmetal.device.GetHost()
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    host = ttm.device.GetHost()
     shp = ttx.shape()
     tt_out = ttx.to(host)
     torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
@@ -238,8 +238,8 @@ def tt2torch_rm(ttx):
     """
     Converts an llbuda row-major tensor to torch tensor.
     """
-    device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
-    host = ttmetal.device.GetHost()
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    host = ttm.device.GetHost()
     shp = ttx.shape()
     tt_out = ttx.to(host)
     torch_out = torch.Tensor(tt_out.data()).reshape(shp)
@@ -249,7 +249,7 @@ def ttP(x, count=4, offset=0, stride=1):
     if type(x) == torch.Tensor:
         t1 = x.reshape(-1)
     else:
-        host = ttmetal.device.GetHost()
+        host = ttm.device.GetHost()
         shp = x.shape()
         tt_out = x.to(host)
         torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
@@ -263,37 +263,37 @@ def enable_compile_cache():
     """
     Enables the compiler caching.
     """
-    ttmetal.device.EnableCompileCache()
+    ttm.device.EnableCompileCache()
 
 def disable_compile_cache():
     """
     Disables the compiler caching.
     """
-    ttmetal.device.DisableCompileCache()
+    ttm.device.DisableCompileCache()
 
 def get_compile_cache_enabled():
     """
     Returns the current state of compile cache on/off switch.
     """
-    return ttmetal.device.GetCompileCacheEnabled()
+    return ttm.device.GetCompileCacheEnabled()
 
 def enable_binary_cache():
     """
     Enables the binary loading cache.
     """
-    ttmetal.device.EnableBinaryCache()
+    ttm.device.EnableBinaryCache()
 
 def disable_binary_cache():
     """
     Disables the binary loading cache.
     """
-    ttmetal.device.DisableBinaryCache()
+    ttm.device.DisableBinaryCache()
 
 def get_binary_cache_enabled():
     """
     Returns the current state of binary loading cache on/off switch.
     """
-    return ttmetal.device.GetBinaryCacheEnabled()
+    return ttm.device.GetBinaryCacheEnabled()
 
 
 def float_to_bits(x):

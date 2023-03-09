@@ -30,7 +30,7 @@ import torch
 import tiktoken
 from ref.model import GPTConfig, GPT
 from tt.tt_model import TTGPT
-from pymetal import tt_metal as ttm
+from pymetal import ttmetal as ttm
 
 path_prefix = 'python_api_testing/models/nanogpt/'
 

@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
-from pymetal import tt_metal as ttm
+from pymetal import ttmetal as ttm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 

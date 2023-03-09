@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from pymetal import tt_metal as ttm
+from pymetal import ttmetal as ttm
 from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
@@ -76,7 +76,7 @@ class CausalSelfAttention(nn.Module):
         self.reciprocal_of_sqrt_hidden_dim_tensor = ttm.tensor.Tensor(
             [1 / math.sqrt(self.n_embd/self.n_head)] + [0 for _ in range(32 * 32 - 1)],
             [1, 1, 32, 32],
-            ttm.tensor.DataType.FLOAT32,
+            ttm.tensor.DataType.BFLOAT16,
             ttm.tensor.Layout.TILE,
             device
         )
@@ -287,7 +287,7 @@ class TTGPT(nn.Module):
         x1 = pad_weight(x.unsqueeze(1))
         x_tilized = tilize_to_list(x1)
         x_tt = ttm.tensor.Tensor(
-            x_tilized, x1.shape, ttm.tensor.DataType.FLOAT32,  ttm.tensor.Layout.TILE, self.device)
+            x_tilized, x1.shape, ttm.tensor.DataType.BFLOAT16,  ttm.tensor.Layout.TILE, self.device)
         #print_diff_tt_pyt(x_tt, d["tokpos"].unsqueeze(1), "Embeddings")
         for block in self.transformer.h:
             x_tt = block(x_tt, t)

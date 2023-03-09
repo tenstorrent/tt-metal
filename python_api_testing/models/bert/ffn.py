@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../..")
 import torch
 from transformers import BertForQuestionAnswering
 
-from pymetal import tt_metal as ttm
+from pymetal import ttmetal as ttm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
 from fused_ops.linear import Linear as TtLinear
 

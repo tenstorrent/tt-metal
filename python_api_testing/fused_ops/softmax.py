@@ -6,7 +6,7 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-from ttm import gttm
+from pymetal import ttmetal as ttm
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
 from python_api_testing.models.utility_functions import tt2torch, tt2torch_rm
 
@@ -44,7 +44,7 @@ def ref_stable_softmax(x):
     return softmax
 
 if __name__ == "__main__":
-    device = ttm.device.CreateDevice(gttmdevice.Arch.GRAYSKULL, 0)
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()
     H, W = 64, 96
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     ref_sm = ref_stable_softmax(x)
 
     x_t = tilize_to_list(x)
-    t0 = ttm.tensor.Tensor(x_t, [1, 1, H, W], gttmtensor.DataType.BFLOAT16, gpttmensor.Layout.TILE, device)
+    t0 = ttm.tensor.Tensor(x_t, [1, 1, H, W], ttm.tensor.DataType.BFLOAT16, gpttmensor.Layout.TILE, device)
     func = softmax
     t1 = func(t0)
     t2_data = t1.to(host).data()

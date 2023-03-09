@@ -8,7 +8,7 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-from ttm import gttm
+from pymetal import ttmetal as ttm
 from python_api_testing.fused_ops.add_and_norm import AddAndNorm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
 
@@ -57,9 +57,9 @@ def run_add_and_norm_inference():
     pytorch_out = pytorch_add_and_norm_model(add_and_norm_inputa, add_and_norm_inputb)
 
     tt_add_and_norm_input_a = tilize_to_list(pad_activation(add_and_norm_inputa))
-    tt_add_and_norm_input_a = ttm.tensor.Tensor(tt_add_and_norm_input_a, add_and_norm_inputa.shape, gttmtensor.DataType.BFLOAT16,  gpttmensor.Layout.TILE, device)
+    tt_add_and_norm_input_a = ttm.tensor.Tensor(tt_add_and_norm_input_a, add_and_norm_inputa.shape, ttm.tensor.DataType.BFLOAT16,  ttm.tensor.Layout.TILE, device)
     tt_add_and_norm_input_b = tilize_to_list(pad_activation(add_and_norm_inputb))
-    tt_add_and_norm_input_b = ttm.tensor.Tensor(tt_add_and_norm_input_b, add_and_norm_inputb.shape, gttmtensor.DataType.BFLOAT16,  gpttmensor.Layout.TILE, device)
+    tt_add_and_norm_input_b = ttm.tensor.Tensor(tt_add_and_norm_input_b, add_and_norm_inputb.shape, ttm.tensor.DataType.BFLOAT16,  ttm.tensor.Layout.TILE, device)
 
     tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).to(host)
     tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
@@ -67,7 +67,7 @@ def run_add_and_norm_inference():
 
 if __name__ == "__main__":
     # Initialize the device
-    device = ttm.device.CreateDevice(gttmdevice.Arch.GRAYSKULL, 0)
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()
     run_add_and_norm_inference()
