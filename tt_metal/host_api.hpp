@@ -45,9 +45,6 @@ void dumpProfilerResults(std::string name_append = "", bool add_header = false);
 // set profiler log dir
 void setProfilerDir(std::string output_dir = "");
 
-// stop host side printf server
-void stopPrintfServer();
-
 // ==================================================
 //                  HOST API: host and device
 // ==================================================
@@ -390,7 +387,7 @@ bool CompileProgram(
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)
 // - Takes the device out of reset
-bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPrintfServer = false);
+bool ConfigureDeviceWithProgram(Device *device, Program *program);
 
 // Loads all kernel args into L1s of assigned Tensix cores
 bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const tt_xy_pair &logical_core, const std::vector<uint32_t> &runtime_args);
@@ -402,6 +399,9 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
 bool LaunchKernels(Device *device, Program *program, bool stagger_start = false);
+
+// Dump all device side profiling results
+void ReadDeviceSideProfileData(Device *device, Program *program);
 
 //
 /**

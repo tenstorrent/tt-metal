@@ -444,11 +444,11 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Writing kernel runtime args to device complete");
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program, profile_kernel);
+        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
+        tt_metal::ReadDeviceSideProfileData(device, program);
 
         tt_metal::dumpProfilerResults("Init");
-        tt_metal::stopPrintfServer();
 
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");

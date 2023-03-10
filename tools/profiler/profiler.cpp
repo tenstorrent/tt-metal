@@ -82,6 +82,43 @@ void Profiler::dumpResults(std::string name_append, bool add_header)
     name_to_timer_map.clear();
 }
 
+void Profiler::dumpKernelResults(
+        int chip_id,
+        int core_x,
+        int core_y,
+        std::string hart_name,
+        uint64_t timestamp,
+        uint32_t timer_id)
+{
+    std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
+    std::ofstream log_file;
+
+    if (firstRun)
+    {
+        log_file.open(log_path);
+        log_file << "Chip clock is at 1.2 GHz" << std::endl;
+        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]" << std::endl;
+        firstRun = false;
+    }
+    else
+    {
+        log_file.open(log_path,  std::ios_base::app);
+    }
+    constexpr int DRAM_ROW = 6;
+    if (core_y > DRAM_ROW){
+       core_y = core_y - 2;
+    }
+    else{
+       core_y--;
+    }
+    core_x--;
+    log_file << chip_id << ", " << core_x << ", " << core_y << ", " << hart_name << ", ";
+    log_file << timer_id << ", ";
+    log_file << timestamp;
+    log_file << std::endl;
+    log_file.close();
+}
+
 void Profiler::kernelProfilerCallback(
         std::ostream& stream,
         int chip_id,

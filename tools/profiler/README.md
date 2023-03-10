@@ -41,13 +41,11 @@ On the host side minimal changes are necessary on the code.
 
 1. The compile flag for kernel side profiling has to be set, this is done by setting the flag in `tt_metal::CompileProgram`.
 2. Print server start flag must be set, this is done setting the flag in `tt_metal::ConfigureDeviceWithProgram` .
-3. `tt_metal::stopPrintfServer` function has to run before another `tt_metal::ConfigureDeviceWithProgram` with print start server set to true can start.
 
 e.g.
 ```
     constexpr bool profile_kernel = true;
     pass &= tt_metal::CompileProgram(device, program, skip_hlkc, profile_kernel);
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program, profile_kernel);
     .
     .
     .
@@ -55,13 +53,6 @@ e.g.
     .
     tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, second_runtime_args);
     pass &= tt_metal::LaunchKernels(device, program);
-
-    .
-    .
-    .
-    .
-    .
-    tt_metal::stopPrintfServer();
 ```
 
 After this setup, default markers will be generated and can be post-processed.

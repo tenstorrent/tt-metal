@@ -326,7 +326,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program, profile_kernel);
+        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         log_info(LogTest, "Launching kernels...");
         pass &= tt_metal::LaunchKernels(device, program);
         log_info(LogTest, "Kernels done.");

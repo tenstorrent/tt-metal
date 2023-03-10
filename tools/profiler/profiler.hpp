@@ -6,6 +6,8 @@
 #include <iostream>
 #include <filesystem>
 
+#define DEVICE_BUFFER_SIZE            40U
+
 using std::chrono::steady_clock;
 using std::chrono::duration;
 using std::chrono::duration_cast;
@@ -55,6 +57,15 @@ class Profiler {
 
         //Get kernel profile log filename
         std::string getKernelProfilerLogName();
+
+        // Dumpe device profile results
+        void dumpKernelResults(
+            int chip_id,
+            int core_x,
+            int core_y,
+            std::string hart_name,
+            uint64_t timestamp,
+            uint32_t timer_id);
 
         //Callback on receiving profiler data from kernels
         static void kernelProfilerCallback(

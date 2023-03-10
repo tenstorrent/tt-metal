@@ -448,7 +448,7 @@ void ConfigureKernelGroup(const KernelGroup &kernel_group, Device *device, const
 
 
 
-bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPrintfServer) {
+bool ConfigureDeviceWithProgram(Device *device, Program *program) {
     bool pass = true;
 
     tt_metal_profiler.markStart("ConfigureDeviceWithProgram");
@@ -487,14 +487,6 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPr
         llrt::write_circular_buffer_config_vector_to_core(cluster, pcie_slot, worker_core, circular_buffer_config_vec); // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
     }
 
-    // Setup printf host server
-    if (doStartPrintfServer)
-    {
-        int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
-
-        std::string log_name = tt_metal_profiler.getKernelProfilerLogName();
-        tt_start_debug_print_server(cluster, {pcie_slot}, worker_cores, hart_mask, log_name.c_str());
-    }
 
     // Take device out of reset
     const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS; // PROF_BEGIN("LOAD_BLANK")
@@ -540,11 +532,6 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
         }, core);
     }
     return pass;
-}
-
-void stopPrintfServer()
-{
-    tt_stop_debug_print_server();
 }
 
 bool core_runs_ncrisc(Program *program, const tt_xy_pair &logical_core) {
@@ -610,9 +597,58 @@ bool LaunchKernels(Device *device, Program *program, bool stagger_start) {
     // Reset the device that was running
     cluster->broadcast_remote_tensix_risc_reset(pcie_slot, TENSIX_ASSERT_SOFT_RESET);
 
+
     tt_metal_profiler.markStop("LaunchKernels");
     return pass;
 }
+
+void ReadDeviceSideProfileData(Device *device, Program *program) {
+
+    auto cluster = device->cluster();
+    auto pcie_slot = device->pcie_slot();
+
+    // Cores have to be enabled before BRISC reset is de-asserted
+    auto logical_cores_used_in_program = program->logical_cores();
+
+    Profiler tt_metal_device_profiler = Profiler();
+    for (const auto &logical_core : logical_cores_used_in_program) {
+        vector<std::uint32_t> profile_buffer;
+        uint32_t end_index;
+        auto worker_core = device->worker_core_from_logical_core(logical_core);
+
+        ReadFromDeviceL1(device, logical_core, PRINT_BUFFER_NC, profile_buffer ,PRINT_BUFFER_SIZE*sizeof(std::uint32_t));
+
+        end_index = profile_buffer[0];
+
+        for (int i = 1; i < end_index; i+=3) {
+            tt_metal_device_profiler.dumpKernelResults(
+                            pcie_slot,
+                            worker_core.x,
+                            worker_core.y,
+                            "NCRISC",
+                            (uint64_t(profile_buffer[i+2]) << 32) | profile_buffer[i+1],
+                            profile_buffer[i]
+                    );
+        }
+
+
+        ReadFromDeviceL1(device, logical_core, PRINT_BUFFER_BR, profile_buffer ,PRINT_BUFFER_SIZE*sizeof(std::uint32_t));
+
+        end_index = profile_buffer[0];
+
+        for (int i = 1; i < end_index; i+=3) {
+            tt_metal_device_profiler.dumpKernelResults(
+                            pcie_slot,
+                            worker_core.x,
+                            worker_core.y,
+                            "BRISC",
+                            (uint64_t(profile_buffer[i+2]) << 32) | profile_buffer[i+1],
+                            profile_buffer[i]
+                    );
+        }
+    }
+}
+
 
 // Copies data from a host buffer into a buffer within the device DRAM channel
 bool WriteToDeviceDRAM(DramBuffer *dram_buffer, std::vector<uint32_t> &host_buffer) {
