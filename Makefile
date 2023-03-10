@@ -73,7 +73,6 @@ else
 	BASE_INCLUDES=-Isrc/firmware/riscv/$(ARCH_NAME)
 endif
 
-BASE_INCLUDES+=-Ithird_party/yaml-cpp/include
 BASE_INCLUDES+=-I./ # to be able to include modules relative to root level from any module in the project
 
 #WARNINGS ?= -Wall -Wextra
