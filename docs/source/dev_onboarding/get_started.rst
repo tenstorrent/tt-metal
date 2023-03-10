@@ -35,6 +35,17 @@ with the dependencies in ``python_env/requirements.txt``, the Python setup
 doesn't really matter. Please refer to ``python_env/module.mk`` for further
 technical details.
 
+Additional Git setup
+--------------------
+
+We use ``#`` as a special character to denote issue numbers in our commit
+messages. Please change your comment character in your Git to not conflict with
+this:
+
+::
+
+    git config core.commentchar ">"
+
 Run tt-metal programs
 ---------------------
 
