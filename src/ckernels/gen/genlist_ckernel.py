@@ -11,12 +11,8 @@ import sys
 from pathlib import Path
 
 kernel_list = sys.argv[1]
-hlkc_kernel_list = sys.argv[2]
-output_file_func = sys.argv[3]
-output_file_enum = sys.argv[4]
-output_file_string = sys.argv[5]
-output_file_make = sys.argv[6]
-arch = sys.argv[7].upper()
+output_file_enum = sys.argv[2]
+arch = sys.argv[3].upper()
 
 def load_yaml(filename):
     with open(filename, 'r') as stream:
@@ -103,16 +99,6 @@ uint run_kernel() {
     return inc
 
 doc = load_yaml(kernel_list)
-file_string = gen_output_list(doc, False)
-text_file = open(output_file_func, "w")
-text_file.write(file_string)
-text_file.close()
-
-#doc_hlkc = load_yaml(hlkc_kernel_list)
-#file_string = gen_output_list(doc_hlkc, True)
-#text_file = open(output_hlkc_file_func, "w")
-#text_file.write(file_string)
-#text_file.close()
 
 inc = """
 //
@@ -200,24 +186,6 @@ inc += """
 
 """
 
-text_file = open(output_file_string, "w")
-text_file.write(inc)
-text_file.close()
-
-make = """
-#
-# Auto-generated file, do not modify!
-#
-
-.PHONY: all_kernels
-"""
-
-make += "all_kernels: "
-for kernel, data_full in sorted(doc.items()):
-    make += f"$(OUTPUT_DIR)/c{kernel}.o "
-
-make += "\n\n"
-
 for kernel, data_full in sorted(doc.items()):
     data = data_full.split()
     kernel_cc = data.pop(0)
@@ -229,94 +197,3 @@ for kernel, data_full in sorted(doc.items()):
     #Always set the NAMESPACE
     defines += " -DNAMESPACE=" + namespace_name(kernel, data_full)
     defines += " -DARCH_" + arch
-
-    make += f"""
-$(OUTPUT_DIR)/c{kernel}.o: c{kernel_cc}.cc | $(OUTPUT_DIR)
-	@echo "CXX $< {defines}"
-	$(CXX) $(CXXFLAGS) {defines} -c -o $@ $<
-
-$(OUTPUT_DIR)/c{kernel}.d: c{kernel_cc}.cc | $(OUTPUT_DIR)
-	$(CXX) $(CXXFLAGS) {defines} -c -o $@ $<
-
-$(OUTPUT_DIR)/c{kernel}: $(OUTPUT_DIR)/c{kernel}.o
-
-"""
-text_file = open(output_file_make, "w")
-text_file.write(make)
-text_file.close()
-
-################################ NEW #######################################################
-
-# inc = """
-# //
-# // Auto-generated file, do not modify!
-# //
-
-# #pragma once
-# using namespace ckernel;
-
-# #include "fw_debug.h"
-# #include "ckernel_enum.h"
-
-# """
-
-# for kernel, data_full in sorted(doc.items()):
-#     # inc += f"#ifdef UCK_C{kernel.upper()}\n"
-#     inc += f"namespace {namespace_name(kernel, data_full)} {{ uint kernel_main(uint *params = nullptr); }}\n"
-#     # inc += "#endif\n\n"
-
-# inc += """
-
-# uint run_kernel(kernel_function_id_e function_id, uint *params) {
-
-#     FWLOG1("run_kernel = %d", function_id);
-#     switch (function_id) {
-# """
-
-# for kernel, data_full in sorted(doc.items()):
-#     # inc += f"        #ifdef UCK_C{kernel.upper()}\n"
-#     inc += f"            case {kernel.upper()}: return {namespace_name(kernel, data_full)}::kernel_main(params);\n"
-#     # inc +=  "        #endif\n\n"
-
-# inc += """
-#         default:
-#             FWASSERT("Unknown kernel function", 0);
-#     }
-#     return 0;
-# }
-
-# """
-
-# text_file = open("/localhome/shuang/tensix/src/ckernels/gen/out/ckernel_list_new.h", "w")
-# text_file.write(inc)
-# text_file.close()
-
-
-# Auto generate blank .cc files
-
-blank_kernel_src_contents = """
-// Auto-generated file
-
-#include "ckernel.h"
-
-namespace NAMESPACE
-{
-
-uint kernel_main(uint *params = nullptr)
-{
-    return 0;
-}
-
-} // namespace NAMESPACE
-"""
-
-blank_srcs_output_dir = Path(output_file_func).parent / "blank"
-blank_srcs_output_dir.mkdir(exist_ok=True)
-
-for kernel, data_full in sorted(doc.items()):
-    data = data_full.split()
-    data = data.pop(0)
-    blank_kernel_src_name = f"c{data}.cc"
-    text_file = open(f"{blank_srcs_output_dir}/{blank_kernel_src_name}", "w")
-    text_file.write(blank_kernel_src_contents)
-    text_file.close()

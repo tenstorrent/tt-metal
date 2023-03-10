@@ -8,11 +8,7 @@
 
 #include "ckernel_globals.h"
 
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK)
 #include "chlkc_list.h"
-#else
-#include "ckernel_list.h"
-#endif
 
 // Global vars
 uint32_t unp_cfg_context = 0;
