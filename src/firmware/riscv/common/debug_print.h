@@ -121,11 +121,6 @@ struct DebugPrinter {
 template<typename T>
 DebugPrinter operator <<(DebugPrinter dp, T val) {
 
-    if (*dp.wpos() == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
-        // skip all prints if this hart+core was not specifically enabled on the host
-        return dp;
-    }
-
     uint32_t payload_sz = DebugPrintTypeToSize<T>(val); // includes terminating 0 for char*
     uint8_t typecode = DebugPrintTypeToId<T>();
 
@@ -134,6 +129,12 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
     uint32_t wpos = *dp.wpos(); // copy wpos into local storage
     auto sum_sz = payload_sz + code_sz + sz_sz;
     if (dp.data() + wpos + sum_sz >= dp.bufend()) {
+
+        if (*dp.wpos() == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+            // skip this stall on buffer flush if this hart+core was not specifically enabled on the host
+            return dp;
+        }
+
         // buffer is full - wait for the host reader to flush+update rpos
         while (*dp.rpos() < *dp.wpos())
             ; // wait for host to catch up to wpos with it's rpos
