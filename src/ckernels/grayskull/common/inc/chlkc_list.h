@@ -1,7 +1,6 @@
 #pragma once
 
 #include "fw_debug.h"
-#include "ckernel_enum.h"
 #include "ckernel.h"
 #include "ckernel_gpr_map.h"
 #include "llk_param_structs.h"
@@ -36,8 +35,6 @@ namespace chlkc_pack { void pack_main(const struct hlk_args_t* hlk_args=nullptr,
 #include "hlk_args_struct_init.h"
 namespace chlkc_unpack { void unpack_main(const struct hlk_args_t* hlk_args=nullptr, const void* llk_args=nullptr, const int loop_count=0); }
 #endif
-
-
 
 uint run_kernel() {
 

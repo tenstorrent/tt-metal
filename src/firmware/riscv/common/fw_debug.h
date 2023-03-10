@@ -180,3 +180,18 @@ void fwlog2(std::uint32_t a, std::uint32_t b) {
 #define FWLOG1_ALWAYS FWLOG1_IMPL
 #define FWLOG2_ALWAYS FWLOG2_IMPL
 #define FWLOG1STR_EMULE_ALWAYS FWLOG1STR_EMULE_IMPL
+
+namespace ckernel {
+
+
+enum kernel_function_id_e {
+      FIRMWARE_MSG = 0x8FF,   // Special kernel ID that sends a message to Trisc
+          DEBUG_MSG0   = 0x1,     // Debug message to Trisc
+              HLKC_UNPACK  = 0x4,     // HLKC generated kernels
+                  HLKC_MATH    = 0x5,     // HLKC generated kernels
+                      HLKC_PACK    = 0x6,     // HLKC generated kernels
+                          BLANK = 10,
+
+};
+
+}
