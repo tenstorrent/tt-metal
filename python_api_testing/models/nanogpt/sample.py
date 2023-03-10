@@ -32,7 +32,7 @@ from ref.model import GPTConfig, GPT
 from tt.tt_model import TTGPT
 from pymetal import ttmetal as ttm
 
-path_prefix = 'python_api_testing/models/nanogpt/'
+path_prefix = "" # 'python_api_testing/models/nanogpt/'
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
