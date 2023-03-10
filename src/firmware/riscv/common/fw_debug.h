@@ -186,12 +186,11 @@ namespace ckernel {
 
 enum kernel_function_id_e {
       FIRMWARE_MSG = 0x8FF,   // Special kernel ID that sends a message to Trisc
-          DEBUG_MSG0   = 0x1,     // Debug message to Trisc
-              HLKC_UNPACK  = 0x4,     // HLKC generated kernels
-                  HLKC_MATH    = 0x5,     // HLKC generated kernels
-                      HLKC_PACK    = 0x6,     // HLKC generated kernels
-                          BLANK = 10,
-
+      DEBUG_MSG0   = 0x1,     // Debug message to Trisc
+      HLKC_UNPACK  = 0x4,     // HLKC generated kernels
+      HLKC_MATH    = 0x5,     // HLKC generated kernels
+      HLKC_PACK    = 0x6,     // HLKC generated kernels
+      BLANK = 10,
 };
 
 }
