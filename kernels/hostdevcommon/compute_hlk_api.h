@@ -518,6 +518,9 @@ void hlk_reduce_tile(tt_core* core_ptr, int reduce_func, int dim, int lstream, i
 void hlk_copy_tile_to_dst_init(tt_core* core_ptr);
 void hlk_copy_tile_to_dst_init_short(tt_core* core_ptr);
 void hlk_copy_tile_to_dst_init_once(tt_core* core_ptr);
+void hlk_tilize_and_copy_to_dst_init(tt_core* core_ptr);
+void hlk_tilize_and_copy_to_dst_init_short(tt_core* core_ptr);
+void hlk_tilize_and_copy_to_dst_init_once(tt_core* core_ptr);
 void hlk_load_mm_partial_to_dst_init(tt_core* core_ptr);
 void hlk_load_mm_partial_to_dst_init_short(tt_core* core_ptr, int within_face_16x16_transpose);
 void hlk_mm_tile_init(tt_core* core_ptr, int transpose);

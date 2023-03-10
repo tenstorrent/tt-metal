@@ -48,10 +48,10 @@ void compute_main(const hlk_args_t *args) {
                 acquire_dst(DstMode::Half);
 
                 if (enable_reload) {
-                    matmul_load_partial_init_short(false);
+                    hlk_copy_tile_to_dst_init_short(nullptr);
                     cb_wait_front(CB::c_intermed0, out_subblock_num_tiles);
                     for (int i = 0; i < out_subblock_num_tiles; i++) {
-                        matmul_load_partial(CB::c_intermed0, i, i);
+                        copy_tile(CB::c_intermed0, i, i);
                     }
                     cb_pop_front(CB::c_intermed0, out_subblock_num_tiles);
                     matmul_tile_init_short(0);

@@ -657,14 +657,14 @@ class HlkMatrixOp_hlk_mm_tile : public HlkMatrixOp {
         void specialize_math_pack_sync(string dst_mode_str, bool untilize_en, bool adv_features_en, bool fp32_dest_acc_en) override {
             HlkMatrixOp::specialize_math_pack_sync(dst_mode_str, untilize_en, adv_features_en, fp32_dest_acc_en);
 
-            const string DEST_LAYOUT = "DstTileFaceLayout::ColMajor";
+            const string DEST_LAYOUT = "DstTileFaceLayout::RowMajor";
             const string UNTILIZE_EN = untilize_en ? "true" : "false";
 
             pack_dest_init           = string("llk_pack_dest_init") + "<" + dst_mode_str + ", " + DEST_LAYOUT + ", " + UNTILIZE_EN + ">";
             specialize_hw_fp32(pack_dest_init, adv_features_en, fp32_dest_acc_en);
         }
         virtual string get_optional_pack_init_func_str(string dst_mode_str, bool untilize_output) override {
-            return "llk_init_packer_dest_offset_registers<" + dst_mode_str + "," + "DstTileFaceLayout::ColMajor" + "," + (untilize_output ? "true" : "false") + ">";
+            return "llk_init_packer_dest_offset_registers<" + dst_mode_str + "," + "DstTileFaceLayout::RowMajor" + "," + (untilize_output ? "true" : "false") + ">";
         };
 };
 

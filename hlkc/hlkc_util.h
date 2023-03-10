@@ -735,7 +735,7 @@ void replace_hlk_inits_and_insert_hw_configure(SgProject *project, HlkMatrixOp* 
             SgExprStatement* new_call_statement = build_void_func_call_statement(hw_func_name, expr_list, main_def);
 
             // If we use _once postfix, we insert the reconfig call outside the outer_loop
-            if (op_string_init_once == symbol_str) {
+            if (insert_hw_config) {
                 insertStatementAfter(*(body->get_statements().begin()), new_call_statement);
             // In normal reconfig, we only replace the hlk api
             } else {

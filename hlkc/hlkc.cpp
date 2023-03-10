@@ -331,7 +331,7 @@ void generate_pack(SgProject *project, string llk_args_file_name, bool perf_dump
 
     string dst_tile_face_layout_str = "DstTileFaceLayout::RowMajor";
     if (hlk_ops.size() > 0) {
-        dst_tile_face_layout_str = hlk_matrix_op->get_op_api() == HlkMatrixOp::OpApi::hlk_mm_tile ? "DstTileFaceLayout::ColMajor" : "DstTileFaceLayout::RowMajor"; //only matmul op outputs tiles with face layout in column major form (0,2,1,3)
+        dst_tile_face_layout_str = "DstTileFaceLayout::RowMajor"; //only matmul op outputs tiles with face layout in column major form (0,2,1,3)
     }
 
     bool const has_pack_shifted_relu = !find_function_calls_by_name(project, "hlk_pack_shifted_relu_tile_to_stream").empty();
