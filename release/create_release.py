@@ -20,9 +20,9 @@ from reg_scripts import common
 class ReleaseConstants:
     PUBLIC_GITHUB_USER_HOST = "git@github.com"
 
-    REMOTE_ORGANIZATION = "tenstorrent-accel"
+    REMOTE_ORGANIZATION = "tenstorrent-metal"
 
-    REMOTE_RELEASE_REPO = "gp.ai-rel"
+    REMOTE_RELEASE_REPO = "tt-metal-rel"
 
     REMOTE_RELEASE_BRANCH = "main"
 

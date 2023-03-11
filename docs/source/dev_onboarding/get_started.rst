@@ -3,9 +3,7 @@
 Getting Started
 ===============
 
-Ensure you're using the developer repo: ``tenstorrent-accel/gp.ai.git``
-
-Not ``tenstorrent-accel/gp.ai-rel.git``.
+Ensure you're using the developer repo: ``tenstorrent-metal/tt-metal.git``
 
 Setting up the dev environment
 ------------------------------

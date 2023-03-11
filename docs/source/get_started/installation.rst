@@ -2,7 +2,7 @@ Getting Started
 ===============
 
 The GitHub page for the project is located here:
-https://github.com/tenstorrent-accel/gp.ai
+https://github.com/tenstorrent-metal/tt-metal
 
 To be added to the repo, please contact Jasmina or Davor at:
 jvasiljevic@tenstorrent.com, dcapalija@tenstorrent.com.
@@ -60,7 +60,7 @@ Devs<Getting started for devs>` for further instructions for developers.
 
     ::
 
-        git clone git@github.com:tenstorrent-accel/gp.ai-rel.git --recurse-submodules
+        git clone git@github.com:<REPO>.git --recurse-submodules
 
     Building the library
     --------------------
