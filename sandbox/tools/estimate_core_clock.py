@@ -5,7 +5,7 @@ import csv
 
 hostData = {}
 
-with open("tools/profiler/profile_log.csv") as csv_file:
+with open("tools/profiler/profile_log_host.csv") as csv_file:
     csv_reader = csv.reader(csv_file, delimiter=",")
     line_count = 0
     for row in csv_reader:
@@ -27,7 +27,7 @@ with open("tools/profiler/profile_log.csv") as csv_file:
 
 deviceData = {}
 
-with open("tools/profiler/profile_log_kernel.csv") as csv_file:
+with open("tools/profiler/profile_log_device.csv") as csv_file:
     csv_reader = csv.reader(csv_file, delimiter=",")
     line_count = 0
     for row in csv_reader:

@@ -21,7 +21,6 @@ constexpr int DEBUG_PRINT_TYPEID_SETP    = 9; // std::setprecision
 constexpr int DEBUG_PRINT_TYPEID_FIXP    = 10; // std::fixed
 constexpr int DEBUG_PRINT_TYPEID_HEX     = 11; // std::hex
 constexpr int DEBUG_PRINT_TYPEID_INT32   = 12;
-constexpr int DEBUG_PRINT_TYPEID_TIMER   = 13;
 
 // Because there's no mechanism (known to me) to initialize values at fixed mem locations in kernel code,
 // in order to initialize the pointers in the buffers we use a trick with print server writing
@@ -36,8 +35,6 @@ constexpr int DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0x23455432;
 // (making it impossible to print) we will instead print this message.
 constexpr const char* debug_print_overflow_error_message = "*** INTERNAL DEBUG PRINT BUFFER OVERFLOW ***\n\n";
 
-constexpr int TIMER_PRINT_DATA_SIZE = 12;
-
 struct DebugPrintMemLayout {
     struct Aux {
         // current writer offset in buffer
@@ -50,12 +47,4 @@ struct DebugPrintMemLayout {
 
 } __attribute__((packed));
 
-struct TimerPrintData {
-    uint32_t timestamp_L __attribute__((aligned(4)));
-    uint32_t timestamp_H __attribute__((aligned(4)));
-    uint32_t id __attribute__((aligned(4)));
-} __attribute__((packed));
-
-
-static_assert(sizeof(TimerPrintData) == TIMER_PRINT_DATA_SIZE);
 static_assert(sizeof(DebugPrintMemLayout) == PRINT_BUFFER_SIZE);

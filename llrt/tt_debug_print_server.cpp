@@ -5,7 +5,6 @@
 #include <iomanip>
 #include <chrono>
 #include <set>
-#include <string>
 #include "llrt.hpp"
 #include "common/logger.hpp"
 
@@ -13,8 +12,6 @@
 
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/debug_print_common.h"
-
-#include "tools/profiler/profiler.hpp"
 
 using std::uint32_t;
 using std::int32_t;
@@ -84,7 +81,6 @@ struct DebugPrintServerContext {
         }
         stream_ = outfile_ ? outfile_ : &cout;
 
-        add_profiler_header_ = true;
         exit_threads_condition_ = false;
         for (auto chip: chip_ids) {
             for (auto core: cores) {
@@ -135,9 +131,6 @@ private:
     std::mutex output_lock_;
     std::ofstream* outfile_ = nullptr; // non-cout
     std::ostream* stream_ = nullptr; // either == outfile_ or is &cout
-
-    //Flag for printing profiler header
-    std::atomic<bool> add_profiler_header_;
 
     // configuration of cores/harts to listen for
     tt_cluster* cluster_;
@@ -206,32 +199,6 @@ void rename_my_thread(int chip_id, const tt_xy_pair& core, int hart_id)
     pthread_setname_np(pthread_self(), rn.c_str());
 }
 
-string get_hart_name (int hart_id)
-{
-    string res = "";
-
-    switch(hart_id) {
-        case 0:
-            res = "NCRISC";
-            break;
-        case 1:
-            res = "TR0RISC";
-            break;
-        case 2:
-            res = "TR1RISC";
-            break;
-        case 3:
-            res = "TR2RISC";
-            break;
-        case 4:
-            res = "BRISC";
-            break;
-        default:
-            TT_ASSERT("Unexpected hart id");
-    }
-    return res;
-}
-
 // peeks a specified hart for any debug prints present in the buffer and flushes it, printing the contents out to host-side stream
 void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const tt_xy_pair& core, int hart_id) {
     // compute the buffer address for the requested hart
@@ -283,21 +250,6 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                         stream << cptr;
                     unlock_stream();
                     TT_ASSERT(sz == strlen(cptr)+1);
-                break;
-                case DEBUG_PRINT_TYPEID_TIMER:
-                    lock_stream();
-                    Profiler::kernelProfilerCallback(
-                            stream,
-                            chip_id,
-                            core.x,
-                            core.y,
-                            get_hart_name(hart_id),
-                            (uint64_t(reinterpret_cast<const TimerPrintData*>(ptr)->timestamp_H) << 32) |\
-                            reinterpret_cast<const TimerPrintData*>(ptr)->timestamp_L,
-                            reinterpret_cast<const TimerPrintData*>(ptr)->id,
-                            add_profiler_header_);
-                    add_profiler_header_ = false;
-                    unlock_stream();
                 break;
                 case DEBUG_PRINT_TYPEID_ENDL:
                     lock_stream();

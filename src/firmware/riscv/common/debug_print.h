@@ -85,7 +85,6 @@ template<> uint8_t DebugPrintTypeToId<HEX>() { return DEBUG_PRINT_TYPEID_HEX; }
 template<> uint8_t DebugPrintTypeToId<F32>() { return DEBUG_PRINT_TYPEID_FLOAT32; }
 template<> uint8_t DebugPrintTypeToId<U32>() { return DEBUG_PRINT_TYPEID_UINT32; }
 template<> uint8_t DebugPrintTypeToId<int>() { return DEBUG_PRINT_TYPEID_INT32; }
-template<> uint8_t DebugPrintTypeToId<TimerPrintData>() { return DEBUG_PRINT_TYPEID_TIMER; }
 static_assert(sizeof(int) == 4);
 
 // Different specializations for const char*
@@ -197,4 +196,3 @@ template DebugPrinter operator<< <SETP>(DebugPrinter, SETP val);
 template DebugPrinter operator<< <F16>(DebugPrinter, F16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
-template DebugPrinter operator<< <TimerPrintData>(DebugPrinter, TimerPrintData val);

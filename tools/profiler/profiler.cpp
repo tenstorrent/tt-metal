@@ -5,8 +5,8 @@
 
 #include "tools/profiler/profiler.hpp"
 
-#define HOST_SIDE_LOG "profile_log.csv"
-#define DEVICE_SIDE_LOG "profile_log_kernel.csv"
+#define HOST_SIDE_LOG "profile_log_host.csv"
+#define DEVICE_SIDE_LOG "profile_log_device.csv"
 
 Profiler::Profiler()
 {
@@ -82,7 +82,7 @@ void Profiler::dumpResults(std::string name_append, bool add_header)
     name_to_timer_map.clear();
 }
 
-void Profiler::dumpKernelResults(
+void Profiler::dumpDeviceResults(
         int chip_id,
         int core_x,
         int core_y,
@@ -119,36 +119,7 @@ void Profiler::dumpKernelResults(
     log_file.close();
 }
 
-void Profiler::kernelProfilerCallback(
-        std::ostream& stream,
-        int chip_id,
-        int core_x,
-        int core_y,
-        std::string hart_name,
-        uint64_t timestamp,
-        uint32_t timer_id,
-        bool add_header)
-{
-    if (add_header)
-    {
-        stream << "Chip clock is at 1.2 GHz" << std::endl;
-        stream << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]" << std::endl;
-    }
-    constexpr int DRAM_ROW = 6;
-    if (core_y > DRAM_ROW){
-       core_y = core_y - 2;
-    }
-    else{
-       core_y--;
-    }
-    core_x--;
-    stream << chip_id << ", " << core_x << ", " << core_y << ", " << hart_name << ", ";
-    stream << timer_id << ", ";
-    stream << timestamp;
-    stream << std::endl;
-}
-
-std::string Profiler::getKernelProfilerLogName()
+std::string Profiler::getDeviceProfilerLogName()
 {
     return output_dir / DEVICE_SIDE_LOG;
 }

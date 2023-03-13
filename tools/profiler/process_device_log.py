@@ -17,7 +17,7 @@ PER_CORE_HEIGHT = 90
 REARRANGED_TIME_CSV = "device_arranged_timestamps.csv"
 DEVICE_STATS_TXT = "device_stats.txt"
 DEVICE_PERF_HTML = "device_perf.html"
-DEVICE_TIME_CSV = "profile_log_kernel.csv"
+DEVICE_TIME_CSV = "profile_log_device.csv"
 
 DEVICE_PERF_RESULTS = "device_perf_results.tar"
 
@@ -169,9 +169,9 @@ def print_help():
     print(
         "Please choose a plot setup class that matches your test kernel profile data."
     )
-    print("e.g. : psotproc_kernel_log.py test_add_two_ints")
+    print("e.g. : process_device_log.py test_add_two_ints")
     print("Or run default by providing no args")
-    print("e.g. : psotproc_kernel_log.py")
+    print("e.g. : process_device_log.py")
 
 
 def main(args):
@@ -406,7 +406,7 @@ def main(args):
 
         app.run_server(host="0.0.0.0", debug=True)
     else:
-        print("Empty profile_log_kernel.csv")
+        print(f"Empty {DEVICE_TIME_CSV}")
 
 
 if __name__ == "__main__":

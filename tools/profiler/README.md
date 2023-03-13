@@ -34,18 +34,20 @@ second, LaunchKernels, 675598625865918, 675598625981107, 115189
 second, ConfigureDeviceWithProgram, 675598392545035, 675598625864988, 233319953
 ```
 
-## Profiling kernel side API
+## Profiling device side
 
 ### Default Markers
 On the host side minimal changes are necessary on the code.
 
-1. The compile flag for kernel side profiling has to be set, this is done by setting the flag in `tt_metal::CompileProgram`.
-2. Print server start flag must be set, this is done setting the flag in `tt_metal::ConfigureDeviceWithProgram` .
+1. The compile flag for device side profiling has to be set, this is done by setting the flag in `tt_metal::CompileProgram`.
+2. For each kernel launch through `tt_metal::LaunchKernels(device, program);`  that you want device side profiler markers dumped,
+A call to `tt_metal::ReadDeviceSideProfileData(device, program);` has to be made to append the markers to
+the current test device side output `profile_log_device.csv`
 
 e.g.
 ```
-    constexpr bool profile_kernel = true;
-    pass &= tt_metal::CompileProgram(device, program, skip_hlkc, profile_kernel);
+    constexpr bool profile_device = true;
+    pass &= tt_metal::CompileProgram(device, program, skip_hlkc, profile_device);
     .
     .
     .
@@ -53,6 +55,7 @@ e.g.
     .
     tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, second_runtime_args);
     pass &= tt_metal::LaunchKernels(device, program);
+    tt_metal::ReadDeviceSideProfileData(device, program);
 ```
 
 After this setup, default markers will be generated and can be post-processed.
@@ -62,9 +65,9 @@ Default markers are:
 1. Kernel start
 2. Kernel end
 
-The generated csv is `profile_log_kernel.csv` is saved under `tools/profiler/` by default.
+The generated csv is `profile_log_device.csv` is saved under `tools/profiler/` by default.
 
-Sample generated csv for running a kernel on core 0,0:
+Sample generated csv for a run on core 0,0:
 
 ```
 0, 0, 0, BRISC, 2, 46413751954532
@@ -74,7 +77,7 @@ Sample generated csv for running a kernel on core 0,0:
 ```
 
 
-### Post-processing kernel profiler
+### Post-processing device profiler
 
 
 1. Set up the environment for running the plotter:
@@ -89,7 +92,7 @@ pip install -r requirements.txt
 2. Run plotter webapp:
 ```
 cd tools/profiler/
-./postproc_kerenel_log.py
+./process_device_log.py
 ```
 
 3. Navigate to `<machine IP>:8050` to view output chart.

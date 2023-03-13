@@ -57,7 +57,7 @@ In functions such as ``LaunchKernels`` the entire code within the function is wr
     }
 
 After the execution of all wrapped code. A call to  ``dumpResults`` will process the deltas on all
-timers and dump the results into a CSV in the current directory called ``profile_log.csv``. In
+timers and dump the results into a CSV in the current directory called ``profile_log_host.csv``. In
 ``tt_metal`` this function is wrapped under another function called ``dumpProfilerResults`` to
 simplify the decision of when to generate the CSV on tests that are using the ``tt_metal`` API.
 
@@ -82,83 +82,6 @@ CSV.
     second, LaunchKernels, 675598625865918, 675598625981107, 115189
     second, ConfigureDeviceWithProgram, 675598392545035, 675598625864988, 233319953
 
-Kernel Side
-========================
-
-On kernel side profiling of the code is achieved by marking the cycle counts from when the RISC was taken out of reset.
-
-As a high level overview, on each marking event, the kernel measures the cycle count of the event
-and puts it and the id of the marker in an L1 buffer. The print server on the host services and
-flushes the buffers for all RISCs on all cores. Profile messages are collected in to a CSV by the
-instance of the print server. i.e. All the marked events in a kernels that execute are saved as a
-row in the CSV, with information on which chip, core, RISC, and timer id the event came from.
-
-Setup
-------------------------
-
-On the host side, a single version of the print server must be running. The function
-``tt_start_debug_print_server`` starts the print server. For ``tt_metal`` tests, this function is
-called under ``ConfigureDeviceWithProgram`` as follows.
-
-..  code-block:: C++
-
-    if (doStartPrintfServer)
-    {
-        int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
-
-        std::string log_name = Profiler::getKernelProfilerLogName();
-        tt_start_debug_print_server(cluster, {pcie_slot}, worker_cores, hart_mask, log_name.c_str());
-    }
-
-The check under if statement is there to be able to signal that only a single instance of the
-server runs. i.e. If multiple calls to ``ConfigureDeviceWithProgram`` are made in a single test,
-only one should be called with ``doStartPrintfServer`` set to true. Understandably, this configure
-has to run before any of the kernels that are profiled are launched. The name for the output file
-is provided by the static function from the ``Profiler`` class ``getKernelProfilerLogName``. The
-output CSV is set to ``profile_log_kernel.csv``.
-
-On the kernel side, the ``mark_time`` function is used to record the cycle count at the execution
-of that location in kernel code. This function take only one argument which is the integer id that
-is recorded in the CSV to show which mark the readings belong to. The function is defined in the
-``kernel_profile.hpp`` and is included in kernel as follows.
-
-
-..  code-block:: C++
-
-    #include "tools/profiler/kernel_profiler.hpp"
-
-The ``kernels/add_two_ints.cpp`` is a simple example that demonstrates how to mark the beginning
-and the end of a kernel.
-
-..  code-block:: C++
-
-    void kernel_main() {
-
-        kernel_profiler::mark_time(0);
-
-        volatile std::uint32_t* arg_a = (volatile uint32_t*)(L1_ARG_BASE);
-        volatile std::uint32_t* arg_b = (volatile uint32_t*)(L1_ARG_BASE + 4);
-        volatile std::uint32_t* result = (volatile uint32_t*)(L1_RESULT_BASE);
-
-        result[0] = arg_a[0] + arg_b[0];
-
-        kernel_profiler::mark_time(1);
-    }
-
-This kernel is launched twice as part of the ``tt_metal/tests/test_add_two_ints.cpp`` test. **Note**
-that the committed code on master for this ``tt_metal`` test asks for the non-profiled version of
-the kernel.
-
-The resulting CSV for the test is as follows.
-
-..  code-block:: c++
-
-    Chip clock is at 1.2 GHz
-    chip_id, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]
-    0, 1, 1, BRISC, 0, 41860018245206
-    0, 1, 1, BRISC, 1, 41860018245419
-    0, 1, 1, BRISC, 0, 41860018600257
-    0, 1, 1, BRISC, 1, 41860018600463
 
 Limitations
 ------------------------
@@ -179,4 +102,4 @@ Limitations
 * TRISC0,1,2 measurements are not supported. Further development on underlying APIs are required
   inorder to bring profiling to these cores.
 
-* Other DPRINT messages can not used in kernels that are being profiled.
+* Debug print can not used in kernels that are being profiled.

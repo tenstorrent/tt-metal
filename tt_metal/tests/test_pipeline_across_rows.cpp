@@ -254,8 +254,8 @@ int main(int argc, char **argv) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
-        constexpr bool profile_kernel = true;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc, profile_kernel);
+        constexpr bool profile_device = true;
+        pass &= tt_metal::CompileProgram(device, program, skip_hlkc, profile_device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -329,6 +329,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         log_info(LogTest, "Launching kernels...");
         pass &= tt_metal::LaunchKernels(device, program);
+        tt_metal::ReadDeviceSideProfileData(device, program);
         log_info(LogTest, "Kernels done.");
 
         log_info(LogTest, "Reading results from device...");
