@@ -7,6 +7,16 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
+std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16: os << "bfloat16"; break;
+        case DataType::FLOAT32: os << "float32"; break;
+        case DataType::UINT32: os << "uint32"; break;
+        default: throw std::invalid_argument("Unknown data type");
+    }
+    return os;
+}
+
 std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(
     DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape) {
     uint32_t W = shape[3];

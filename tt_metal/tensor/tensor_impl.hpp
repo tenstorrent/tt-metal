@@ -14,25 +14,30 @@ template <class T>
 inline std::vector<T> initialize_row_major_tensor_data(const std::array<uint32_t, 4> &shape, Initialize init_type, int rand_max_val = 100, int seed = 0) {
     std::vector<T> values;
 
-    auto get_val = [&init_type, shape, rand_max_val, seed](int x, int y, int z, int w) {
-        auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_val), std::mt19937(seed));
-        float val;
+    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_val), std::mt19937(seed));
+
+    auto get_val = [&init_type, &shape, &rand_float](int x, int y, int z, int w) {
+        T val;
         switch (init_type) {
             case Initialize::ZEROS:
-                val = 0;
-                break;
+                val = static_cast<T>(0);
+            break;
             case Initialize::ONES:
-                val = 1;
-                break;
-            case Initialize::INCREMENT:
-                val = x + shape[3] * y + shape[3] * shape[2] * z + shape[3] * shape[2] * shape[1] * w;
-                break;
-            case Initialize::RANDOM:
-                val = rand_float();
-                break;
+                val = static_cast<T>(1);
+            break;
+            case Initialize::INCREMENT: {
+                uint32_t test_val = x + shape[3] * y + shape[3] * shape[2] * z + shape[3] * shape[2] * shape[1] * w;
+                val = static_cast<T>(test_val);
+            }
+            break;
+            case Initialize::RANDOM: {
+                float float_val = rand_float();
+                val = static_cast<T>(float_val);
+            }
+            break;
             default:
                 TT_ASSERT(false && "Unsupported initializer type");
-                break;
+            break;
         }
         return val;
     };
@@ -41,15 +46,20 @@ inline std::vector<T> initialize_row_major_tensor_data(const std::array<uint32_t
         for(auto z = 0; z < shape[1]; z++) {
             for(auto y = 0; y < shape[2]; y++) {
                 for(auto x = 0; x < shape[3]; x++) {
-                    float val = get_val(x, y, z, w);
-                    values.push_back(static_cast<T>(val));
+                    T val = get_val(x, y, z, w);
+                    values.push_back(val);
                 }
             }
         }
     }
-
     return values;
 }
+
+// -----------------------------------------------------------------------------------------------------------------------------------------------
+// ===============================================================================================================================================
+//                                                              Low Level APIs
+// ===============================================================================================================================================
+// -----------------------------------------------------------------------------------------------------------------------------------------------
 
 // ======================================================================================
 //                        Data type converters, packers, and unpackers
@@ -178,15 +188,87 @@ inline std::vector<T> convert_layout_tile_to_row_major(const std::array<uint32_t
 }
 
 // ======================================================================================
+//                                         Print
+// ======================================================================================
+std::ostream& operator<<(std::ostream& os, const DataType& dtype);
+
+template <typename T>
+void print_data(const std::vector<T> &data, DataType dtype) {
+    std::cout << "[ ";
+    for (int i = 0; i < data.size(); i++) {
+        std:: cout << data[i];
+        if (i < data.size() - 1) {
+            std::cout << ", ";
+        }
+    }
+    std::cout << " dtype=" <<  dtype << " ]" << std::endl;
+}
+
+template <typename T>
+void print_row_major_data(const std::vector<T> &data, std::array<uint32_t, 4> shape, DataType dtype) {
+    std::cout << "[ ";
+    for(auto w = 0; w < shape[0]; w++) {
+        if(w == 0)
+            std::cout << "[";
+        else
+            std::cout << "  [";
+        for(auto z = 0; z < shape[1]; z++) {
+            if (z == 0)
+                std::cout << "[";
+            else
+                std::cout << "   [";
+            for(auto y = 0; y < shape[2]; y++) {
+                if (y == 0)
+                    std::cout << "[";
+                else
+                    std::cout << "    [";
+                for(auto x = 0; x < shape[3]; x++) {
+                    // data in row major order
+                    auto index = x + y*shape[3] + z*shape[2]*shape[3] + w*shape[1]*shape[2]*shape[3];
+                    std::cout << data[index];
+                    if (x < shape[3] - 1) {
+                        std::cout << ", ";
+                    }
+                }
+                if(y < shape[2] - 1)
+                    std::cout << "]," << std::endl;
+                else
+                    std::cout << "]";
+            }
+            if(z < shape[1] - 1)
+                std::cout << "]," << std::endl << std::endl;
+            else
+                std::cout << "]";
+        }
+        if(w < shape[0] - 1)
+            std::cout << "]," << std::endl << std::endl << std::endl;
+        else
+            std::cout << "]";
+    }
+    std::cout << " dtype=" <<  dtype << " ]" << std::endl;
+}
+
+
+// ======================================================================================
 //                                      Validators
 // ======================================================================================
 void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout);
 
 // ======================================================================================
-//                           Data reader, writer, and initializer
+//                           Data reader, writer, and initializers
 // ======================================================================================
 std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape);
 
+
+// -----------------------------------------------------------------------------------------------------------------------------------------------
+// ===============================================================================================================================================
+//                                                              High Level APIs
+// ===============================================================================================================================================
+// -----------------------------------------------------------------------------------------------------------------------------------------------
+
+// ======================================================================================
+//                           Data reader, writer, and initializers
+// ======================================================================================
 void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
 template <typename T>
@@ -274,69 +356,6 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device) {
 // ======================================================================================
 //                                         Print
 // ======================================================================================
-inline std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16: os << "bfloat16"; break;
-        case DataType::FLOAT32: os << "float32"; break;
-        case DataType::UINT32: os << "uint32"; break;
-        default: throw std::invalid_argument("Unknown data type");
-    }
-    return os;
-}
-
-template <typename T>
-void print_data(const std::vector<T> &data, DataType dtype) {
-    std::cout << "[ ";
-    for (int i = 0; i < data.size(); i++) {
-        std::cout << data[i] << ", ";
-    }
-    std::cout << " dtype=" <<  dtype << " ]" << std::endl;
-}
-
-template <typename T>
-void print_row_major_data(const std::vector<T> &data, std::array<uint32_t, 4> shape, DataType dtype) {
-    std::cout << "[ ";
-    for(auto w = 0; w < shape[0]; w++) {
-        if(w == 0)
-            std::cout << "[";
-        else
-            std::cout << "  [";
-        for(auto z = 0; z < shape[1]; z++) {
-            if (z == 0)
-                std::cout << "[";
-            else
-                std::cout << "   [";
-            for(auto y = 0; y < shape[2]; y++) {
-                if (y == 0)
-                    std::cout << "[";
-                else
-                    std::cout << "    [";
-                for(auto x = 0; x < shape[3]; x++) {
-                    // data in row major order
-                    auto index = x + y*shape[3] + z*shape[2]*shape[3] + w*shape[1]*shape[2]*shape[3];
-                    std::cout << data[index];
-                    if (x < shape[3] - 1) {
-                        std::cout << ", ";
-                    }
-                }
-                if(y < shape[2] - 1)
-                    std::cout << "]," << std::endl;
-                else
-                    std::cout << "]";
-            }
-            if(z < shape[1] - 1)
-                std::cout << "]," << std::endl << std::endl;
-            else
-                std::cout << "]";
-        }
-        if(w < shape[0] - 1)
-            std::cout << "]," << std::endl << std::endl << std::endl;
-        else
-            std::cout << "]";
-    }
-    std::cout << " dtype=" <<  dtype << " ]" << std::endl;
-}
-
 template <typename T>
 inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) {
     auto data_ptr_to_print = tensor.data_ptr();
@@ -351,8 +370,9 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
             if (print_layout == Layout::ROW_MAJOR) {
                 pretty_print ? print_row_major_data(data_vec, tensor.shape(), tensor.dtype()) : print_data(data_vec, tensor.dtype());
             } else if (print_layout == Layout::TILE) {
+                TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
                 auto converted_data = convert_layout_row_major_to_tile(tensor.shape(), data_vec);
-                pretty_print ? print_row_major_data(converted_data, tensor.shape(), tensor.dtype()) : print_data(converted_data, tensor.dtype());
+                print_data(converted_data, tensor.dtype());
             } else {
                 TT_ASSERT(false && "Unsupported print layout");
             }
@@ -362,7 +382,8 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
                 auto converted_data = convert_layout_tile_to_row_major(tensor.shape(), data_vec);
                 pretty_print ? print_row_major_data(converted_data, tensor.shape(), tensor.dtype()) : print_data(converted_data, tensor.dtype());
             } else if (print_layout == Layout::TILE) {
-                pretty_print ? print_row_major_data(data_vec, tensor.shape(), tensor.dtype()) : print_data(data_vec, tensor.dtype());
+                TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
+                print_data(data_vec, tensor.dtype());
             } else {
                 TT_ASSERT(false && "Unsupported print layout");
             }

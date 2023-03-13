@@ -48,6 +48,9 @@ namespace tensor_impl {
 
 class Tensor {
     public:
+        // ======================================================================================
+        //                                  Hi Level APIs
+        // ======================================================================================
         Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
 
         Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device);
@@ -66,7 +69,23 @@ class Tensor {
 
         Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device);
 
+        Tensor to(Device *target_device) const;
+
+        Tensor to(Host *host) const;
+
+        void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
+
+        // Prints like numpy print function to make it more readable. Only supports row major layout.
+        void pretty_print(Layout print_layout = Layout::ROW_MAJOR) const;
+
+        // ======================================================================================
+        //                                  Low Level APIs
+        // ======================================================================================
         const std::array<uint32_t, 4>& reshape(int N, int C, int H, int W);
+
+        // ======================================================================================
+        //                                      Getters
+        // ======================================================================================
 
         const std::array<uint32_t, 4>& shape() const { return this->shape_; }
 
@@ -85,15 +104,6 @@ class Tensor {
         void *data_ptr() const { return data_; }
 
         bool on_host() const { return device_ == nullptr; }
-
-        Tensor to(Device *target_device) const;
-
-        Tensor to(Host *host) const;
-
-        void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
-
-        // Prints like numpy print function to make it more readable. Only supports row major layout.
-        void pretty_print(Layout print_layout = Layout::ROW_MAJOR) const;
 
     private:
         const std::array<uint32_t, 4> compute_strides() const {
