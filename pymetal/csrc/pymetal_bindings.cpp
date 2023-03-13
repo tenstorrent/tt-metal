@@ -218,12 +218,12 @@ void DeviceModule(py::module &m_device) {
 
 PYBIND11_MODULE(_C, m) {
 
-    m.attr("__name__") = "ttmetal._C";
+    m.attr("__name__") = "ttmetal";
     m.doc() = "General purpose AI python bindings";
-
-    py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an tt_metal tensor");
-    tt::tt_metal::TensorModule(m_tensor);
 
     py::module_ m_device = m.def_submodule("device", "Submodule defining a host or device");
     tt::tt_metal::DeviceModule(m_device);
+
+    py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an tt_metal tensor");
+    tt::tt_metal::TensorModule(m_tensor);
 }
