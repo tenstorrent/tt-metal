@@ -70,10 +70,10 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::array<uint32_t, 4> shape = {1, 64, 32, 32};
+        std::array<uint32_t, 4> shape = {1, 64, 31, 32};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::CHANNELS_LAST, device);
-        Tensor b = tilize(a).to(host);
+        Tensor b = tilize_with_zero_padding(a).to(host);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
