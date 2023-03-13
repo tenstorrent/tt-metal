@@ -20,26 +20,21 @@ Welcome to TT-Metal documentation!
    hardware/hardware
 
 .. toctree::
-   :caption: Programming Model
-
-   programming_model/programming_model
-
-.. toctree::
    :caption: APIs
 
    apis/host_apis2
    apis/kernel_apis
 
 .. toctree::
-    :caption: Python API
-
-    python_api/python_api
-
-.. toctree::
    :caption: Programming Examples
 
    examples/dram_loopback
    examples/eltwise_binary
+
+.. toctree::
+    :caption: Libraries
+
+    libraries/tt_dnn
 
 .. toctree::
    :caption: Debug Tools

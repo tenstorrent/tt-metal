@@ -30,8 +30,50 @@ extern int  DisableBinaryCache();
 extern bool GetBinaryCacheEnabled();
 
 void TensorModule(py::module &m_tensor) {
+    // ENUM SECTION
 
-    py::class_<Tensor>(m_tensor, "Tensor")
+    // bast enums
+    py::enum_<BcastOpMath::Enum>(m_tensor, "BcastOpMath")
+        .value("ADD", BcastOpMath::Enum::ADD)
+        .value("SUB", BcastOpMath::Enum::SUB)
+        .value("MUL", BcastOpMath::Enum::MUL);
+
+    py::enum_<BcastOpDim::Enum>(m_tensor, "BcastOpDim")
+        .value("H", BcastOpDim::Enum::H)
+        .value("W", BcastOpDim::Enum::W)
+        .value("HW", BcastOpDim::Enum::HW);
+
+    // reduce enums
+    py::enum_<ReduceOpMath::Enum>(m_tensor, "ReduceOpMath")
+        .value("SUM", ReduceOpMath::Enum::SUM)
+        .value("MAX", ReduceOpMath::Enum::MAX);
+
+    py::enum_<ReduceOpDim::Enum>(m_tensor, "ReduceOpDim")
+        .value("H", ReduceOpDim::Enum::H)
+        .value("W", ReduceOpDim::Enum::W)
+        .value("HW", ReduceOpDim::Enum::HW);
+
+    // layout enums
+    py::enum_<Layout>(m_tensor, "Layout")
+        .value("ROW_MAJOR", Layout::ROW_MAJOR)
+        .value("TILE", Layout::TILE)
+        .value("CHANNELS_LAST", Layout::CHANNELS_LAST);
+
+    // TODO(agrebenisan): This should probably be in its own module, but here for now.
+    py::enum_<Initialize>(m_tensor, "Initialize")
+        .value("ZEROS", Initialize::ZEROS)
+        .value("ONES",Initialize::ONES)
+        .value("INCREMENT", Initialize::INCREMENT)
+        .value("RANDOM", Initialize::RANDOM);
+
+    py::enum_<DataType>(m_tensor, "DataType")
+        .value("FLOAT32", DataType::FLOAT32)
+        .value("BFLOAT16", DataType::BFLOAT16)
+        .value("UINT32", DataType::UINT32);
+
+    auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor");
+
+    pyTensor
         .def(
             py::init<>(
                 [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
@@ -94,18 +136,58 @@ void TensorModule(py::module &m_tensor) {
 
     // Tensor functions
     // eltwise binary
-    m_tensor.def("add", &add);
-    m_tensor.def("sub", &sub);
-    m_tensor.def("mul", &mul);
+    const std::string add_doc = R"doc(
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | First tensor to add  | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+        | b        | Second tensor to add | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc";
+    m_tensor.def("add", &add, "Perform an eltwise-binary add on two tensors.");
 
-    m_tensor.def("fill_ones_rm", &fill_ones_rm);
+    const std::string sub_doc = R"doc(
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | First tensor to sub  | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+        | b        | Second tensor to sub | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc";
+
+    m_tensor.def("sub", &sub, "Perform an eltwise-binary sub on two tensors.");
+    m_tensor.def("mul", &mul, "Perform an eltwise-binary mul on two tensors.");
+
+    m_tensor.def("fill_ones_rm", &fill_ones_rm, R"doc(
+        Generates an NCHW row-major tensor and fill it with ones up to hOnes,
+        wOnes in each HW tile with the rest padded with zeros. So for H=2, W=3,
+        hFill=1, wFill=2 the following tensor will be generated:
+
+        +------------> W
+        | hi hi lo
+        | lo lo lo
+        |
+        v H
+
+        H, W are expected to be multiples of 32.
+
+        The 'any' Tensor arg is only used to pass the device and resulting tensor dtype.
+
+        val_hi/lo are expected to be uint16 encodings of bfloat16 numbers, so 0x3f80 for 1.0 etc.
+    )doc");
     m_tensor.def("fill_rm", &fill_rm);
     m_tensor.def("pad_h_rm", &pad_h_rm);
     m_tensor.def("transpose_hc_rm", &transpose_hc_rm);
 
     // matrix multiplication
-    m_tensor.def("matmul", &matmul);
-    m_tensor.def("bmm", &bmm);
+    m_tensor.def("matmul", &matmul, R"doc(
+        Perform a non-batched matmul ``A x B`` with two tensors.
+    )doc");
+    m_tensor.def("bmm", &bmm, R"doc(
+        Perform a batched matmul ``A x B`` with two tensors, where batch dims match.
+    )doc");
 
     // broadcast math
     m_tensor.def("bcast", &bcast);
@@ -114,14 +196,14 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("reduce", &reduce);
 
     // eltwise unary SFPU
-    m_tensor.def("exp", &exp);
-    m_tensor.def("recip", &recip);
-    m_tensor.def("gelu", &gelu);
-    m_tensor.def("relu", &relu);
-    m_tensor.def("sqrt", &sqrt);
-    m_tensor.def("sigmoid", &sigmoid);
-    m_tensor.def("log", &log);
-    m_tensor.def("tanh", &tanh);
+    m_tensor.def("exp", &exp, "Performs a unary exp operation on a tensor.");
+    m_tensor.def("recip", &recip, "Performs a unary recip operation on a tensor.");
+    m_tensor.def("gelu", &gelu, "Performs a unary gelu operation on a tensor.");
+    m_tensor.def("relu", &relu, "Performs a unary relu operation on a tensor.");
+    m_tensor.def("sqrt", &sqrt, "Performs a unary sqrt operation on a tensor.");
+    m_tensor.def("sigmoid", &sigmoid, "Performs a unary sigmoid operation on a tensor.");
+    m_tensor.def("log", &log, "Performs a unary log operation on a tensor.");
+    m_tensor.def("tanh", &tanh, "Performs a unary tanh operation on a tensor.");
 
     // TMs
     m_tensor.def("reshape", &reshape);
@@ -132,67 +214,48 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("transpose_hc", &transpose_hc);
     m_tensor.def("tilize", &tilize);
     m_tensor.def("untilize", &untilize);
-
-    // bast enums
-    py::enum_<BcastOpMath::Enum>(m_tensor, "BcastOpMath")
-        .value("ADD", BcastOpMath::Enum::ADD)
-        .value("SUB", BcastOpMath::Enum::SUB)
-        .value("MUL", BcastOpMath::Enum::MUL);
-
-    py::enum_<BcastOpDim::Enum>(m_tensor, "BcastOpDim")
-        .value("H", BcastOpDim::Enum::H)
-        .value("W", BcastOpDim::Enum::W)
-        .value("HW", BcastOpDim::Enum::HW);
-
-    // reduce enums
-    py::enum_<ReduceOpMath::Enum>(m_tensor, "ReduceOpMath")
-        .value("SUM", ReduceOpMath::Enum::SUM)
-        .value("MAX", ReduceOpMath::Enum::MAX);
-
-    py::enum_<ReduceOpDim::Enum>(m_tensor, "ReduceOpDim")
-        .value("H", ReduceOpDim::Enum::H)
-        .value("W", ReduceOpDim::Enum::W)
-        .value("HW", ReduceOpDim::Enum::HW);
-
-    // layout enums
-    py::enum_<Layout>(m_tensor, "Layout")
-        .value("ROW_MAJOR", Layout::ROW_MAJOR)
-        .value("TILE", Layout::TILE)
-        .value("CHANNELS_LAST", Layout::CHANNELS_LAST);
-
-    // TODO(agrebenisan): This should probably be in its own module, but here for now.
-    py::enum_<Initialize>(m_tensor, "Initialize")
-        .value("ZEROS", Initialize::ZEROS)
-        .value("ONES",Initialize::ONES)
-        .value("INCREMENT", Initialize::INCREMENT)
-        .value("RANDOM", Initialize::RANDOM);
-
-    py::enum_<DataType>(m_tensor, "DataType")
-        .value("FLOAT32", DataType::FLOAT32)
-        .value("BFLOAT16", DataType::BFLOAT16)
-        .value("UINT32", DataType::UINT32);
 }
 
 void DeviceModule(py::module &m_device) {
-    py::class_<Device>(m_device, "Device")
+    py::enum_<tt::ARCH>(m_device, "Arch", "Type of Tenstorrent accelerator device")
+        .value("GRAYSKULL", tt::ARCH::GRAYSKULL);
+
+    auto pyDevice = py::class_<Device>(m_device, "Device", "A Tenstorrent accelerator device");
+
+    pyDevice
         .def(
             py::init<>(
                 [](tt::ARCH arch, int pcie_slot) {
                     return Device(arch, pcie_slot);
                 }
-            )
+            ), "Create device"
         );
-    py::class_<Host>(m_device, "Host")
+
+    auto pyHost = py::class_<Host>(m_device, "Host", "A host machine");
+
+    pyHost
         .def(
             py::init<>(
                 []() {
                     return Host();
                 }
-            )
+            ), "Create host"
         );
-    m_device.def("CreateDevice", &CreateDevice);
-    m_device.def("InitializeDevice", &InitializeDevice);
-    m_device.def("CloseDevice", &CloseDevice);
+
+    m_device.def("CreateDevice", &CreateDevice, R"doc(
+        Creates a device instance.
+
+        +------------------+------------------------+---------------------+-------------+----------+
+        | Argument         | Description            | Data type           | Valid range | Required |
+        +==================+========================+=====================+=============+==========+
+        | arch             | Device type            | ttmetal.device.Arch |             | Yes      |
+        +------------------+------------------------+---------------------+-------------+----------+
+        | pci_express_slot | PCI Express slot index | int                 |             | Yes      |
+        +------------------+------------------------+---------------------+-------------+----------+
+    )doc");
+    m_device.def("InitializeDevice", &InitializeDevice, "Initialize device instance with default params");
+    m_device.def("CloseDevice", &CloseDevice, "Close device instance");
+
     m_device.def("StartDebugPrintServer", &StartDebugPrintServer);
     m_device.def("setProfilerDir", &setProfilerDir);
 
@@ -206,13 +269,10 @@ void DeviceModule(py::module &m_device) {
     m_device.def("GetBinaryCacheEnabled", &GetBinaryCacheEnabled);
 
     m_device.def("GetHost", &GetHost);
-
-    py::enum_<tt::ARCH>(m_device, "Arch")
-        .value("GRAYSKULL", tt::ARCH::GRAYSKULL);
-
 }
 
 } // end namespace tt_metal
+
 } // end namespace tt
 
 
