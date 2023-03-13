@@ -25,7 +25,7 @@ Tensor tilize(const Tensor &a) {
         std::cout << "Perf warning: tilize called on already tilized tensor." << std::endl;
         return a;
     } else {
-        TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+        TT_ASSERT(a.layout() == Layout::ROW_MAJOR or a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
     }
     tt_metal::Program *program = new tt_metal::Program();
 
@@ -41,9 +41,10 @@ Tensor tilize(const Tensor &a) {
 
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume() / TILE_HW;
-
-    uint32_t num_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
-    uint32_t stick_size = a.shape()[3] * 2; // Assuming bfloat16 dataformat
+    uint32_t stick_s =  a.layout() == Layout::ROW_MAJOR ? a.shape()[3] : a.shape()[1];
+    uint32_t num_sticks = a.layout() == Layout::ROW_MAJOR ? a.shape()[0] * a.shape()[1] * a.shape()[2] : a.shape()[0] * a.shape()[2] * a.shape()[3];
+    uint32_t stick_size = stick_s * 2; // Assuming bfloat16 dataformat
+    std::cout << "stick size (datum) " << stick_s << std::endl;
     TT_ASSERT((stick_size % 2) == 0, "Stick size must be divisible by 2");
 
     // InterleavedDramBuffer stores buffers across multiple dram banks but reader kernel only needs the location of the first one
@@ -60,7 +61,7 @@ Tensor tilize(const Tensor &a) {
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;
-    uint32_t num_input_tiles = a.shape()[3] / 32;
+    uint32_t num_input_tiles = stick_s / 32;
 
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
@@ -75,7 +76,7 @@ Tensor tilize(const Tensor &a) {
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t output_cb_addr = 400 * 1024;
-    uint32_t num_output_tiles = a.shape()[3] / 32;
+    uint32_t num_output_tiles = stick_s / 32;
 
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
@@ -120,7 +121,7 @@ Tensor tilize(const Tensor &a) {
 
     void *hlk_args = new tilize::hlk_args_t{
         .per_core_block_cnt = int32_t(num_sticks / 32),
-        .per_core_block_tile_cnt = int32_t(a.shape()[3] / 32)
+        .per_core_block_tile_cnt = int32_t(stick_s / 32)
     };
     tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, hlk_args, sizeof(tilize::hlk_args_t));
 
@@ -164,8 +165,9 @@ Tensor tilize(const Tensor &a) {
         (uint32_t) dram_dst_noc_xy.y,
         (uint32_t) (a.shape()[0] * a.shape()[1] * a.shape()[2] * a.shape()[3] / TILE_HW)}
     );
-
+    std::cout << "Launching kernels " << std::endl;
     tt_metal::LaunchKernels(device, program);
+    std::cout << "Done kernels " << std::endl;
 
     delete program;
 

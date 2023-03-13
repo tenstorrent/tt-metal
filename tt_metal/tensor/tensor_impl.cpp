@@ -20,6 +20,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
 std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(
     DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape) {
     uint32_t W = shape[3];
+    uint32_t C = shape[1];
     int num_bank_units;
     int num_entries_per_bank_unit;
     int num_bytes_per_entry;
@@ -57,7 +58,9 @@ std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(
         }
         break;
         case Layout::CHANNELS_LAST:
-            TT_ASSERT(false && "Writing in CHANNELS_LAST layout to device is currently unsupported");
+            num_bank_units = total_size_bytes / (C*2);
+            num_entries_per_bank_unit = C/2; // num elements in tile packed as uint32
+            num_bytes_per_entry = 4;
         break;
         default:
             TT_ASSERT(false && "Unsupported layout to write to device");
@@ -73,7 +76,7 @@ void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_
 void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() { return dtype == DataType::BFLOAT16; };
-    auto supported_layout = [&layout]() { return layout == Layout::ROW_MAJOR or layout == Layout::TILE; };
+    auto supported_layout = [&layout]() { return layout == Layout::ROW_MAJOR or layout == Layout::TILE or layout == Layout::CHANNELS_LAST; };
     TT_ASSERT(supported_dtype() && "Only BFLOAT16 is supported on device!");
     TT_ASSERT(supported_layout() && "Only ROW_MAJOR and TILE layouts are supported on device!");
 }

@@ -14,6 +14,7 @@ TT_METAL_TESTS += \
 		 tt_metal/tests/ops/test_reduce_op \
 		 tt_metal/tests/ops/test_bcast_op \
 		 tt_metal/tests/ops/test_bmm_op \
+		 tt_metal/tests/ops/test_tilize_op \
 		 tt_metal/tests/test_bmm \
 		 tt_metal/tests/tensors/test_host_device_loopback \
 		 tt_metal/tests/test_add_two_ints \

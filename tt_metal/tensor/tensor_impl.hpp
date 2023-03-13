@@ -187,6 +187,18 @@ inline std::vector<T> convert_layout_tile_to_row_major(const std::array<uint32_t
     return convert_layout(data_to_convert, shape_vec, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
 }
 
+template <typename T>
+inline std::vector<T> convert_layout_row_major_to_channels_last(const std::array<uint32_t, 4> &shape, const std::vector<T>& data_to_convert) {
+    std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
+    return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::CHANNELS_LAST);
+}
+
+template <typename T>
+inline std::vector<T> convert_layout_channels_last_to_row_major(const std::array<uint32_t, 4> &shape, const std::vector<T>& data_to_convert) {
+    std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
+    return convert_layout(data_to_convert, shape_vec, TensorLayout::CHANNELS_LAST, TensorLayout::LIN_ROW_MAJOR);
+}
+
 // ======================================================================================
 //                                         Print
 // ======================================================================================
@@ -273,10 +285,13 @@ void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_
 
 template <typename T>
 inline std::vector<T> initialize_data(const std::array<uint32_t, 4> &shape, Initialize init_type, Layout layout) {
-    TT_ASSERT(layout == Layout::TILE or layout == Layout::ROW_MAJOR, "Only ROW_MAJOR or TILE layout is supported!");
+    TT_ASSERT(layout == Layout::TILE or layout == Layout::ROW_MAJOR or layout == Layout::CHANNELS_LAST, "Only ROW_MAJOR or TILE layout is supported!");
     std::vector<T> data = initialize_row_major_tensor_data<T>(shape, init_type);
     if (layout == Layout::TILE) {
         data = convert_layout_row_major_to_tile(shape, data);
+    }
+    else if (layout == Layout::CHANNELS_LAST) {
+        data = convert_layout_row_major_to_channels_last(shape, data);
     }
     return data;
 }
