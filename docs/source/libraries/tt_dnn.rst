@@ -44,7 +44,7 @@ operation (unary, binary etc.).
 +----------+----------------------+-----------+-------------+----------+
 | Argument | Description          | Data type | Valid range | Required |
 +==========+======================+===========+=============+==========+
-| arg      | First tensor to add  | Tensor    |             | Yes      |
+| arg      | Tensor argument      | Tensor    |             | Yes      |
 +----------+----------------------+-----------+-------------+----------+
 
 Any arguments which are exceptions to this rule will be noted in that

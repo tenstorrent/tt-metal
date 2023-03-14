@@ -247,10 +247,40 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // broadcast math
-    m_tensor.def("bcast", &bcast);
+    m_tensor.def("bcast", &bcast, R"doc(
+        Perform a broadcasted binary math operation between two tensors.
+
+        The first tensor, ``a``, is the one to be broadcast.
+
+        +-----------+-------------------------------+----------------------------+-------------+----------+
+        | Argument  | Description                   | Data type                  | Valid range | Required |
+        +===========+===============================+============================+=============+==========+
+        | a         | Input tensor                  | ttmetal.tensor.Tensor      |             | Yes      |
+        +-----------+-------------------------------+----------------------------+-------------+----------+
+        | b         | Input tensor                  | ttmetal.tensor.Tensor      |             | Yes      |
+        +-----------+-------------------------------+----------------------------+-------------+----------+
+        | bcast_op  | Math operation to perform     | ttmetal.tensor.BcastOpMath |             | Yes      |
+        +-----------+-------------------------------+----------------------------+-------------+----------+
+        | bcast_dim | Height count of output tensor | ttmetal.tensor.BcastOpDim  |             | Yes      |
+        +-----------+-------------------------------+----------------------------+-------------+----------+
+    )doc");
 
     // reduce
-    m_tensor.def("reduce", &reduce);
+    m_tensor.def("reduce", &reduce, R"doc(
+        Perform a reduce with a specified aggregation function on a tensor.
+
+        +-------------+---------------------------------------+-----------------------------+-------------+----------+
+        | Argument    | Description                           | Data type                   | Valid range | Required |
+        +=============+=======================================+=============================+=============+==========+
+        | a           | Input tensor                          | ttmetal.tensor.Tensor       |             | Yes      |
+        +-------------+---------------------------------------+-----------------------------+-------------+----------+
+        | reduce_math | Aggregating math operation            | ttmetal.tensor.ReduceOpMath |             | Yes      |
+        +-------------+---------------------------------------+-----------------------------+-------------+----------+
+        | reduce_dim  | Dim to perform aggregation over       | ttmetal.tensor.ReduceOpDim  |             | Yes      |
+        +-------------+---------------------------------------+-----------------------------+-------------+----------+
+        | scalar      | Scalar to apply during math operation | float                       |             | Yes      |
+        +-------------+---------------------------------------+-----------------------------+-------------+----------+
+    )doc");
 
     // eltwise unary SFPU
     m_tensor.def("exp", &exp, "Performs a unary exp operation on a tensor.");
@@ -381,7 +411,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
         +==================+========================+=======================+=============+==========+
-        | device           | Device to initialize   | ttmetal.device.Device |             | Yes      |
+        | device           | Device to close        | ttmetal.device.Device |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 

@@ -20,7 +20,7 @@ Welcome to TT-Metal documentation!
    hardware/hardware
 
 .. toctree::
-   :caption: APIs
+   :caption: TT-Metal APIs
 
    apis/host_apis2
    apis/kernel_apis
