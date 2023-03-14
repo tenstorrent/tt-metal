@@ -1,9 +1,5 @@
-torch==1.13.1
 datasets==2.9.0
 torchvision==0.14.1
 transformers==4.20.1
-numpy==1.20.3
-loguru==0.6.0
-black==22.8.0
 tiktoken
 tqdm
