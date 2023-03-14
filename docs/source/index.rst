@@ -32,9 +32,14 @@ Welcome to TT-Metal documentation!
    examples/eltwise_binary
 
 .. toctree::
-    :caption: Libraries
+   :caption: Libraries
 
-    libraries/tt_dnn
+   libraries/tt_dnn
+
+.. toctree::
+   :caption: Frameworks
+
+   frameworks/tt_dispatch
 
 .. toctree::
    :caption: Debug Tools
