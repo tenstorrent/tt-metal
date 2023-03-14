@@ -76,7 +76,7 @@ class Tensor {
         void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
 
         // Prints like numpy print function to make it more readable. Only supports row major layout.
-        void pretty_print(Layout print_layout = Layout::ROW_MAJOR) const;
+        void pretty_print() const;
 
         // ======================================================================================
         //                                  Low Level APIs

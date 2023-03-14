@@ -89,8 +89,8 @@ void Tensor::print(Layout print_layout, bool pretty_print) const {
 }
 
 // Prints like numpy print function to make it more readable. Only supports row major layout.
-void Tensor::pretty_print(Layout print_layout) const {
-    print(print_layout, /*pretty_print=*/true);
+void Tensor::pretty_print() const {
+    print(Layout::ROW_MAJOR, /*pretty_print=*/true);
 }
 
 const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {

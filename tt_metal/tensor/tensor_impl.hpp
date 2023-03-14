@@ -26,8 +26,8 @@ inline std::vector<T> initialize_row_major_tensor_data(const std::array<uint32_t
                 val = static_cast<T>(1);
             break;
             case Initialize::INCREMENT: {
-                uint32_t test_val = x + shape[3] * y + shape[3] * shape[2] * z + shape[3] * shape[2] * shape[1] * w;
-                val = static_cast<T>(test_val);
+                float float_val = x + shape[3] * y + shape[3] * shape[2] * z + shape[3] * shape[2] * shape[1] * w;
+                val = static_cast<T>(float_val);
             }
             break;
             case Initialize::RANDOM: {
@@ -205,10 +205,20 @@ inline std::vector<T> convert_layout_channels_last_to_row_major(const std::array
 std::ostream& operator<<(std::ostream& os, const DataType& dtype);
 
 template <typename T>
+inline void print_datum(T datum) {
+    std::cout << datum;
+}
+
+template <>
+inline void print_datum(bfloat16 datum) {
+    std::cout << datum.to_float();
+}
+
+template <typename T>
 void print_data(const std::vector<T> &data, DataType dtype) {
     std::cout << "[ ";
     for (int i = 0; i < data.size(); i++) {
-        std:: cout << data[i];
+        print_datum(data[i]);
         if (i < data.size() - 1) {
             std::cout << ", ";
         }
@@ -237,7 +247,7 @@ void print_row_major_data(const std::vector<T> &data, std::array<uint32_t, 4> sh
                 for(auto x = 0; x < shape[3]; x++) {
                     // data in row major order
                     auto index = x + y*shape[3] + z*shape[2]*shape[3] + w*shape[1]*shape[2]*shape[3];
-                    std::cout << data[index];
+                    print_datum(data[index]);
                     if (x < shape[3] - 1) {
                         std::cout << ", ";
                     }

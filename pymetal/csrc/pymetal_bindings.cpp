@@ -107,6 +107,9 @@ void TensorModule(py::module &m_tensor) {
         .def("print", [](const Tensor &self, Layout print_layout = Layout::ROW_MAJOR) {
             return self.print(print_layout);
         }, "Prints the tensor")
+        .def("pretty_print", [](const Tensor &self) {
+            return self.pretty_print();
+        }, "Pretty prints the tensor")
         .def("shape", [](const Tensor &self) {
             return self.shape();
         }, "Returns the shape of the tensor")
