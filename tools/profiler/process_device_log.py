@@ -17,7 +17,7 @@ PER_CORE_HEIGHT = 90
 REARRANGED_TIME_CSV = "device_arranged_timestamps.csv"
 DEVICE_STATS_TXT = "device_stats.txt"
 DEVICE_PERF_HTML = "device_perf.html"
-DEVICE_TIME_CSV = "profile_log_device.csv"
+DEVICE_TIME_CSV = "logs/profile_log_device.csv"
 
 DEVICE_PERF_RESULTS = "device_perf_results.tar"
 

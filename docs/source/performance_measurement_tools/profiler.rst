@@ -58,7 +58,7 @@ In functions such as ``LaunchKernels`` the entire code within the function is wr
 
 After the execution of all wrapped code. A call to  ``dumpResults`` will process the deltas on all
 timers and dump the results into a CSV in the current directory called ``profile_log_host.csv``. In
-``tt_metal`` this function is wrapped under another function called ``dumpProfilerResults`` to
+``tt_metal`` this function is wrapped under another function called ``DumpHostProfileResults`` to
 simplify the decision of when to generate the CSV on tests that are using the ``tt_metal`` API.
 
 The ``dumpResults`` also flushes all the timers data after the dump. This is so that the same
@@ -69,7 +69,7 @@ belongs to.
 ``tt_metal\tests\test_add_two_ints.cpp`` is a good example that demonstrates this scenario.
 ``LaunchKernels`` is called twice in this test, if we only dump results once at the end of the
 execution, we will only get the results on the last call to that function. With the use of sections
-names we can call ``dumpProfilerResults`` twice and get and output such as the following in the
+names we can call ``DumpHostProfileResults`` twice and get and output such as the following in the
 CSV.
 
 

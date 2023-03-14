@@ -9,7 +9,7 @@ Profiling is provided through the `profiler.hpp` module. The idea is that portio
 all of it can be wrapped between a start and end timer marks. After the execution of the function,
 the delta between the two markers can be calculated as the period of the portion you wanted to
 profile. For each tt_metal function such as `LaunchKernels` the entire function is wrapped in timers
-and using `dumpProfilerResults` the result will be dumped into `profiler_log.json` in the current
+and using `DumpHostProfileResults` the result will be dumped into `profiler_log.json` in the current
 directory.
 
 With respect to how the host side api of `tt_metal` is designed, it is assumed that a subset of
@@ -18,7 +18,7 @@ program. `test_add_two_ints.cpp` is a good example for this. In the first sectio
 device, launches the kernel, and reads from device L1. All of these tasks can be profiles. The
 second section only launches the kernel with new args and reads from L1 as the device is already
 configured and only new kernel args are being sent. In order to keep the distinction between the
-first and second section `dumpProfilerResults(<section name>)`is used at the end of each section to
+first and second section `DumpHostProfileResults(<section name>)`is used at the end of each section to
 dump the host profiler results for each function of each section.  The code for this test is
 demonstrative of what was described.
 
@@ -65,7 +65,7 @@ Default markers are:
 1. Kernel start
 2. Kernel end
 
-The generated csv is `profile_log_device.csv` is saved under `tools/profiler/` by default.
+The generated csv is `profile_log_device.csv` is saved under `tools/profiler/logs` by default.
 
 Sample generated csv for a run on core 0,0:
 

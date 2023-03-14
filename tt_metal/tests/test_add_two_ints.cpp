@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
         tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, first_kernel_result, sizeof(int));
         log_info(LogVerif, "first kernel result = {}", first_kernel_result[0]);
 
-        tt_metal::dumpProfilerResults("first");
+        tt_metal::DumpHostProfileResults("first");
         ////////////////////////////////////////////////////////////////////////////
         //                  Update Runtime Args and Re-run Application
         ////////////////////////////////////////////////////////////////////////////
@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
         tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, second_kernel_result, sizeof(int));
         log_info(LogVerif, "second kernel result = {}", second_kernel_result[0]);
 
-        tt_metal::dumpProfilerResults("second");
+        tt_metal::DumpHostProfileResults("second");
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

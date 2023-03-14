@@ -39,11 +39,59 @@ namespace tt_metal {
 //                  HOST API: profiler
 // ==================================================
 
-// dump host side profiler results
-void dumpProfilerResults(std::string name_append = "", bool add_header = false);
+/**
+ * Dump host side profiler results into the host side CSV log
+ *
+ * Return value: void
+ *
+ * | Argument       | Description                                                                  |  Data type  | Valid range  | required |
+ * |----------------|------------------------------------------------------------------------------|-------------|--------------|----------|
+ * | name_prepend   | The name or description to be prepended to all rows in the CSV for this dump | std::string | Any string   | No       |
+ * */
+void DumpHostProfileResults(std::string name_prepend = "");
 
-// set profiler log dir
-void setProfilerDir(std::string output_dir = "");
+/**
+ * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                             |  Data type  | Valid range              | required |
+ * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
+ * | output_dir   | The output directory that will hold the outpu CSV logs  | std::string | Any valid directory path | No       |
+ * */
+void SetProfilerDir(std::string output_dir = "");
+
+/**
+ * Start a fresh log for the host side profile results
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                             |  Data type  | Valid range              | required |
+ * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
+ * */
+void FreshProfilerHostLog();
+
+/**
+ * Start a fresh log for the device side profile results
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                             |  Data type  | Valid range              | required |
+ * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
+ * */
+void FreshProfilerDeviceLog();
+
+/**
+ * Read device side profiler data and dump results into device side CSV log
+ *
+ * Return value: void
+ *
+ * | Argument       | Description                                                      | Data type | Valid range                                         | required |
+ * |----------------|------------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
+ * | device_type    | Type of Tenstorrent device to be used                            | ARCH enum | “tt::ARCH::GRAYSKULL”                               | Yes      |
+ * | pcie_slot      | The number of the PCIexpress slot in which the device is located | int       | 0 to 7                                              | Yes      |
+ * */
+void ReadDeviceSideProfileData(Device *device, Program *program);
 
 // ==================================================
 //                  HOST API: host and device
@@ -413,9 +461,6 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
 bool LaunchKernels(Device *device, Program *program, bool stagger_start = false);
-
-// Dump all device side profiling results
-void ReadDeviceSideProfileData(Device *device, Program *program);
 
 //
 /**

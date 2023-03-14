@@ -18,15 +18,6 @@ namespace tt_metal {
 
 static Profiler tt_metal_profiler = Profiler();
 
-void dumpProfilerResults(std::string name_append, bool add_header)
-{
-    tt_metal_profiler.dumpResults(name_append, add_header);
-}
-
-void setProfilerDir(std::string output_dir){
-     tt_metal_profiler.setOutputDir(output_dir);
- }
-
 bool enable_compile_cache = false;
 int force_recompiles = 0;
 void EnableCompileCache() { enable_compile_cache = true; }
@@ -37,6 +28,22 @@ int  GetForceRecompiles() { return force_recompiles; }
 void EnableBinaryCache() { tt::llrt::llrt_enable_binary_cache = true; }
 void DisableBinaryCache() { tt::llrt::llrt_enable_binary_cache = false; }
 bool GetBinaryCacheEnabled() { return tt::llrt::llrt_enable_binary_cache; }
+
+void DumpHostProfileResults(std::string name_prepend){
+    tt_metal_profiler.dumpHostResults(name_prepend);
+}
+
+void SetProfilerDir(std::string output_dir){
+     tt_metal_profiler.setOutputDir(output_dir);
+}
+
+void FreshProfilerHostLog(){
+     tt_metal_profiler.setHostNewLogFlag(true);
+}
+
+void FreshProfilerDeviceLog(){
+     tt_metal_profiler.setDeviceNewLogFlag(true);
+}
 
 Host *GetHost() {
     return new Host();

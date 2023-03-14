@@ -10,15 +10,27 @@
 
 Profiler::Profiler()
 {
-    firstRun = true;
-    output_dir = std::filesystem::path("tools/profiler");
+    host_new_log = true;
+    device_new_log = true;
+    output_dir = std::filesystem::path("tools/profiler/logs");
+    std::filesystem::create_directories(output_dir);
+}
+
+void Profiler::setDeviceNewLogFlag(bool new_log_flag)
+{
+    device_new_log = new_log_flag;
+}
+
+void Profiler::setHostNewLogFlag(bool new_log_flag)
+{
+    host_new_log = new_log_flag;
 }
 
 void Profiler::setOutputDir(std::string new_output_dir)
- {
+{
     std::filesystem::create_directories(new_output_dir);
     output_dir = new_output_dir;
- }
+}
 
 TimerPeriodInt Profiler::timerToTimerInt(TimerPeriod period)
 {
@@ -41,7 +53,7 @@ void Profiler::markStop(std::string timer_namer)
     name_to_timer_map[timer_namer].stop = steady_clock::now();
 }
 
-void Profiler::dumpResults(std::string name_append, bool add_header)
+void Profiler::dumpHostResults(std::string name_prepend)
 {
     const int large_width = 30;
     const int medium_width = 25;
@@ -49,7 +61,7 @@ void Profiler::dumpResults(std::string name_append, bool add_header)
     std::filesystem::path log_path = output_dir / HOST_SIDE_LOG;
     std::ofstream log_file;
 
-    if (firstRun || add_header)
+    if (host_new_log)
     {
         log_file.open(log_path);
 
@@ -59,17 +71,17 @@ void Profiler::dumpResults(std::string name_append, bool add_header)
         log_file << "Stop timer count [ns]"  << ", ";
         log_file << "Delta timer count [ns]";
         log_file << std::endl;
-        firstRun = false;
+        host_new_log = false;
     }
     else
     {
-        log_file.open(log_path,  std::ios_base::app);
+        log_file.open(log_path, std::ios_base::app);
     }
 
     for (auto timer : name_to_timer_map)
     {
         auto timer_period_ns = timerToTimerInt(timer.second);
-        log_file << name_append << ", ";
+        log_file << name_prepend << ", ";
         log_file << timer.first << ", ";
         log_file << timer_period_ns.start  << ", ";
         log_file << timer_period_ns.stop  << ", ";
@@ -93,17 +105,18 @@ void Profiler::dumpDeviceResults(
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     std::ofstream log_file;
 
-    if (firstRun)
+    if (device_new_log)
     {
         log_file.open(log_path);
         log_file << "Chip clock is at 1.2 GHz" << std::endl;
         log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]" << std::endl;
-        firstRun = false;
+        device_new_log = false;
     }
     else
     {
-        log_file.open(log_path,  std::ios_base::app);
+        log_file.open(log_path, std::ios_base::app);
     }
+
     constexpr int DRAM_ROW = 6;
     if (core_y > DRAM_ROW){
        core_y = core_y - 2;
@@ -112,6 +125,7 @@ void Profiler::dumpDeviceResults(
        core_y--;
     }
     core_x--;
+
     log_file << chip_id << ", " << core_x << ", " << core_y << ", " << hart_name << ", ";
     log_file << timer_id << ", ";
     log_file << timestamp;

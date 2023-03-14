@@ -31,8 +31,11 @@ class Profiler {
         // Turn steady clock start and stop into integer start, stop and duration
         TimerPeriodInt timerToTimerInt(TimerPeriod period);
 
-        // First Run
-        bool firstRun;
+        // Recreate host side log file with header
+        bool host_new_log;
+
+        // Recreate device side log file with header
+        bool device_new_log;
 
         // Output Dir for Profile Logs
         std::filesystem::path output_dir;
@@ -47,16 +50,22 @@ class Profiler {
         //Mark the steady_clock time for the end of the asked name
         void markStop(std::string timer_name);
 
+        //Set the host side file flag
+        void setHostNewLogFlag(bool new_log_flag);
+
+        //Set the device side file flag
+        void setDeviceNewLogFlag(bool new_log_flag);
+
         //Change the output dir of the profile logs
         void setOutputDir(std::string new_output_dir);
 
         //Traverse all timers and dump the results
-        void dumpResults(std::string name_append, bool add_header=false);
+        void dumpHostResults(std::string name_append);
 
         //Get device profile log filename
         std::string getDeviceProfilerLogName();
 
-        // Dump device profile results
+        //Dump device profile results
         void dumpDeviceResults(
             int chip_id,
             int core_x,
