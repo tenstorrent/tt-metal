@@ -160,26 +160,83 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("sub", &sub, "Perform an eltwise-binary sub on two tensors.");
     m_tensor.def("mul", &mul, "Perform an eltwise-binary mul on two tensors.");
 
-    m_tensor.def("fill_ones_rm", &fill_ones_rm, R"doc(
-        Generates an NCHW row-major tensor and fill it with ones up to hOnes,
-        wOnes in each HW tile with the rest padded with zeros. So for H=2, W=3,
-        hFill=1, wFill=2 the following tensor will be generated:
+    m_tensor.def("fill_rm", &fill_rm, R"doc(
+        Generates an NCHW row-major tensor and fill it with high values up to
+        hOnes, wOnes in each HW tile with the rest padded with high values. So
+        for H=2, W=3, hFill=1, wFill=2 the following tensor will be generated:
 
-        +------------> W
-        | hi hi lo
-        | lo lo lo
-        |
-        v H
+        .. code-block::
+
+            +------------> W
+            | hi hi lo
+            | lo lo lo
+            |
+            v H
 
         H, W are expected to be multiples of 32.
 
-        The 'any' Tensor arg is only used to pass the device and resulting tensor dtype.
+        The 'any' Tensor arg is only used to pass the device and resulting
+        tensor dtype.
 
-        val_hi/lo are expected to be uint16 encodings of bfloat16 numbers, so 0x3f80 for 1.0 etc.
+        val_hi/lo are expected to be uint16 encodings of bfloat16 numbers, so
+        0x3f80 for 1.0 etc.
+
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | Argument | Description                                                           | Data type             | Valid range            | Required |
+        +==========+=======================================================================+=======================+========================+==========+
+        | N        | Batch count of output tensor                                          | int                   |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | C        | Channel count of output tensor                                        | int                   |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | H        | Height count of output tensor                                         | int                   |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | W        | Width count of output tensor                                          | int                   |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | hOnes    | Height of high values region                                          | int                   | hOnes <= H             | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | wOnes    | Width of high values region                                           | int                   | wOnes <= W             | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | any      | Any input tensor with desired device and data types for output tensor | ttmetal.tensor.Tensor |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | val_hi   | High value to use                                                     | int                   | Valid bfloat16 integer | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | val_lo   | Low value to use                                                      | int                   | Valid bfloat16 integer | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
     )doc");
-    m_tensor.def("fill_rm", &fill_rm);
-    m_tensor.def("pad_h_rm", &pad_h_rm);
-    m_tensor.def("transpose_hc_rm", &transpose_hc_rm);
+    m_tensor.def("fill_ones_rm", &fill_ones_rm, R"doc(
+        Same as ``fill_rm``, but ``val_hi`` is set to ``1`` and ``val_lo`` is
+        ``0``.
+
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | Argument | Description                                                           | Data type             | Valid range            | Required |
+        +==========+=======================================================================+=======================+========================+==========+
+        | N        | Batch count of output tensor                                          | int                   |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | C        | Channel count of output tensor                                        | int                   |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | H        | Height count of output tensor                                         | int                   |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | W        | Width count of output tensor                                          | int                   |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | hOnes    | Height of high values region                                          | int                   | hOnes <= H             | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | wOnes    | Width of high values region                                           | int                   | wOnes <= W             | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+        | any      | Any input tensor with desired device and data types for output tensor | ttmetal.tensor.Tensor |                        | Yes      |
+        +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+    )doc");
+    m_tensor.def("pad_h_rm", &pad_h_rm, R"doc(
+        Pads a given tensor's on the H dimension (2nd dimension from lowest)
+        with 0s until the H reaches dimension ``paddedH``.
+
+        +----------+----------------------+-----------+--------------+----------+
+        | Argument | Description          | Data type | Valid range  | Required |
+        +==========+======================+===========+==============+==========+
+        | a        | Tensor to pad        | Tensor    |              | Yes      |
+        +----------+----------------------+-----------+--------------+----------+
+        | paddedH  | New H dim            | int       | >= current H | Yes      |
+        +----------+----------------------+-----------+--------------+----------+
+    )doc");
 
     // matrix multiplication
     m_tensor.def("matmul", &matmul, R"doc(
@@ -206,14 +263,70 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("tanh", &tanh, "Performs a unary tanh operation on a tensor.");
 
     // TMs
-    m_tensor.def("reshape", &reshape);
-    m_tensor.def("transpose", &transpose);
-    m_tensor.def("transpose_hc", &transpose_hc);
-    m_tensor.def("tilize", &tilize);
-    m_tensor.def("untilize", &untilize);
-    m_tensor.def("transpose_hc", &transpose_hc);
-    m_tensor.def("tilize", &tilize);
-    m_tensor.def("untilize", &untilize);
+    m_tensor.def("reshape", &reshape, R"doc(
+        Reshapes a tensor given new N, C, H, and W dimensions and returns
+        a tensor (a new view).
+
+        +----------+--------------------------------+-----------------------+-------------+----------+
+        | Argument | Description                    | Data type             | Valid range | Required |
+        +==========+================================+=======================+=============+==========+
+        | a        | Input tensor                   | ttmetal.tensor.Tensor |             | Yes      |
+        +----------+--------------------------------+-----------------------+-------------+----------+
+        | N        | Batch count of output tensor   | int                   |             | Yes      |
+        +----------+--------------------------------+-----------------------+-------------+----------+
+        | C        | Channel count of output tensor | int                   |             | Yes      |
+        +----------+--------------------------------+-----------------------+-------------+----------+
+        | H        | Height count of output tensor  | int                   |             | Yes      |
+        +----------+--------------------------------+-----------------------+-------------+----------+
+        | W        | Width count of output tensor   | int                   |             | Yes      |
+        +----------+--------------------------------+-----------------------+-------------+----------+
+    )doc");
+
+    m_tensor.def("transpose", &transpose, R"doc(
+        Transposes a given tensor's H and W dimensions.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
+    m_tensor.def("transpose_hc", &transpose_hc, R"doc(
+        Transposes a given tensor's H and C dimensions.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
+    m_tensor.def("transpose_hc_rm", &transpose_hc_rm, R"doc(
+        Transposes a given tensor's H and C dimensions, row-major wise.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
+    m_tensor.def("tilize", &tilize, R"doc(
+        Tilizes a given tensor across memory on device.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
+    m_tensor.def("untilize", &untilize, R"doc(
+        Untilizes a given tensor tilized across memory on device.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
 }
 
 void DeviceModule(py::module &m_device) {
@@ -253,8 +366,24 @@ void DeviceModule(py::module &m_device) {
         | pci_express_slot | PCI Express slot index | int                 |             | Yes      |
         +------------------+------------------------+---------------------+-------------+----------+
     )doc");
-    m_device.def("InitializeDevice", &InitializeDevice, "Initialize device instance with default params");
-    m_device.def("CloseDevice", &CloseDevice, "Close device instance");
+    m_device.def("InitializeDevice", &InitializeDevice, R"doc(
+        Initialize device instance with default params.
+
+        +------------------+------------------------+-----------------------+-------------+----------+
+        | Argument         | Description            | Data type             | Valid range | Required |
+        +==================+========================+=======================+=============+==========+
+        | device           | Device to initialize   | ttmetal.device.Device |             | Yes      |
+        +------------------+------------------------+-----------------------+-------------+----------+
+    )doc");
+    m_device.def("CloseDevice", &CloseDevice, R"doc(
+        Close a device.
+
+        +------------------+------------------------+-----------------------+-------------+----------+
+        | Argument         | Description            | Data type             | Valid range | Required |
+        +==================+========================+=======================+=============+==========+
+        | device           | Device to initialize   | ttmetal.device.Device |             | Yes      |
+        +------------------+------------------------+-----------------------+-------------+----------+
+    )doc");
 
     m_device.def("StartDebugPrintServer", &StartDebugPrintServer);
     m_device.def("setProfilerDir", &setProfilerDir);

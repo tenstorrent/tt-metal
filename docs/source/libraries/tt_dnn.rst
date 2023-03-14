@@ -1,10 +1,10 @@
-ttDNN Reference (currently ttmetal)
-===================================
-
-ttDNN is a simplified Python interface to the compute engine of the TT-Metal.
+ttmetal Python API (will become ttDNN)
+**************************************
 
 The TT-Metal Tensor library provides easy entry to the data structures and
 device management layer of TT-Metal.
+
+ttDNN is a simplified Python interface to the compute engine of the TT-Metal.
 
 This will be the future plan. For now, the ``ttmetal`` Python module is a
 unified Python interface that provides both ttDNN and the Tensor library.
@@ -35,8 +35,8 @@ Tensor Library through ``ttmetal``
 ttDNN through ``ttmetal``
 =========================
 
-Operations on tensors
----------------------
+Tensor math operations
+----------------------
 
 All arguments to operations on tensors are tensors, regardless of arity of
 operation (unary, binary etc.).
@@ -73,3 +73,49 @@ operation's listing.
 .. autofunction:: ttmetal.tensor.log
 
 .. autofunction:: ttmetal.tensor.tanh
+
+Tensor manipulation operations
+------------------------------
+
+These operations change the tensor shape in some way, giving it new dimensions
+but in general retaining the data.
+
+.. autofunction:: ttmetal.tensor.reshape
+
+.. autofunction:: ttmetal.tensor.transpose
+
+.. autofunction:: ttmetal.tensor.transpose_hc
+
+.. autofunction:: ttmetal.tensor.transpose_hc_rm
+
+.. autofunction:: ttmetal.tensor.tilize
+
+.. autofunction:: ttmetal.tensor.untilize
+
+All other operations
+--------------------
+
+.. autofunction:: ttmetal.tensor.fill_rm
+
+.. autofunction:: ttmetal.tensor.fill_ones_rm
+
+.. autofunction:: ttmetal.tensor.pad_h_rm
+
+.. autofunction:: ttmetal.tensor.bcast
+
+.. autofunction:: ttmetal.tensor.reduce
+
+Enums
+-----
+
+.. autoclass:: ttmetal.tensor.BcastOpMath
+    :members: ADD, SUB, MUL
+
+.. autoclass:: ttmetal.tensor.BcastOpDim
+    :members: H, W, HW
+
+.. autoclass:: ttmetal.tensor.ReduceOpMath
+    :members: SUM, MAX
+
+.. autoclass:: ttmetal.tensor.ReduceOpDim
+    :members: H, W, HW
