@@ -33,13 +33,12 @@ Tensor transpose_wh(const Tensor &a) {
 
     uint32_t single_tile_size = 2 * 1024;
 
-    tt_metal::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume()/TILE_HW;
 
-    // InterleavedDramBuffer stores buffers across multiple dram banks but reader kernel only needs the location of the first one
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates().at(0);
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
 
     // This should allocate a DRAM buffer on the device
@@ -48,10 +47,9 @@ Tensor transpose_wh(const Tensor &a) {
     std::array<uint32_t, 4> output_shape = {shape[0], shape[1], W, H};
     tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 
-    tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    // InterleavedDramBuffer stores buffers across multiple dram banks but writer kernel only needs the location of the first one
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates().at(0);
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;
@@ -181,13 +179,12 @@ Tensor transpose_wh_multi_core(const Tensor &a) {
 
     uint32_t single_tile_size = 2 * 1024;
 
-    tt_metal::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume()/TILE_HW;
 
-    // InterleavedDramBuffer stores buffers across multiple dram banks but reader kernel only needs the location of the first one
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates().at(0);
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
 
     // This should allocate a DRAM buffer on the device
@@ -196,10 +193,9 @@ Tensor transpose_wh_multi_core(const Tensor &a) {
     std::array<uint32_t, 4> output_shape = {shape[0], shape[1], W, H};
     tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 
-    tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    // InterleavedDramBuffer stores buffers across multiple dram banks but writer kernel only needs the location of the first one
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates().at(0);
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {
             int core_index = i * num_cores_c + j;
@@ -343,10 +339,9 @@ Tensor transpose_hc(const Tensor &a) {
 
     uint32_t single_tile_size = 2 * 1024;
 
-    tt_metal::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
-    // InterleavedDramBuffer stores buffers across multiple dram banks but reader kernel only needs the location of the first one
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates().at(0);
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -354,10 +349,9 @@ Tensor transpose_hc(const Tensor &a) {
     std::array<uint32_t, 4> output_shape = {N, H, C, W};
     tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 
-    tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    // InterleavedDramBuffer stores buffers across multiple dram banks but writer kernel only needs the location of the first one
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates().at(0);
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;

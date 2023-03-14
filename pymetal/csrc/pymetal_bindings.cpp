@@ -71,6 +71,21 @@ void TensorModule(py::module &m_tensor) {
         .value("BFLOAT16", DataType::BFLOAT16)
         .value("UINT32", DataType::UINT32);
 
+    auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig");
+
+    pyMemoryConfig
+        .def(
+            py::init<>(
+                [](bool interleaved, int dram_channel) {
+                    return MemoryConfig{.interleaved=interleaved, dram_channel=dram_channel};
+                }
+            ),
+            py::arg("interleaved") = true,
+            py::arg("dram_channel") = -1
+        )
+        .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
+        .def_readonly("dram_channel", &MemoryConfig::dram_channel, "DRAM channel holding tensor data. Only used when tensor is not interleaved");
+
     auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor");
 
     pyTensor
@@ -90,6 +105,13 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
+                [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
+                    return Tensor(data, shape, data_type, layout, device, mem_config);
+                }
+            )
+        )
+        .def(
+            py::init<>(
                 [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
                     return Tensor(data, shape, data_type, layout);
                 }
@@ -102,11 +124,20 @@ void TensorModule(py::module &m_tensor) {
                 }
             )
         )
-        .def("to", py::overload_cast<Device*>(&Tensor::to, py::const_), "Moves the tensor to device")
+        .def(
+            py::init<>(
+                [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
+                    return Tensor(data, shape, data_type, layout, device, mem_config);
+                }
+            )
+        )
+        .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
+            self.to(device, mem_config);
+        }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, "Moves the tensor to device")
         .def("to", py::overload_cast<Host*>(&Tensor::to, py::const_), "Moves the tensor to CPU")
-        .def("print", [](const Tensor &self, Layout print_layout = Layout::ROW_MAJOR) {
+        .def("print", [](const Tensor &self, Layout print_layout) {
             return self.print(print_layout);
-        }, "Prints the tensor")
+        }, py::arg("print_layout") = Layout::ROW_MAJOR, "Prints the tensor")
         .def("pretty_print", [](const Tensor &self) {
             return self.pretty_print();
         }, "Pretty prints the tensor")

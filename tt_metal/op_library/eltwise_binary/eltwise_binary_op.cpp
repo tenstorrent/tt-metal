@@ -29,26 +29,24 @@ Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_ty
 
     uint32_t single_tile_size = 2 * TILE_HW;
 
-    tt_metal::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
-    tt_metal::InterleavedDramBuffer *src1_dram_buffer = b.buffer();
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src1_dram_buffer = b.buffer();
 
     TT_ASSERT(src0_dram_buffer->size() == src1_dram_buffer->size(), "Operand to eltwise binary need to be the same size!");
 
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume() / TILE_HW;
 
-    // InterleavedDramBuffer stores buffers across multiple dram banks but reader kernels only need the location of the first one
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates().at(0);
-    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates().at(0);
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
     tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
 
-    tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    // InterleavedDramBuffer stores buffers across multiple dram banks but writer kernel only needs the location of the first one
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates().at(0);
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;

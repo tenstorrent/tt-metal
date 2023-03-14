@@ -31,7 +31,7 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
     std::array<uint32_t, 4> bshape = {u32(N),u32(C),u32(H),u32(W)};
 
     tt_metal::Tensor output = tt_metal::Tensor(bshape, any.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
-    tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t num_cb_tiles = 16;

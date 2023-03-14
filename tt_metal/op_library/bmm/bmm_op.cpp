@@ -33,8 +33,8 @@ Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
 
     uint32_t single_tile_size = 2 * 1024;
-    tt_metal::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
-    tt_metal::InterleavedDramBuffer *src1_dram_buffer = b.buffer();
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src1_dram_buffer = b.buffer();
     if (bcast_batch)
         TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     else {
@@ -50,7 +50,7 @@ Tensor matmul_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
     tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 
-    tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool pass = true;

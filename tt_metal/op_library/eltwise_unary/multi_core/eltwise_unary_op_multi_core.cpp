@@ -21,13 +21,12 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
 
     uint32_t single_tile_size = 2 * TILE_HW;
 
-    tt_metal::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume() / TILE_HW;
 
-    // InterleavedDramBuffer stores buffers across multiple dram banks but reader kernel only needs the location of the first one
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates().at(0);
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
     tt_metal::Device *device = a.device();
 
@@ -43,10 +42,9 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
     // This should allocate a DRAM buffer on the device
     tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
 
-    tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    // InterleavedDramBuffer stores buffers across multiple dram banks but writer kernel only needs the location of the first one
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates().at(0);
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     std::vector<tt_metal::DataMovementKernel *> unary_reader_kernels;
     std::vector<tt_metal::DataMovementKernel *> unary_writer_kernels;

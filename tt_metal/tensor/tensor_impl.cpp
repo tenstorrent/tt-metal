@@ -70,15 +70,53 @@ std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(
 
 void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
     auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(tensor.dtype(), tensor.layout(), buffer_size_bytes, tensor.shape());
-    tensor.interleaved_buffer_ = CreateInterleavedDramBuffer(tensor.device(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    tensor.buffer_ = CreateInterleavedDramBuffer(tensor.device(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+}
+
+void allocate_dram_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
+    TT_ASSERT(tensor.mem_config_.dram_channel != -1);
+    tensor.buffer_ = CreateDramBuffer(tensor.device(), tensor.mem_config_.dram_channel, buffer_size_bytes);
+}
+
+void allocate_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
+    if (tensor.interleaved()) {
+        allocate_interleaved_buffer_on_device(tensor, buffer_size_bytes);
+    } else {
+        allocate_dram_buffer_on_device(tensor, buffer_size_bytes);
+    }
+}
+
+void read_interleaved_data_from_device(const Tensor &tensor, uint32_t size_in_bytes, std::vector<uint32_t> &host_buffer) {
+    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(tensor.dtype(), tensor.layout(), size_in_bytes, tensor.shape());
+    ReadFromDeviceDRAMChannelsInterleaved(tensor.device(), host_buffer, tensor.buffer()->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+}
+
+void read_contiguous_data_from_device(const Tensor &tensor, uint32_t size_in_bytes, std::vector<uint32_t> &host_buffer) {
+    TT_ASSERT(tensor.buffer()->size() == size_in_bytes);
+    auto dram_buffer = dynamic_cast<DramBuffer *>(tensor.buffer());
+    TT_ASSERT(dram_buffer != nullptr);
+    ReadFromDeviceDRAM(dram_buffer, host_buffer);
+}
+
+void write_interleaved_data_to_device(const Tensor &tensor, std::vector<uint32_t> &host_buffer) {
+    uint32_t packed_size_in_bytes = host_buffer.size() * sizeof(uint32_t);
+    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(tensor.dtype(), tensor.layout(), packed_size_in_bytes, tensor.shape());
+    WriteToDeviceDRAMChannelsInterleaved(
+        tensor.device(), host_buffer, tensor.buffer()->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+}
+
+void write_contiguous_data_to_device(const Tensor &tensor, std::vector<uint32_t> &host_buffer) {
+    auto dram_buffer = dynamic_cast<DramBuffer *>(tensor.buffer());
+    TT_ASSERT(dram_buffer != nullptr);
+    WriteToDeviceDRAM(dram_buffer, host_buffer);
 }
 
 void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() { return dtype == DataType::BFLOAT16; };
-    auto supported_layout = [&layout]() { return layout == Layout::ROW_MAJOR or layout == Layout::TILE or layout == Layout::CHANNELS_LAST; };
+    auto supported_layout = [&layout]() { return true; };
     TT_ASSERT(supported_dtype() && "Only BFLOAT16 is supported on device!");
-    TT_ASSERT(supported_layout() && "Only ROW_MAJOR and TILE layouts are supported on device!");
+    TT_ASSERT(supported_layout());
 }
 
 

@@ -5,8 +5,7 @@ namespace tt {
 namespace tt_metal {
 
 InterleavedDramBuffer::InterleavedDramBuffer(Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry)
-    : device_(device), total_size_bytes_(num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry) {
-
+    : Buffer(device, num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry, 0) {
     this->address_ = 0;
     for (int dram_bank = 0; dram_bank < this->device_->num_dram_banks(); dram_bank++) {
         this->address_ = std::max(this->address_, this->device_->banked_dram_manager_.at(dram_bank)->peak());
@@ -27,7 +26,7 @@ InterleavedDramBuffer::InterleavedDramBuffer(Device *device, int num_bank_units,
         auto dram_buffer = new DramBuffer(device, dram_bank, buffer_size, this->address_);
         this->bank_to_buffer_.insert({dram_bank, dram_buffer});
         total_allocated += buffer_size;
-        if (total_allocated == this->total_size_bytes_) {
+        if (total_allocated == this->size_in_bytes_) {
             break;
         }
     }
@@ -40,6 +39,10 @@ uint32_t InterleavedDramBuffer::buffer_size(int dram_channel) const {
     return this->bank_to_buffer_.at(dram_channel)->size();
 }
 
+tt_xy_pair InterleavedDramBuffer::noc_coordinates() const {
+    return this->noc_coordinates(0);
+}
+
 tt_xy_pair InterleavedDramBuffer::noc_coordinates(int dram_channel) const {
     if (this->bank_to_buffer_.find(dram_channel) == this->bank_to_buffer_.end()) {
         TT_THROW("No buffer has been allocated at DRAM channel " + std::to_string(dram_channel));
@@ -47,7 +50,7 @@ tt_xy_pair InterleavedDramBuffer::noc_coordinates(int dram_channel) const {
     return this->bank_to_buffer_.at(dram_channel)->noc_coordinates();
 }
 
-std::vector<tt_xy_pair> InterleavedDramBuffer::noc_coordinates() const {
+std::vector<tt_xy_pair> InterleavedDramBuffer::interleaved_noc_coordinates() const {
     std::vector<tt_xy_pair> dram_noc_coordinates;
     for (int dram_bank = 0; dram_bank < this->device_->num_dram_banks(); dram_bank++) {
         if (this->bank_to_buffer_.find(dram_bank) != this->bank_to_buffer_.end()) {

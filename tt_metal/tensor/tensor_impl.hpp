@@ -9,52 +9,6 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
-// Copied from root/tensor.hpp
-template <class T>
-inline std::vector<T> initialize_row_major_tensor_data(const std::array<uint32_t, 4> &shape, Initialize init_type, int rand_max_val = 100, int seed = 0) {
-    std::vector<T> values;
-
-    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_val), std::mt19937(seed));
-
-    auto get_val = [&init_type, &shape, &rand_float](int x, int y, int z, int w) {
-        T val;
-        switch (init_type) {
-            case Initialize::ZEROS:
-                val = static_cast<T>(0);
-            break;
-            case Initialize::ONES:
-                val = static_cast<T>(1);
-            break;
-            case Initialize::INCREMENT: {
-                float float_val = x + shape[3] * y + shape[3] * shape[2] * z + shape[3] * shape[2] * shape[1] * w;
-                val = static_cast<T>(float_val);
-            }
-            break;
-            case Initialize::RANDOM: {
-                float float_val = rand_float();
-                val = static_cast<T>(float_val);
-            }
-            break;
-            default:
-                TT_ASSERT(false && "Unsupported initializer type");
-            break;
-        }
-        return val;
-    };
-
-    for(auto w = 0; w < shape[0]; w++) {
-        for(auto z = 0; z < shape[1]; z++) {
-            for(auto y = 0; y < shape[2]; y++) {
-                for(auto x = 0; x < shape[3]; x++) {
-                    T val = get_val(x, y, z, w);
-                    values.push_back(val);
-                }
-            }
-        }
-    }
-    return values;
-}
-
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              Low Level APIs
@@ -279,8 +233,58 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
 // ======================================================================================
 //                           Data reader, writer, and initializers
 // ======================================================================================
+template <class T>
+inline std::vector<T> initialize_row_major_tensor_data(const std::array<uint32_t, 4> &shape, Initialize init_type, int rand_max_val = 100, int seed = 0) {
+    std::vector<T> values;
+
+    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_val), std::mt19937(seed));
+
+    auto get_val = [&init_type, &shape, &rand_float](int x, int y, int z, int w) {
+        T val;
+        switch (init_type) {
+            case Initialize::ZEROS:
+                val = static_cast<T>(0);
+            break;
+            case Initialize::ONES:
+                val = static_cast<T>(1);
+            break;
+            case Initialize::INCREMENT: {
+                float float_val = x + shape[3] * y + shape[3] * shape[2] * z + shape[3] * shape[2] * shape[1] * w;
+                val = static_cast<T>(float_val);
+            }
+            break;
+            case Initialize::RANDOM: {
+                float float_val = rand_float();
+                val = static_cast<T>(float_val);
+            }
+            break;
+            default:
+                TT_ASSERT(false && "Unsupported initializer type");
+            break;
+        }
+        return val;
+    };
+
+    for(auto w = 0; w < shape[0]; w++) {
+        for(auto z = 0; z < shape[1]; z++) {
+            for(auto y = 0; y < shape[2]; y++) {
+                for(auto x = 0; x < shape[3]; x++) {
+                    T val = get_val(x, y, z, w);
+                    values.push_back(val);
+                }
+            }
+        }
+    }
+    return values;
+}
+
 std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape);
 
+void allocate_dram_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
+
+void read_contiguous_data_from_device(const Tensor &tensor, uint32_t size_in_bytes, std::vector<uint32_t> &host_buffer);
+
+void write_contiguous_data_to_device(const Tensor &tensor, std::vector<uint32_t> &data);
 
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
@@ -293,9 +297,11 @@ std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataType dtyp
 // ======================================================================================
 void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
+void allocate_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
+
 template <typename T>
 inline std::vector<T> initialize_data(const std::array<uint32_t, 4> &shape, Initialize init_type, Layout layout) {
-    TT_ASSERT(layout == Layout::TILE or layout == Layout::ROW_MAJOR or layout == Layout::CHANNELS_LAST, "Only ROW_MAJOR or TILE layout is supported!");
+    TT_ASSERT(layout == Layout::TILE or layout == Layout::ROW_MAJOR or layout == Layout::CHANNELS_LAST);
     std::vector<T> data = initialize_row_major_tensor_data<T>(shape, init_type);
     if (layout == Layout::TILE) {
         data = convert_layout_row_major_to_tile(shape, data);
@@ -306,29 +312,37 @@ inline std::vector<T> initialize_data(const std::array<uint32_t, 4> &shape, Init
     return data;
 }
 
+void read_interleaved_data_from_device(const Tensor &tensor, uint32_t size_in_bytes, std::vector<uint32_t> &host_buffer);
+
 template <typename T>
 std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_bytes) {
     std::vector<uint32_t> device_data;
-    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(tensor.dtype(), tensor.layout(), size_in_bytes, tensor.shape());
-    ReadFromDeviceDRAMChannelsInterleaved(tensor.device(), device_data, tensor.buffer()->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    if (tensor.interleaved()) {
+        read_interleaved_data_from_device(tensor, size_in_bytes, device_data);
+    } else {
+        read_contiguous_data_from_device(tensor, size_in_bytes, device_data);
+    }
     auto unpacked_data = unpack_uint32_vec<T>(device_data);
     return unpacked_data;
 }
 
+void write_interleaved_data_to_device(const Tensor &tensor, std::vector<uint32_t> &data);
+
 template <typename T>
 inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
-    uint32_t packed_size_in_bytes = packed_buffer_size_bytes<T>(data.size());
-    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(tensor.dtype(), tensor.layout(), packed_size_in_bytes, tensor.shape());
     std::vector<uint32_t> uint32_data = pack_vec_into_uint32_vec<T>(data);
-    WriteToDeviceDRAMChannelsInterleaved(
-        tensor.device(), uint32_data, tensor.buffer()->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    if (tensor.interleaved()) {
+        write_interleaved_data_to_device(tensor, uint32_data);
+    } else {
+        write_contiguous_data_to_device(tensor, uint32_data);
+    }
 }
 
 template <typename T>
 inline void initialize_data_on_device(Tensor &tensor, std::vector<T> &data) {
     TT_ASSERT(tensor.device() != nullptr);
     uint32_t packed_size_in_bytes = packed_buffer_size_bytes<T>(data.size());
-    allocate_interleaved_buffer_on_device(tensor, packed_size_in_bytes);
+    allocate_buffer_on_device(tensor, packed_size_in_bytes);
     write_data_to_device<T>(tensor, data);
 }
 
@@ -394,11 +408,11 @@ inline Tensor to_host(const Tensor &tensor) {
 }
 
 template <typename T>
-inline Tensor to_device(const Tensor &tensor, Device *target_device) {
+inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config) {
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
     TT_ASSERT(tensor.data_ptr() != nullptr && "Need data to exist in order to move it to device");
     auto data_vec = *reinterpret_cast<std::vector<T>*>(tensor.data_ptr());
-    return Tensor(data_vec, tensor.shape(), tensor.dtype(), tensor.layout(), target_device);
+    return Tensor(data_vec, tensor.shape(), tensor.dtype(), tensor.layout(), target_device, mem_config);
 }
 
 template <typename T>

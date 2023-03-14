@@ -32,7 +32,7 @@ Tensor pad_h_rm(const Tensor &a, int paddedH) {
 
 
     uint32_t single_tile_size = 2 * TILE_HW;
-    tt_metal::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
     auto ashape = a.shape();
     int N = ashape[0], C = ashape[1], H = ashape[2], W = ashape[3];
 
@@ -42,7 +42,7 @@ Tensor pad_h_rm(const Tensor &a, int paddedH) {
     TT_ASSERT(a.layout() == tt::tt_metal::Layout::ROW_MAJOR);
 
     tt_metal::Tensor output = tt_metal::Tensor(bshape, a.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
-    tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t num_cb_tiles = 16;

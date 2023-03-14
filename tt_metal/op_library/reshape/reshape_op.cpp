@@ -48,8 +48,8 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
      // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
     tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
-    tt_metal::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
-    tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
 
     uint32_t single_tile_size = 2 * TILE_HW; // Assuming bfloat16 dataformat
     uint32_t src0_cb_index = 0;
