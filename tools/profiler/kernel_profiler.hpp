@@ -23,9 +23,11 @@ namespace kernel_profiler{
     uint32_t w_index;
     void init_profiler()
     {
+#ifdef PROFILE_KERNEL
         buffer = reinterpret_cast<uint32_t*>(get_debug_print_buffer());
         w_index = 1;
         buffer [0] = w_index;
+#endif //PROFILE_KERNEL
     }
 
     inline void mark_time(uint32_t timer_id)
