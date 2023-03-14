@@ -81,7 +81,7 @@ CC ?= gcc
 CXX ?= g++
 CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\" -DFMT_HEADER_ONLY -Ithird_party/fmt
 CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden
-LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) -Ldevice/lib -ldl #-l/usr/include/python3.8
+LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) -ldl
 SHARED_LIB_FLAGS = -shared -fPIC
 STATIC_LIB_FLAGS = -fPIC
 ifeq ($(findstring clang,$(CC)),clang)
