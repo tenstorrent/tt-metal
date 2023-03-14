@@ -16,6 +16,8 @@ TT_METAL_TESTS += \
 		 tt_metal/tests/ops/test_bmm_op \
 		 tt_metal/tests/ops/test_tilize_op \
 		 tt_metal/tests/ops/test_tilize_zero_padding \
+		 tt_metal/tests/ops/test_tilize_op_channels_last \
+		 tt_metal/tests/ops/test_tilize_zero_padding_channels_last \
 		 tt_metal/tests/test_bmm \
 		 tt_metal/tests/tensors/test_host_device_loopback \
 		 tt_metal/tests/test_add_two_ints \

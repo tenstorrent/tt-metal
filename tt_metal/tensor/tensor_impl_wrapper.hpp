@@ -29,6 +29,8 @@ Tensor to_host_wrapper(const Tensor &tensor);
 
 Tensor to_device_wrapper(const Tensor &tensor, Device *target_device);
 
+Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout);
+
 void print_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print);
 
 }  // namespace tensor_impl

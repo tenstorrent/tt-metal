@@ -73,6 +73,8 @@ class Tensor {
 
         Tensor to(Host *host) const;
 
+        Tensor to(Layout target_layout) const;
+
         void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
 
         // Prints like numpy print function to make it more readable. Only supports row major layout.

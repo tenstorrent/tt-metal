@@ -36,7 +36,6 @@ Tensor tilize(const Tensor &a) {
     uint32_t stick_s =  a.layout() == Layout::ROW_MAJOR ? a.shape()[3] : a.shape()[1];
     uint32_t num_sticks = a.layout() == Layout::ROW_MAJOR ? a.shape()[0] * a.shape()[1] * a.shape()[2] : a.shape()[0] * a.shape()[2] * a.shape()[3];
     uint32_t stick_size = stick_s * 2; // Assuming bfloat16 dataformat
-    std::cout << "stick size (datum) " << stick_s << std::endl;
     TT_ASSERT((stick_size % 2) == 0, "Stick size must be divisible by 2");
 
     // InterleavedDramBuffer stores buffers across multiple dram banks but reader kernel only needs the location of the first one
@@ -182,24 +181,33 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
 
+    // This should allocate a DRAM buffer on the device
+    tt_metal::Device *device = a.device();
+    auto output_shape = a.shape();
+    output_shape[2] = ceil((double) output_shape[2] / (double) TILE_HEIGHT ) * TILE_HEIGHT;
+    output_shape[3] = ceil((double) output_shape[3] / (double) TILE_WIDTH ) * TILE_WIDTH;
+    std::cout << "output shape height=" << output_shape[2] << " output shape width=" << output_shape[3] << std::endl;
+    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+
+
     uint32_t single_tile_size = 2 * TILE_HW;
 
     tt_metal::InterleavedDramBuffer *src0_dram_buffer = a.buffer();
 
-    TT_ASSERT(a.volume() % TILE_HW == 0);
-    int32_t num_tiles = a.volume() / TILE_HW;
-    uint32_t stick_s =  a.layout() == Layout::ROW_MAJOR ? a.shape()[3] : a.shape()[1];
-    uint32_t num_sticks = a.layout() == Layout::ROW_MAJOR ? a.shape()[0] * a.shape()[1] * a.shape()[2] : a.shape()[0] * a.shape()[2] * a.shape()[3];
-    uint32_t stick_size = stick_s * 2; // Assuming bfloat16 dataformat
-    std::cout << "stick size (datum) " << stick_s << std::endl;
-    TT_ASSERT((stick_size % 2) == 0, "Stick size must be divisible by 2");
+    TT_ASSERT(output.volume() % TILE_HW == 0);
+    std::cout << "outptu volume " << output.volume() << std::endl;
+    int32_t num_tiles = output.volume() / TILE_HW;
+    uint32_t row_size_datum =  a.layout() == Layout::ROW_MAJOR ? a.shape()[3] : a.shape()[1];
+    std::cout << "row_size_datum = " << row_size_datum << std::endl;
+    uint32_t num_rows =  a.layout() == Layout::ROW_MAJOR ? a.shape()[2] : a.shape()[3];
+    uint32_t num_rows_padded = ceil((double) num_rows / (double) TILE_HEIGHT) * TILE_HEIGHT;
+    std::cout << "num rows=" << num_rows <<" , num rows padded " << num_rows_padded << std::endl;
+    assert(row_size_datum % TILE_WIDTH == 0);
+    uint32_t num_2d_faces = a.layout() == Layout::ROW_MAJOR ? a.shape()[0] * a.shape()[1] : a.shape()[0] * a.shape()[2];
+    uint32_t row_size_bytes = row_size_datum * 2; // Assuming bfloat16 dataformat
 
     // InterleavedDramBuffer stores buffers across multiple dram banks but reader kernel only needs the location of the first one
     auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates().at(0);
-
-    // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
-    tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
 
     tt_metal::InterleavedDramBuffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -208,8 +216,8 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
 
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;
-    uint32_t num_input_tiles = stick_s / 32;
-
+    uint32_t num_input_tiles = row_size_datum / 32;
+    assert(num_input_tiles > 0);
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
         device,
@@ -223,7 +231,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t output_cb_addr = 400 * 1024;
-    uint32_t num_output_tiles = stick_s / 32;
+    uint32_t num_output_tiles = row_size_datum / 32;
 
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
@@ -237,14 +245,20 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     );
 
     uint32_t zero_buffer_l1_addr = 600 * 1024;
-    auto zero_buffer_l1 = tt_metal::CreateL1Buffer(program, device, core, stick_size, zero_buffer_l1_addr);
+    auto zero_buffer_l1 = tt_metal::CreateL1Buffer(program, device, core, row_size_bytes, zero_buffer_l1_addr);
 
     // Reader compile-time args
-    bool stick_size_is_power_of_two = (ceil(log2(stick_size)) == floor(log2(stick_size)));
-    vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(), num_sticks, stick_size, zero_buffer_l1_addr};
+    bool stick_size_is_power_of_two = (ceil(log2(row_size_bytes)) == floor(log2(row_size_bytes)));
+    vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(),
+                                            num_2d_faces,
+                                            num_rows,
+                                            num_rows_padded,
+                                            row_size_bytes,
+                                            zero_buffer_l1_addr};
+    std::cout << "num 2d faces " << num_2d_faces << " , row size " << row_size_bytes << std::endl;
     DataMovementKernelArgs *compile_time_args;
     if (stick_size_is_power_of_two) {
-        reader_kernel_args.push_back(log2(stick_size));
+        reader_kernel_args.push_back(log2(row_size_bytes));
 
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
         compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1});
@@ -255,7 +269,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     // Tilized reader
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_unary_stick_layout_8bank_padding.cpp",
+        "kernels/dataflow/reader_unary_pad_rows.cpp",
         core,
         compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -270,9 +284,10 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
         tt_metal::NOC::RISCV_0_default);
 
     vector<uint32_t> compute_kernel_args = {
-        uint32_t(num_sticks / 32),
-        uint32_t(stick_s / 32)
+        uint32_t((num_rows_padded/TILE_HEIGHT) * num_2d_faces),
+        uint32_t(row_size_datum / TILE_WIDTH)
     };
+
     tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
@@ -313,9 +328,9 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
         {dst_dram_buffer->address(),
         (uint32_t) dram_dst_noc_xy.x,
         (uint32_t) dram_dst_noc_xy.y,
-        (uint32_t) (a.shape()[0] * a.shape()[1] * a.shape()[2] * a.shape()[3] / TILE_HW)}
+        (uint32_t) (output.shape()[0] * output.shape()[1] * output.shape()[2] * output.shape()[3] / TILE_HW)}
     );
-    std::vector<uint32_t> zero_buffer_stick(stick_s, 0);
+    std::vector<uint32_t> zero_buffer_stick(row_size_datum, 0);
     tt_metal::WriteToDeviceL1(device, core, zero_buffer_stick, zero_buffer_l1_addr);
     std::cout << "Launching kernels " << std::endl;
     tt_metal::LaunchKernels(device, program);

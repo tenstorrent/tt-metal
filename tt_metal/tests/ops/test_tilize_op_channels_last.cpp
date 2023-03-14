@@ -33,31 +33,24 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::array<uint32_t, 4> shape = {1, 32, 45, 64};
+        std::array<uint32_t, 4> shape = {1, 64, 32, 32};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::ROW_MAJOR, device);
-        Tensor b = tilize_with_zero_padding(a);
-        Tensor c =  b.to(host);
+        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::CHANNELS_LAST, device);
+        Tensor b = tilize(a);
+        Tensor c = b.to(host);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         std::cout << "Moving src data to host to validate" << std::endl;
         Tensor host_a = a.to(host); // Move tensor a to host to validate
-        Tensor golden = host_a.to(Layout::TILE);
+        auto host_vec =  *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
+        std::array<uint32_t, 4> cl_shape = {1, 32, 32, 64};
+        Tensor g = Tensor(host_vec, cl_shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+        Tensor golden = g.to(Layout::TILE);
         auto golden_vec =  *reinterpret_cast<std::vector<bfloat16>*>(golden.data_ptr());
         auto result_vec = *reinterpret_cast<std::vector<bfloat16>*>(c.data_ptr());
-        std::cout << "Validating " << std::endl;
-         std::cout << "golden vec size " << golden_vec.size() << std::endl;
-        std::cout << "result vec size " << result_vec.size() << std::endl;
-        uint32_t num_errors = 0;
-        for(uint32_t i = 0; i < result_vec.size() ; i++) {
-            if(result_vec[i] != golden_vec[i]) {
-                if(num_errors < 10)
-                    std::cout << "Error at i=" << i << " result=" <<result_vec[i]<< " golden=" <<golden_vec[i] << std::endl;
-                num_errors++;
-            }
-        }
         pass &= (result_vec == golden_vec);
+        pass &= tt_metal::CloseDevice(device);;
 
     } catch (const std::exception &e) {
         pass = false;

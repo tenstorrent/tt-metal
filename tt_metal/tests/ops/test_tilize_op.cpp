@@ -16,43 +16,6 @@ using namespace constants;
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 
-inline vector<uint32_t> gold_standard_tilize(std::vector<uint32_t> src_vec, vector<uint32_t> shape) {
-    vector<uint32_t> dst_vec;
-
-    int num_rows = shape.at(0);
-    int num_cols = shape.at(1) / 2;
-    for (int x = 0; x < num_rows; x += 32) {
-        for (int y = 0; y < num_cols; y += 16) {
-            int start = x * num_cols + y;
-
-            // Top faces
-            for (int j = 0; j < 2; j++) {
-                int start_ = start + 8 * j;
-                for (int k = 0; k < 16; k++) {
-                    for (int i = 0; i < 8; i++) {
-                        int idx = start_ + num_cols * k + i;
-                        dst_vec.push_back(src_vec.at(idx));
-                    }
-                }
-            }
-
-            // Bottom faces
-            start += 16 * num_cols;
-            for (int j = 0; j < 2; j++) {
-                int start_ = start + 8 * j;
-                for (int k = 0; k < 16; k++) {
-                    for (int i = 0; i < 8; i++) {
-                        int idx = start_ + num_cols * k + i;
-                        dst_vec.push_back(src_vec.at(idx));
-                    }
-                }
-            }
-        }
-    }
-
-    return dst_vec;
-}
-
 int main(int argc, char **argv) {
     bool pass = true;
 
@@ -70,15 +33,20 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::array<uint32_t, 4> shape = {1, 64, 32, 32};
+        std::array<uint32_t, 4> shape = {1, 64, 32, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::CHANNELS_LAST, device);
-        Tensor b = tilize(a).to(host);
+        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::ROW_MAJOR, device);
+        Tensor b = tilize(a);
+        Tensor c = b.to(host);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
+        std::cout << "Moving src data to host to validate" << std::endl;
         Tensor host_a = a.to(host); // Move tensor a to host to validate
-        //vector<uint32_t> golden = gold_standard_tilize(src_vec, {num_tiles_r * 32, num_tiles_c * 32});
+        Tensor golden = host_a.to(Layout::TILE);
+        auto golden_vec =  *reinterpret_cast<std::vector<bfloat16>*>(golden.data_ptr());
+        auto result_vec = *reinterpret_cast<std::vector<bfloat16>*>(c.data_ptr());
+        pass &= (result_vec == golden_vec);
         pass &= tt_metal::CloseDevice(device);;
 
     } catch (const std::exception &e) {

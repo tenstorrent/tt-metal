@@ -53,6 +53,15 @@ Tensor to_device_wrapper(const Tensor &tensor, Device *target_device) {
     return to_device_map.at(tensor.dtype())(tensor, target_device);
 }
 
+Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout) {
+    const static std::map<DataType, std::function<Tensor(const Tensor &, Layout)>> to_layout_map = {
+        {DataType::BFLOAT16, &to_layout<bfloat16>},
+        {DataType::FLOAT32, &to_layout<float>},
+        {DataType::UINT32, &to_layout<uint32_t>}
+    };
+    return to_layout_map.at(tensor.dtype())(tensor, target_layout);
+}
+
 void print_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print) {
     const static std::map<DataType, std::function<void(const Tensor &, Layout, bool)>> print_map = {
         {DataType::BFLOAT16, &print<bfloat16>},

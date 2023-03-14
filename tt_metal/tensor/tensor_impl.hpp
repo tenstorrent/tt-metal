@@ -358,6 +358,26 @@ inline void initialize_data_helper(Tensor &tensor, Initialize init_type) {
     write_data(tensor, data);
 }
 
+template <typename T1, typename T2>
+inline void convert_layout_or_type_and_write_data(Tensor &tensor, std::vector<T2> &data) {
+    auto layout = tensor.layout();
+    auto shape = tensor.shape();
+    if (layout == Layout::TILE) {
+        std::cout << "Converting from row major to tile " << std::endl;
+        data = convert_layout_row_major_to_tile(shape, data);
+    }
+    else if (layout == Layout::CHANNELS_LAST) {
+        std::cout << "Converting from tile to channels last " << std::endl;
+        data = convert_layout_row_major_to_channels_last(shape, data);
+    }
+    if (std::is_same<T1, T2>::value) {
+        write_data(tensor, data);
+    } else {
+        std::vector<T1> converted_data = cast_vec<T1>(data);
+        write_data(tensor, converted_data);
+    }
+}
+
 // ======================================================================================
 //                                         .to()
 // ======================================================================================
@@ -365,8 +385,11 @@ template <typename T>
 inline Tensor to_host(const Tensor &tensor) {
     TT_ASSERT(tensor.buffer() != nullptr, "Need DRAM buffers on device to exist to copy data to host!");
     TT_ASSERT(tensor.device() != nullptr && "Need device to be set copy data from device to host!");
+    std::cout << "Reading from device" << std::endl;
     uint32_t size_in_bytes = tensor.buffer()->size();
+    std::cout << "Size=" << size_in_bytes << std::endl;
     auto data_vec = read_data_from_device<T>(tensor, size_in_bytes);
+    std::cout << "data vec size " << data_vec.size() << std::endl;
     return Tensor(data_vec, tensor.shape(), tensor.dtype(), tensor.layout());
 }
 
@@ -376,6 +399,21 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device) {
     TT_ASSERT(tensor.data_ptr() != nullptr && "Need data to exist in order to move it to device");
     auto data_vec = *reinterpret_cast<std::vector<T>*>(tensor.data_ptr());
     return Tensor(data_vec, tensor.shape(), tensor.dtype(), tensor.layout(), target_device);
+}
+
+template <typename T>
+inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
+    TT_ASSERT(tensor.layout() != target_layout && "Cannot convert to target layout same as it is the same the current layout.");
+    TT_ASSERT(tensor.layout() == Layout::ROW_MAJOR && "Need layout to be in row major to convert to another layout");
+    TT_ASSERT(target_layout == Layout::TILE || target_layout == Layout::CHANNELS_LAST && "Target layout unsupported");
+    auto data = *reinterpret_cast<std::vector<T>*>(tensor.data_ptr());
+    if (target_layout == Layout::TILE) {
+        data = convert_layout_row_major_to_tile(tensor.shape(), data);
+    }
+    else if (target_layout == Layout::CHANNELS_LAST) {
+        data = convert_layout_row_major_to_channels_last(tensor.shape(), data);
+    }
+    return Tensor(data, tensor.shape(), tensor.dtype(), target_layout);
 }
 
 // ======================================================================================

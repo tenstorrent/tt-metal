@@ -84,6 +84,11 @@ Tensor Tensor::to(Host *host) const {
     return tensor_impl::to_host_wrapper(*this);
 }
 
+Tensor Tensor::to(Layout target_layout) const {
+    TT_ASSERT(on_host() && "Bring tensor to host before converting to target layout");
+    return tensor_impl::to_layout_wrapper(*this, target_layout);
+}
+
 void Tensor::print(Layout print_layout, bool pretty_print) const {
     tensor_impl::print_wrapper(*this, print_layout, pretty_print);
 }
