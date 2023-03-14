@@ -51,6 +51,18 @@ namespace tt_metal {
 void DumpHostProfileResults(std::string name_prepend = "");
 
 /**
+ * Read device side profiler data and dump results into device side CSV log
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                       | Type       | Valid Range                                            | Required |
+ * |---------------|---------------------------------------------------|------------|--------------------------------------------------------|----------|
+ * | device        | The device where the L1 buffer resides.           | Device *   |                                                        | True     |
+ * | program       | The program to which buffer will be added to.     | Program *  |                                                        | True     |
+ * */
+void DumpDeviceProfileResults(Device *device, Program *program);
+
+/**
  * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
  *
  * Return value: void
@@ -81,17 +93,6 @@ void FreshProfilerHostLog();
  * */
 void FreshProfilerDeviceLog();
 
-/**
- * Read device side profiler data and dump results into device side CSV log
- *
- * Return value: void
- *
- * | Argument       | Description                                                      | Data type | Valid range                                         | required |
- * |----------------|------------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
- * | device_type    | Type of Tenstorrent device to be used                            | ARCH enum | “tt::ARCH::GRAYSKULL”                               | Yes      |
- * | pcie_slot      | The number of the PCIexpress slot in which the device is located | int       | 0 to 7                                              | Yes      |
- * */
-void ReadDeviceSideProfileData(Device *device, Program *program);
 
 // ==================================================
 //                  HOST API: host and device

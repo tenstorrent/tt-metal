@@ -41,7 +41,7 @@ On the host side minimal changes are necessary on the code.
 
 1. The compile flag for device side profiling has to be set, this is done by setting the flag in `tt_metal::CompileProgram`.
 2. For each kernel launch through `tt_metal::LaunchKernels(device, program);`  that you want device side profiler markers dumped,
-A call to `tt_metal::ReadDeviceSideProfileData(device, program);` has to be made to append the markers to
+A call to `tt_metal::DumpDeviceProfileResults(device, program);` has to be made to append the markers to
 the current test device side output `profile_log_device.csv`
 
 e.g.
@@ -55,7 +55,7 @@ e.g.
     .
     tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, second_runtime_args);
     pass &= tt_metal::LaunchKernels(device, program);
-    tt_metal::ReadDeviceSideProfileData(device, program);
+    tt_metal::DumpDeviceProfileResults(device, program);
 ```
 
 After this setup, default markers will be generated and can be post-processed.

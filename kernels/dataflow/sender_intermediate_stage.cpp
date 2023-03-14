@@ -3,7 +3,6 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
-    kernel_profiler::mark_time(3);
 
     uint32_t receiver_noc_x          = get_arg_val<uint32_t>(0);
     uint32_t receiver_noc_y          = get_arg_val<uint32_t>(1);
@@ -59,6 +58,4 @@ void kernel_main() {
         }
         cb_pop_front(cb_id, block_size_tiles);
     }
-
-    kernel_profiler::mark_time(4);
 }

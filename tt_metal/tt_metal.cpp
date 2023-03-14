@@ -33,6 +33,11 @@ void DumpHostProfileResults(std::string name_prepend){
     tt_metal_profiler.dumpHostResults(name_prepend);
 }
 
+void DumpDeviceProfileResults(Device *device, Program *program) {
+    auto logical_cores_used_in_program = program->logical_cores();
+    tt_metal_profiler.dumpDeviceResults(device,logical_cores_used_in_program);
+}
+
 void SetProfilerDir(std::string output_dir){
      tt_metal_profiler.setOutputDir(output_dir);
 }
@@ -701,40 +706,6 @@ bool LaunchKernels(Device *device, Program *program, bool stagger_start) {
     tt_metal_profiler.markStop("LaunchKernels");
     return pass;
 }
-
-void ReadDeviceSideProfileDataHelper (Device *device, const tt_xy_pair &logical_core, std::string risc_name, int risc_print_buffer_addr){
-    auto pcie_slot = device->pcie_slot();
-
-    vector<std::uint32_t> profile_buffer;
-    uint32_t end_index;
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-
-    ReadFromDeviceL1(device, logical_core, risc_print_buffer_addr, profile_buffer ,PRINT_BUFFER_SIZE*sizeof(std::uint32_t));
-
-    end_index = profile_buffer[0];
-
-    for (int i = 1; i < end_index; i+=3) {
-        tt_metal_profiler.dumpDeviceResults(
-                        pcie_slot,
-                        worker_core.x,
-                        worker_core.y,
-                        risc_name,
-                        (uint64_t(profile_buffer[i+2]) << 32) | profile_buffer[i+1],
-                        profile_buffer[i]
-                );
-    }
-}
-
-void ReadDeviceSideProfileData(Device *device, Program *program) {
-
-    auto logical_cores_used_in_program = program->logical_cores();
-
-    for (const auto &logical_core : logical_cores_used_in_program) {
-        ReadDeviceSideProfileDataHelper(device, logical_core, "NCRISC", PRINT_BUFFER_NC);
-        ReadDeviceSideProfileDataHelper(device, logical_core, "BRISC", PRINT_BUFFER_BR);
-    }
-}
-
 
 // Copies data from a host buffer into a buffer within the device DRAM channel
 bool WriteToDeviceDRAM(DramBuffer *dram_buffer, std::vector<uint32_t> &host_buffer) {

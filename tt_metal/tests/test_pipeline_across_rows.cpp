@@ -329,7 +329,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         log_info(LogTest, "Launching kernels...");
         pass &= tt_metal::LaunchKernels(device, program);
-        tt_metal::ReadDeviceSideProfileData(device, program);
+        tt_metal::DumpDeviceProfileResults(device, program);
         log_info(LogTest, "Kernels done.");
 
         log_info(LogTest, "Reading results from device...");

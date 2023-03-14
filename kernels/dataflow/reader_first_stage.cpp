@@ -3,7 +3,6 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
-    kernel_profiler::mark_time(1);
 
     std::uint32_t buffer_src_addr      = get_arg_val<uint32_t>(0);
     std::uint32_t src_noc_x            = get_arg_val<uint32_t>(1);
@@ -33,6 +32,4 @@ void kernel_main() {
 
         }
     }
-
-    kernel_profiler::mark_time(2);
 }

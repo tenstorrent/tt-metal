@@ -4,7 +4,6 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
-    kernel_profiler::mark_time(5);
 
     uint32_t sender_noc_x            = get_arg_val<uint32_t>(0);
     uint32_t sender_noc_y            = get_arg_val<uint32_t>(1);
@@ -39,5 +38,4 @@ void kernel_main() {
         }
     }
 
-    kernel_profiler::mark_time(6);
 }

@@ -6,6 +6,9 @@
 #include <iostream>
 #include <filesystem>
 
+#include "tt_metal/impl/device/device.hpp"
+#include "llrt/llrt.hpp"
+
 using std::chrono::steady_clock;
 using std::chrono::duration;
 using std::chrono::duration_cast;
@@ -28,9 +31,6 @@ class Profiler {
     private:
         std::unordered_map <std::string, TimerPeriod> name_to_timer_map;
 
-        // Turn steady clock start and stop into integer start, stop and duration
-        TimerPeriodInt timerToTimerInt(TimerPeriod period);
-
         // Recreate host side log file with header
         bool host_new_log;
 
@@ -39,6 +39,25 @@ class Profiler {
 
         // Output Dir for Profile Logs
         std::filesystem::path output_dir;
+
+        // Turn steady clock start and stop into integer start, stop and duration
+        TimerPeriodInt timerToTimerInt(TimerPeriod period);
+
+        // Dumping profile result to file
+        void dumpDeviceResultToFile(
+                int chip_id,
+                int core_x,
+                int core_y,
+                std::string hart_name,
+                uint64_t timestamp,
+                uint32_t timer_id);
+
+        // Helper function for reading risc profile results
+        void readRiscProfilerResults(
+                tt::tt_metal::Device *device,
+                const tt_xy_pair &logical_core,
+                std::string risc_name,
+                int risc_print_buffer_addr);
 
     public:
         //Constructor
@@ -62,15 +81,6 @@ class Profiler {
         //Traverse all timers and dump the results
         void dumpHostResults(std::string name_append);
 
-        //Get device profile log filename
-        std::string getDeviceProfilerLogName();
-
-        //Dump device profile results
-        void dumpDeviceResults(
-            int chip_id,
-            int core_x,
-            int core_y,
-            std::string hart_name,
-            uint64_t timestamp,
-            uint32_t timer_id);
+        //Traverse all cores on the device and dump the device profile results
+        void dumpDeviceResults(tt::tt_metal::Device *device, const vector<tt_xy_pair> &logical_cores);
 };

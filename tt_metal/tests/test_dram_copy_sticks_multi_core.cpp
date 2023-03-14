@@ -106,7 +106,7 @@ int main(int argc, char **argv) {
         }
 
         pass &= tt_metal::LaunchKernels(device, program);
-        tt_metal::ReadDeviceSideProfileData(device, program);
+        tt_metal::DumpDeviceProfileResults(device, program);
         //std::vector<uint32_t> result_vec;
         //tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
