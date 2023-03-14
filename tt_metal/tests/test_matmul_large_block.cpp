@@ -6,7 +6,7 @@
 #include "common/bfloat16.hpp"
 #include "tensor/tensor.hpp"
 #include "test_tiles.hpp"
-
+#include "llrt/tests/test_libs/debug_mailbox.hpp"
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -63,26 +63,6 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
     return result;
 }
 
-// Transpose 2D matrix of tiles so that its column major of tiles instead of row major.
-// this is usually used for activation so that blocks data is contiguous in memory
-// until we have a more generalized read kernel that can read tiles from different
-// location in memory to make up a block in the activations CB
-std::vector<std::uint32_t> transpose_tiles(std::vector<std::uint32_t> data, int row_tiles, int col_tiles, int in0_block_w) {
-    std::vector<std::uint32_t> result;
-    int tile_size = 512;
-    for(int c = 0; c < col_tiles; c+=in0_block_w) {
-        for(int r = 0 ; r < row_tiles; r++) {
-            for(int k = 0; k < in0_block_w; k++) {
-                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
-                for(int i = 0; i < tile_size; i++) {
-                    result.push_back(data.at(offset + i));
-                }
-            }
-        }
-    }
-    return result;
-}
-
 void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
     std::cout<<name<<": "<<std::endl;
     int index = 0;
@@ -96,7 +76,7 @@ void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
     std::cout<<std::endl;
 }
 
-void print_faces(std::vector<bfloat16> data, string name) {
+void print_faces(std::vector<bfloat16> data, string name, string fname) {
     std::cout<<name<<": "<<std::endl;
     int index = 0;
 
@@ -120,7 +100,7 @@ void print_faces(std::vector<bfloat16> data, string name) {
     std::cout<<std::endl;
 }
 
-int main(int argc, char **argv) {
+bool test_matmul_large_block(bool activations_rm) {
     bool pass = true;
 
     try {
@@ -139,15 +119,15 @@ int main(int argc, char **argv) {
         tt_metal::Program *program = new tt_metal::Program();
 
         tt_xy_pair core = {0, 0};
-        uint32_t M = 12;
-        uint32_t K = 12;
+        uint32_t M = 8;
+        uint32_t K = 4;
         uint32_t N = K;
         int out_subblock_h = 4;
         int out_subblock_w = 2;
-        int in0_block_w = 2;
+        int in0_block_w = K;
 
         uint32_t single_tile_size = 2 * 1024;
-        TT_ASSERT(M * in0_block_w * single_tile_size * 2 <= 100*1024);
+        TT_ASSERT(M * in0_block_w * single_tile_size * 2 <= 150*1024);
         TT_ASSERT(N * in0_block_w * single_tile_size * 2 <= 100*1024);
         TT_ASSERT(M * N * single_tile_size <= 600*1024);
         uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -170,7 +150,7 @@ int main(int argc, char **argv) {
         auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 200 * 1024;
+        uint32_t src0_cb_addr = 150 * 1024;
         uint32_t cb0_tiles = M * in0_block_w * 2;
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
@@ -180,6 +160,19 @@ int main(int argc, char **argv) {
             cb0_tiles,
             cb0_tiles * single_tile_size,
             src0_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t src0_tilized_index = 25;
+        uint32_t src_0_tilized_cb_addr = 500 * 1024;
+        auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            src0_tilized_index,
+            core,
+            cb0_tiles,
+            cb0_tiles * single_tile_size,
+            src_0_tilized_cb_addr,
             tt::DataFormat::Float16_b
         );
 
@@ -276,30 +269,80 @@ int main(int argc, char **argv) {
 
         int out_subblock_num_tiles = out_subblock_h*out_subblock_w;
 
-        vector<uint32_t> compute_kernel_args = {
-            uint(in0_block_w),
-            uint(in0_num_subblocks),
-            uint(in0_block_num_tiles),
-            uint(in0_subblock_num_tiles),
+        int in0_subblock_h = (in0_block_num_tiles / in0_num_subblocks) / in0_block_w;
 
-            uint(in1_num_subblocks),
-            uint(in1_block_num_tiles),
-            uint(in1_per_core_w),
+        TT_ASSERT(in0_subblock_h * in0_block_w * in0_num_subblocks == in0_block_num_tiles);
+        TT_ASSERT(in0_block_w == K);
 
-            uint(num_blocks),
+        vector<uint32_t> compute_kernel_args;
+        if (activations_rm) {
 
-            uint(out_subblock_h),
-            uint(out_subblock_w),
-            uint(out_subblock_num_tiles)
+            compute_kernel_args = {
+                uint(in0_block_w),
+                uint(in0_num_subblocks),
+                uint(in0_block_num_tiles),
+                uint(in0_subblock_num_tiles),
+                uint(in0_subblock_h),
+
+                uint(in1_num_subblocks),
+                uint(in1_block_num_tiles),
+                uint(in1_per_core_w),
+
+                uint(num_blocks),
+
+                uint(out_subblock_h),
+                uint(out_subblock_w),
+                uint(out_subblock_num_tiles),
+            };
+        } else {
+
+            compute_kernel_args = {
+                uint(in0_block_w),
+                uint(in0_num_subblocks),
+                uint(in0_block_num_tiles),
+                uint(in0_subblock_num_tiles),
+
+                uint(in1_num_subblocks),
+                uint(in1_block_num_tiles),
+                uint(in1_per_core_w),
+
+                uint(num_blocks),
+
+                uint(out_subblock_h),
+                uint(out_subblock_w),
+                uint(out_subblock_num_tiles),
+            };
+        }
+
+        vector<string> arg_names = {
+            "in0_block_w", "in0_num_subblocks", "in0_block_num_tiles", "in0_subblock_num_tiles", "in0_subblock_h",
+            "in1_num_subblocks", "in1_block_num_tiles", "in1_per_core_w",
+            "num_blocks",
+            "out_subblock_h", "out_subblock_w", "out_subblock_num_tiles",
         };
+
+        int i = 0;
+        std::cout << "Args: " << std::endl;
+        for (uint32_t v: compute_kernel_args) {
+            std::cout << arg_names.at(i++) << ": " << v << std::endl;
+        }
+        std::cout << std::endl;
 
         tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
+
+        string compute_kernel;
+        if (activations_rm) {
+            compute_kernel = "kernels/compute/3T/matmul_large_block_zm_activations_rm";
+        } else {
+            compute_kernel = "kernels/compute/matmul_large_block_zm.cpp";
+        }
+
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/matmul_large_block_zm.cpp",
+            compute_kernel,
             core,
             mm_args,
             MathFidelity::HiFi4,
@@ -311,18 +354,27 @@ int main(int argc, char **argv) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        if (activations_rm) {
+            pass &= tt_metal::CompileProgramNew(device, program);
+        } else {
+            pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        }
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         SHAPE shape = {1, 1, M * 32, K * 32};
         tt::Tensor<bfloat16> tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
-        auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-        auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
-        pass &= tt_metal::WriteToDeviceDRAM(src0_dram_buffer, activations_tile_transposed);
+
+        vector<uint32_t> activations;
+        if (activations_rm) {
+            activations = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
+        } else {
+            auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
+            auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+            activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
+        }
+        pass &= tt_metal::WriteToDeviceDRAM(src0_dram_buffer, activations);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 32x32 identity
         auto identity_tilized = tilize(identity, K * 32, N * 32);
@@ -344,8 +396,11 @@ int main(int argc, char **argv) {
             core,
             writer_rt_args);
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        tt_xy_pair debug_core = {1, 1};
+        // read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
+        // read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 1);
 
+        pass &= tt_metal::LaunchKernels(device, program);
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
@@ -355,15 +410,8 @@ int main(int argc, char **argv) {
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
         auto result_flat_layout = convert_to_flat_layout(result_bfp16);
         auto result_untilized = untilize(result_flat_layout, M*32, N*32);
-
-        // print_vec(result_bfp16, 128, 128, "Result bfp16");
-        // print_faces(unpack_uint32_vec_into_bfloat16_vec(activations_tile_transposed), "Activations tile transpose");
-        // print_faces(unpack_uint32_vec_into_bfloat16_vec(weights), "Weights tile transposed");
-        // print_faces(result_bfp16, "Result bfp16");
-        // print_vec_of_uint32_as_packed_bfloat16(weights, 16, "weights tile transposed");
-        // print_vec(result_untilized, M*32, N*32, "Result");
-        // print_vec(tensor.get_values(), 128, 128, "Golden");
         pass &= (tensor.get_values() == result_untilized);
+
         pass &= tt_metal::CloseDevice(device);;
 
     } catch (const std::exception &e) {
@@ -380,7 +428,12 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    return pass;
+}
 
-    return 0;
+int main(int argc, char **argv) {
+    bool pass = true;
+    pass &= test_matmul_large_block(true);
+    pass &= test_matmul_large_block(false);
+    TT_ASSERT(pass);
 }

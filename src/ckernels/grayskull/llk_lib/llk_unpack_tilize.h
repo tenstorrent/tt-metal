@@ -37,6 +37,7 @@ inline void llk_unpack_tilize_hw_configure_disaggregated(
 
 inline void llk_unpack_tilize_uninit() {
     // Undo tilize if added
+    wait_for_idle();
     volatile uint *cfg = get_cfg_pointer();
     unpack_config_u config;
 
@@ -53,6 +54,8 @@ inline void llk_unpack_tilize_init(const uint32_t unpA_operand, const uint32_t u
     // do in HLKC right now, and we're going to make clean APIs without need of
     // HLKC anyways, so good enough for time being.
 
+    wait_for_idle();
+
     // Override default settings
     std::uint32_t input = get_operand_id(unpA_operand);
     unpack_config_u config;
@@ -63,6 +66,8 @@ inline void llk_unpack_tilize_init(const uint32_t unpA_operand, const uint32_t u
         (SCALE_DATUM_SIZE((uint)unpack_src_format[input], unpA_block_c_tiles << 5)) >> 4;
     cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0] = config.val[0];
     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = 16 | (16 << 16);
+
+
 }
 
 inline void llk_unpack_tilize_(std::uint32_t operand, std::uint32_t block_c_tiles) {
