@@ -41,17 +41,16 @@ git clone git@<HOST>:<REPO>.git --recurse-submodules
 cd <REPO>
 ```
 
-5. Install docs dependencies.
+5. Build and activate the TT-Metal environment:
 ```
-source ./run_docs_setup.sh
+source ./build_tt_metal.sh
 ```
 
-6. Now activate the environment and build HTML pages for the docs and launch a
+6. Now build HTML pages for the docs and launch a
    web server on the port `<port>`.
 
 ```
 cd docs
-source env/bin/activate
 PORT=<port> make all
 ```
 
