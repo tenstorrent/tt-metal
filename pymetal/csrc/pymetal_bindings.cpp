@@ -430,7 +430,16 @@ void DeviceModule(py::module &m_device) {
     m_device.def("DisableBinaryCache", &DisableBinaryCache);
     m_device.def("GetBinaryCacheEnabled", &GetBinaryCacheEnabled);
 
-    m_device.def("GetHost", &GetHost);
+    m_device.def("GetHost", &GetHost, R"doc(
+        Gets the host machine of a device, usually a reference to the host
+        machine you're running this on.
+
+        +------------------+-------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                   | Data type             | Valid range | Required |
+        +==================+===============================+=======================+=============+==========+
+        | device           | Device whost host to retrieve | ttmetal.device.Device |             | Yes      |
+        +------------------+-------------------------------+-----------------------+-------------+----------+
+    )doc");
 }
 
 } // end namespace tt_metal
