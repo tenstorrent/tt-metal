@@ -20,6 +20,7 @@ TT_METAL_TEST_ENTRIES = (
 
     TestEntry("tt_metal/tests/test_datacopy", "test_datacopy"),
     TestEntry("tt_metal/tests/test_dataflow_cb", "test_dataflow_cb"),
+    # TestEntry("tt_metal/tests/test_datacopy_multi_core_multi_dram", "test_datacopy_multi_core_multi_dram"),  TODO: pls fix
 
     TestEntry("tt_metal/tests/test_eltwise_binary", "test_eltwise_binary"),
     TestEntry("tt_metal/tests/test_bcast", "test_bcast"),

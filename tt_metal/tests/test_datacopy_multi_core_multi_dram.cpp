@@ -12,14 +12,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-namespace eltwise_copy_block {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t block_num_tiles;
-    std::int32_t num_blocks;
-};
-}
-
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -88,6 +80,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *> create_program(
+    tt_metal::Device *device,
     int num_cores_r,
     int num_cores_c,
     int tensor_num_tiles,
@@ -169,12 +162,12 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    void *hlk_args = new eltwise_copy_block::hlk_args_t{
-        .block_num_tiles = block_num_tiles,
-        .num_blocks = num_blocks_per_core
+    std::vector<uint32_t> compute_kernel_args = {
+        uint(block_num_tiles),
+        uint(num_blocks_per_core)
     };
 
-    tt_metal::ComputeKernelArgs *eltwise_copy_block = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, hlk_args, sizeof(eltwise_copy_block::hlk_args_t));
+    tt_metal::ComputeKernelArgs *eltwise_copy_block = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto compute_kernel = tt_metal::CreateComputeKernel(
@@ -376,7 +369,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, mm_reader_kernel, unary_writer_kernel]  = create_program(num_cores_r, num_cores_c, M, N, K, block_tile_dim, num_tiles_per_sub_block_m, num_tiles_per_sub_block_n, per_core_M, per_core_N);
+        auto [program, mm_reader_kernel, unary_writer_kernel]  = create_program(device, num_cores_r, num_cores_c, M, N, K, block_tile_dim, num_tiles_per_sub_block_m, num_tiles_per_sub_block_n, per_core_M, per_core_N);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
