@@ -65,6 +65,7 @@ struct DebugPrintServerContext {
 
     // only one instance is allowed at the moment
     static DebugPrintServerContext* inst;
+    static bool ProfilerIsRunning;
 
     DebugPrintServerContext(
         tt_cluster* cluster, vector<int> chip_ids, const vector<tt_xy_pair>& cores, uint32_t hart_mask, const char* filename
@@ -430,6 +431,7 @@ void DebugPrintServerContext::thread_poll(
 }
 
 DebugPrintServerContext* DebugPrintServerContext::inst = nullptr;
+bool DebugPrintServerContext::ProfilerIsRunning = false;
 
 } // anon namespace
 
@@ -447,11 +449,22 @@ void tt_stop_debug_print_server_per_device(tt_cluster* cluster, int)
     tt_stop_debug_print_server(cluster);
 }
 
+void tt_set_profiler_state_for_debug_print(bool profile_device)
+{
+    DebugPrintServerContext::ProfilerIsRunning = profile_device;
+}
+
+bool tt_is_print_server_running()
+{
+    return DebugPrintServerContext::inst != nullptr;
+}
+
 // The print server is not valid without alive tt_cluster and tt_device
 void tt_start_debug_print_server(
     tt_cluster* cluster, const vector<int>& chip_ids, const vector<tt_xy_pair>& cores, uint32_t hart_mask, const char* filename)
 {
-    TT_ASSERT(DebugPrintServerContext::inst == nullptr);
+    TT_ASSERT(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
+    TT_ASSERT(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
 
     DebugPrintServerContext* ctx = new DebugPrintServerContext(cluster, chip_ids, cores, hart_mask, filename);
 

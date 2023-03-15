@@ -38,6 +38,7 @@ void DumpHostProfileResults(std::string name_prepend){
 }
 
 void DumpDeviceProfileResults(Device *device, Program *program) {
+    TT_ASSERT(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
     auto worker_cores_used_in_program =\
         device->worker_cores_from_logical_cores(program->logical_cores());
 
@@ -672,6 +673,9 @@ private:
 bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
+
+    TT_ASSERT(!(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
+    tt_set_profiler_state_for_debug_print(profile_kernel);
 
     std::string out_dir_path = tt::utils::get_root_dir() + "/built_kernels/";
     CompileBlankKernel(device, out_dir_path); // PROF_BEGIN("CCBLANK") PROF_END("CCBLANK")

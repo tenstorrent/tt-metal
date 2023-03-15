@@ -51,3 +51,15 @@ tt_start_print_server() will register this function call with tt_cluster->on_des
 Note that this api call is not thread safe at the moment.
 */
 void tt_stop_debug_print_server(tt_cluster* cluster = nullptr);
+
+/**
+@brief Set device side profiler state.
+
+@param profile_device true if profiling, false if not profiling
+*/
+void tt_set_profiler_state_for_debug_print(bool profile_device);
+
+/**
+@brief Return if the instance debug print server is running or not.
+*/
+bool tt_is_print_server_running();

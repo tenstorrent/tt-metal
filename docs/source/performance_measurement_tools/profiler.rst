@@ -112,7 +112,9 @@ e.g.
     .
     tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, second_runtime_args);
     pass &= tt_metal::LaunchKernels(device, program);
-    tt_metal::DumpDeviceProfileResults(device, program);
+    if (profile_device){
+        tt_metal::DumpDeviceProfileResults(device, program);
+    }
 
 After this setup, default markers will be generated and can be post-processed.
 
@@ -224,4 +226,4 @@ Limitations
 * It is relatively safe to assume that all RISCs on all cores are taken out of reset at the same
   time so processing the cycle counts read from various RISCs is reasonable.
 
-* Debug print can not used in kernels that are being profiled.
+* Debug print can not used in kernels that are being profiled.Correct usage of DPRINT and profiler is suggested in the `add_two_ints.cpp` tt_metal test. If `profile_device` is set, it profiles, if not it prints. The test will error out if DRPRINT and profiler are attempted to be used together.

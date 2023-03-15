@@ -43,12 +43,17 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
+        if (profile_device == false){
+            StartDebugPrintServer(device);
+        }
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, first_runtime_args);
 
         pass &= tt_metal::LaunchKernels(device, program);
-        tt_metal::DumpDeviceProfileResults(device, program);
+        if (profile_device){
+            tt_metal::DumpDeviceProfileResults(device, program);
+        }
 
         std::vector<uint32_t> first_kernel_result;
         tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, sizeof(int), first_kernel_result);
@@ -61,7 +66,9 @@ int main(int argc, char **argv) {
         tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, second_runtime_args);
 
         pass &= tt_metal::LaunchKernels(device, program);
-        tt_metal::DumpDeviceProfileResults(device, program);
+        if (profile_device){
+            tt_metal::DumpDeviceProfileResults(device, program);
+        }
 
         std::vector<uint32_t> second_kernel_result;
         tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, sizeof(int), second_kernel_result);
