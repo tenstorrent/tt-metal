@@ -52,6 +52,10 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_unpack_tilize", "test_unpack_tilize"),
     TestEntry("tt_metal/tests/test_unpack_untilize", "test_unpack_untilize"),
     TestEntry("tt_metal/tests/test_interleaved_layouts", "test_interleaved_layouts"),
+    TestEntry("tt_metal/tests/test_dram_copy_sticks_multi_core", "test_dram_copy_sticks_multi_core"),
+    TestEntry("tt_metal/tests/test_dtx_tilized_row_to_col_major", "test_dtx_tilized_row_to_col_major"),
+    #TestEntry("tt_metal/tests/test_l1_to_l1_multi_core", "test_l1_to_l1_multi_core"), // TODO (nshanker): fix this test
+    TestEntry("tt_metal/tests/test_dtx", "test_dtx"),
 
     TestEntry("tt_metal/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"),
     TestEntry("tt_metal/tests/ops/test_bcast_op", "ops/test_bcast_op"),
@@ -63,6 +67,10 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/ops/test_transpose_wh_multi_core", "ops/test_transpose_wh_multi_core"),
     TestEntry("tt_metal/tests/ops/test_transpose_hc_rm_8bank_single_core", "ops/test_transpose_hc_rm_8bank_single_core"),
     TestEntry("tt_metal/tests/ops/test_transpose_hc_rm_8bank_multi_core", "ops/test_transpose_hc_rm_8bank_multi_core"),
+    TestEntry("tt_metal/tests/ops/test_tilize_op", "ops/test_tilize_op"),
+    TestEntry("tt_metal/tests/ops/test_tilize_op_channels_last", "ops/test_tilize_op_channels_last"),
+    TestEntry("tt_metal/tests/ops/test_tilize_zero_padding", "ops/test_tilize_zero_padding"),
+    TestEntry("tt_metal/tests/ops/test_tilize_zero_padding_channels_last", "ops/test_tilize_zero_padding_channels_last"),
 
     TestEntry("tt_metal/tests/tensors/test_host_device_loopback", "tensors/test_host_device_loopback"),
     TestEntry("tt_metal/tests/test_pipeline_across_rows", "test_pipeline_across_rows"),
