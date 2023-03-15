@@ -23,6 +23,7 @@ def pad_activation(x):
     assert len(x.shape) >= 1 and len(x.shape) <= 4, "Only tensors with dimension 1-4 supported"
     if len(x.shape) == 1: # (num_features,)
         padded_tensor = torch.zeros(1, 1, 32, nearest_32(x.shape[0]))
+        padded_tensor[:, 0, 0, :x.shape[0]] = x
     elif len(x.shape) == 2: # (batch, num features)
         padded_tensor = torch.zeros(x.shape[0], 1, 32, nearest_32(x.shape[1]))
         padded_tensor[:, 0, 0, :x.shape[1]] = x
