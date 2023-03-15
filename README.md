@@ -44,6 +44,7 @@ cd <REPO>
 5. Build and activate the TT-Metal environment:
 ```
 source ./build_tt_metal.sh
+source build/python_env/bin/activate
 ```
 
 6. Now build HTML pages for the docs and launch a
