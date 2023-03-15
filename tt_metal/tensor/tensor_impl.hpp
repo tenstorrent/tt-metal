@@ -399,11 +399,8 @@ template <typename T>
 inline Tensor to_host(const Tensor &tensor) {
     TT_ASSERT(tensor.buffer() != nullptr, "Need DRAM buffers on device to exist to copy data to host!");
     TT_ASSERT(tensor.device() != nullptr && "Need device to be set copy data from device to host!");
-    std::cout << "Reading from device" << std::endl;
     uint32_t size_in_bytes = tensor.buffer()->size();
-    std::cout << "Size=" << size_in_bytes << std::endl;
     auto data_vec = read_data_from_device<T>(tensor, size_in_bytes);
-    std::cout << "data vec size " << data_vec.size() << std::endl;
     return Tensor(data_vec, tensor.shape(), tensor.dtype(), tensor.layout());
 }
 
