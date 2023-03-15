@@ -75,7 +75,7 @@ def shapes_and_datagen(shape_dict, datagen_dict):
             generation_funcs.gen_func_with_cast(
                 partial(
                     getattr(generation_funcs, datagen_dict["function"]),
-                    **datagen_dict["args"]
+                    **datagen_dict["args"],
                 ),
                 generation_funcs.supported_dtypes[datagen_dict.get("dtype", "float32")],
             )
@@ -85,7 +85,7 @@ def shapes_and_datagen(shape_dict, datagen_dict):
             generation_funcs.gen_func_with_cast(
                 partial(
                     getattr(generation_funcs, _datagen_dict["function"]),
-                    **_datagen_dict["args"]
+                    **_datagen_dict["args"],
                 ),
                 generation_funcs.supported_dtypes[datagen_dict.get("dtype", "float32")],
             )
@@ -137,6 +137,17 @@ def shapes_and_datagen(shape_dict, datagen_dict):
             total_shapes = len(sweeps_generator)
             idx_list = _get_sample_indices(total_shapes, num_shapes)
 
+            if "split" in shape_dict:
+                split_params = shape_dict["split"]
+                assert len(split_params) == 2
+
+                split_id, num_splits = split_params
+                assert len(idx_list) % num_splits == 0
+                samples_per_split = len(idx_list) // num_splits
+                idx_list = idx_list[
+                    (split_id - 1) * samples_per_split : split_id * samples_per_split
+                ]
+
             for idx in idx_list:
                 shape = list(sweeps_generator[idx])
                 yield [shape] * num_shapes, datagen_funcs
@@ -161,6 +172,17 @@ def shapes_and_datagen(shape_dict, datagen_dict):
             sweeps_generator = list(product(*dim_ranges))
             total_shapes = len(sweeps_generator)
             idx_list = _get_sample_indices(total_shapes, num_shapes)
+
+            if "split" in shape_dict:
+                split_params = shape_dict["split"]
+                assert len(split_params) == 2
+
+                split_id, num_splits = split_params
+                assert len(idx_list) % num_splits == 0
+                samples_per_split = len(idx_list) // num_splits
+                idx_list = idx_list[
+                    (split_id - 1) * samples_per_split : split_id * samples_per_split
+                ]
 
             for idx in idx_list:
                 shape = list(sweeps_generator[idx])
@@ -208,6 +230,17 @@ def shapes_and_datagen(shape_dict, datagen_dict):
             sweeps_generator = list(product(*dim_ranges))
             total_shapes = len(sweeps_generator)
             idx_list = _get_sample_indices(total_shapes, num_shapes)
+
+            if "split" in shape_dict:
+                split_params = shape_dict["split"]
+                assert len(split_params) == 2
+
+                split_id, num_splits = split_params
+                assert len(idx_list) % num_splits == 0
+                samples_per_split = len(idx_list) // num_splits
+                idx_list = idx_list[
+                    (split_id - 1) * samples_per_split : split_id * samples_per_split
+                ]
 
             for idx in idx_list:
                 b, c, h, w, outer_dim = sweeps_generator[idx]
