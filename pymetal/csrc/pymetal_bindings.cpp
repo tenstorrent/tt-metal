@@ -135,6 +135,7 @@ void TensorModule(py::module &m_tensor) {
             self.to(device, mem_config);
         }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, "Moves the tensor to device")
         .def("to", py::overload_cast<Host*>(&Tensor::to, py::const_), "Moves the tensor to CPU")
+        .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_), "Converts the tensor layout")
         .def("print", [](const Tensor &self, Layout print_layout) {
             return self.print(print_layout);
         }, py::arg("print_layout") = Layout::ROW_MAJOR, "Prints the tensor")
@@ -375,6 +376,15 @@ void TensorModule(py::module &m_tensor) {
     )doc");
     m_tensor.def("tilize", &tilize, R"doc(
         Tilizes a given tensor across memory on device.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
+    m_tensor.def("tilize_with_zero_padding", &tilize_with_zero_padding, R"doc(
+        Tilizes a given tensor across memory on device. Pads zeroes height-wise if required.
 
         +----------+----------------------+-----------+-------------+----------+
         | Argument | Description          | Data type | Valid range | Required |

@@ -3,6 +3,8 @@
 #include "tt_metal/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
+#include "tt_metal/impl/dtx/dtx.hpp"
+#include "tt_metal/impl/dtx/dtx_passes.hpp"
 
 #include "llrt/tests/test_libs/debug_mailbox.hpp"
 
@@ -42,7 +44,12 @@ Tensor tilize(const Tensor &a) {
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
+    auto output_shape = a.shape();
+    if(a.layout() == Layout::CHANNELS_LAST) {
+        // Set channels last in the innermost dim in the shape
+        output_shape = {a.shape()[0], a.shape()[2], a.shape()[3], a.shape()[1]};
+    }
+    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -182,8 +189,12 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
     auto output_shape = a.shape();
-    output_shape[2] = ceil((double) output_shape[2] / (double) TILE_HEIGHT ) * TILE_HEIGHT;
-    output_shape[3] = ceil((double) output_shape[3] / (double) TILE_WIDTH ) * TILE_WIDTH;
+    if(a.layout() == Layout::CHANNELS_LAST) {
+        // Set channels last in the innermost dim in the shape
+        output_shape = {a.shape()[0], a.shape()[2], a.shape()[3], a.shape()[1]};
+    }
+    // pad height
+    output_shape[2] = (uint32_t) (ceil((double) output_shape[2] / (double) TILE_HEIGHT ) * TILE_HEIGHT);
     std::cout << "output shape height=" << output_shape[2] << " output shape width=" << output_shape[3] << std::endl;
     tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 

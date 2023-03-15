@@ -81,7 +81,7 @@ int main(int argc, char **argv) {
         std::cout << "Moving src data to host to validate" << std::endl;
         Tensor host_a = a.to(host); // Move tensor a to host to validate
         auto host_vec =  *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
-        std::array<uint32_t, 4> cl_shape = {1, 32, 61, 32};
+        std::array<uint32_t, 4> cl_shape = {shape[0], shape[2], shape[3], shape[1]};
         Tensor g = Tensor(host_vec, cl_shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
         Tensor golden = g.to(Layout::TILE);
         auto golden_vec =  *reinterpret_cast<std::vector<bfloat16>*>(golden.data_ptr());

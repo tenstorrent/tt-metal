@@ -447,7 +447,8 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
                 TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
                 auto converted_data = convert_layout_row_major_to_tile(tensor.shape(), data_vec);
                 print_data(converted_data, tensor.dtype());
-            } else {
+            }
+            else {
                 TT_ASSERT(false && "Unsupported print layout");
             }
         break;
@@ -463,7 +464,20 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
             }
         break;
         case Layout::CHANNELS_LAST:
-            TT_ASSERT(false && "Unsupported print layout");
+            if (print_layout == Layout::ROW_MAJOR) {
+                auto converted_data = convert_layout_channels_last_to_row_major(tensor.shape(), data_vec);
+                pretty_print ? print_row_major_data(converted_data, tensor.shape(), tensor.dtype()) : print_data(converted_data, tensor.dtype());
+            }
+            else if (print_layout == Layout::CHANNELS_LAST) {
+                auto cl_shape = tensor.shape();
+                cl_shape[3] = tensor.shape()[1];
+                cl_shape[2] = tensor.shape()[3];
+                cl_shape[1] = tensor.shape()[2];
+                pretty_print ? print_row_major_data(data_vec, cl_shape, tensor.dtype()) : print_data(data_vec, tensor.dtype());
+            }
+            else {
+                TT_ASSERT(false && "Unsupported print layout");
+            }
         break;
         default:
             TT_ASSERT(false && "Unsupported print layout");

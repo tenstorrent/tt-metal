@@ -66,6 +66,35 @@ def pad_weight(x):
 
     return padded_tensor
 
+def channels_last(x):
+    """
+    This function converts a row-major tensor to channels last.
+
+    :param x: Input PyTorch Tensor
+    :type x: class:`torch.Tensor`
+
+    """
+    nearest_32 = _nearest_32
+
+    assert isinstance(x, (torch.Tensor, np.ndarray)), "Input to this function must be an instance of torch.Tensor or np.array"
+    assert len(x.shape) == 4, "Only 4D tensors suppported"
+
+    ret_shape = [x.shape[0], x.shape[2], x.shape[3], x.shape[1]]
+    if isinstance(x, torch.Tensor):
+        ret = torch.zeros(np.prod(x.shape))
+    else:
+        ret = np.zeros(np.prod(x.shape))
+
+    idx = 0
+    for n in range(x.shape[0]):
+        for h in range(x.shape[2]):
+            for w in range(0, x.shape[3]):
+                for c in range(0, x.shape[1]):
+                    ret[idx] = x[n][c][h][w]
+                    idx+=1
+
+    return ret.reshape(ret_shape)
+
 def tilize(x):
     """
     This function tilizes a tensor. The last two tensor dims must be divisible by 32, after which this function
