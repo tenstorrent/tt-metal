@@ -1,4 +1,6 @@
 import math
+import struct
+
 import torch
 import numpy as np
 
@@ -158,3 +160,62 @@ def untilize(x):
                     hw += 1024 # traverse tiles in RM-order
 
     return ret
+
+
+def print_diff_argmax(a, b, annotation = ""):
+    """
+    Prints out the value of both tensors at a point where the absolute difference is the largest.
+    """
+    absdiff = (a-b).abs()
+    argmax = absdiff.argmax().item()
+    diff = absdiff.reshape(-1)[argmax]
+    rela = a.abs()/(torch.max(a.abs(), b.abs()))
+    relb = b.abs()/(torch.max(a.abs(), b.abs()))
+    print("Abs diff=", diff, " at ", argmax, " --- ", annotation)
+    print("  (a=", a.reshape(-1)[argmax].item(), ")")
+    print("  (b=", b.reshape(-1)[argmax].item(), ")")
+    print("  Rel a=", rela.reshape(-1)[argmax], " at ", argmax)
+    print("  Rel b=", relb.reshape(-1)[argmax], " at ", argmax)
+    return diff.item()
+
+
+def tt2torch(ttx):
+    """
+    Converts an llbuda tiled tensor to torch tensor.
+    """
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    host = ttm.device.GetHost()
+    shp = ttx.shape()
+    tt_out = ttx.to(host)
+    torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
+    return torch_out
+
+
+def tt2torch_rm(ttx):
+    """
+    Converts an llbuda row-major tensor to torch tensor.
+    """
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    host = ttm.device.GetHost()
+    shp = ttx.shape()
+    tt_out = ttx.to(host)
+    torch_out = torch.Tensor(tt_out.data()).reshape(shp)
+    return torch_out
+
+
+def divup(a, b):
+    return (a+b-1)//b
+
+
+def roundup(a, b):
+    result = divup(a, b)*b
+    return result
+
+
+def roundup32(a):
+    return roundup(a, 32)
+
+
+def float_to_bits(x):
+    s = struct.pack('>f', x)
+    return struct.unpack('>l', s)[0]
