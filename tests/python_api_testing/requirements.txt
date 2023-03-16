@@ -12,3 +12,6 @@ numba==0.56.4
 librosa==0.10.0
 timm==0.6.13
 opencv-python==4.7.0.72
+diffusers==0.12.1
+accelerate
+ftfy

@@ -287,3 +287,37 @@ class Profiler():
 
 
 profiler = Profiler()
+def tt_to_torch_tensor(tt_tensor, host):
+    tt_tensor = tt_tensor.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
+    # and then reshape PyTorch tensor to shape of TT Tensor
+    py_tensor = torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
+    return py_tensor
+
+def torch_to_tt_tensor(py_tensor, device):
+    shape = list(py_tensor.size())
+    while len(shape) < 4:
+        shape.insert(0, 1)
+
+    tt_tensor = (
+        ttl.tensor.Tensor(
+            py_tensor.reshape(-1).tolist(), # PyTorch tensor flatten into a list of floats
+            shape,               # shape of TT Tensor that will be created
+            ttl.tensor.DataType.BFLOAT16, # data type that will be used in created TT Tensor
+            ttl.tensor.Layout.ROW_MAJOR,  # memory layout that will be used in created TT Tensor
+        )
+        .to(ttl.tensor.Layout.TILE)     # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
+        .to(device)                         # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
+    )
+
+    return tt_tensor
+
+def print_corr_coef(x: torch.Tensor, y: torch.Tensor):
+    x = torch.reshape(x, (-1, ))
+    y = torch.reshape(y, (-1, ))
+
+    input = torch.stack((x, y))
+
+    corrval = torch.corrcoef(input)
+    print(f"Corr coef:")
+    print(f"{corrval}")
