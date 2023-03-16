@@ -24,7 +24,7 @@ bool convert_abstract_tensor_to_channels_last_layout(DataTransformations * dtx){
     // Calculate the consumer shape
     int consumer_shape_x = vector_product(producer_shape);
     int consumer_shape_y = 1;
-    consumer->groups[0]->shape = {consumer_shape_y, consumer_shape_x};
+    consumer->groups[0]->shape = {1, consumer_shape_y, consumer_shape_x};
 
     int consumer_y = 0;
     int consumer_x = 0;
@@ -43,8 +43,8 @@ bool convert_abstract_tensor_to_channels_last_layout(DataTransformations * dtx){
         vector<int> producer_str = { producer_z, producer_y, 0};
         vector<int> producer_end = { producer_z, producer_y, producer_shape[X(rank)]-1};
 
-        vector<int> consumer_str = {consumer_y, consumer_x};
-        vector<int> consumer_end = {consumer_y, consumer_x + producer_shape[X(rank)]-1};
+        vector<int> consumer_str = {0, consumer_y, consumer_x};
+        vector<int> consumer_end = {0, consumer_y, consumer_x + producer_shape[X(rank)]-1};
 
         TensorPair * tp = new TensorPair(new Tensor({producer_str}, {producer_end}),
                                         0,
