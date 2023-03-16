@@ -20,8 +20,15 @@ def ref_ln(x, gamma, beta = None, epsilon = 1e-5):
     return y, mean, var, std, invstd, y1
 
 # TODO(AP): refactor to support any num_dims
-# H,W correspond to normalized_shape in pytorch Layernorm spec
-def Layernorm(gamma, beta, epsilon: float, H, W, device, num_dims = 2):
+def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims = 2):
+    """
+    Returns a function that performs LayerNorm with parameters.
+
+    H, W correspond to normalized_shape in pytorch Layernorm spec
+
+    *Note*: Note that the only ``num_dims`` supported at the moment is ``2``.
+    """
+
     num_dims_ = num_dims
     assert(num_dims == 1)
 

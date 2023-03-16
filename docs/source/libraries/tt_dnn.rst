@@ -211,3 +211,20 @@ Enums
 
 .. autoclass:: ttmetal.tensor.ReduceOpDim
     :members: H, W, HW
+
+``ttmetal`` Mini-Graph Library
+==============================
+
+Fused Operations
+----------------
+
+We have a variety of common operations that require fusion of multiple
+base operations together.
+
+.. autofunction:: ttmetal.fused_ops.linear.Linear
+
+.. autofunction:: ttmetal.fused_ops.softmax.softmax
+
+.. autofunction:: ttmetal.fused_ops.layernorm.Layernorm
+
+.. autofunction:: ttmetal.fused_ops.add_and_norm.AddAndNorm

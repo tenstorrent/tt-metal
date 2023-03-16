@@ -1,7 +1,12 @@
+from typing import List, Union
 from .. import tensor
 
-def Linear(in_features, out_features, weight, bias, device):
+def Linear(in_features: int, out_features: int, weight: List[Union[int, float]], bias, device):
+    """
+    Returns a function that performs a Linear operation with optional bias.
 
+    ``weight`` must be the weight as a tilized list of values.
+    """
     weight = tensor.Tensor(
         weight,
         [1, 1, out_features, in_features],

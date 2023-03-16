@@ -6,7 +6,11 @@ from .. import tensor, device
 from ..utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
 
 
-def softmax(x, stable=False):
+def softmax(x: tensor.Tensor, stable=False):
+    """
+    Performs Softmax on a ``ttmetal.tensor.Tensor``.
+    """
+
     RMAX = tensor.ReduceOpMath.MAX
     RSUM = tensor.ReduceOpMath.SUM
     RW = tensor.ReduceOpDim.W
