@@ -5,8 +5,8 @@
 #include "risc_common.h"
 #include "hostdevcommon/profiler_common.h"
 
-#define PROFILER_OPTIONS KERNEL_FUNCT_MARKER
-//#define PROFILER_OPTIONS KERNEL_FUNCT_MARKER | MAIN_FUNCT_MARKER
+//#define PROFILER_OPTIONS KERNEL_FUNCT_MARKER
+#define PROFILER_OPTIONS KERNEL_FUNCT_MARKER | MAIN_FUNCT_MARKER
 
 //TODO: Add mechanism for selecting PROFILER markers
 

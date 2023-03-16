@@ -36,13 +36,14 @@ def generate_analysis_table(analysisData):
     stats = sorted(stats)
     return html.Table(
         # Header
-        [html.Tr([html.Th("Type")] + [html.Th(stat) for stat in stats])]
+        [html.Tr([html.Th("Type")] + [html.Th(f"{stat} [cycles]") for stat in stats])]
         +
         # Body
         [
             html.Tr(
-                [html.Td(analysis)]
-                + [html.Td(analysisData[analysis][stat]) for stat in stats]
+                [html.Td(f"{analysis}")]
+                + [html.Td(f"{analysisData[analysis][stat]:.0f}")\
+                   if stat in analysisData[analysis].keys() else html.Td("-") for stat in stats]
             )
             for analysis in analysisData.keys()
         ]
@@ -84,6 +85,11 @@ def print_arranged_csv(timerVals, timerIDLabels, pcie_slot, freq_text):
                 ]
             )
 
+def analyze_stats(timerStats, timerStatsCores):
+    FW_START_VARIANCE_THRESHOLD = 1e3
+    if int(timerStats["FW start"]["Max"])  > FW_START_VARIANCE_THRESHOLD:
+        print(f"NOTE: Variance on FW starts seems too high at : {timerStats['FW start']['Max']} [cycles]")
+        print(f"Please reboot the host to make sure the device is not in a bad reset state")
 
 def print_stats_outfile(timerStats, timerStatsCores):
     original_stdout = sys.stdout
@@ -101,11 +107,11 @@ def print_stats(timerStats, timerStatsCores):
     for coreDurations in timerStatsCores.values():
         for durationType in coreDurations.keys():
             durationTypes.add(durationType)
-    for duration in durationTypes:
+    for duration in sorted(durationTypes):
         print()
         print(f"=================== {duration} ===================")
-        for stat in timerStats[duration].keys():
-            print(f"{stat:>20} = {timerStats[duration][stat]}")
+        for stat in sorted(timerStats[duration].keys()):
+            print(f"{stat:>12} [cycles] = {timerStats[duration][stat]:>13,.0f}")
         print()
         for core_y in range(-3, 11):
             # Print row number
@@ -163,6 +169,11 @@ def print_stats(timerStats, timerStatsCores):
         print()
         print()
         print()
+    for duration in timerStats.keys():
+        if duration not in durationTypes:
+            print(f"=================== {duration} ===================")
+            for stat in sorted(timerStats[duration].keys()):
+                print(f"{stat:>12} [cycles] = {timerStats[duration][stat]:>13,.0f}")
 
 
 def print_help():
@@ -235,8 +246,7 @@ def main(args):
                         maxTime = cycleCount
                     if cycleCount < minTime:
                         minTime = cycleCount
-        print(f" Total runtime {maxTime - minTime} [cycles]")
-        timerStats = {}
+        timerStats = {"RunTime" : {"Total" : maxTime - minTime}}
         timerStatsCores = {}
         setupMaxStrLen = 0
         for timerAnalysisSetup in setup.timerAnalysis.keys():
@@ -294,13 +304,14 @@ def main(args):
                 analysisTimeAverage = analysisTimeSum / countAnalysisTime
 
             timerStats[timerAnalysisSetup] = {
-                "Average [cycles]": f"{analysisTimeAverage:<14,.2f}",
-                "Min [cycles]": f"{analysisTimeMin:<11,}",
-                "Max [cycles]": f"{analysisTimeMax:<11,}",
+                "Average": analysisTimeAverage,
+                "Min": analysisTimeMin,
+                "Max": analysisTimeMax,
             }
 
         print_stats(timerStats, timerStatsCores)
         print_stats_outfile(timerStats, timerStatsCores)
+        analyze_stats(timerStats, timerStatsCores)
 
         yVals = sorted(timerVals.keys(), key=coreCompare, reverse=True)
         xVals = {}

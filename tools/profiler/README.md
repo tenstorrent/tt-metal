@@ -62,18 +62,24 @@ After this setup, default markers will be generated and can be post-processed.
 
 Default markers are:
 
-1. Kernel start
-2. Kernel end
+1. FW start
+2. Kernel start
+3. Kernel end
+4. FW end
 
 The generated csv is `profile_log_device.csv` is saved under `tools/profiler/logs` by default.
 
 Sample generated csv for a run on core 0,0:
 
 ```
-0, 0, 0, BRISC, 2, 46413751954532
-0, 0, 0, BRISC, 3, 46413751954779
-0, 0, 0, NCRISC, 2, 46413751955228
-0, 0, 0, NCRISC, 3, 46413751955414
+0, 0, 0, NCRISC, 1, 1882735035004
+0, 0, 0, NCRISC, 2, 1882735036049
+0, 0, 0, NCRISC, 3, 1882735036091
+0, 0, 0, NCRISC, 4, 1882735036133
+0, 0, 0, BRISC, 1, 1882735032214
+0, 0, 0, BRISC, 2, 1882735035364
+0, 0, 0, BRISC, 3, 1882735035433
+0, 0, 0, BRISC, 4, 1882735035518
 ```
 
 

@@ -36,41 +36,6 @@ class test_base:
 
     riscTimerCombo = {
         "BRISC": [
-            ("START", "2", "blank", ""),
-            ("2", "3", "green", "Kernel start -> kernel end"),
-            ("3", "END", "blank", ""),
-        ],
-        "NCRISC": [
-            ("START", "2", "blank", ""),
-            ("2", "3", "red", "Kernel start -> kernel end"),
-            ("3", "END", "blank", ""),
-        ],
-    }
-
-    timerAnalysisBase = {
-        "BRISC kernel start -> BRISC kernel end [cycles]": {
-            "type": "diff",
-            "start": {"risc": "BRISC", "timerID": "2"},
-            "end": {"risc": "BRISC", "timerID": "3"},
-        },
-        "NCRISC kernel start -> NCRISC kernel end [cycles]": {
-            "type": "diff",
-            "start": {"risc": "NCRISC", "timerID": "2"},
-            "end": {"risc": "NCRISC", "timerID": "3"},
-        },
-    }
-
-    timerIDLabels = [
-        ("1", "firmware starts"),
-        ("2", "data movement kernel starts"),
-        ("3", "data movement kernel ends"),
-        ("4", "firmware ends"),
-    ]
-
-
-class fw_default_markers(test_base):
-    riscTimerCombo = {
-        "BRISC": [
             ("START", "1", "blank", ""),
             ("1", "2", "dark green", "Main start -> Kernel start"),
             ("2", "3", "green", "Kernel start -> kernel end"),
@@ -86,13 +51,30 @@ class fw_default_markers(test_base):
         ],
     }
 
+    timerAnalysisBase = {
+        "FW start": {
+            "type": "single",
+            "risc": "BRISC",
+            "timerID": "1"
+        },
+        "BRISC kernel start -> BRISC kernel end": {
+            "type": "diff",
+            "start": {"risc": "BRISC", "timerID": "2"},
+            "end": {"risc": "BRISC", "timerID": "3"},
+        },
+        "NCRISC kernel start -> NCRISC kernel end": {
+            "type": "diff",
+            "start": {"risc": "NCRISC", "timerID": "2"},
+            "end": {"risc": "NCRISC", "timerID": "3"},
+        },
+    }
+
     timerIDLabels = [
         ("1", "firmware starts"),
         ("2", "data movement kernel starts"),
         ("3", "data movement kernel ends"),
         ("4", "firmware ends"),
     ]
-
 
 class test_matmul_multi_core_multi_dram(test_base):
     riscTimerCombo = {
