@@ -1,4 +1,3 @@
-import argparse
 import random
 from itertools import product
 from functools import partial
@@ -9,6 +8,7 @@ fieldnames = [
     "test_name",
     "input_shapes",
     "data_seed",
+    "env_vars",
     "status",
     "test_output",
     "pass/fail",
@@ -37,7 +37,7 @@ def run_test(
 
 
 def run_test_and_save_results(
-    results_csv_writer, test_name, input_shapes, data_seed, *run_test_args
+    results_csv_writer, test_name, input_shapes, data_seed, env_vars, *run_test_args
 ):
     try:
         test_pass, test_output = run_test(*run_test_args)
@@ -59,6 +59,7 @@ def run_test_and_save_results(
             "test_name": test_name,
             "input_shapes": input_shapes,
             "data_seed": data_seed,
+            "env_vars": env_vars,
             "status": test_status,
             "test_output": test_output,
             "pass/fail": test_result,
