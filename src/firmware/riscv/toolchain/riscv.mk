@@ -23,7 +23,7 @@ all:: # Always first to guarantee all is the default goal.
 
 TOOLCHAIN := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-include $(TT_METAL_HOME)/common/common.mk
+include $(TT_METAL_HOME)/tt_metal/common/common.mk
 
 SFPI ?= $(TT_METAL_HOME)/src/ckernels/sfpi
 RISCV_TOOLS_PREFIX := $(SFPI)/compiler/bin/riscv32-unknown-elf-
@@ -103,7 +103,8 @@ endif
 
 # Derive the list of source directories from $(SOURCES), use that as a list of include directories.
 SOURCE_DIRS := $(filter-out ./,$(sort $(dir $(SOURCES))))
-INCLUDES := $(INCLUDES) -I "$(TT_METAL_HOME)" -I "$(SFPI)/include" -I "$(TT_METAL_HOME)/src/firmware/riscv/common" $(addprefix -iquote ,$(SOURCE_DIRS)) -iquote .
+# rk: TODO: get rid of one of TT_METAL_HOME
+INCLUDES := $(INCLUDES) -I "$(TT_METAL_HOME)" -I "$(TT_METAL_HOME)/tt_metal" -I "$(SFPI)/include" -I "$(TT_METAL_HOME)/src/firmware/riscv/common" $(addprefix -iquote ,$(SOURCE_DIRS)) -iquote .
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
   INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole"

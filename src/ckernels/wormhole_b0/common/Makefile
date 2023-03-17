@@ -1,4 +1,4 @@
-include $(TT_METAL_HOME)/common/common.mk
+include $(TT_METAL_HOME)/tt_metal/common/common.mk
 
 ARCH_NAME ?= wormhole_b0
 DEVICE_TYPE=0

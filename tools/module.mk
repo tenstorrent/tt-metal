@@ -5,8 +5,8 @@ TOOLS = \
 
 TOOLS_SRCS = $(addsuffix .cpp, $(TOOLS))
 
-TOOLS_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tools -I$(TT_METAL_HOME)/. -Illrt
-TOOLS_LDFLAGS = $(LDFLAGS) -ldevice -lllrt  -lcommon -lyaml-cpp -lstdc++fs
+TOOLS_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tools
+TOOLS_LDFLAGS = $(LDFLAGS) -L$(TT_METAL_HOME) -lllrt -ldevice -lcommon -lyaml-cpp -lstdc++fs
 
 TOOLS_DEPS = $(addprefix $(OBJDIR)/, $(TOOLS_SRCS:.cpp=.d))
 

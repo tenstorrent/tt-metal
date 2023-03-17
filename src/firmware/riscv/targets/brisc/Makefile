@@ -1,4 +1,4 @@
-include $(TT_METAL_HOME)/common/common.mk
+include $(TT_METAL_HOME)/tt_metal/common/common.mk
 
 CKERNELS_DIR=$(TT_METAL_HOME)/src/ckernels
 ARCH_NAME ?= grayskull
@@ -19,9 +19,11 @@ endif
 FIRMWARE_NAME = brisc
 INFO_NAME = brisc
 
+# TODO: rk: get rid of one on TT_METAL_HOME decls
 INCLUDES += -I$(TT_METAL_HOME)/src/firmware/riscv/targets/ncrisc \
 	-I$(TT_METAL_HOME)/src/ckernels/$(ARCH_NAME)/common/inc \
 	-I$(TT_METAL_HOME) \
+	-I$(TT_METAL_HOME)/tt_metal \
 	-I$(KERNEL_INC)
 
 LINKER_SCRIPT_NAME = brisc.ld

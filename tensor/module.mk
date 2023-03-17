@@ -1,12 +1,10 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
-INCLUDE_DIRS+=-Itensor -I. -Icommon
-
 TENSOR_LIB = $(LIBDIR)/libtensor.a
 TENSOR_SRCS = \
 	tensor/tensor.cpp
 
-TENSOR_INCLUDES = $(INCLUDE_DIRS)
+TENSOR_INCLUDES = -I$(TT_METAL_HOME)/tensor $(COMMON_INCLUDES)
 
 TENSOR_OBJS = $(addprefix $(OBJDIR)/, $(TENSOR_SRCS:.cpp=.o))
 TENSOR_DEPS = $(addprefix $(OBJDIR)/, $(TENSOR_SRCS:.cpp=.d))

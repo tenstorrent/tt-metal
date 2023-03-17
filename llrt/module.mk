@@ -2,8 +2,8 @@
 
 LLRT_LIB = $(LIBDIR)/libllrt.a
 LLRT_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
-LLRT_INCLUDES = $(COMMON_INCLUDES) $(MODEL_INCLUDES) $(NETLIST_INCLUDES) -I$(TT_METAL_HOME)/llrt -I$(TT_METAL_HOME)/.
-LLRT_LDFLAGS = -L$(TT_METAL_HOME) -ldevice -lcommon
+LLRT_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/llrt
+LLRT_LDFLAGS = -L$(TT_METAL_HOME) -ltt_gdb -ldevice -lcommon
 LLRT_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 LLRT_SRCS = \

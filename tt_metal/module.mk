@@ -1,5 +1,26 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
+BASE_INCLUDES+=-I./ # make all tt_metal modules includable
+
+CFLAGS += -DFMT_HEADER_ONLY -I$(TT_METAL_HOME)/tt_metal/third_party/fmt
+
+include $(TT_METAL_HOME)/tt_metal/common/module.mk
+include $(TT_METAL_HOME)/device/module.mk
+include $(TT_METAL_HOME)/src/ckernels/module.mk
+include $(TT_METAL_HOME)/src/firmware/module.mk
+include $(TT_METAL_HOME)/hlkc/module.mk
+include $(TT_METAL_HOME)/tt_gdb/module.mk # needs to compiled after llrt and tt_metal
+include $(TT_METAL_HOME)/tensor/module.mk
+include $(TT_METAL_HOME)/build_kernels_for_riscv/module.mk
+include $(TT_METAL_HOME)/llrt/module.mk
+
+# only include these modules if we're in development
+ifdef TT_METAL_ENV_IS_DEV
+include $(TT_METAL_HOME)/build_kernels_for_riscv/tests/module.mk
+include $(TT_METAL_HOME)/llrt/tests/module.mk
+include tt_metal/tests/module.mk
+endif
+
 TT_METAL_LIB = $(LIBDIR)/libtt_metal.a
 TT_BUILD_LIB = $(LIBDIR)/libbuild_kernels_for_riscv.a
 TT_METAL_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)

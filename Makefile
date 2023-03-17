@@ -73,13 +73,14 @@ else
 	BASE_INCLUDES=-Isrc/firmware/riscv/$(ARCH_NAME)
 endif
 
-BASE_INCLUDES+=-I./ # to be able to include modules relative to root level from any module in the project
+# TODO: rk reduce this to one later
+BASE_INCLUDES+=-I./ -I./tt_metal/
 
 #WARNINGS ?= -Wall -Wextra
 WARNINGS ?= -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter
 CC ?= gcc
 CXX ?= g++
-CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\" -DFMT_HEADER_ONLY -Ithird_party/fmt
+CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\"
 CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden
 LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) -ldl
 SHARED_LIB_FLAGS = -shared -fPIC
@@ -94,15 +95,16 @@ endif
 
 LIBS_TO_BUILD = \
 	common \
-	tools/profiler \
 	src/ckernels \
-	hlkc hlkc/api \
+	hlkc \
+	hlkc/api \
 	build_kernels_for_riscv \
 	device \
-	llrt \
-	tt_metal \
 	tt_gdb \
 	tensor \
+	llrt \
+	tt_metal \
+	tools/profiler \
 	tools \
 	python_env \
 	pymetal
@@ -113,36 +115,24 @@ LIBS_TO_BUILD += \
 	git_hooks
 endif
 
-build: $(LIBS_TO_BUILD)
-
-clean_fw: src/firmware/clean
-clean: src/ckernels/clean clean_fw
-	rm -rf $(OUT)
-
 # These must be in dependency order (enforces no circular deps)
-include common/module.mk
-include tools/profiler/module.mk
-include device/module.mk
-include src/ckernels/module.mk
-include src/firmware/module.mk
-include hlkc/module.mk
-include llrt/module.mk
-include build_kernels_for_riscv/module.mk
+include tt_metal/common/common.mk
 include tt_metal/module.mk
-include tt_gdb/module.mk # needs to compiled after llrt and tt_metal
-include common/common.mk
-include tensor/module.mk
 include tools/module.mk
+include tools/profiler/module.mk
 include python_env/module.mk
 include pymetal/module.mk
 
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV
-include build_kernels_for_riscv/tests/module.mk
-include llrt/tests/module.mk
-include tt_metal/tests/module.mk
 include git_hooks/module.mk
 endif
 
 # Programming examples for external users
 include programming_examples/module.mk
+
+build: $(LIBS_TO_BUILD)
+
+clean_fw: src/firmware/clean
+clean: src/ckernels/clean clean_fw
+	rm -rf $(OUT)
