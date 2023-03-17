@@ -50,9 +50,7 @@ docs/doxygen_build
 **.swn
 
 *profile_log*.csv
-device_perf.html
-device_stats.txt
-device_perf_results.tar
+**/profiler/output/*
 
 env/
 tags
