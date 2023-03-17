@@ -10,7 +10,8 @@ tt_metal::Program * create_program(
     tt_metal::Device *device,
     uint32_t single_tile_size,
     uint32_t num_cores_x,
-    uint32_t M, uint32_t N, uint32_t K,
+    uint32_t B, uint32_t M, uint32_t N, uint32_t K,
+    bool bcast_batch,
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
@@ -56,7 +57,8 @@ tt_metal::Program * create_program(
 
         out_subblock_h, // out_subblock_h
         out_subblock_w, // out_subblock_w
-        out_subblock_num_tiles // out_subblock_num_tiles
+        out_subblock_num_tiles, // out_subblock_num_tiles
+        B // batch
     };
 
     uint32_t num_blocks_read = 0;
@@ -128,14 +130,14 @@ tt_metal::Program * create_program(
             // Create reader and writer kernels per core
             auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
                 program,
-                "kernels/dataflow/reader_matmul_tile_layout.cpp",
+                "kernels/dataflow/reader_bmm_tile_layout.cpp",
                 core,
                 tt_metal::DataMovementProcessor::RISCV_1,
                 tt_metal::NOC::RISCV_1_default);
 
             auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
                 program,
-                "kernels/dataflow/writer_matmul_tile_layout.cpp",
+                "kernels/dataflow/writer_bmm_tile_layout.cpp",
                 core,
                 tt_metal::DataMovementProcessor::RISCV_0,
                 tt_metal::NOC::RISCV_0_default);
@@ -146,7 +148,7 @@ tt_metal::Program * create_program(
             bool math_approx_mode = false;
             auto mm_kernel = tt_metal::CreateComputeKernel(
                 program,
-                "kernels/compute/matmul_large_block_zm.cpp",
+                "kernels/compute/bmm_large_block_zm.cpp",
                 core,
                 mm_args,
                 MathFidelity::HiFi4,
@@ -176,7 +178,12 @@ tt_metal::Program * create_program(
                 (std::uint32_t)  in0_block_w, //in1_block_h
                 (std::uint32_t)  per_core_N * in0_block_w, // in1_block_num_tiles
 
-                (std::uint32_t)  K / in0_block_w // num_blocks
+                (std::uint32_t)  K / in0_block_w, // num_blocks
+
+                (std::uint32_t)  M * K, // MtKt
+                (std::uint32_t)  K * N, // KtNt
+                (std::uint32_t)  B, // batch
+                (std::uint32_t)  bcast_batch // bcast_B
             };
 
             std::vector<uint32_t> writer_args = {
@@ -192,6 +199,9 @@ tt_metal::Program * create_program(
                 (std::uint32_t) (out_subblock_w * out_subblock_h), // out_subblocks_w * out_subblocks_h
                 (std::uint32_t) (per_core_N / out_subblock_w), // out_num_subblocks_w
                 (std::uint32_t) (per_core_M / out_subblock_h), // out_num_subblocks_h
+
+                (std::uint32_t) M * N, // MtNt
+                (std::uint32_t) B // batch
             };
 
             tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel, core, mm_reader_args);
@@ -232,8 +242,6 @@ Tensor matmul_multi_core_reuse_(const Tensor &a, const Tensor &b, bool bcast_bat
     TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0);
 
-    TT_ASSERT(ashape[0] * ashape[1] == 1, "Batch dimensions must be 1 for fast matmul"); // TODO: Support batch
-    TT_ASSERT(bshape[0] * bshape[1] == 1, "Batch dimensions must be 1 for fast matmul");
     TT_ASSERT(ashape[3] == bshape[2], "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
     TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
@@ -245,7 +253,7 @@ Tensor matmul_multi_core_reuse_(const Tensor &a, const Tensor &b, bool bcast_bat
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    // uint32_t B = ashape[0]*ashape[1]; // Only supports B = 1?
+    uint32_t B = ashape[0]*ashape[1];
     uint32_t Mt = ashape[2]/TILE_HEIGHT;
     uint32_t Kt = ashape[3]/TILE_WIDTH;
     uint32_t Nt = bshape[3]/TILE_WIDTH;
@@ -295,7 +303,8 @@ Tensor matmul_multi_core_reuse_(const Tensor &a, const Tensor &b, bool bcast_bat
         device,
         single_tile_size,
         num_cores_x,
-        Mt, Nt, Kt,
+        B, Mt, Nt, Kt,
+        bcast_batch,
         in0_block_w,
         out_subblock_h, out_subblock_w,
         per_core_M, per_core_N,

@@ -38,7 +38,6 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
     tt_xy_pair core_range = get_core_range((Mt / per_core_M), (Nt / per_core_N), num_cores_y, num_cores_x);
 
     if (
-        B == 1 and
         Mt % per_core_M == 0 and
         Nt % per_core_N == 0 and
         Kt % in0_block_w == 0 and
