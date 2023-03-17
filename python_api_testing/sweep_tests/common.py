@@ -189,9 +189,9 @@ def shapes_and_datagen(shape_dict, datagen_dict):
             )
 
             if not isinstance(interval, list):
-                interval = [interval] * num_dims
+                interval = [interval] * (num_dims + 1)
 
-            assert len(interval) == num_dims
+            assert len(interval) == (num_dims + 1)
 
             dim_ranges = [
                 range(shape1_start[i], shape1_end[i] + interval[i], interval[i])
