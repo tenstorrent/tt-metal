@@ -35,9 +35,9 @@ LLRT_TESTS += llrt/tests/test_silicon_driver \
 				llrt/tests/test_run_matmul_small_block \
 				llrt/tests/test_run_dataflow_cb_test
 
-LLRT_TESTS_SRCS = $(addsuffix .cpp, $(LLRT_TESTS))
+LLRT_TESTS_SRCS = $(addprefix tt_metal/, $(addsuffix .cpp, $(LLRT_TESTS)))
 
-LLRT_TEST_INCLUDES = $(LLRT_INCLUDES) -Itt_gdb -Illrt/tests -Icompile_trisc -Iverif
+LLRT_TEST_INCLUDES = $(LLRT_INCLUDES) -Itt_gdb -Illrt/tests
 LLRT_TESTS_LDFLAGS = -lllrt -ltt_gdb -ldevice -lcommon -lstdc++fs -pthread -lyaml-cpp
 
 LLRT_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(LLRT_TESTS_SRCS:.cpp=.o))
@@ -56,6 +56,6 @@ $(TESTDIR)/llrt/tests/%: $(OBJDIR)/llrt/tests/%.o $(BACKEND_LIB) $(LLRT_LIB) $(V
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(LLRT_TEST_INCLUDES) -o $@ $^ $(LDFLAGS) $(LLRT_TESTS_LDFLAGS)
 
 .PRECIOUS: $(OBJDIR)/llrt/tests/%.o
-$(OBJDIR)/llrt/tests/%.o: llrt/tests/%.cpp
+$(OBJDIR)/llrt/tests/%.o: tt_metal/llrt/tests/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(LLRT_TEST_INCLUDES) -c -o $@ $<
