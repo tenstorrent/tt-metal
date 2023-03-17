@@ -11,12 +11,12 @@ include $(TT_METAL_HOME)/src/firmware/module.mk
 include $(TT_METAL_HOME)/hlkc/module.mk
 include $(TT_METAL_HOME)/tt_gdb/module.mk # needs to compiled after llrt and tt_metal
 include $(TT_METAL_HOME)/tensor/module.mk
-include $(TT_METAL_HOME)/build_kernels_for_riscv/module.mk
+include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/module.mk
 include $(TT_METAL_HOME)/llrt/module.mk
 
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV
-include $(TT_METAL_HOME)/build_kernels_for_riscv/tests/module.mk
+include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/tests/module.mk
 include $(TT_METAL_HOME)/llrt/tests/module.mk
 include tt_metal/tests/module.mk
 endif
