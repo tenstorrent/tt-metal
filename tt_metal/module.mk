@@ -1,11 +1,11 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
-BASE_INCLUDES+=-I./ # make all tt_metal modules includable
+BASE_INCLUDES+=-I./ -I./tt_metal/ # make all tt_metal modules includable
 
 CFLAGS += -DFMT_HEADER_ONLY -I$(TT_METAL_HOME)/tt_metal/third_party/fmt
 
 include $(TT_METAL_HOME)/tt_metal/common/module.mk
-include $(TT_METAL_HOME)/device/module.mk
+include $(TT_METAL_HOME)/tt_metal/device/module.mk
 include $(TT_METAL_HOME)/src/ckernels/module.mk
 include $(TT_METAL_HOME)/src/firmware/module.mk
 include $(TT_METAL_HOME)/hlkc/module.mk

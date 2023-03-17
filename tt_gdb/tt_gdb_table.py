@@ -21,7 +21,7 @@ from debugger_screen import (
     update_split_screen_layout
 )
 
-def get_functional_workers(path="device/grayskull_120_arch.yaml"):
+def get_functional_workers(path="tt_metal/device/grayskull_120_arch.yaml"):
     with open(path, "r") as f:
         functional_workers = yaml.safe_load(f)["functional_workers"]
 
@@ -84,7 +84,7 @@ class ChipGrid:
     HIGHLIGHT_COLOR = "bold blue"
     BREAKPOINT_HIGHLIGHT_COLOR = "bold red"
     BREAKPOINT_HIGHLIGHT_COLOR_ON_TOP_OF_HIGHLIGHT_COLOR = "grey0"
-    ARCH_YAML = "device/grayskull_120_arch.yaml"
+    ARCH_YAML = "tt_metal/device/grayskull_120_arch.yaml"
 
     def __init__(self, cores_with_breakpoint: list = [], start_index: tuple = (0, 0)):
 

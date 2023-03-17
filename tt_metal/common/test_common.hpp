@@ -28,11 +28,11 @@ inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevi
         return output_dir + "/device_desc.yaml";
     } else {
         switch (arch) {
-            case tt::ARCH::Invalid: return tt_metal_home + "device/none.yaml"; // will be overwritten in tt_global_state constructor
+            case tt::ARCH::Invalid: return tt_metal_home + "tt_metal/device/none.yaml"; // will be overwritten in tt_global_state constructor
             case tt::ARCH::JAWBRIDGE: throw std::runtime_error("JAWBRIDGE arch not supported");
-            case tt::ARCH::GRAYSKULL: return tt_metal_home + "device/grayskull_120_arch.yaml";
-            case tt::ARCH::WORMHOLE: return tt_metal_home + "device/wormhole_80_arch.yaml";
-            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "device/wormhole_b0_80_arch.yaml";
+            case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/device/grayskull_120_arch.yaml";
+            case tt::ARCH::WORMHOLE: return tt_metal_home + "tt_metal/device/wormhole_80_arch.yaml";
+            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/device/wormhole_b0_80_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
         };
     }

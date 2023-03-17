@@ -1,22 +1,22 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 DEVICE_LIB = $(LIBDIR)/libdevice.so
 DEVICE_SRCS = \
-	device/tt_device.cpp \
-	device/tt_memory.cpp \
-	device/tt_hexfile.cpp \
-	device/tt_silicon_driver.cpp \
-	device/tt_silicon_driver_common.cpp
+	tt_metal/device/tt_device.cpp \
+	tt_metal/device/tt_memory.cpp \
+	tt_metal/device/tt_hexfile.cpp \
+	tt_metal/device/tt_silicon_driver.cpp \
+	tt_metal/device/tt_silicon_driver_common.cpp
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-  DEVICE_SRCS += device/wormhole/impl_device.cpp
+  DEVICE_SRCS += tt_metal/device/wormhole/impl_device.cpp
 else
-  DEVICE_SRCS += device/$(ARCH_NAME)/impl_device.cpp
+  DEVICE_SRCS += tt_metal/device/$(ARCH_NAME)/impl_device.cpp
 endif
 
 ifeq ($(DISABLE_VERSIM_BUILD),1)
-  DEVICE_SRCS += device/tt_versim_stub.cpp
+  DEVICE_SRCS += tt_metal/device/tt_versim_stub.cpp
 else
-  DEVICE_SRCS += device/tt_versim_device.cpp
+  DEVICE_SRCS += tt_metal/device/tt_versim_device.cpp
 endif
 
 DEVICE_OBJS = $(addprefix $(OBJDIR)/, $(DEVICE_SRCS:.cpp=.o))
@@ -32,9 +32,9 @@ ifeq ($(DISABLE_VERSIM_BUILD),1)
 endif
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-  DEVICE_INCLUDES += -I$(TT_METAL_HOME)/device/wormhole/
+  DEVICE_INCLUDES += -I$(TT_METAL_HOME)/tt_metal/device/wormhole/
 else
-  DEVICE_INCLUDES += -I$(TT_METAL_HOME)/device/$(ARCH_NAME)/
+  DEVICE_INCLUDES += -I$(TT_METAL_HOME)/tt_metal/device/$(ARCH_NAME)/
 endif
 
 
@@ -109,6 +109,6 @@ $(DEVICE_LIB): $(COMMON_LIB) $(DEVICE_OBJS)
 	@mkdir -p $(LIBDIR)
 	$(DEVICE_CXX) $(DEVICE_CXXFLAGS) $(SHARED_LIB_FLAGS) -o $(DEVICE_LIB) $^ $(LDFLAGS) $(DEVICE_LDFLAGS)
 
-$(OBJDIR)/device/%.o: device/%.cpp
+$(OBJDIR)/tt_metal/device/%.o: tt_metal/device/%.cpp
 	@mkdir -p $(@D)
 	$(DEVICE_CXX) $(DEVICE_CXXFLAGS) $(STATIC_LIB_FLAGS) $(DEVICE_INCLUDES) -c -o $@ $<
