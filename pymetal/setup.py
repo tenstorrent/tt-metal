@@ -5,7 +5,7 @@ setup(
     version="0.1",
     description="",
     install_requires=[
-        "torch==1.13.1",
+        "torch==1.13.1+cpu",
         "numpy==1.20.3",
     ],
     python_requires='>=3.8',

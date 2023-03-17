@@ -14,7 +14,7 @@ $(PYTHON_ENV)/.installed: python_env/requirements.txt
 	touch $@
 
 $(PYTHON_ENV)/%: $(PYTHON_ENV)/.installed
-	bash -c "source $(PYTHON_ENV)/bin/activate && pip install -e ."
+	bash -c "source $(PYTHON_ENV)/bin/activate && pip install -e . --extra-index-url https://download.pytorch.org/whl/cpu"
 
 $(PYTHON_ENV)/.installed-dev: python_env python_env/requirements-dev.txt
 	bash -c "source $(PYTHON_ENV)/bin/activate && pip3.8 install -r python_env/requirements-dev.txt"

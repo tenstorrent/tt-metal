@@ -1,5 +1,6 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 datasets==2.9.0
-torchvision==0.14.1
+torchvision==0.14.1+cpu
 transformers==4.20.1
 tiktoken
 tqdm
