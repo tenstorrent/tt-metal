@@ -26,9 +26,7 @@ tt_metal::Program * create_program(
     uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
     uint32_t out_CB_tiles = per_core_M * per_core_N;
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
-    TT_ASSERT(in0_CB_size <= 130*1024);
-    TT_ASSERT(in1_CB_size <= 130*1024);
-    TT_ASSERT(out_CB_size <= 540*1024);
+    TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N <= 400);
 
     // Compute kernel compile time args
     uint32_t num_blocks = (K/in0_block_w);
