@@ -121,7 +121,7 @@ include pymetal/module.mk
 
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV
-include git_hooks/module.mk
+include infra/git_hooks/module.mk
 endif
 
 build: $(LIBS_TO_BUILD)

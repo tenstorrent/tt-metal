@@ -1,21 +1,12 @@
-# Release
-
-- Releasing
-- Machine setup (for devs/customers)
-
-# Releasing
-
-rk: TODO
-
 # Machine setup
 
 ## Requirements
 
-In this directory, after doing a ``make build``:
+In this directory, after doing a ``make build`` and using the ``infra`` env:
 
 ```
 source <REPO_HOME>/build/python_env/bin/activate
-python -m pip install -r requirements-release.txt
+python -m pip install -r ../requirements-infra.txt
 sudo apt install sshpass
 sudo apt install ssh-copy-id
 ```
@@ -36,16 +27,16 @@ cat machines | xargs -n 1 -I{} ssh-copy-id <user>@{}
 ```
 
 Then create an inventory file with ``ansible_user`` set for all IPs in the
-``machine_setup`` directory.
+``inventories`` directory.
 
 Install the dependencies, hugepages, and check for the entries in the
 inventory.
 
 ```
-ansible-playbook -i machine_setup/inventory/<INV_FILE> machine_setup/playbooks/0-install-deps.yaml -K --ask-pass
-ansible-playbook -i machine_setup/inventory/<INV_FILE> machine_setup/playbooks/1-install-hugepages.yaml -K --ask-pass
-ansible-playbook -i machine_setup/inventory/<INV_FILE> machine_setup/playbooks/2-reboot.yaml -K --ask-pass
-ansible-playbook -i machine_setup/inventory/<INV_FILE> machine_setup/playbooks/1-install-hugepages.yaml -K --ask-pass
+ansible-playbook -i inventory/<INV_FILE> playbooks/0-install-deps.yaml -K --ask-pass
+ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages.yaml -K --ask-pass
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml -K --ask-pass
+ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages.yaml -K --ask-pass
 ```
 
 **NOTE**: You can add ``--forks <number-of-forks>`` to speed up the Ansible
