@@ -131,7 +131,7 @@ Tensor bcast_single_core(const Tensor &a, const Tensor &b, BcastOpMath::Enum bca
         fp32_dest_acc_en,
         math_approx_mode
     );
-    bcast_op_utils::set_compute_kernel_defines(bcast_kernel, bcast_math);
+    bcast_op_utils::add_defines(bcast_kernel, bcast_math);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application

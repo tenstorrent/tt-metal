@@ -7,21 +7,16 @@ using namespace tt::constants;
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
-string get_op_name(BinaryOpType::Enum op_type) {
-    string op_name;
+void add_defines(ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_type){
+    string op_name, op_code;
     switch (op_type) {
-        case BinaryOpType::ADD: op_name = "add_tiles"; break;
-        case BinaryOpType::SUB: op_name = "sub_tiles"; break;
-        case BinaryOpType::MUL: op_name = "mul_tiles"; break;
+        case BinaryOpType::ADD: op_name = "add_tiles"; op_code = "0"; break;
+        case BinaryOpType::SUB: op_name = "sub_tiles"; op_code = "1"; break;
+        case BinaryOpType::MUL: op_name = "mul_tiles"; op_code = "2"; break;
         default: TT_ASSERT(false && "Undefined op type");
     }
-    return op_name;
-}
-
-void set_compute_kernel_defines(ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_type){
-    string op_name = get_op_name(op_type);
     eltwise_binary_kernel->add_define("ELTWISE_OP", op_name.c_str());
-    return;
+    eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_code.c_str());
 }
 
 BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, const Tensor &b){

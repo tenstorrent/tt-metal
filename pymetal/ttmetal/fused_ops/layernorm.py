@@ -96,7 +96,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims 
 
     # 1D variant
     # TODO(AP): merge with 2d? refactor.
-    def layernorm_1d_(x, overrideH = None, refx = None, refgamma = None):
+    def layernorm_1d_(x, overrideH = None, refx = None, refgamma = None, refbeta = None):
 
         N = x.shape()[0]
         C = x.shape()[1]
@@ -111,7 +111,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims 
         means = tensor.reduce(x, RSUM, RW, 1.0/W) # -> NCH1
         x_minus_mean = tensor.bcast(x, means, BCSUB, BCW) # need to blank out the H for non-multiple of 32
         if False and refx is not None:
-            ry, rmean, rvar, rstd, rinvstd, ry1 = ref_ln(refx, refgamma)
+            ry, rmean, rvar, rstd, rinvstd, ry1 = ref_ln(refx, refgamma, refbeta)
 
         var = tensor.mul(x_minus_mean, x_minus_mean) # (x-m)^2
         var_redW = tensor.reduce(var, RSUM, RW, 1.0) # sum[(x-m)^2]

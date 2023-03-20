@@ -125,22 +125,14 @@ int main(int argc, char **argv) {
             uint(Ht),
             uint(Wt),
             uint(NC),
-
         };
         tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
 
-        string compute_kernel;
-        if (do_max) {
-            compute_kernel = "kernels/compute/reduce_w.cpp";
-        } else {
-            compute_kernel = "kernels/compute/3T/reduce_w_sum";
-        }
-
         auto reduce_w_compute_kernel = tt_metal::CreateComputeKernel(
             program,
-            compute_kernel,
+            "kernels/compute/reduce_w.cpp",
             core,
             compute_args,
             MathFidelity::HiFi4,
@@ -148,17 +140,14 @@ int main(int argc, char **argv) {
             math_approx_mode
         );
 
-        reduce_w_compute_kernel->add_define("REDUCE_OP", do_max ? 2 : 0); // TOOD(AP): need a sync with Reduce::Max from HLK headers
+        reduce_w_compute_kernel->add_define("REDUCE_OP", do_max ? "PoolType::MAX" : "PoolType::SUM");
+        reduce_w_compute_kernel->add_define("REDUCE_DIM", "ReduceDim::REDUCE_ROW");
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
-        if (do_max) {
-            pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
-        } else {
-            pass &= tt_metal::CompileProgramNew(device, program, skip_hlkc);
-        }
+        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

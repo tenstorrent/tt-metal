@@ -1,13 +1,12 @@
 #include <cstdint>
-
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
 using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
-
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
 
     constexpr int onetile = 1;
 
@@ -18,6 +17,8 @@ void compute_main() {
     uint32_t Mt = get_compile_time_arg_val(1);
     uint32_t Kt = get_compile_time_arg_val(2);
     uint32_t Nt = get_compile_time_arg_val(3);
+
+    mm_init();
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -45,3 +46,4 @@ void compute_main() {
 
 
 }
+} // NAMESPACE

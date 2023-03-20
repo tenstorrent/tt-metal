@@ -1,12 +1,15 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
     // expands to hlk_relu_config(nullptr, 1); for relu only
 
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+
+    init_sfpu(CB::c_in0);
 
     INIT_RELU
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
@@ -19,7 +22,10 @@ void compute_main() {
 
             copy_tile(CB::c_in0, 0, 0);
             // SFPU_OP expected to be defined via add_define as one of
-            // exp_tile, gelu_tile, recip_tile
+            // exp_tile, gelu_tile, recip_tile. etc followed by pack_tile
+            // (except for relu because the llk is fused for relu)
+            // "sfpu_gelu(0); pack_tile(0, CB::c_out0);"
+
             SFPU_OP_AND_PACK
             // comes from add_define in kernel config
             // Also is epxected to include pack_tile(0, CB::c_out0); for non-relu
@@ -33,4 +39,5 @@ void compute_main() {
     }
     DEINIT_RELU
     // expands to hlk_relu_config(nullptr, 0); for relu only
+}
 }

@@ -1,6 +1,8 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
+}
 }

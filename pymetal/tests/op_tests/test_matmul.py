@@ -1,4 +1,4 @@
-import ttmetal
+from pymetal import ttmetal
 import torch
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
@@ -15,8 +15,6 @@ def test_matmul():
     M = 32
     K = 64
     N = 96
-
-    #enablegpaiompilegpaiache()
 
     A = torch.randn((batch,1,M,K))
     B = torch.randn((1,1,K,N)) - 0.95

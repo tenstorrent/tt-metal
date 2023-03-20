@@ -1,10 +1,9 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
-
-void compute_main() {
-    acquire_dst(DstMode::Full);
+namespace NAMESPACE {
+void MAIN {
 
     uint32_t block_tile_dim = get_compile_time_arg_val(0);
     uint32_t dst_tile_rows = get_compile_time_arg_val(1);
@@ -14,6 +13,9 @@ void compute_main() {
     uint32_t in1_block_tile_cnt = get_compile_time_arg_val(5);
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
 
+    mm_init();
+
+    acquire_dst(DstMode::Full);
     for(uint32_t b=0;b<block_cnt;++b)
     {
         cb_wait_front(CB::c_in0, in0_block_tile_cnt);
@@ -48,4 +50,5 @@ void compute_main() {
     cb_push_back(CB::c_out0, out_block_tile_cnt);
 
     release_dst(DstMode::Full);
+}
 }

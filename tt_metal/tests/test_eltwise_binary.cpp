@@ -5,6 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "test_gold_impls.hpp"
+#include "llrt/tt_debug_print_server.hpp"
 
 using namespace tt;
 
@@ -16,6 +17,7 @@ int main(int argc, char **argv) {
     bool multibank = true;
 
     const char* op_id_to_op_define[] = {"add_tiles", "sub_tiles", "mul_tiles"};
+    const char* op_id_to_op_code_define[] = {"0", "1", "2"};
     const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
     auto ops = EltwiseOp::all();
     for (auto eltwise_op: ops) {
@@ -30,6 +32,7 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);;
+        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -132,6 +135,8 @@ int main(int argc, char **argv) {
             math_approx_mode
         );
         eltwise_binary_kernel->add_define("ELTWISE_OP", op_id_to_op_define[eltwise_op]);
+        eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_id_to_op_code_define[eltwise_op]);
+        //eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_id_to_op_code_define[eltwise_op]);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application

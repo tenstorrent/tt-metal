@@ -1,13 +1,14 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
-
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
     constexpr uint32_t onetile = 1;
     uint32_t B = get_compile_time_arg_val(0);
     uint32_t Ht = get_compile_time_arg_val(1);
     uint32_t Wt = get_compile_time_arg_val(2);
+    init_bcast(CB::c_in0, CB::c_in1);
 
     for (uint32_t b = 0; b < B; b++) {
     for (uint32_t h = 0; h < Ht; h++) {
@@ -19,7 +20,7 @@ void compute_main() {
 
         cb_wait_front(CB::c_in0, onetile);
 
-        BCAST_OP((int) Dim::RC, CB::c_in0, CB::c_in1, 0, 0, 0);
+        BCAST_OP(tt::Dim::RC, CB::c_in0, CB::c_in1, 0, 0, 0);
         pack_tile(0, CB::c_out0);
 
         cb_pop_front(CB::c_in0, onetile);
@@ -31,3 +32,4 @@ void compute_main() {
     } } }
 
 }
+} // NAMESPACE

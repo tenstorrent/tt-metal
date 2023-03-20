@@ -4,14 +4,6 @@
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
 
-namespace eltwise_unary {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t per_core_block_cnt;
-    std::int32_t per_core_block_size;
-};
-}
-
 using namespace tt::constants;
 
 namespace tt {

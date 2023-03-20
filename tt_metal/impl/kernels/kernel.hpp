@@ -162,8 +162,7 @@ class ComputeKernel : public Kernel {
 
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
-    // This file can then be included in the kernel file via a #include directive
-    // It is also automatically included from compute_hlk_api.h
+    // This file is then automatically included in the generated compiled kernel files
     void add_define(const std::string& name, const std::string& value) { defines_[name] = value; }
     void add_define(const std::string& name, int value) { defines_[name] = std::to_string(value); }
 

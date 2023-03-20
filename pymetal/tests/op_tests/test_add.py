@@ -1,18 +1,50 @@
-import ttmetal
+import math
+from pathlib import Path
+import sys
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
 
-def test_add():
+import torch
 
-    device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
-    ttmetal.device.InitializeDevice(device)
-    data = list(range(1024))
-    t0 = ttmetal.tensor.Tensor(data, [1, 1, 32, 32], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
-    t1 = ttmetal.tensor.Tensor(data, [1, 1, 32, 32], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
+from pymetal import ttmetal
+from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
-    t2 = ttmetal.tensor.add(t0, t1)
+RSUM = ttmetal.tensor.ReduceOpMath.SUM
+RW = ttmetal.tensor.ReduceOpDim.W
+RH = ttmetal.tensor.ReduceOpDim.H
+RHW = ttmetal.tensor.ReduceOpDim.HW
 
-    t2.print(ttmetal.tensor.Layout.TILE)
-    ttmetal.device.CloseDevice(device)
-    return
+# Initialize the device
+device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
+ttmetal.device.InitializeDevice(device)
+host = ttmetal.device.GetHost()
+ttmetal.device.StartDebugPrintServer(device)
 
 if __name__ == "__main__":
-    test_add()
+    N = 1
+    C = 1
+    H = 32
+    W = 32
+    shape = [N,C,H,W]
+    torch.manual_seed(123)
+    for op in ["add", "sub", "mul"]:
+        x = (torch.randn((N,C,H,W))+0.01).to(torch.bfloat16).to(torch.float32)
+        y = (torch.randn((N,C,H,W))+0.01).to(torch.bfloat16).to(torch.float32)
+        xt = ttmetal.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
+        yt = ttmetal.tensor.Tensor(tilize_to_list(y), [N, C, H, W], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
+        if op == "add":
+            ref_torch = x+y
+            tt_res = ttmetal.tensor.add(xt, yt)
+        elif op == "sub":
+            ref_torch = x-y
+            tt_res = ttmetal.tensor.sub(xt, yt)
+        else:
+            ref_torch = x*y
+            tt_res = ttmetal.tensor.mul(xt, yt)
+        tt_host_rm = tt_res.to(host).data()
+
+        pyt_got_back_rm = torch.Tensor(tt_host_rm).reshape(shape)
+        pyt_got_back_rm = untilize(pyt_got_back_rm)
+        print_diff_argmax(pyt_got_back_rm, ref_torch)
+
+ttmetal.device.CloseDevice(device)

@@ -59,15 +59,16 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
 int main(int argc, char **argv) {
     bool pass = true;
 
-    // convert from bcast mode as defined in compute_hlk_api.h Dim enum to kernel name string
-    // W = 2, H = 1, HW = 4
     const char* bdim_to_log_string[] = { "", "BCAST_H", "BCAST_W", "", "BCAST_HW" };
     const char* op_id_to_op_define[] = {"add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast"};
+    const char* op_id_to_llkop_define[] = {"ELWADD", "ELWSUB", "ELWMUL"};
+    const char* bdim_to_llkdim_define[] = { "", "BroadcastType::ROW", "BroadcastType::COL", "", "BroadcastType::SCALAR" };
     const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
     bool multibank = true;
 
     auto bdims = BcastDim::all();
     auto ops = BcastOp::all();
+    //ops = { BcastOp::MUL }; // TODO(AP): for debugging
     for (auto bcast_op: ops) {
     for (auto bcast_dim: bdims) {
 
@@ -280,7 +281,9 @@ int main(int argc, char **argv) {
             math_approx_mode
         );
 
+        eltwise_binary_kernel->add_define("BCAST_DIM", bdim_to_llkdim_define[bcast_dim]);
         eltwise_binary_kernel->add_define("BCAST_OP", op_id_to_op_define[bcast_op]);
+        eltwise_binary_kernel->add_define("BCAST_LLKOP", op_id_to_llkop_define[bcast_op]);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application

@@ -11,24 +11,24 @@ using namespace tt::tt_metal;
 string dim_to_kernel_name(ReduceOpDim::Enum reduce_dim, ReduceOpMath::Enum reduce_op){
     string kernel_name;
     switch(reduce_dim){
-        case ReduceOpDim::H:
-            kernel_name = reduce_op == ReduceOpMath::SUM ? "kernels/compute/3T/reduce_h_sum" : "kernels/compute/reduce_h.cpp";
-            break;
-        case ReduceOpDim::W:
-            kernel_name = reduce_op == ReduceOpMath::SUM ? "kernels/compute/3T/reduce_w_sum" : "kernels/compute/reduce_w.cpp";
-            break;
-        case ReduceOpDim::HW:
-            kernel_name = reduce_op == ReduceOpMath::SUM ? "kernels/compute/3T/reduce_hw_sum" : "kernels/compute/reduce_hw.cpp";
-            break;
-        default:
-            TT_ASSERT(false && "Undefined dim");
+        case ReduceOpDim::H: kernel_name = "kernels/compute/reduce_h.cpp"; break;
+        case ReduceOpDim::W: kernel_name = "kernels/compute/reduce_w.cpp"; break;
+        case ReduceOpDim::HW: kernel_name = "kernels/compute/reduce_hw.cpp"; break;
+        default: TT_ASSERT(false && "Undefined dim");
     }
     return kernel_name;
 }
 
-void set_compute_kernel_defines(ComputeKernel * reduce_kernel, ReduceOpMath::Enum reduce_op){
+void add_defines(ComputeKernel * reduce_kernel, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim){
     // TOOD(AP): need a sync with Reduce::Max from HLK headers
-    reduce_kernel->add_define("REDUCE_OP", reduce_op == ReduceOpMath::MAX ? 2 : 0);
+    bool do_max = reduce_op == ReduceOpMath::MAX;
+    reduce_kernel->add_define("REDUCE_OP", do_max ? "PoolType::MAX" : "PoolType::SUM");
+    switch(reduce_dim) {
+        case ReduceOpDim::W: reduce_kernel->add_define("REDUCE_DIM", "ReduceDim::REDUCE_ROW"); break;
+        case ReduceOpDim::H: reduce_kernel->add_define("REDUCE_DIM", "ReduceDim::REDUCE_COL"); break;
+        case ReduceOpDim::HW: reduce_kernel->add_define("REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"); break;
+        default: TT_ASSERT(false && "Invalid reduce_op!");
+    }
     return;
 }
 
@@ -58,13 +58,10 @@ Tensor reduce (const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum 
     switch (reduce_op_utils::get_parallelization_strategy(a, reduce_dim)){
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
             return reduce_multi_core_h(a, reduce_op, reduce_dim, scaler);
-            break;
-         case ReduceOpParallelizationStrategy::MULTI_CORE_W:
+        case ReduceOpParallelizationStrategy::MULTI_CORE_W:
             return reduce_multi_core_w(a, reduce_op, reduce_dim, scaler);
-            break;
-         case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
+        case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
             return reduce_multi_core_hw(a, reduce_op, reduce_dim, scaler);
-            break;
         case ReduceOpParallelizationStrategy::SINGLE_CORE:
         default:
             return reduce_single_core(a, reduce_op, reduce_dim, scaler);

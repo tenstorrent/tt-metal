@@ -1,8 +1,9 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
 
     constexpr uint32_t block_num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
@@ -27,4 +28,5 @@ void compute_main() {
        release_dst(DstMode::Half);
     }
 
+}
 }

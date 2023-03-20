@@ -39,7 +39,7 @@ using namespace tt::tt_metal;
 
 string get_op_name(UnaryOpType::Enum op_type);
 
-void set_compute_kernel_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type);
+void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type);
 
 UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a);
 

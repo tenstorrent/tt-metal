@@ -1,8 +1,12 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
+//#include "debug_print.h"
 
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
+    binary_op_specific_init(ELTWISE_OP_CODE);
+    binary_op_init_common(0, 1);
 
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_size = get_compile_time_arg_val(1);
@@ -30,4 +34,5 @@ void compute_main() {
 
         cb_push_back(CB::c_out0, per_core_block_size);
     }
+}
 }

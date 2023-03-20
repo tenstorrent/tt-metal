@@ -6,7 +6,7 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-import ttmetal
+from pymetal import ttmetal
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight
 
 # Initialize the device

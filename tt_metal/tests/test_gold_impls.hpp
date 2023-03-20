@@ -161,8 +161,7 @@ struct BcastDim {
         H = 1, // broadcast a W-tensor over destination's H
         HW = 4, // broadcast a 1-element tensor over destination's HW
     };
-    // TODO(AP): these constants above must match Dim::R, Dim::C, Dim::RC from compute_hlk_api.h
-    // either add compile-time asserts or need to ensure some other kind of matching like a shared header
+    // TODO(AP): fix the gap to match defines in llk_3c.h
 
     static const vector<Enum> all() { return { W, H, HW }; }
 };
@@ -173,7 +172,7 @@ struct BcastOp {
         SUB = 1,
         MUL = 2,
     };
-    // These constants above map to ops in compute_hlk_api.h:
+    // These constants above map to ops in llk_3c.h:
     // add_tiles_bcast, sub_tiles_bcast, mul_tiles_bcast
 
     static const vector<Enum> all() { return { ADD, SUB, MUL }; }

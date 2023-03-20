@@ -108,14 +108,15 @@ bool is_close_rtol_0p175_atol_0p1(float a, float b) {
 
 // SFPU maps -> relevant kernels, golden functions, comparison functions
 const map<string, string> sfpu_op_to_hlk_op_name = {
-    {"relu", "hlk_pack_relu_tile_to_stream(nullptr, 0, CB::c_out0);"},
-    {"exponential", "hlk_sfpu_exponential(nullptr, 0); pack_tile(0, CB::c_out0);"},
-    {"reciprocal", "hlk_sfpu_reciprocal(nullptr, 0); pack_tile(0, CB::c_out0);"},
-    {"gelu", "hlk_sfpu_gelu(nullptr, 0); pack_tile(0, CB::c_out0);"},
-    {"sqrt", "hlk_sfpu_sqrt(nullptr, 0); pack_tile(0, CB::c_out0);"},
-    {"sigmoid", "hlk_sfpu_sigmoid(nullptr, 0); pack_tile(0, CB::c_out0);"},
-    {"log", "hlk_sfpu_log(nullptr, 0); pack_tile(0, CB::c_out0);"},
-    {"tanh", "hlk_sfpu_tanh(nullptr, 0); pack_tile(0, CB::c_out0);"},
+    // TODO(AP): auto-generate inits
+    { "relu", "pack_relu_tile_to_stream(0, CB::c_out0);" },
+    { "exponential", "exp_tile_init(); exp_tile(0); pack_tile(0, CB::c_out0);" },
+    { "reciprocal", "recip_tile_init(); recip_tile(0); pack_tile(0, CB::c_out0);" },
+    { "gelu", "gelu_tile_init(); gelu_tile(0); pack_tile(0, CB::c_out0);" },
+    { "sqrt", "sqrt_tile_init(); sqrt_tile(0); pack_tile(0, CB::c_out0);" },
+    { "sigmoid", "sigmoid_tile_init(); sigmoid_tile(0); pack_tile(0, CB::c_out0);" },
+    { "log", "log_tile_init(); log_tile(0); pack_tile(0, CB::c_out0);" },
+    { "tanh", "tanh_tile_init(); tanh_tile(0); pack_tile(0, CB::c_out0);" },
 };
 
 const map<string, std::function<float(float)>> sfpu_op_to_function = {

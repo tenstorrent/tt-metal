@@ -115,7 +115,7 @@ Tensor eltwise_binary_single_core(const Tensor &a, const Tensor &b, BinaryOpType
         math_approx_mode
     );
 
-    eltwise_binary_op_utils::set_compute_kernel_defines(eltwise_binary_kernel, op_type);
+    eltwise_binary_op_utils::add_defines(eltwise_binary_kernel, op_type);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application

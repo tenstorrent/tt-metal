@@ -1,11 +1,12 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
-
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
 
     uint32_t NHtWt = get_compile_time_arg_val(0);
+    transpose_wh_init(CB::c_in0);
 
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader
@@ -23,4 +24,5 @@ void compute_main() {
         cb_push_back(CB::c_out0, 1);
         cb_pop_front(CB::c_in0, 1);
     }
+}
 }

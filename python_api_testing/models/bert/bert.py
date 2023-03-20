@@ -99,8 +99,8 @@ if __name__ == "__main__":
     # TODO(AP): currently necessary, otherwise get bit discrepancies
     torch.manual_seed(1234)
     # Initialize the device
-    #enable_binary_cache()
-    #enable_compile_cache()
+    enable_binary_cache()
+    enable_compile_cache()
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()

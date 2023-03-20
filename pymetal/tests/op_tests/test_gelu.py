@@ -6,7 +6,7 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-import ttmetal
+from pymetal import ttmetal
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
 RSUM = ttmetal.tensor.ReduceOpMath.SUM
@@ -34,14 +34,51 @@ if __name__ == "__main__":
     W = 32
     shape = [N,C,H,W]
     torch.manual_seed(123)
-    x = (torch.randn((N,C,H,W))+0.01).to(torch.bfloat16).to(torch.float32)
-    xt = ttmetal.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
-    tt_res = ttmetal.tensor.gelu(xt)
-    tt_host_rm = tt_res.to(host).data()
 
-    ref_gelu = new_gelu(x)
-    pyt_got_back_rm = torch.Tensor(tt_host_rm).reshape(shape)
-    pyt_got_back_rm = untilize(pyt_got_back_rm)
-    print_diff_argmax(pyt_got_back_rm, ref_gelu)
+    for op in ["gelu", "exp", "sqrt", "sigmoid", "recip", "tanh", "log", "relu"]:
+        x = (torch.randn((N,C,H,W))+0.01).to(torch.bfloat16).to(torch.float32)
+        if op == "recip":
+            x = x+5.0
+        if op == "sqrt":
+            x = x*x
+        if op == "log":
+            x = (x+10.0)*100.0
+        xt = ttmetal.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
+        if op == "relu":
+            print("---- Testing relu")
+            tt_res = ttmetal.tensor.relu(xt)
+            ref = x.relu()
+        if op == "log":
+            print("---- Testing log")
+            tt_res = ttmetal.tensor.tanh(xt)
+            ref = x.log()
+        if op == "tanh":
+            print("---- Testing tanh")
+            tt_res = ttmetal.tensor.tanh(xt)
+            ref = torch.tanh(x)
+        if op == "recip":
+            print("---- Testing recip")
+            tt_res = ttmetal.tensor.recip(xt)
+            ref = 1.0/x
+        if op == "sigmoid":
+            print("---- Testing sigmoid")
+            tt_res = ttmetal.tensor.sigmoid(xt)
+            ref = torch.sigmoid(x)
+        if op == "gelu":
+            print("---- Testing gelu")
+            tt_res = ttmetal.tensor.gelu(xt)
+            ref = new_gelu(x)
+        elif op == "exp":
+            print("---- Testing exp")
+            tt_res = ttmetal.tensor.exp(xt)
+            ref = x.exp()
+        elif op == "sqrt":
+            print("---- Testing sqrt")
+            tt_res = ttmetal.tensor.sqrt(xt)
+            ref = x.sqrt()
+        tt_host_rm = tt_res.to(host).data()
+        pyt_got_back_rm = torch.Tensor(tt_host_rm).reshape(shape)
+        pyt_got_back_rm = untilize(pyt_got_back_rm)
+        print_diff_argmax(pyt_got_back_rm, ref)
 
 ttmetal.device.CloseDevice(device)

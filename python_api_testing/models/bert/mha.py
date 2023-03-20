@@ -12,7 +12,8 @@ import numpy as np
 
 from pymetal import ttmetal as ttm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
-# from utility_functions import get_FR, set_FR
+from utility_functions import get_FR, set_FR
+from utility_functions import enable_compile_cache, enable_binary_cache
 from fused_ops.linear import Linear as TtLinear
 from fused_ops.softmax import softmax
 
@@ -173,6 +174,8 @@ def run_mha_inference():
     assert np.allclose(pytorch_out.detach().numpy(), tt_out1, 1e-5, 0.17)
 
 if __name__ == "__main__":
+    enable_binary_cache()
+    enable_compile_cache()
     # Initialize the device
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)

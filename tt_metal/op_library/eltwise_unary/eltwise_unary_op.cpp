@@ -10,26 +10,26 @@ using namespace tt::tt_metal;
 string get_op_name(UnaryOpType::Enum op_type) {
     string op_name;
     switch (op_type) {
-        case UnaryOpType::EXP: op_name = "hlk_sfpu_exponential(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
-        case UnaryOpType::RECIP: op_name = "hlk_sfpu_reciprocal(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
-        case UnaryOpType::GELU: op_name = "hlk_sfpu_gelu(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
-        case UnaryOpType::RELU: op_name = "hlk_pack_relu_tile_to_stream(nullptr, 0, CB::c_out0);"; break;
-        case UnaryOpType::SQRT: op_name = "hlk_sfpu_sqrt(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
-        case UnaryOpType::SIGMOID: op_name = "hlk_sfpu_sigmoid(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
-        case UnaryOpType::LOG: op_name = "hlk_sfpu_log(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
-        case UnaryOpType::TANH: op_name = "hlk_sfpu_tanh(nullptr, 0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::EXP: op_name = "exp_tile_init(); exp_tile(0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::RECIP: op_name = "recip_tile_init(); recip_tile(0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::GELU: op_name = "gelu_tile_init(); gelu_tile(0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::RELU: op_name = "pack_relu_tile_to_stream(0, CB::c_out0);"; break;
+        case UnaryOpType::SQRT: op_name = "sqrt_tile_init(); sqrt_tile(0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::SIGMOID: op_name = "sigmoid_tile_init(); sigmoid_tile(0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::LOG: op_name = "log_tile_init(); log_tile(0); pack_tile(0, CB::c_out0);"; break;
+        case UnaryOpType::TANH: op_name = "tanh_tile_init(); tanh_tile(0); pack_tile(0, CB::c_out0);"; break;
 
         default: TT_ASSERT(false && "Undefined op type");
     }
     return op_name;
 }
 
-void set_compute_kernel_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type){
+void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type){
     string op_name = get_op_name(op_type);
     eltwise_unary_kernel->add_define("SFPU_OP_AND_PACK", op_name);
     bool is_relu = (op_type == UnaryOpType::RELU);
-    eltwise_unary_kernel->add_define("INIT_RELU", is_relu ? "hlk_relu_config(nullptr, 1);" : "");
-    eltwise_unary_kernel->add_define("DEINIT_RELU", is_relu ? "hlk_relu_config(nullptr, 0);" : "");
+    eltwise_unary_kernel->add_define("INIT_RELU", is_relu ? "pack_relu_config(1);" : "");
+    eltwise_unary_kernel->add_define("DEINIT_RELU", is_relu ? "pack_relu_config(0);" : "");
     return;
 }
 

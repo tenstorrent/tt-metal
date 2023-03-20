@@ -1,14 +1,17 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
 
     uint32_t scaler = get_compile_time_arg_val(0);
     // float scaler = *reinterpret_cast<float*>(&int_scaler);
     uint32_t Ht = get_compile_time_arg_val(1);
     uint32_t Wt = get_compile_time_arg_val(2);
     uint32_t NC = get_compile_time_arg_val(3);
+    union { float f; uint32_t u; } u; u.u = scaler;
+    reduce_init(REDUCE_OP, REDUCE_DIM, CB::c_in0, u.f);
 
     for (uint32_t nc = 0; nc < NC; nc++) {
 
@@ -22,7 +25,7 @@ void compute_main() {
             for(uint32_t ht = 0; ht < Ht; ++ht) {
                 cb_wait_front(CB::c_in0, onetile);
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile(REDUCE_OP, (int)Dim::R, CB::c_in0, 0, reduce_dst_idx, scaler);
+                reduce_tile(REDUCE_OP, REDUCE_DIM, CB::c_in0, 0, reduce_dst_idx, scaler);
                 cb_pop_front(CB::c_in0, onetile);
             }
 
@@ -32,4 +35,5 @@ void compute_main() {
             release_dst(DstMode::Full);
         }
     }
+}
 }

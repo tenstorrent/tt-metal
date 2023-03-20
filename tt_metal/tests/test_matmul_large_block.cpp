@@ -7,6 +7,8 @@
 #include "tensor/tensor.hpp"
 #include "test_tiles.hpp"
 #include "llrt/tests/test_libs/debug_mailbox.hpp"
+#include "llrt/tt_debug_print_server.hpp"
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -253,6 +255,7 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);;
+        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

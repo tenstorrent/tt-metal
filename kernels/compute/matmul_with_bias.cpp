@@ -1,9 +1,12 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#define BCAST_LLKOP ELWADD // TODO(AP): hacky
+#define BCAST_DIM   BroadcastType::ROW
 
+#include "llk_3c.h"
 
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
 
 
     uint32_t block_tile_dim = get_compile_time_arg_val(0);
@@ -18,7 +21,7 @@ void compute_main() {
 
     acquire_dst(DstMode::Full);
 
-    hlk_mm_tile_init_once(nullptr, false);
+    mm_init();
     for(uint32_t b=0;b<block_cnt;++b)
     {
         cb_wait_front(CB::c_in0, in0_block_tile_cnt);
@@ -56,7 +59,8 @@ void compute_main() {
         release_dst(DstMode::Full);
 
         acquire_dst(DstMode::Full);
-        hlk_add_tile_bcast_init_short(nullptr);
+
+        add_bcast_rows_init_short();
         cb_wait_front(CB::c_intermed0, out_block_tile_cnt);
         cb_wait_front(CB::c_in2, dst_tile_cols);
         int dst_tile_index = 0;
@@ -64,7 +68,7 @@ void compute_main() {
         {
             for(uint32_t c=0;c<dst_tile_cols;++c)
             {
-                hlk_add_tile_bcast(core_ptr, (int)Dim::R, HlkOperand::intermed0, HlkOperand::in2, dst_tile_index, c, dst_tile_index);
+                add_tiles_bcast(tt::Dim::R, HlkOperand::intermed0, HlkOperand::in2, dst_tile_index, c, dst_tile_index);
                 dst_tile_index++;
             }
         }
@@ -80,4 +84,5 @@ void compute_main() {
 
     cb_push_back(CB::c_out0, out_block_tile_cnt);
     release_dst(DstMode::Full);
+}
 }

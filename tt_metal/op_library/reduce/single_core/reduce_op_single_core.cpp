@@ -113,17 +113,13 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         math_approx_mode
     );
 
-    reduce_op_utils::set_compute_kernel_defines(reduce_compute_kernel, reduce_op);
+    reduce_op_utils::add_defines(reduce_compute_kernel, reduce_op);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
     bool skip_hlkc = false;
-    if (reduce_op == ReduceOpMath::SUM){
-        tt_metal::CompileProgramNew(device, program);
-    } else {
-        tt_metal::CompileProgram(device, program, skip_hlkc);
-    }
+    tt_metal::CompileProgram(device, program, skip_hlkc);
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////

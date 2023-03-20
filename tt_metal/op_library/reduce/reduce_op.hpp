@@ -38,7 +38,7 @@ using namespace tt::tt_metal;
 
 string dim_to_kernel_name(ReduceOpDim::Enum reduce_dim, ReduceOpMath::Enum reduce_op);
 
-void set_compute_kernel_defines(ComputeKernel * reduce_kernel, ReduceOpMath::Enum reduce_op);
+void add_defines(ComputeKernel * reduce_kernel, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim);
 
 ReduceOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, ReduceOpDim::Enum reduce_dim);
 

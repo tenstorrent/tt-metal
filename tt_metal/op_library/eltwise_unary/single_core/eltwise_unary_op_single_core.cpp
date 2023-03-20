@@ -108,7 +108,7 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
         math_approx_mode
     );
 
-    eltwise_unary_op_utils::set_compute_kernel_defines(eltwise_unary_kernel, op_type);
+    eltwise_unary_op_utils::add_defines(eltwise_unary_kernel, op_type);
 
 
     ////////////////////////////////////////////////////////////////////////////

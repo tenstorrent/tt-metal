@@ -1,9 +1,11 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    unary_op_init_common(CB::c_in0);
     for(uint32_t b=0;b<per_core_tile_cnt;++b)
     {
         acquire_dst(DstMode::Half);
@@ -20,4 +22,5 @@ void compute_main() {
 
         release_dst(DstMode::Half);
     }
+}
 }

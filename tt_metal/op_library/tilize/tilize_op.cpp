@@ -125,7 +125,7 @@ Tensor tilize(const Tensor &a) {
     bool math_approx_mode = false;
     auto tilize_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/3T/tilize",
+        "kernels/compute/tilize.cpp",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,

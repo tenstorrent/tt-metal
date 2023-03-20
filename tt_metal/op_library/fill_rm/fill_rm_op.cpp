@@ -4,13 +4,6 @@
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
 
-namespace blank_hlk {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t dummy;
-};
-}
-
 using namespace tt::constants;
 using u32 = uint32_t;
 

@@ -115,10 +115,11 @@ bool run_sfpu_test(string sfpu_name) {
             math_approx_mode
         );
         const string hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
+        // this macro combines 2 ops due to relu_pack op LLK interface being different from other SFPU ops
         eltwise_unary_kernel->add_define("SFPU_OP_AND_PACK", hlk_op_name);
         bool is_relu = (sfpu_name == "relu");
-        eltwise_unary_kernel->add_define("INIT_RELU", is_relu ? "hlk_relu_config(nullptr, 1);" : "");
-        eltwise_unary_kernel->add_define("DEINIT_RELU", is_relu ? "hlk_relu_config(nullptr, 0);" : "");
+        eltwise_unary_kernel->add_define("INIT_RELU", is_relu ? "pack_relu_config(1);" : "");
+        eltwise_unary_kernel->add_define("DEINIT_RELU", is_relu ? "pack_relu_config(0);" : "");
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
