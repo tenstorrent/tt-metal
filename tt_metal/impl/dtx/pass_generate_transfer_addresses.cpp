@@ -3,7 +3,7 @@
 #include "util.hpp"
 
 bool generate_transfer_addresses(DataTransformations * dtx){
-    bool DEBUG = true;
+    bool DEBUG = false;
 
     if (dtx->transformations.size() > 2) throw std::runtime_error("DTX error: your DTX contains more than 2 transformations. First run collapse_transormations(), then generate_transfer_addresses");
 
@@ -41,7 +41,7 @@ bool generate_transfer_addresses(DataTransformations * dtx){
 }
 
 bool generate_transfer_addresses_tiled_data(DataTransformations * dtx){
-    bool DEBUG = true;
+    bool DEBUG = false;
 
     if (dtx->transformations.size() > 2) throw std::runtime_error("DTX error: your DTX contains more than 2 transformations. First run collapse_transormations(), then generate_transfer_addresses");
 

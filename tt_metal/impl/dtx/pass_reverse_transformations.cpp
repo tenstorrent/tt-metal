@@ -76,14 +76,16 @@ DataTransformations * reverse_and_combine_transformations(DataTransformations * 
     // dtx_right - stays the same
     // dtx_left - flips, and goes on top
 
-    bool DEBUG = true;
+    bool DEBUG = false;
     //if (DEBUG) fw_dtx->print();
     if (DEBUG) cout << "\n\n ----- Start Reverse And Combine Transformations ------" << endl;
 
     // Step 1: Validation
     //      1. dtx_left 1st TX shape == dtx_right 1st TX shape
     if (compare_two_vectors_of_ints(dtx_left->transformations[0]->groups[0]->shape, dtx_right->transformations[0]->groups[0]->shape)) {
-        cout << s(2) << "its true - good i think" << endl;
+        if (DEBUG) {
+            cout << s(2) << "its true - good i think" << endl;
+        }
     }
     else {
         cout << s(2) << "ERROR: shapes dont mathc" << endl;

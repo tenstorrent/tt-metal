@@ -161,9 +161,7 @@ Tensor tilize(const Tensor &a) {
         (uint32_t) dram_dst_noc_xy.y,
         (uint32_t) (a.shape()[0] * a.shape()[1] * a.shape()[2] * a.shape()[3] / TILE_HW)}
     );
-    std::cout << "Launching kernels " << std::endl;
     tt_metal::LaunchKernels(device, program);
-    std::cout << "Done kernels " << std::endl;
 
     delete program;
 
@@ -195,7 +193,6 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     }
     // pad height
     output_shape[2] = (uint32_t) (ceil((double) output_shape[2] / (double) TILE_HEIGHT ) * TILE_HEIGHT);
-    std::cout << "output shape height=" << output_shape[2] << " output shape width=" << output_shape[3] << std::endl;
     tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 
 
@@ -204,13 +201,10 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
     TT_ASSERT(output.volume() % TILE_HW == 0);
-    std::cout << "outptu volume " << output.volume() << std::endl;
     int32_t num_tiles = output.volume() / TILE_HW;
     uint32_t row_size_datum =  a.layout() == Layout::ROW_MAJOR ? a.shape()[3] : a.shape()[1];
-    std::cout << "row_size_datum = " << row_size_datum << std::endl;
     uint32_t num_rows =  a.layout() == Layout::ROW_MAJOR ? a.shape()[2] : a.shape()[3];
     uint32_t num_rows_padded = ceil((double) num_rows / (double) TILE_HEIGHT) * TILE_HEIGHT;
-    std::cout << "num rows=" << num_rows <<" , num rows padded " << num_rows_padded << std::endl;
     assert(row_size_datum % TILE_WIDTH == 0);
     uint32_t num_2d_faces = a.layout() == Layout::ROW_MAJOR ? a.shape()[0] * a.shape()[1] : a.shape()[0] * a.shape()[2];
     uint32_t row_size_bytes = row_size_datum * 2; // Assuming bfloat16 dataformat
@@ -262,7 +256,6 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
                                             num_rows_padded,
                                             row_size_bytes,
                                             zero_buffer_l1_addr};
-    std::cout << "num 2d faces " << num_2d_faces << " , row size " << row_size_bytes << std::endl;
     DataMovementKernelArgs *compile_time_args;
     if (stick_size_is_power_of_two) {
         reader_kernel_args.push_back(log2(row_size_bytes));
@@ -339,9 +332,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     );
     std::vector<uint32_t> zero_buffer_stick(row_size_datum, 0);
     tt_metal::WriteToDeviceL1(device, core, zero_buffer_stick, zero_buffer_l1_addr);
-    std::cout << "Launching kernels " << std::endl;
     tt_metal::LaunchKernels(device, program);
-    std::cout << "Done kernels " << std::endl;
 
     delete program;
 
@@ -368,10 +359,9 @@ Tensor tilize_conv_activation(const Tensor &a) {
     assert(matrix_shape[0] == 1);
     uint32_t num_rows = (uint32_t) matrix_shape[1];
     uint32_t num_cols = (uint32_t) matrix_shape[2];
-    std::cout << "NUM rows - " << num_rows << " NUM cols - " << num_cols << std::endl;
     pass &= row_major_memory_store(dtx_right);
 
-    cout << "\n\nDTX_RIGHT" << endl;
+    //cout << "\n\nDTX_RIGHT" << endl;
     //dtx_right->print();
 
 
@@ -382,19 +372,19 @@ Tensor tilize_conv_activation(const Tensor &a) {
     dtx_left->transformations.push_back(node1);
     pass &= convert_abstract_tensor_to_channels_last_layout(dtx_left);
 
-    cout << "\n\nDTX_LEFT" << endl;
+    //cout << "\n\nDTX_LEFT" << endl;
     //dtx_left->print();
 
     DataTransformations * combined = reverse_and_combine_transformations(dtx_left, dtx_right);
-    cout << "\n\nDTX_COMBINED" << endl;
+    //cout << "\n\nDTX_COMBINED" << endl;
     //combined->print();
 
     pass &= optimize_away_transpose(combined);
-    cout << "\n\nDTX_OPTIMIZED" << endl;
+    //cout << "\n\nDTX_OPTIMIZED" << endl;
     //combined->print();
 
     pass &= collapse_transformations(combined);
-    cout << "\n\nDTX_COLLAPSED" << endl;
+    //cout << "\n\nDTX_COLLAPSED" << endl;
     //combined->print();
     pass &= generate_transfer_addresses(combined);
     //combined->print();
@@ -407,12 +397,6 @@ Tensor tilize_conv_activation(const Tensor &a) {
         address_map.push_back(transfer->size*2);
         t_bytes += transfer->size*2;
     }
-    // std::cout << "Address Map - " << std::endl;
-    // for(auto i = 0; i < address_map.size(); i+=3) {
-    //     std::cout << "Source address - " << address_map[i];
-    //     std::cout << ", Destination address - " << address_map[i+1];
-    //     std::cout << ", Size to transfer in bytes - " << address_map[i+2] << std::endl;
-    // }
 
     tt_metal::Program *program = new tt_metal::Program();
     tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
@@ -432,7 +416,6 @@ Tensor tilize_conv_activation(const Tensor &a) {
     uint32_t num_tiles_r = ceil((double)num_rows / (double)TILE_HEIGHT);
     uint32_t tiles_c_bytes = num_tiles_c * single_tile_size;
     uint32_t total_bytes = num_rows * num_cols * 2; // 2 for bfloat16
-    std::cout << "t_bytes " << t_bytes << " total_bytes " << total_bytes << std::endl;
     assert(total_bytes == t_bytes);
     uint32_t row_size = num_cols * 2; // 2 for bfloat16
 
@@ -443,7 +426,6 @@ Tensor tilize_conv_activation(const Tensor &a) {
     std::array<uint32_t, 4> output_shape = {1, 1, num_rows, num_cols};
     // pad height
     output_shape[2] = (uint32_t) (ceil((double) output_shape[2] / (double) TILE_HEIGHT ) * TILE_HEIGHT);
-    std::cout << "output shape height=" << output_shape[2] << " output shape width=" << output_shape[3] << std::endl;
 
     tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 
@@ -562,9 +544,7 @@ Tensor tilize_conv_activation(const Tensor &a) {
         (uint32_t) dram_dst_noc_xy.y,
         (uint32_t) (output.shape()[0] * output.shape()[1] * output.shape()[2] * output.shape()[3] / TILE_HW)}
     );
-    std::cout << "Launching kernels " << std::endl;
     tt_metal::LaunchKernels(device, program);
-    std::cout << "Done kernels " << std::endl;
 
     delete program;
 
