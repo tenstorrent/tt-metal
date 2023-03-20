@@ -392,6 +392,15 @@ void TensorModule(py::module &m_tensor) {
         | a        | Input tensor         | Tensor    |             | Yes      |
         +----------+----------------------+-----------+-------------+----------+
     )doc");
+    m_tensor.def("tilize_conv_activation", &tilize_conv_activation, R"doc(
+        Converts conv activation to 2d Matrix and tilizes it on device. Pads zeroes height-wise if required.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
     m_tensor.def("untilize", &untilize, R"doc(
         Untilizes a given tensor tilized across memory on device.
 

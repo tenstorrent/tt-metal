@@ -7,7 +7,7 @@
 #include "tt_metal/impl/dtx/dtx_passes.hpp"
 
 #include "llrt/tests/test_libs/debug_mailbox.hpp"
-
+#include "llrt/tt_debug_print_server.hpp"
 using namespace tt::constants;
 
 namespace tt {
@@ -339,6 +339,229 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     );
     std::vector<uint32_t> zero_buffer_stick(row_size_datum, 0);
     tt_metal::WriteToDeviceL1(device, core, zero_buffer_stick, zero_buffer_l1_addr);
+    std::cout << "Launching kernels " << std::endl;
+    tt_metal::LaunchKernels(device, program);
+    std::cout << "Done kernels " << std::endl;
+
+    delete program;
+
+    // output does not hold any data, contains pointer to buffer on device with the data
+    return output;
+}
+
+Tensor tilize_conv_activation(const Tensor &a) {
+    TT_ASSERT(a.layout() == Layout::CHANNELS_LAST, "Conv activation should be in channels last layout");
+
+    //vector<int> shape = {5, 4,4};
+    vector<int> shape = {(int) a.shape()[1], (int) a.shape()[2], (int) a.shape()[3]};
+
+    // Right side: AbstractTensor --> consumer conv/mm
+    DataTransformations * dtx_right = new DataTransformations();
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = shape;
+    dtx_right->transformations.push_back(node0);
+    bool pass = true;
+    pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1(dtx_right);
+    // Get the 2d matrix shape
+    auto matrix_shape = dtx_right->transformations.back()->groups[0]->shape;
+    assert(matrix_shape.size() == 3);
+    assert(matrix_shape[0] == 1);
+    uint32_t num_rows = (uint32_t) matrix_shape[1];
+    uint32_t num_cols = (uint32_t) matrix_shape[2];
+    std::cout << "NUM rows - " << num_rows << " NUM cols - " << num_cols << std::endl;
+    pass &= row_major_memory_store(dtx_right);
+
+    cout << "\n\nDTX_RIGHT" << endl;
+    //dtx_right->print();
+
+
+    // Left side: AbstractTensor --> producer memory buffer
+    DataTransformations * dtx_left = new DataTransformations();
+    TransformationNode * node1 = new TransformationNode("producer", 1);
+    node1->groups[0]->shape = shape;
+    dtx_left->transformations.push_back(node1);
+    pass &= convert_abstract_tensor_to_channels_last_layout(dtx_left);
+
+    cout << "\n\nDTX_LEFT" << endl;
+    //dtx_left->print();
+
+    DataTransformations * combined = reverse_and_combine_transformations(dtx_left, dtx_right);
+    cout << "\n\nDTX_COMBINED" << endl;
+    //combined->print();
+
+    pass &= optimize_away_transpose(combined);
+    cout << "\n\nDTX_OPTIMIZED" << endl;
+    //combined->print();
+
+    pass &= collapse_transformations(combined);
+    cout << "\n\nDTX_COLLAPSED" << endl;
+    //combined->print();
+    pass &= generate_transfer_addresses(combined);
+    //combined->print();
+    // copy transfer addresses into a vector
+    std::vector<uint32_t> address_map;
+    uint32_t t_bytes = 0;
+    for(auto transfer : combined->transformations.back()->groups[0]->transfers){
+        address_map.push_back(transfer->src_address*2); // 2 for bfloat16
+        address_map.push_back(transfer->dst_address*2);
+        address_map.push_back(transfer->size*2);
+        t_bytes += transfer->size*2;
+    }
+    // std::cout << "Address Map - " << std::endl;
+    // for(auto i = 0; i < address_map.size(); i+=3) {
+    //     std::cout << "Source address - " << address_map[i];
+    //     std::cout << ", Destination address - " << address_map[i+1];
+    //     std::cout << ", Size to transfer in bytes - " << address_map[i+2] << std::endl;
+    // }
+
+    tt_metal::Program *program = new tt_metal::Program();
+    tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
+
+    tt_xy_pair core = {0, 0};
+
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
+
+    uint32_t single_tile_size = 2 * TILE_HW;
+
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+
+    assert(num_cols % TILE_WIDTH == 0);
+    uint32_t num_tiles_c = num_cols / TILE_WIDTH;
+    uint32_t num_tiles_r = ceil((double)num_rows / (double)TILE_HEIGHT);
+    uint32_t tiles_c_bytes = num_tiles_c * single_tile_size;
+    uint32_t total_bytes = num_rows * num_cols * 2; // 2 for bfloat16
+    std::cout << "t_bytes " << t_bytes << " total_bytes " << total_bytes << std::endl;
+    assert(total_bytes == t_bytes);
+    uint32_t row_size = num_cols * 2; // 2 for bfloat16
+
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+
+    // This should allocate a DRAM buffer on the device
+    tt_metal::Device *device = a.device();
+    std::array<uint32_t, 4> output_shape = {1, 1, num_rows, num_cols};
+    // pad height
+    output_shape[2] = (uint32_t) (ceil((double) output_shape[2] / (double) TILE_HEIGHT ) * TILE_HEIGHT);
+    std::cout << "output shape height=" << output_shape[2] << " output shape width=" << output_shape[3] << std::endl;
+
+    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
+    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+
+    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_addr = 200 * 1024;
+    uint32_t num_input_tiles = num_tiles_c;
+
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        src0_cb_index,
+        core,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        src0_cb_addr,
+        DataFormat::Float16_b
+    );
+
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_addr = 300 * 1024;
+    uint32_t num_output_tiles = num_tiles_c;
+
+    auto cb_output = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        ouput_cb_index,
+        core,
+        num_output_tiles,
+        num_output_tiles * single_tile_size,
+        output_cb_addr,
+        DataFormat::Float16_b
+    );
+
+    uint32_t address_map_l1_addr = 400 * 1024;
+    auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, address_map.size() * sizeof(uint32_t), address_map_l1_addr);
+    uint32_t zero_buffer_l1_addr = 600 * 1024;
+    auto zero_buffer_l1 = tt_metal::CreateL1Buffer(program, device, core, row_size, zero_buffer_l1_addr);
+
+    vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(),
+                                            (uint32_t)dram_dst_noc_xy.x,
+                                            (uint32_t)dram_dst_noc_xy.y,
+                                            src0_cb_addr,
+                                            address_map_l1_addr,
+                                            (uint32_t) address_map.size(),
+                                            num_tiles_c,
+                                            tiles_c_bytes,
+                                            total_bytes,
+                                            row_size,
+                                            zero_buffer_l1_addr};
+
+    // Tilized reader
+    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "kernels/dataflow/reader_for_tilize_with_address_map.cpp",
+        core,
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_1_default);
+
+    // Tilized writer
+    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "kernels/dataflow/writer_unary_8bank.cpp",
+        core,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_0_default);
+
+    vector<uint32_t> compute_args = {
+        uint32_t(num_tiles_r), // per_core_block_cnt
+        uint32_t(num_tiles_c) // per_core_block_tile_cnt
+    };
+    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
+
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    auto tilize_kernel = tt_metal::CreateComputeKernel(
+        program,
+        "kernels/compute/3T/tilize",
+        core,
+        eltwise_unary_args,
+        MathFidelity::HiFi4,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Compile Application
+    ////////////////////////////////////////////////////////////////////////////
+    bool skip_hlkc = false;
+    tt_metal::CompileProgramNew(device, program);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Execute Application
+    ////////////////////////////////////////////////////////////////////////////
+    tt_metal::ConfigureDeviceWithProgram(device, program);
+    tt_metal::WriteToDeviceL1(device, core, address_map, address_map_l1_addr);
+    std::vector<uint32_t> zero_buffer_stick(num_cols, 0);
+    tt_metal::WriteToDeviceL1(device, core, zero_buffer_stick, zero_buffer_l1_addr);
+
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        unary_reader_kernel,
+        core,
+        reader_kernel_args
+    );
+
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        unary_writer_kernel,
+        core,
+        {dst_dram_buffer->address(),
+        (uint32_t) dram_dst_noc_xy.x,
+        (uint32_t) dram_dst_noc_xy.y,
+        (uint32_t) (output.shape()[0] * output.shape()[1] * output.shape()[2] * output.shape()[3] / TILE_HW)}
+    );
     std::cout << "Launching kernels " << std::endl;
     tt_metal::LaunchKernels(device, program);
     std::cout << "Done kernels " << std::endl;

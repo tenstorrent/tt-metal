@@ -6,7 +6,7 @@ sys.path.append(f"{f}/..")
 import numpy as np
 
 from pymetal import ttmetal as ttm
-from pymetal.ttmetal.utils import tilize_to_list, tilize, channels_last, _nearest_32, pad_activation
+from pymetal.ttmetal.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, pad_activation
 import torch
 
 if __name__ == "__main__":
@@ -14,7 +14,7 @@ if __name__ == "__main__":
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, pcie_0)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()
-    pt_tensor = torch.randn(1, 32, 1, 28)
+    pt_tensor = torch.randn(1, 32*9, 1, 4)
     cl_pt_tensor = channels_last(pt_tensor)
     cl_shape = cl_pt_tensor.shape[:]
     list_tensor = torch.flatten(cl_pt_tensor).tolist()

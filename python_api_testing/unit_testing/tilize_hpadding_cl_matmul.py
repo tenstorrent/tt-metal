@@ -50,5 +50,5 @@ if __name__ == "__main__":
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()
-    run_tilize_matmul_test(28, 32, 32)
+    run_tilize_matmul_test(4, 32*9, 32)
     ttm.device.CloseDevice(device)

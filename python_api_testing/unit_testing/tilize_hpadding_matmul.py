@@ -27,8 +27,10 @@ def run_tilize_matmul_test(M, K, N):
         device
     )
     a_t = ttm.tensor.tilize_with_zero_padding(a)
+    print("Shape of A_t - " + str(a_t.shape()))
     b_t = ttm.tensor.Tensor(tilize_to_list(B), b_shape, ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
-    t2 = ttm.tensor.matmul(a_t, b_t)
+    print("Shape of B_t - " + str(b_t.shape()))
+    t2 = ttm.tensor.bmm(a_t, b_t)
     assert(t2.shape() == output_shape)
     tt_host_rm = t2.to(host).data()
     pyt_got_back = torch.Tensor(tt_host_rm).reshape(output_shape)
@@ -45,5 +47,5 @@ if __name__ == "__main__":
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()
-    run_tilize_matmul_test(28, 32, 32)
+    run_tilize_matmul_test(4, 32*9, 32)
     ttm.device.CloseDevice(device)

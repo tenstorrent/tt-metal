@@ -10,6 +10,7 @@ namespace tt_metal {
 
 Tensor tilize (const Tensor &a);
 Tensor tilize_with_zero_padding (const Tensor &a);
+Tensor tilize_conv_activation (const Tensor &a);
 }  // namespace tt_metal
 
 }  // namespace tt
