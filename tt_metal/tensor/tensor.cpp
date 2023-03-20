@@ -68,6 +68,118 @@ Tensor::Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layo
     tensor_impl::allocate_buffer_on_device(*this, packed_size_in_bytes);
 }
 
+Tensor::Tensor(const Tensor &other)
+    : shape_(other.shape_), strides_(other.strides_), dtype_(other.dtype_), layout_(other.layout_), device_(other.device_), mem_config_(other.mem_config_) {
+    if (other.on_host()) {
+        // deep copy other.data_ into this->data_
+        tensor_impl::deepcopy_host_data_wrapper(other, *this);
+    } else {
+        // allocate buffer of same size and on same device as other.buffer_ and copy data from other.buffer_ into it
+        tensor_impl::deepcopy_device_data_wrapper(other, *this);
+    }
+}
+
+Tensor &Tensor::operator=(const Tensor &other) {
+    if (this != &other) {
+        bool originally_on_host = this->on_host();
+        if (not originally_on_host) {
+            // Always deallocate in this case because `this` is either updated to be host tensor or gets new buffer
+            // free the buffer before `this` members get updated
+            this->free_buffer();
+        }
+        this->shape_ = other.shape_;
+        this->strides_ = other.strides_;
+        this->dtype_ = other.dtype_;
+        this->layout_ = other.layout_;
+        this->device_ = other.device_;
+        this->mem_config_ = other.mem_config_;
+        if (originally_on_host) {
+            if (other.on_host()) {
+                // deep copy other.data_ into this->data_
+                tensor_impl::deepcopy_host_data_wrapper(other, *this);
+            } else {
+                // `this` is updated to be a device tensor,
+                // allocate buffer of same size and on same device as other.buffer_ and copy data from other.buffer_ into it
+                tensor_impl::deepcopy_device_data_wrapper(other, *this);
+            }
+        } else {
+            // deallocate this->buffer_ from device
+            // if `this` is updated to be a host tensor no buffer is allocated
+            // otherwise a new buffer is allocated holding same data as other.buffer_
+            delete this->buffer_;
+            this->buffer_ = nullptr;
+            if (other.on_host()) {
+                // `this` is updated to be a host tensor, copy data from other into `this`
+                tensor_impl::deepcopy_host_data_wrapper(other, *this);
+            } else {
+                // allocate new buffer with same size and on same device as other.buffer_ and copy data from other.buffer_ into it
+                tensor_impl::deepcopy_device_data_wrapper(other, *this);
+            }
+        }
+    }
+    return *this;
+}
+
+Tensor::Tensor(Tensor &&other)
+    : shape_(other.shape_), strides_(other.strides_), dtype_(other.dtype_), layout_(other.layout_), device_(other.device_), mem_config_(other.mem_config_) {
+    if (other.on_host()) {
+        // deep copy other.data_ into this->data_ and delete other.data_
+        tensor_impl::move_host_data_wrapper(std::move(other), *this);
+    } else {
+        // this owns buffer, does not need to be deallocated from device
+        this->buffer_ = std::move(other.buffer_);
+        other.buffer_ = nullptr;
+    }
+}
+
+Tensor &Tensor::operator=(Tensor &&other) {
+    if (this != &other) {
+        bool originally_on_host = this->on_host();
+        if (not originally_on_host) {
+            // Always deallocate in this case because `this` is either updated to be host tensor or gets new buffer
+            // free the buffer before `this` members get updated
+            this->free_buffer();
+        }
+        this->shape_ = other.shape_;
+        this->strides_ = other.strides_;
+        this->dtype_ = other.dtype_;
+        this->layout_ = other.layout_;
+        this->device_ = other.device_;
+        this->mem_config_ = other.mem_config_;
+        if (originally_on_host) {
+            if (other.on_host()) {
+                // move other.data_ into this->data_ and free other.data_
+                tensor_impl::move_host_data_wrapper(std::move(other), *this);
+            } else {
+                // `this` is updated to be a device tensor,
+                // allocate buffer of same size and on same device as other.buffer_ move data from other.buffer_ into it then deallocate other.buffer_
+                tensor_impl::move_device_data_wrapper(std::move(other), *this);
+            }
+        } else {
+            // if `this` is updated to be a host tensor no buffer is allocated
+            // otherwise a new buffer is allocated holding same data as other.buffer_
+            delete this->buffer_;
+            this->buffer_ = nullptr;
+            if (other.on_host()) {
+                // `this` is updated to be a host tensor, move data from other into `this`
+                tensor_impl::move_host_data_wrapper(std::move(other), *this);
+            } else {
+                // allocate new buffer with same size and on same device as other.buffer_ and move data from other.buffer_ into it then deallocate other.buffer_
+                tensor_impl::move_device_data_wrapper(std::move(other), *this);
+            }
+        }
+    }
+    return *this;
+}
+
+Tensor::~Tensor() {
+    if (not on_host()) {
+        this->free_buffer();
+        delete this->buffer_;
+        this->buffer_ = nullptr;
+    }
+}
+
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     if (on_host()) {
         tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
@@ -156,6 +268,14 @@ const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
     strides_ = compute_strides();
 
     return shape_;
+}
+
+void Tensor::free_buffer() {
+    TT_ASSERT(not on_host() && "Tensor needs to have a buffer on device to free it!");
+    if (this->buffer_ == nullptr) {
+        return;
+    }
+    FreeBuffer(this->buffer_);
 }
 
 }  // namespace tt_metal

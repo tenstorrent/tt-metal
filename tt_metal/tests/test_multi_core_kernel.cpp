@@ -306,6 +306,9 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(tt_metal::Device
     ////////////////////////////////////////////////////////////////////////////
     pass &= (src_vec == result_vec);
 
+    FreeBuffer(src_dram_buffer);
+    FreeBuffer(dst_dram_buffer);
+
     return pass;
 }
 
@@ -377,6 +380,11 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     pass &= (src_vec == result_vec_1);
     pass &= (src_vec == result_vec_2);
     pass &= (src_vec == result_vec_3);
+
+    FreeBuffer(src_dram_buffer);
+    FreeBuffer(dst_dram_buffer_1);
+    FreeBuffer(dst_dram_buffer_2);
+    FreeBuffer(dst_dram_buffer_3);
 
     return pass;
 }
@@ -465,6 +473,11 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     pass &= (src_vec == result_vec_1);
     pass &= (src_vec_2 == result_vec_2);
     pass &= (src_vec_3 == result_vec_3);
+
+    FreeBuffer(src_dram_buffer);
+    FreeBuffer(dst_dram_buffer_1);
+    FreeBuffer(dst_dram_buffer_2);
+    FreeBuffer(dst_dram_buffer_3);
 
     return pass;
 }

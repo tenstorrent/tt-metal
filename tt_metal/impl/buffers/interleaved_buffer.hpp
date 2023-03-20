@@ -13,6 +13,10 @@ class InterleavedDramBuffer : public Buffer {
    public:
     InterleavedDramBuffer(Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
 
+    ~InterleavedDramBuffer();
+
+    Buffer *clone();
+
     // Size in bytes of buffer in given DRAM channel
     uint32_t buffer_size(int dram_channel) const;
 
@@ -25,6 +29,13 @@ class InterleavedDramBuffer : public Buffer {
     std::vector<tt_xy_pair> interleaved_noc_coordinates() const;
 
    private:
+    InterleavedDramBuffer(Device *device, uint32_t total_size_bytes, const std::unordered_map<int, DramBuffer *> &bank_to_buffer);
+
+    void set_address();
+
+    void free();
+    friend void FreeBuffer(Buffer *buffer);
+
     std::unordered_map<int, DramBuffer *> bank_to_buffer_;
 };
 

@@ -5,11 +5,8 @@ namespace tt {
 namespace tt_metal {
 
 InterleavedDramBuffer::InterleavedDramBuffer(Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry)
-    : Buffer(device, num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry, 0) {
-    this->address_ = 0;
-    for (int dram_bank = 0; dram_bank < this->device_->num_dram_banks(); dram_bank++) {
-        this->address_ = std::max(this->address_, this->device_->banked_dram_manager_.at(dram_bank)->peak());
-    }
+    : Buffer(device, num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry, 0, true) {
+    this->set_address();
 
     int num_equally_distributed_units = num_bank_units / this->device_->num_dram_banks();
     int remaining_units_after_equally_distributing = num_bank_units % this->device_->num_dram_banks();
@@ -22,7 +19,6 @@ InterleavedDramBuffer::InterleavedDramBuffer(Device *device, int num_bank_units,
             remaining_units_after_equally_distributing -= 1;
         }
         uint32_t buffer_size = num_units_in_bank * (num_entries_per_bank_unit * num_bytes_per_entry);
-        device->allocate_buffer(dram_bank, buffer_size, this->address_);
         auto dram_buffer = new DramBuffer(device, dram_bank, buffer_size, this->address_);
         this->bank_to_buffer_.insert({dram_bank, dram_buffer});
         total_allocated += buffer_size;
@@ -30,6 +26,27 @@ InterleavedDramBuffer::InterleavedDramBuffer(Device *device, int num_bank_units,
             break;
         }
     }
+}
+
+InterleavedDramBuffer::InterleavedDramBuffer(Device *device, uint32_t total_size_bytes, const std::unordered_map<int, DramBuffer *> &bank_to_buffer)
+    : Buffer(device, total_size_bytes, 0, true) {
+    this->set_address();
+
+    for (auto &[dram_bank, dram_buffer] : bank_to_buffer) {
+        auto new_dram_buffer = new DramBuffer(device, dram_buffer->dram_channel(), dram_buffer->size(), this->address_);
+        this->bank_to_buffer_.insert({dram_bank, new_dram_buffer});
+    }
+}
+
+void InterleavedDramBuffer::set_address() {
+    this->address_ = 0;
+    for (int dram_bank = 0; dram_bank < this->device_->num_dram_banks(); dram_bank++) {
+        this->address_ = std::max(this->address_, this->device_->banked_dram_manager_.at(dram_bank)->peak());
+    }
+}
+
+Buffer *InterleavedDramBuffer::clone() {
+    return new InterleavedDramBuffer(this->device_, this->size(), this->bank_to_buffer_);
 }
 
 uint32_t InterleavedDramBuffer::buffer_size(int dram_channel) const {
@@ -60,6 +77,16 @@ std::vector<tt_xy_pair> InterleavedDramBuffer::interleaved_noc_coordinates() con
     TT_ASSERT(not dram_noc_coordinates.empty());
     return dram_noc_coordinates;
 }
+
+void InterleavedDramBuffer::free() {
+    for (auto &[dram_bank, dram_buffer] : bank_to_buffer_) {
+        dram_buffer->free();
+    }
+    this->allocated_on_device_ = false;
+    bank_to_buffer_.clear();
+}
+
+InterleavedDramBuffer::~InterleavedDramBuffer() {}
 
 }  // namespace tt_metal
 

@@ -21,6 +21,7 @@ TT_METAL_TESTS += \
 		 tt_metal/tests/ops/test_tilize_conv_activation \
 		 tt_metal/tests/test_bmm \
 		 tt_metal/tests/tensors/test_host_device_loopback \
+		 tt_metal/tests/tensors/test_alloc_dealloc \
 		 tt_metal/tests/test_add_two_ints \
 		 tt_metal/tests/test_dram_to_l1_multicast \
 		 tt_metal/tests/test_dram_to_l1_multicast_loopback_src \
