@@ -113,7 +113,7 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         math_approx_mode
     );
 
-    reduce_op_utils::add_defines(reduce_compute_kernel, reduce_op);
+    reduce_op_utils::add_defines(reduce_compute_kernel, reduce_op, reduce_dim);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application

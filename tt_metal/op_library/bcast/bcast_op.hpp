@@ -48,7 +48,7 @@ const char* get_compute_name(BcastOpDim::Enum bcast_dim);
 
 const char* get_math_to_op_define(BcastOpMath::Enum bcast_math);
 
-void add_defines(ComputeKernel * bcast_kernel, BcastOpMath::Enum bcast_math);
+void add_defines(ComputeKernel * bcast_kernel, BcastOpDim::Enum bcast_dim, BcastOpMath::Enum bcast_math);
 
 BcastOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a);
 

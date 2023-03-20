@@ -9,6 +9,25 @@
 
 using namespace tt;
 
+struct BinaryOpType {
+    enum Enum { ADD = 0, SUB = 1, MUL = 2 };
+    static const vector<Enum> all() { return { ADD, SUB, MUL }; }
+};
+
+void add_defines(tt_metal::ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_type){
+    // TODO(AP): remove duplication
+    string op_name, op_code;
+    switch (op_type) {
+        case BinaryOpType::ADD: op_name = "add_tiles"; op_code = "0"; break;
+        case BinaryOpType::SUB: op_name = "sub_tiles"; op_code = "1"; break;
+        case BinaryOpType::MUL: op_name = "mul_tiles"; op_code = "2"; break;
+        default: TT_ASSERT(false && "Undefined op type");
+    }
+    eltwise_binary_kernel->add_define("ELTWISE_OP", op_name.c_str());
+    eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_code.c_str());
+}
+
+
 tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair &core, uint32_t single_tile_size) {
     tt_metal::Program *program = new tt_metal::Program();
 
@@ -84,6 +103,7 @@ tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair 
         math_approx_mode
     );
     eltwise_binary_kernel->add_define("ELTWISE_OP", "add_tiles");
+    add_defines(eltwise_binary_kernel, BinaryOpType::ADD);
 
     return program;
 }

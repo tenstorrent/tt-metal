@@ -2,7 +2,7 @@
 
 #include "llk_3c.h"
 
-NAMESPACE {
+namespace NAMESPACE {
 void MAIN {
 
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);

@@ -21,11 +21,23 @@ using namespace tt::tt_metal;
  * We need to copy the types of the compute kernel arguments to use them host-
  * side.
  */
-namespace eltwise_binary {
-struct compute_kernel_args_t {
-    std::int32_t per_core_block_cnt;
-    std::int32_t per_core_block_size;
+
+struct BinaryOpType {
+    enum Enum { ADD = 0, SUB = 1, MUL = 2 };
+    static const vector<Enum> all() { return { ADD, SUB, MUL }; }
 };
+
+void add_defines(ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_type){
+    // TODO(AP): remove duplication
+    string op_name, op_code;
+    switch (op_type) {
+        case BinaryOpType::ADD: op_name = "add_tiles"; op_code = "0"; break;
+        case BinaryOpType::SUB: op_name = "sub_tiles"; op_code = "1"; break;
+        case BinaryOpType::MUL: op_name = "mul_tiles"; op_code = "2"; break;
+        default: TT_ASSERT(false && "Undefined op type");
+    }
+    eltwise_binary_kernel->add_define("ELTWISE_OP", op_name.c_str());
+    eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_code.c_str());
 }
 
 int main(int argc, char **argv) {
@@ -151,7 +163,7 @@ int main(int argc, char **argv) {
             fp32_dest_acc_en,
             math_approx_mode
         );
-        eltwise_binary_kernel->add_define("ELTWISE_OP", "add_tiles");
+        add_defines(eltwise_binary_kernel, BinaryOpType::ADD);
 
         /*
         * Compile kernels used during execution
@@ -286,7 +298,7 @@ int main(int argc, char **argv) {
         /*
          * But now let's do an eltwise mul!
          */
-        eltwise_binary_kernel->add_define("ELTWISE_OP", "mul_tiles");
+        add_defines(eltwise_binary_kernel, BinaryOpType::MUL);
 
         /*
          * Compile kernels.

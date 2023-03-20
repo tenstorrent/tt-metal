@@ -54,7 +54,7 @@ if __name__ == "__main__":
             ref_padded = torch.zeros(pyt_got_back_rm.shape)
             ref_padded[:,:,0:1,0:1] = ref
 
-        allok = is_close(pyt_got_back_rm, ref_padded, rtol=0.07, atol=0.3)
+        allok = is_close(pyt_got_back_rm, ref_padded, rtol=0.07, atol=0.1)
         if not allok:
             print_diff_argmax(pyt_got_back_rm, ref_padded)
 

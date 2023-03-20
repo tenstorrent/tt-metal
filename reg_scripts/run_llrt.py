@@ -41,7 +41,7 @@ LLRT_TEST_ENTRIES = (
 def run_single_llrt_test(test_entry, timeout):
     run_test = partial(run_single_test, "llrt", timeout=timeout)
 
-    print(f"RUNNING LLRT TEST - {test_entry}")
+    print(f"\n\n=============== RUNNING LLRT TEST - {test_entry}")
 
     return run_test(test_entry)
 

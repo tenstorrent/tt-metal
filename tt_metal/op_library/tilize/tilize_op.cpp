@@ -125,7 +125,7 @@ Tensor tilize(const Tensor &a) {
     bool math_approx_mode = false;
     auto tilize_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/tilize.cpp",
+        "kernels/compute/3T/tilize",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,
@@ -136,7 +136,6 @@ Tensor tilize(const Tensor &a) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    bool skip_hlkc = false;
     tt_metal::CompileProgramNew(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -304,7 +303,6 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    bool skip_hlkc = false;
     tt_metal::CompileProgramNew(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
