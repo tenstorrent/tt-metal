@@ -100,11 +100,9 @@ LIBS_TO_BUILD = \
 	hlkc/api \
 	build_kernels_for_riscv \
 	device \
-	tt_gdb \
 	tensor \
 	llrt \
 	tt_metal \
-	tools/profiler \
 	tools \
 	python_env \
 	pymetal
@@ -118,8 +116,6 @@ endif
 # These must be in dependency order (enforces no circular deps)
 include tt_metal/common/common.mk
 include tt_metal/module.mk
-include tools/module.mk
-include tools/profiler/module.mk
 include python_env/module.mk
 include pymetal/module.mk
 

@@ -1,6 +1,6 @@
 # tt_gdb
 ## Enabling the breakpoint server
-To enable the breakpoint server, in your test, you must include `tt_gdb/tt_gdb.hpp`, and call it right before calling your test function.
+To enable the breakpoint server, in your test, you must include `tools/tt_gdb/tt_gdb.hpp`, and call it right before calling your test function.
 
 For example, below is a snippet of enabling tt_gdb in `test_run_datacopy`.
 
@@ -15,7 +15,7 @@ where cluster was defined earlier in the file.
 
 ## Installing python packages
 
-Within the tt_gdb directory,
+Within the ``tools/tt_gdb`` directory,
 ```bash
 pip3 install -r requirements.txt
 ```

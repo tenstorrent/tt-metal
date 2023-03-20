@@ -9,7 +9,7 @@ include $(TT_METAL_HOME)/tt_metal/device/module.mk
 include $(TT_METAL_HOME)/src/ckernels/module.mk
 include $(TT_METAL_HOME)/src/firmware/module.mk
 include $(TT_METAL_HOME)/hlkc/module.mk
-include $(TT_METAL_HOME)/tt_gdb/module.mk # needs to compiled after llrt and tt_metal
+include $(TT_METAL_HOME)/tools/module.mk
 include $(TT_METAL_HOME)/tensor/module.mk
 include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/module.mk
 include $(TT_METAL_HOME)/tt_metal/llrt/module.mk

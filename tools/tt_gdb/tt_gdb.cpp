@@ -314,7 +314,7 @@ void launch_core_map(PythonCoreMapInfo info) {
         shows certain debug info
     */
 
-    const string cmd = "python3 tt_gdb/tt_gdb_table.py " + disaggregate_python_core_map_info(info);
+    const string cmd = "python3 tools/tt_gdb/tt_gdb_table.py " + disaggregate_python_core_map_info(info);
 
     std::cout << "Launched python core view with this cmd: " << cmd << std::endl;
     int ret = system(cmd.c_str());
