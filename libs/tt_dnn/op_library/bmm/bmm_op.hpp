@@ -8,8 +8,8 @@ namespace tt_metal {
 
 // TODO: Accept parallelization
 struct BmmOpParallelizationStrategy {
-    enum Enum { MULTI_CORE = 0, MULTI_CORE_REUSE = 1, MULTI_CORE_REUSE_MCAST = 2, MULTI_CORE_REUSE_GENERALIZED = 3, MULTI_CORE_REUSE_MCAST_GENERALIZED = 4, SINGLE_CORE = 5 };
-    static const vector<Enum> all() { return { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, MULTI_CORE_REUSE_GENERALIZED, MULTI_CORE_REUSE_MCAST_GENERALIZED, SINGLE_CORE }; }
+    enum Enum { MULTI_CORE = 0, MULTI_CORE_REUSE = 1, MULTI_CORE_REUSE_MCAST = 2, MULTI_CORE_REUSE_GENERALIZED = 3, MULTI_CORE_REUSE_MCAST_GENERALIZED = 4, MULTI_CORE_REUSE_PADDING = 5, MULTI_CORE_REUSE_MCAST_PADDING = 6, SINGLE_CORE = 7 };
+    static const vector<Enum> all() { return { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, MULTI_CORE_REUSE_GENERALIZED, MULTI_CORE_REUSE_MCAST_GENERALIZED, MULTI_CORE_REUSE_PADDING, MULTI_CORE_REUSE_MCAST_PADDING, SINGLE_CORE }; }
 };
 
 Tensor matmul (const Tensor &A, const Tensor &B); // broadcasts batch, expects N=1 for now
@@ -28,6 +28,10 @@ Tensor matmul_multi_core_reuse_generalized  (const Tensor &A, const Tensor &B); 
 Tensor bmm_multi_core_reuse_generalized  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
 Tensor matmul_multi_core_reuse_mcast_generalized  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
 Tensor bmm_multi_core_reuse_mcast_generalized  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
+Tensor matmul_multi_core_reuse_padding (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
+Tensor bmm_multi_core_reuse_padding  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
+Tensor matmul_multi_core_reuse_mcast_padding (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
+Tensor bmm_multi_core_reuse_mcast_padding  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
 
 }  // namespace tt_metal
 

@@ -188,15 +188,29 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
     uint32_t num_cores_x = logical_grid_size.x;
     uint32_t num_cores_y = logical_grid_size.y;
 
-    // Get large matmul params
-    auto matmul_params = bmm_op_utils::get_large_matmul_params(Mt, Nt, num_cores_y, num_cores_x, in0_block_w);
-    uint32_t per_core_M = std::get<0>(matmul_params);
-    uint32_t per_core_N = std::get<1>(matmul_params);
-    uint32_t out_subblock_h = std::get<2>(matmul_params);
-    uint32_t out_subblock_w = std::get<3>(matmul_params);
+    bool use_general_large_matmul_params = false; // Hard force to use default 16, 16, 4, 2
+    uint32_t per_core_M, per_core_N, out_subblock_h, out_subblock_w;
+    uint32_t num_blocks_x, num_blocks_y;
+    if (use_general_large_matmul_params) {
+        // Get large matmul params
+        auto matmul_params = bmm_op_utils::get_large_matmul_params(Mt, Nt, num_cores_y, num_cores_x, in0_block_w);
+        per_core_M = std::get<0>(matmul_params);
+        per_core_N = std::get<1>(matmul_params);
+        out_subblock_h = std::get<2>(matmul_params);
+        out_subblock_w = std::get<3>(matmul_params);
+    }
+    else {
+        // out_subblock h/w doesn't matter
+        per_core_M = 16;
+        per_core_N = 16;
+
+        // Calculate number of blocks along x and y; tensor dims are padded up to 512
+        num_blocks_y = (Mt - 1) / per_core_M + 1;
+        num_blocks_x = (Nt - 1) / per_core_N + 1;
+    }
 
     // If no possible params, matmul_params will be (0, 0, 0, 0)
-    if (per_core_M > 0 and B == 1) {
+    if (use_general_large_matmul_params and per_core_M > 0 and B == 1) {
         tt_xy_pair core_range = get_core_range((Mt / per_core_M), (Nt / per_core_N), num_cores_y, num_cores_x);
         // If matmul params are (16, 16, 4, 2), use the default mcast op
         if (
@@ -209,10 +223,21 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
                 return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST;
             return BmmOpParallelizationStrategy::MULTI_CORE_REUSE;
         }
-        else
+        else if (core_range.y > 0)
+            return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED;
+        return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED;
+    }
+    else if (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y) {
+        tt_xy_pair core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
+        // If we don't need padding, use the default multi_core reuse/reuse_mcast
+        if (Mt % per_core_M == 0 and Nt % per_core_N == 0) {
             if (core_range.y > 0)
-                return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED;
-            return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED;
+                return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING;
+            return BmmOpParallelizationStrategy::MULTI_CORE_REUSE;
+        }
+        else if (core_range.y > 0)
+            return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING;
+        return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING;
     }
     else if (num_output_tiles > 1) {
         return BmmOpParallelizationStrategy::MULTI_CORE;
@@ -245,6 +270,12 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
             return matmul_multi_core_reuse_mcast_generalized(a, b);
             break;
+        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
+            return matmul_multi_core_reuse_padding(a, b);
+            break;
+        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
+            return matmul_multi_core_reuse_mcast_padding(a, b);
+            break;
         case BmmOpParallelizationStrategy::SINGLE_CORE:
         default:
             return matmul_single_core(a, b);
@@ -267,6 +298,12 @@ Tensor bmm(const Tensor& a, const Tensor& b) {
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
             return bmm_multi_core_reuse_mcast_generalized(a, b);
+            break;
+        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
+            return bmm_multi_core_reuse_padding(a, b);
+            break;
+        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
+            return bmm_multi_core_reuse_mcast_padding(a, b);
             break;
         case BmmOpParallelizationStrategy::SINGLE_CORE:
         default:
