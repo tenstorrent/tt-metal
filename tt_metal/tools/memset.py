@@ -7,7 +7,7 @@ import sys
 if __name__ == "__main__":
     assert "TT_METAL_HOME" in os.environ, "TT_METAL_HOME must be set"
     TT_METAL_HOME = os.environ["TT_METAL_HOME"]
-    executable = f"{TT_METAL_HOME}/build/obj/tools/memset"
+    executable = f"{TT_METAL_HOME}/build/obj/tt_metal/tools/memset"
     assert os.path.exists(executable), "You must compile the project first"
 
     command = executable.split(" ")

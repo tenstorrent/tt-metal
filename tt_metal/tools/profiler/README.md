@@ -67,7 +67,7 @@ Default markers are:
 3. Kernel end
 4. FW end
 
-The generated csv is `profile_log_device.csv` is saved under `tools/profiler/logs` by default.
+The generated csv is `profile_log_device.csv` is saved under `tt_metal/tools/profiler/logs` by default.
 
 Sample generated csv for a run on core 0,0:
 
@@ -89,7 +89,7 @@ Sample generated csv for a run on core 0,0:
 1. Set up the environment for running the plotter:
 
 ```
-cd tools/profiler/
+cd tt_metal/tools/profiler/
 python3 -m venv env
 source env/bin/activate
 pip install -r requirements.txt
@@ -97,13 +97,13 @@ pip install -r requirements.txt
 
 2. Run plotter webapp:
 ```
-cd tools/profiler/
+cd tt_metal/tools/profiler/
 ./process_device_log.py
 ```
 
 3. Navigate to `<machine IP>:8050` to view output chart.
 
-4. The following artifact will also be generated under the `tools/profiler/` folder:
+4. The following artifact will also be generated under the `tt_metal/tools/profiler/` folder:
     - `device_perf.html` contains the interactive time series plot
     - `device_stats.txt` contains the extended stats for the run
     - `device_arranged_timestamps.csv` contains all timestamps arranged by each row dedicated to cores

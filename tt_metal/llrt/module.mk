@@ -25,6 +25,6 @@ $(LLRT_LIB): $(COMMON_LIB) $(NETLIST_LIB) $(LLRT_OBJS) $(DEVICE_LIB)
 	@mkdir -p $(@D)
 	ar rcs -o $@ $(LLRT_OBJS)
 
-$(OBJDIR)/llrt/%.o: tt_metal/llrt/%.cpp
+$(OBJDIR)/tt_metal/llrt/%.o: tt_metal/llrt/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(LLRT_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(LLRT_INCLUDES) $(LLRT_DEFINES) -c -o $@ $<

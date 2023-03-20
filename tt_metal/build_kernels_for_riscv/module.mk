@@ -26,6 +26,6 @@ $(BUILD_KERNELS_FOR_RISCV_LIB): $(COMMON_LIB) $(BUILD_KERNELS_FOR_RISCV_OBJS)
 	@mkdir -p $(@D)
 	ar rcs -o $@ $(BUILD_KERNELS_FOR_RISCV_OBJS)
 
-$(OBJDIR)/build_kernels_for_riscv/%.o: tt_metal/build_kernels_for_riscv/%.cpp
+$(OBJDIR)/tt_metal/build_kernels_for_riscv/%.o: tt_metal/build_kernels_for_riscv/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(BUILD_KERNELS_FOR_RISCV_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(BUILD_KERNELS_FOR_RISCV_INCLUDES) $(BUILD_KERNELS_FOR_RISCV_DEFINES) -c -o $@ $<

@@ -34,6 +34,6 @@ $(COMMON_LIB): $(COMMON_OBJS)
 	@mkdir -p $(@D)
 	ar rcs -o $@ $(COMMON_OBJS)
 
-$(OBJDIR)/common/%.o: common/%.cpp
+$(OBJDIR)/tt_metal/common/%.o: tt_metal/common/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(COMMON_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(COMMON_INCLUDES) $(COMMON_DEFINES) -c -o $@ $(COMMON_LDFLAGS) $<

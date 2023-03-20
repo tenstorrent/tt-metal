@@ -46,6 +46,6 @@ $(TESTDIR)/build_kernels_for_riscv/tests/%: $(OBJDIR)/build_kernels_for_riscv/te
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(BUILD_KERNELS_FOR_RISCV_TEST_INCLUDES) -o $@ $^ $(LDFLAGS) $(BUILD_KERNELS_FOR_RISCV_TESTS_LDFLAGS)
 
 .PRECIOUS: $(OBJDIR)/build_kernels_for_riscv/tests/%.o
-$(OBJDIR)/build_kernels_for_riscv/tests/%.o: build_kernels_for_riscv/tests/%.cpp
+$(OBJDIR)/build_kernels_for_riscv/tests/%.o: tt_metal/build_kernels_for_riscv/tests/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(BUILD_KERNELS_FOR_RISCV_TEST_INCLUDES) -c -o $@ $<

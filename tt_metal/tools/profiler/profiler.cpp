@@ -13,7 +13,7 @@ Profiler::Profiler()
 {
     host_new_log = true;
     device_new_log = true;
-    output_dir = std::filesystem::path("tools/profiler/logs");
+    output_dir = std::filesystem::path("tt_metal/tools/profiler/logs");
     std::filesystem::create_directories(output_dir);
 }
 

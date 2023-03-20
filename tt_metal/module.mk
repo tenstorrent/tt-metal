@@ -9,7 +9,7 @@ include $(TT_METAL_HOME)/tt_metal/device/module.mk
 include $(TT_METAL_HOME)/src/ckernels/module.mk
 include $(TT_METAL_HOME)/src/firmware/module.mk
 include $(TT_METAL_HOME)/hlkc/module.mk
-include $(TT_METAL_HOME)/tools/module.mk
+include $(TT_METAL_HOME)/tt_metal/tools/module.mk
 include $(TT_METAL_HOME)/tensor/module.mk
 include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/module.mk
 include $(TT_METAL_HOME)/tt_metal/llrt/module.mk
@@ -79,6 +79,17 @@ $(TT_METAL_LIB): $(COMMON_LIB) $(TT_METAL_OBJS) $(TT_METAL_IMPL_LIB) $(LLRT_LIB)
 	@mkdir -p $(LIBDIR)
 	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(LDFLAGS) $(TT_METAL_LDFLAGS)
 
-$(OBJDIR)/tt_metal/%.o: tt_metal/%.cpp
+# TODO: rk: need to use a general way to do the following directives, note that using tt_metal/%.o will
+# include EVERYTHING under tt_metal, forcing the build step to use only build directives in this file
+# rather than the specialized ones in each submodule
+$(OBJDIR)/tt_metal/tt_metal.o: tt_metal/tt_metal.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TT_METAL_INCLUDES) $(TT_METAL_DEFINES) -c -o $@ $<
+
+$(OBJDIR)/tt_metal/op_library/%.o: tt_metal/op_library/%.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TT_METAL_INCLUDES) $(TT_METAL_DEFINES) -c -o $@ $<
+
+$(OBJDIR)/tt_metal/tensor/%.o: tt_metal/tensor/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TT_METAL_INCLUDES) $(TT_METAL_DEFINES) -c -o $@ $<
