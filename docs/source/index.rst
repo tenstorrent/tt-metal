@@ -7,33 +7,21 @@ Welcome to TT-Metal documentation!
 ==================================
 
 .. toctree::
-   :caption: Contents:
-
-.. toctree::
    :caption: Get Started
 
    get_started/installation
 
 .. toctree::
-   :caption: HARDWARE
+   :caption: TT-Metal
 
-   hardware/hardware
-
-.. toctree::
-   :caption: TT-Metal APIs
-
-   apis/host_apis2
-   apis/kernel_apis
-
-.. toctree::
-   :caption: Programming Examples
-
-   examples/dram_loopback
-   examples/eltwise_binary
+   apis/index
+   examples/index
+   tools/index
 
 .. toctree::
    :caption: Libraries
 
+   libraries/tensor
    libraries/tt_dnn
 
 .. toctree::
@@ -42,25 +30,9 @@ Welcome to TT-Metal documentation!
    frameworks/tt_dispatch
 
 .. toctree::
-   :caption: Debug Tools
-
-   debug/debug
-
-.. toctree::
-   :caption: Performance Measurement Tools
-
-   performance_measurement_tools/profiler.rst
-
-.. toctree::
-   :caption: Release
-
-   release/release_notes
-
-.. toctree::
    :caption: Developer Onboarding (Internal Devs Only)
 
    dev_onboarding/get_started
-
 
 Indices and tables
 ==================
