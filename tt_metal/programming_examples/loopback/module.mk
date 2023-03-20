@@ -1,4 +1,4 @@
-LOOPBACK_EXAMPLE_SRC = programming_examples/loopback/loopback.cpp
+LOOPBACK_EXAMPLE_SRC = $(TT_METAL_HOME)/tt_metal/programming_examples/loopback/loopback.cpp
 
 LOOPBACK_EXAMPLES_DEPS = $(PROGRAMMING_EXAMPLES_OBJDIR)/loopback.d
 

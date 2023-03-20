@@ -102,4 +102,4 @@ Devs<Getting started for devs>` for further instructions for developers.
 
     ::
 
-        ./build/test/programming_examples/basic_empty_program
+        ./build/programming_examples/basic_empty_program

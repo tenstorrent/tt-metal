@@ -1,4 +1,4 @@
-ELTWISE_BINARY_EXAMPLE_SRC = programming_examples/eltwise_binary/eltwise_binary.cpp
+ELTWISE_BINARY_EXAMPLE_SRC = $(TT_METAL_HOME)/tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp
 
 ELTWISE_BINARY_EXAMPLES_DEPS = $(PROGRAMMING_EXAMPLES_OBJDIR)/eltwise_binary.d
 

@@ -128,9 +128,6 @@ ifdef TT_METAL_ENV_IS_DEV
 include git_hooks/module.mk
 endif
 
-# Programming examples for external users
-include programming_examples/module.mk
-
 build: $(LIBS_TO_BUILD)
 
 clean_fw: src/firmware/clean

@@ -18,13 +18,13 @@ function count_loc {
 
 # core
 echo "Core code:"
-count_loc build_kernels_for_riscv tests
-count_loc common
+count_loc tt_metal/build_kernels_for_riscv tests
+count_loc tt_metal/common
 count_loc hlkc meow_hash
-count_loc hostdevcommon
+count_loc tt_metal/hostdevcommon
 count_loc tt_metal tests,op_library
 count_loc pymetal
-count_loc llrt tests
+count_loc tt_metal/llrt tests
 echo
 echo
 
@@ -48,9 +48,9 @@ echo
 # tests
 echo "Tests:"
 count_loc tt_metal/tests
-count_loc build_kernels_for_riscv/tests
-count_loc llrt/tests
-count_loc programming_examples
+count_loc tt_metal/build_kernels_for_riscv/tests
+count_loc tt_metal/llrt/tests
+count_loc tt_metal/programming_examples
 count_loc python_api_testing
 count_loc tensor # testing lib
 echo
@@ -81,7 +81,7 @@ echo
 
 # other stuff
 echo "third party:"
-count_loc third_party
+count_loc tt_metal/third_party
 echo
 echo
 

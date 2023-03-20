@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
 
         DataMovementKernel *dram_copy_kernel = CreateDataMovementKernel(
             program,
-            "programming_examples/loopback/kernels/loopback_dram_copy.cpp",
+            "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
             core,
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default

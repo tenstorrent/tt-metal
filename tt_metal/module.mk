@@ -14,6 +14,9 @@ include $(TT_METAL_HOME)/tensor/module.mk
 include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/module.mk
 include $(TT_METAL_HOME)/tt_metal/llrt/module.mk
 
+# Programming examples for external users
+include $(TT_METAL_HOME)/tt_metal/programming_examples/module.mk
+
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV
 include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/tests/module.mk
