@@ -52,6 +52,7 @@ docs/doxygen_build
 
 **.swp
 **.swo
+**.swn
 
 *profile_log*.csv
 device_perf.html
@@ -76,10 +77,6 @@ data/
 
 # exclude pytorch binaries
 *.pt
-
-# Remove stuff from before, get rid of later
-gpai/
-runme.sh
 
 # exclude Tensor generated heatmaps (debug)
 *.png
