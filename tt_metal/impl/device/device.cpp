@@ -11,9 +11,9 @@ void Device::initialize_cluster() {
     tt_device_params default_params;
     const std::string sdesc_file = get_soc_description_file(arch_, target_type_);
 
-    cluster_ = new tt_cluster();
-    cluster_->open_device(arch_, target_type_, target_device_ids, sdesc_file);
-    cluster_->start_device(default_params);
+    this->cluster_ = new tt_cluster();
+    this->cluster_->open_device(arch_, target_type_, target_device_ids, sdesc_file);
+    this->cluster_->start_device(default_params);
 
     llrt::utils::log_current_ai_clk(cluster_);
     llrt::assert_reset_for_all_chips(cluster_);
@@ -23,10 +23,10 @@ void Device::initialize_banked_dram_manager() {
     TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
 
     for (int dram_bank = 0; dram_bank < num_dram_banks(); dram_bank++) {
-        banked_dram_manager_.insert(
+        this->banked_dram_manager_.insert(
             {
                 dram_bank,
-                new MemoryManager(cluster_->get_soc_desc(pcie_slot_).dram_bank_size)
+                new MemoryManager(this->cluster_->get_soc_desc(this->pcie_slot_).dram_bank_size)
             }
         );
     }
@@ -35,6 +35,7 @@ void Device::initialize_banked_dram_manager() {
 bool Device::initialize() {
     initialize_cluster();
     initialize_banked_dram_manager();
+    this->closed_ = false;
     return true;
 }
 
@@ -42,10 +43,21 @@ bool Device::close() {
     llrt::assert_reset_for_all_chips(cluster_);
     cluster_->close_device();
     cluster_ = nullptr;
-    for (auto const& [dram_bank, memory_manager] : banked_dram_manager_) {
+    for (auto const& [dram_bank, memory_manager] : this->banked_dram_manager_) {
         memory_manager->clear();
     }
+    this->closed_ = true;
     return true;
+}
+
+Device::~Device() {
+    if (this->cluster_is_initialized()) {
+        this->close();
+    }
+    for (auto const& [dram_bank, memory_manager] : this->banked_dram_manager_) {
+        delete memory_manager;
+    }
+    delete this->cluster_;
 }
 
 tt_cluster *Device::cluster() const {
@@ -59,14 +71,14 @@ int Device::num_dram_banks() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return cluster_->get_soc_desc(pcie_slot_).get_num_dram_channels();
+    return this->cluster_->get_soc_desc(pcie_slot_).get_num_dram_channels();
 }
 
 tt_xy_pair Device::logical_grid_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return cluster_->get_soc_desc(pcie_slot_).worker_grid_size;
+    return this->cluster_->get_soc_desc(pcie_slot_).worker_grid_size;
 }
 
 tt_xy_pair Device::worker_core_from_logical_core(const tt_xy_pair &logical_core) const {
@@ -91,8 +103,8 @@ uint32_t Device::allocate_buffer(int dram_channel, uint32_t size_in_bytes) {
     if (not is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    auto memory_manager = banked_dram_manager_.at(dram_channel);
-    auto buffer_address = memory_manager->malloc(size_in_bytes);
+    auto memory_manager = this->banked_dram_manager_.at(dram_channel);
+    auto buffer_address = memory_manager->allocate(size_in_bytes);
     return buffer_address;
 }
 
@@ -100,10 +112,22 @@ uint32_t Device::allocate_buffer(int dram_channel, uint32_t size_in_bytes, uint3
     if (not is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    auto memory_manager = banked_dram_manager_.at(dram_channel);
+    auto memory_manager = this->banked_dram_manager_.at(dram_channel);
     auto buffer_address = memory_manager->reserve(address, size_in_bytes);
     TT_ASSERT(buffer_address == address);
     return buffer_address;
+}
+
+void Device::free_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address) {
+    if (this->closed_) {
+        return;
+    }
+
+    if (not is_initialized()) {
+        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
+    }
+    auto memory_manager = this->banked_dram_manager_.at(dram_channel);
+    memory_manager->deallocate(address);
 }
 
 }  // namespace tt_metal

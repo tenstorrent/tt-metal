@@ -330,6 +330,9 @@ bool run_chained_sfpu_test(int chain_length) {
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
         }
 
+        DeallocateBuffer(src_dram_buffer);
+        DeallocateBuffer(dst_dram_buffer);
+
         pass &= tt_metal::CloseDevice(device);
         delete device;
 

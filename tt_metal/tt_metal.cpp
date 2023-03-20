@@ -186,8 +186,8 @@ ComputeKernel *CreateComputeKernel(
 }
 
 DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes) {
-    uint32_t buffer_address = device->allocate_buffer(dram_channel, size_in_bytes);
-    DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes, buffer_address);
+    TT_ASSERT(dram_channel >= 0 and dram_channel <= 7, "Valid range for DRAM channel is [0, 7]");
+    DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes);
     return buffer;
 }
 
@@ -206,6 +206,10 @@ L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &cor
     L1Buffer *l1_buffer = new L1Buffer(device, core, size_in_bytes, address);
     program->add_l1_buffer(l1_buffer);
     return l1_buffer;
+}
+
+void DeallocateBuffer(Buffer *buffer) {
+    buffer->free();
 }
 
 CircularBuffer *CreateCircularBuffer(

@@ -394,6 +394,17 @@ InterleavedDramBuffer *CreateInterleavedDramBuffer(
 L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address);
 
 /**
+*  Deallocates buffer from device by marking its memory as free.
+*
+*  Return value: void
+*
+*  | Argument | Description                          | Type     | Valid Range | Required |
+*  |----------|--------------------------------------|----------|-------------|----------|
+*  | buffer   | The buffer to deallocate from device | Buffer * |             | Yes      |
+*/
+void DeallocateBuffer(Buffer *buffer);
+
+/**
  * Creates a Circular Buffer (CB) in L1 memory and adds it to the program.
  *
  * Return value: CircularBuffer *

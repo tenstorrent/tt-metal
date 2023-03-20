@@ -20,7 +20,9 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/ops/test_tilize_zero_padding_channels_last \
 		 tests/tt_metal/ops/test_tilize_conv_activation \
 		 tests/tt_metal/test_bmm \
+		 tests/tt_metal/tensors/test_copy_and_move \
 		 tests/tt_metal/tensors/test_host_device_loopback \
+		 tests/tt_metal/memory_manager/test_free_list_mem_manager \
 		 tests/tt_metal/test_add_two_ints \
 		 tests/tt_metal/test_dram_to_l1_multicast \
 		 tests/tt_metal/test_dram_to_l1_multicast_loopback_src \

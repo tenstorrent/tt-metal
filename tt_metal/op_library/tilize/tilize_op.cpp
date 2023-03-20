@@ -163,7 +163,6 @@ Tensor tilize(const Tensor &a) {
 
     delete program;
 
-    // output does not hold any data, contains pointer to buffer on device with the data
     return output;
 }
 

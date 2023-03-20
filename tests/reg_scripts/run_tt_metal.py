@@ -76,7 +76,12 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/ops/test_tilize_conv_activation", "ops/test_tilize_conv_activation"),
 
     TestEntry("tt_metal/tests/tensors/test_host_device_loopback", "tensors/test_host_device_loopback"),
+    TestEntry("tt_metal/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
     TestEntry("tt_metal/tests/test_pipeline_across_rows", "test_pipeline_across_rows"),
+
+    # Mem manager Tests
+    TestEntry("tt_metal/tests/memory_manager/test_free_list_mem_manager", "memory_manager/test_free_list_mem_manager"),
+
     # DTX Tests
     TestEntry("tt_metal/tests/dtx/tensor", "dtx/tensor"),
     TestEntry("tt_metal/tests/dtx/unit_tests/", "dtx/unit_tests"),
