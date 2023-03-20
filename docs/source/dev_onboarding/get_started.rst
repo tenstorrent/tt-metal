@@ -29,9 +29,9 @@ To build the Python environment, library, and git hook scripts,
 such as using ``pyenv`` or ``conda``. Ultimately, the environment provider
 doesn't matter. We chose to go with ``venv`` with this project because it's
 what we had on hand. As long as you can manage a consistent Python environment
-with the dependencies in ``python_env/requirements.txt``, the Python setup
-doesn't really matter. Please refer to ``python_env/module.mk`` for further
-technical details.
+with the dependencies in ``tt_metal/python_env/requirements.txt``, the Python
+setup doesn't really matter. Please refer to ``tt_metal/python_env/module.mk``
+for further technical details.
 
 Additional Git setup
 --------------------

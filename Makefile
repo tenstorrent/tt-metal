@@ -116,7 +116,6 @@ endif
 # These must be in dependency order (enforces no circular deps)
 include tt_metal/common/common.mk
 include tt_metal/module.mk
-include python_env/module.mk
 include pymetal/module.mk
 
 # only include these modules if we're in development

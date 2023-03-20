@@ -1,3 +1,3 @@
--r ../python_env/requirements-dev.txt
+-r ../tt_metal/python_env/requirements-dev.txt
 ansible==6.0.0
 ansible-lint==6.7.0

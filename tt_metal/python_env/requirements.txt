@@ -2,4 +2,4 @@ wheel==0.37.1
 pyyaml==5.3.1
 
 # For docs
--r ../docs/requirements-docs.txt
+-r ../../docs/requirements-docs.txt
