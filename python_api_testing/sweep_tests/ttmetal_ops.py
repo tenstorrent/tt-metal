@@ -309,7 +309,7 @@ def matmul(pcie_slot, x, y):
     return output
 
 
-def bmm(x, y, pcie_slot, profile_device, *args, **kwargs):
+def bmm(pcie_slot, x, y):
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, pcie_slot)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()
@@ -329,7 +329,7 @@ def bmm(x, y, pcie_slot, profile_device, *args, **kwargs):
         device,
     )
 
-    t2 = ttm.tensor.bmm(t0, t1, profile_device)
+    t2 = ttm.tensor.bmm(t0, t1)
 
     output = untilize(torch.Tensor(t2.to(host).data()).reshape(t2.shape()))
     ttm.device.CloseDevice(device)
