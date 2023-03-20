@@ -11,6 +11,7 @@ test-list:
       interval: 3200
       num-shapes: 2
       method: matmul
+      bcast-batch: True
     datagen:
       function: gen_rand
       args:

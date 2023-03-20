@@ -6,6 +6,7 @@ supported_dtypes = {
     "bfloat16": torch.bfloat16,
 }
 
+
 # Wrapper around gen functions to include casting
 def gen_func_with_cast(gen_func, dtype):
     return lambda size: gen_func(size).to(dtype)
@@ -59,7 +60,6 @@ def gen_randint(size, low=0, high=2):
 
 
 def gen_scaled_dirichlet_along_dim(size, start=1, step=1, max=1, dim=-1):
-
     assert start <= max, "start must be <= max"
 
     numel = torch.Size(size).numel()
@@ -96,7 +96,6 @@ def gen_scaled_dirichlet_along_dim(size, start=1, step=1, max=1, dim=-1):
 
 
 def gen_scaled_dirichlet_per_tile(size, start=1, step=1, max=1):
-
     assert start <= max, "start must be <= max"
 
     numel = torch.Size(size).numel()

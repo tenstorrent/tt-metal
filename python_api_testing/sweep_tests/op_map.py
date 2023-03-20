@@ -62,6 +62,10 @@ op_map = {
         "ttmetal_op": ttmetal_ops.matmul,
         "pytorch_op": pytorch_ops.matmul,
     },
+    "bmm": {
+        "ttmetal_op": ttmetal_ops.bmm,
+        "pytorch_op": pytorch_ops.matmul,
+    },
     # Broadcast
     "bcast-add-h": {
         "ttmetal_op": ttmetal_ops.bcast_add_h,

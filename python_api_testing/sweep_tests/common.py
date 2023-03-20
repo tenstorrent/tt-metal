@@ -115,6 +115,7 @@ def shapes_and_datagen(shape_dict, datagen_dict):
 
         method = shape_dict.get("method", "default")
         num_samples = shape_dict.get("num-samples", "all")
+        bcast_batch = shape_dict.get("bcast-batch", False)
 
         if method == "default":
             # Sweep across start-shape to end-shape
@@ -170,6 +171,8 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                     bcast_shape = [b, c, h, 1]
                 elif method == "bcast_hw":
                     bcast_shape = [b, c, 1, 1]
+                if bcast_batch:
+                    bcast_shape[:-2] = [1] * len(bcast_shape[:-2])
                 yield [shape, bcast_shape], datagen_funcs
 
         elif method == "matmul":
@@ -210,6 +213,8 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                 b, c, h, w, outer_dim = sweeps_generator[idx]
                 shape1 = [b, c, h, w]
                 shape2 = [b, c, w, outer_dim]
+                if bcast_batch:
+                    shape2[:-2] = [1] * len(shape2[:-2])
                 yield [shape1, shape2], datagen_funcs
 
         else:
