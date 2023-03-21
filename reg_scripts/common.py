@@ -62,7 +62,7 @@ def get_env_dict_for_fw_tests():
 
 
 def default_build_full_path_to_test(namespace, executable_name, extra_params):
-    return pathlib.Path(f"{get_git_home_dir_str()}/build/test/{namespace}/tests/{executable_name}")
+    return pathlib.Path(f"{get_git_home_dir_str()}/build/test/{namespace}/{executable_name}")
 
 
 def build_executable_command_for_test(namespace: str, test_entry: TestEntry, timeout, build_full_path_to_test):

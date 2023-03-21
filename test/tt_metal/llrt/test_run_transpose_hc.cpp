@@ -11,8 +11,8 @@
 
 #include "llrt.hpp"
 #include "common/bfloat16.hpp"
-#include "llrt/tests/test_libs/debug_mailbox.hpp"
-#include "llrt/tests/test_libs/tiles.hpp"
+#include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
+#include "tt_metal/llrt/test_libs/tiles.hpp"
 
 #include "llrt/tt_debug_print_server.hpp"
 

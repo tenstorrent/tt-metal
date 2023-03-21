@@ -5,7 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "test_gold_impls.hpp"
-#include "llrt/tests/test_libs/debug_mailbox.hpp"
+#include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
 
 using namespace tt;
 

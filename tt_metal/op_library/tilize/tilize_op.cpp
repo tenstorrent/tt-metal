@@ -6,7 +6,6 @@
 #include "tt_metal/impl/dtx/dtx.hpp"
 #include "tt_metal/impl/dtx/dtx_passes.hpp"
 
-#include "llrt/tests/test_libs/debug_mailbox.hpp"
 #include "llrt/tt_debug_print_server.hpp"
 using namespace tt::constants;
 

@@ -6,7 +6,7 @@
 #include "common/bfloat16.hpp"
 #include "tensor/tensor.hpp"
 #include "test_tiles.hpp"
-#include "llrt/tests/test_libs/debug_mailbox.hpp"
+#include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
