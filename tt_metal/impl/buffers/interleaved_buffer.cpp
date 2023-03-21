@@ -86,11 +86,7 @@ void InterleavedDramBuffer::free() {
     bank_to_buffer_.clear();
 }
 
-InterleavedDramBuffer::~InterleavedDramBuffer() {
-    if (this->allocated_on_device_) {
-        this->free();
-    }
-}
+InterleavedDramBuffer::~InterleavedDramBuffer() {}
 
 }  // namespace tt_metal
 
