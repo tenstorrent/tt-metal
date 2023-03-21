@@ -33,9 +33,9 @@ void kernel_main() {
     // Keep track of end of output row and end of output batch
     uint32_t outbatch = output_tile_start_id % MtNt;
     uint32_t itileB_batch = output_tile_start_id % Nt;
-    uint32_t itileB = itileB_batch; // input1 col = output col if we aren't bcasting
+    uint32_t itileB = itileB_batch; // input1 col = output col if we are bcasting
     if (bcast_B == 0)
-        itileB += output_tile_start_id / MtNt * KtNt; // offset into correct batch if bcasting
+        itileB += output_tile_start_id / MtNt * KtNt; // offset into correct batch if not bcasting
 
 
     const InterleavedPow2AddrGen s0 = {

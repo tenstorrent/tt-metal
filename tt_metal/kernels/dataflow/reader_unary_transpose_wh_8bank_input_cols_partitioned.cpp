@@ -8,8 +8,8 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(5);
     uint32_t Wt = get_arg_val<uint32_t>(6);
     uint32_t HtWt = get_arg_val<uint32_t>(7);
-    uint32_t start_id = get_arg_val<uint32_t>(8);
-    uint32_t num_cols = get_arg_val<uint32_t>(9); // number of columns to read (read sequentially in a batch, zigzag through batches)
+    uint32_t start_id = get_arg_val<uint32_t>(8); // Start id in column major order
+    uint32_t num_tiles = get_arg_val<uint32_t>(9); // number of tiles to read in column major order
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -17,28 +17,38 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    uint32_t i_tile = start_id;
     const InterleavedPow2AddrGen s = {
         .bank_base_address = src_addr,
         .num_used_banks = 8,
         .log_base_2_of_num_used_banks = 3,
         .log_base_2_of_bank_unit_size = 11
     };
+    uint32_t h = start_id % Ht;
+    uint32_t w = start_id / Ht % Wt;
+    uint32_t nc = start_id / HtWt;
+    uint32_t i_tile = nc * HtWt + w + h * Wt;
 
     // this reader will read a NHW tensor in NWH order
-    for (uint32_t w = 0; w<num_cols; w++) {
-        i_tile = i_tile / Wt * HtWt + i_tile % Wt;
-        for (uint32_t h = 0; h<Ht; h++) {
-            uint64_t src_noc_addr = get_noc_addr(i_tile, s);
-            cb_reserve_back(cb_id_in0, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
-            noc_async_read_barrier();
+    for (uint32_t i = 0; i < num_tiles; i++){
+        uint64_t src_noc_addr = get_noc_addr(i_tile, s);
+        cb_reserve_back(cb_id_in0, onetile);
+        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
+        noc_async_read_barrier();
 
-            cb_push_back(cb_id_in0, onetile);
-            i_tile += Wt; // stride in H
-        } // Ht
-        i_tile -= HtWt; // go back to H=0
-        i_tile += 1; // increment Wt
-    } // Wt
+        cb_push_back(cb_id_in0, onetile);
+        i_tile += Wt; // stride in H
+        h += 1;
+        if (h == Ht) {
+            h = 0;
+            i_tile += 1;
+            w += 1;
+            if (w == Wt) {
+                w = 0;
+                i_tile -= Wt; // Start of next batch
+            } else {
+                i_tile -= HtWt; // Start of next col
+            }
+        }
+    }
 }
