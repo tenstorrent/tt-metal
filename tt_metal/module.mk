@@ -10,7 +10,6 @@ include $(TT_METAL_HOME)/src/ckernels/module.mk
 include $(TT_METAL_HOME)/src/firmware/module.mk
 include $(TT_METAL_HOME)/hlkc/module.mk
 include $(TT_METAL_HOME)/tt_metal/tools/module.mk
-include $(TT_METAL_HOME)/tensor/module.mk
 include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/module.mk
 include $(TT_METAL_HOME)/tt_metal/llrt/module.mk
 include $(TT_METAL_HOME)/tt_metal/python_env/module.mk
@@ -26,7 +25,6 @@ include $(TT_METAL_HOME)/tt_metal/tests/module.mk
 endif
 
 TT_METAL_LIB = $(LIBDIR)/libtt_metal.a
-TT_BUILD_LIB = $(LIBDIR)/libbuild_kernels_for_riscv.a
 TT_METAL_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
 TT_METAL_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal -I$(TT_METAL_HOME)/.
 TT_METAL_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal_impl
@@ -76,7 +74,7 @@ TT_METAL_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 tt_metal: $(TT_METAL_LIB)
 
-$(TT_METAL_LIB): $(COMMON_LIB) $(TT_METAL_OBJS) $(TT_METAL_IMPL_LIB) $(LLRT_LIB) $(TT_BUILD_LIB)
+$(TT_METAL_LIB): $(COMMON_LIB) $(TT_METAL_OBJS) $(TT_METAL_IMPL_LIB) $(LLRT_LIB) $(BUILD_KERNELS_FOR_RISCV_LIB)
 	@mkdir -p $(LIBDIR)
 	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(LDFLAGS) $(TT_METAL_LDFLAGS)
 

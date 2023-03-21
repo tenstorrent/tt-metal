@@ -100,7 +100,6 @@ LIBS_TO_BUILD = \
 	hlkc/api \
 	build_kernels_for_riscv \
 	device \
-	tensor \
 	llrt \
 	tt_metal \
 	tools \
