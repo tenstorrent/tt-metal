@@ -248,6 +248,8 @@ void generate_binaries_for_triscs(tt::build_kernel_for_riscv_options_t* build_ke
 void generate_binaries_for_triscs_new(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const string &out_dir_path, const string& arch_name, bool parallel, std::vector<uint32_t> kernel_compile_time_args) {
 
     string root_dir = std::getenv("TT_METAL_HOME");
+    auto old_cwd = fs::current_path(); //getting path
+    fs::current_path(root_dir); //setting path
 
     // Right now, to support compiling multiple threads, I am overloading
     // the concept of hlk filename to point to a directory with llks
@@ -324,6 +326,8 @@ void generate_binaries_for_triscs_new(tt::build_kernel_for_riscv_options_t* buil
     for (int thread_id = 0; thread_id < 3; thread_id++) {
         ths[thread_id].join();
     }
+
+    fs::current_path(old_cwd); // restore cwd
 }
 
 void compile_ckernels_for_all_triscs(string arch_name, string root, string chlkc_src_dir, vector<uint32_t> kernel_compile_time_args) {

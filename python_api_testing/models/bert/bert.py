@@ -88,10 +88,14 @@ def run_bert_question_and_answering_inference():
     start_logit_match = (abs(tt_start_logits - pytorch_start_logits) < 0.1).all().item()
     if not start_logit_match:
         print("Start logits don't match")
+    else:
+        print("Start logits match")
 
     end_logit_match = (abs(tt_end_logits - pytorch_end_logits) < 0.1).all().item()
     if not end_logit_match:
         print("End logits don't match")
+    else:
+        print("End logits match")
 
     assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
@@ -99,8 +103,8 @@ if __name__ == "__main__":
     # TODO(AP): currently necessary, otherwise get bit discrepancies
     torch.manual_seed(1234)
     # Initialize the device
-    enable_binary_cache()
-    enable_compile_cache()
+    #enable_binary_cache()
+    #enable_compile_cache()
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()

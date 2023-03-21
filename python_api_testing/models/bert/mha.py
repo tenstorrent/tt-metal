@@ -174,8 +174,8 @@ def run_mha_inference():
     assert np.allclose(pytorch_out.detach().numpy(), tt_out1, 1e-5, 0.17)
 
 if __name__ == "__main__":
-    enable_binary_cache()
-    enable_compile_cache()
+    #enable_binary_cache()
+    #enable_compile_cache()
     # Initialize the device
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
