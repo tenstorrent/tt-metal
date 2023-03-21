@@ -5,7 +5,6 @@
 #include "vptr_uint.h"
 
 #ifndef CPU_JAWBRIDGE
-#include "ckernel_pcbuf.h"
 #include <stdarg.h>
 #endif
 
@@ -15,19 +14,6 @@
 inline void clobber_all_memory(void)
 {
   asm volatile ("" ::: "memory");
-}
-
-/**
- * Add noops and tell compiler to do fresh reads from memory
- */
-inline void software_mem_barrier()
-{
-#ifdef TENSIX_FIRMWARE
-  asm volatile("": : :"memory");
-  asm volatile("ADDI x0, x0, 0");
-  asm volatile("ADDI x0, x0, 0");
-  asm volatile("ADDI x0, x0, 0");
-#endif
 }
 
 /**
@@ -64,20 +50,6 @@ inline void ex_push_insn(vptr_uint  instrn_buffer, uint instrn1, uint instrn2)
   instrn_buffer[0] = instrn1;
   instrn_buffer[0] = instrn2;
 }
-
-/**
- * Transfer program flow from Tensix to RISCV.
- *
- * The tensix core will acknowledge by copying the instruction to the mailbox.
- * Otherwise the tensix core state is unaffected.
- */
-#ifdef CPU_JAWBRIDGE
-inline void ex_sync_instrn(vptr_uint  instrn_buffer, vptr_mailbox mailbox)
-{
-  ex_push_insn(instrn_buffer, INSTRN_TX_CTRL_TO_RISC(0));
-  ex_sync_kernel(mailbox);
-}
-#endif
 
 inline void ex_pacr(uint addr_mode, uint zero_write, uint flush, uint last, vptr_uint  instrn_buf)
 {
@@ -131,14 +103,6 @@ inline void ex_mova2d(uint addr_mode, uint srca_transp, uint dest_index, uint sr
   instrn = 0x0 | (addr_mode << 15) | (srca_transp << 12) | (dest_index << 4) | (srca_index);
   ex_push_insn(instrn_buf, INSTRN_MOVA2D(instrn));
 }
-
-inline void ex_stallwait(uint wait_res, uint stall_res, vptr_uint  instrn_buf)
-{
-  uint instrn;
-  instrn = 0x0 | (stall_res << 12) | (wait_res);
-  ex_push_insn(instrn_buf, INSTRN_STALLWAIT(instrn));
-}
-
 
 inline void ex_setc16(uint addr, uint val, vptr_uint  instrn_buf)
 {
@@ -290,30 +254,6 @@ inline void ex_set_base(cnt_id_t cntset_ind, uint chan_ind, uint base, vptr_uint
 inline void ex_setpkedgof(uint edge_mask, vptr_uint  instrn_buf)
 {
   ex_push_insn(instrn_buf, INSTRN_SETPKEDGEOF(edge_mask));
-}
-
-// Grayskull and later - pass number of iterations, and optional parameters
-inline void execute_kernel(uint kernel_id, vptr_pc_buf pc_buf, uint num_iterations, uint num_extra_params = 0, ...)
-{
-    clobber_all_memory();
-    pc_buf[0] = ckernel::get_pc_buf_cmd(kernel_id, num_iterations, num_extra_params);
-
-    if (num_extra_params == 0)
-      return;
-
-    va_list valist;
-    va_start(valist, num_extra_params);
-    for (uint i = 0; i < num_extra_params; i++) {
-       pc_buf[0] = va_arg(valist, uint);
-     }
-     va_end(valist);
-
-}
-
-inline void execute_kernel_cmd(uint kernel_id, vptr_pc_buf pc_buf, uint command_addr)
-{
-    clobber_all_memory();
-    pc_buf[0] = ckernel::get_pc_buf_cmd(kernel_id, command_addr);
 }
 
 inline void execute_kernel_loop(uint kernel_count, uint loop_count, vptr_pc_buf pc_buf)

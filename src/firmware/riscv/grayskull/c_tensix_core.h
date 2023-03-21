@@ -51,65 +51,21 @@ public:
         return DEBUG_MAILBOX;
     }
 
-    static volatile uint32_t &cq_mailbox() { extern volatile std::uint32_t CQ_MAILBOX; return CQ_MAILBOX; }
-
-    static volatile uint32_t *get_io_queue_pointer_base(uint32_t base_addr, uint32_t id)
-    {
-      return reinterpret_cast<volatile uint32_t *>(base_addr) + (id << 2) + id;
-    }
-
-    // These are used to track dynamic allocation/deallocations for perf analysis. They don't do anything by default, but writes to perf scratch area could be added.
-    static void record_dynamic_allocation(int buffer_id, int loc, std::intptr_t ptr, uint32_t size) {}
-    static void record_dynamic_deallocation(int buffer_id) {}
-
-    //static void ex_sync_kernel(vptr_mailbox mailbox) { ::ex_sync_kernel(mailbox); }
-    //static void ex_sync_instrn(vptr_uint instrn_buf, vptr_mailbox mailbox) { ::ex_sync_instrn(instrn_buf, mailbox); }
-    static void ex_stallwait(vptr_uint instrn_buf, uint wait_res, uint stall_res ) { :: ex_stallwait(wait_res, stall_res, instrn_buf); }
     static void ex_setc16(uint addr, uint val, vptr_uint instrn_buf) { ::ex_setc16(addr, val, instrn_buf); }
-    static void ex_instrn_wrcfg(uint gpr, uint cfg_addr, vptr_uint instrn_buf) { ::ex_instrn_wrcfg(gpr, cfg_addr, instrn_buf); }
-    static void ex_instrn_rdcfg(uint gpr, uint cfg_addr, vptr_uint instrn_buf) { ::ex_instrn_rdcfg(gpr, cfg_addr, instrn_buf); }
-    static void ex_rmw_cfg_gpr(uint state_id, uint cfg_addr32, uint cfg_shamt, uint32_t cfg_mask, uint gpr_index)
-      { ::ex_rmw_cfg_gpr(cfg_addr32, cfg_shamt, cfg_mask, gpr_index, regfile_base(), cfg_regs_base(state_id)); }
     static void ex_rmw_cfg(uint8_t state_id, uint cfg_addr32, uint cfg_shamt, uint32_t cfg_mask, uint wr_val)
       { ::ex_rmw_cfg(cfg_addr32, cfg_shamt, cfg_mask, wr_val, cfg_regs_base(state_id)); }
 
     static void ex_nop(vptr_uint instrn_buf) { :: ex_nop(instrn_buf); }
 
-    //static void ex_set_stride_prepacked(cnt_id_t cntset_ind, uint chan_ind, uint xy_stride, uint zw_stride, vptr_uint instrn_buf);
-    static void ex_setadc(cnt_id_t cnt_ind, uint chan_ind, uint dim_ind, uint val, vptr_uint instrn_buf);
-    static void ex_setpkedgof(uint edge_mask, vptr_uint instrn_buf);
-    static void ex_clear_dvalid(uint clear_ab, uint reset, vptr_uint instrn_buffer);
     static void ex_sem_init(uint semaphore, uint max_value, uint init_value, vptr_uint instrn_buffer);
     static void ex_zeroacc(vptr_uint instrn_buf, uint clear_mode = 3, uint dest_register = 0, uint addressing_mode = 0);
     static void ex_encc(vptr_uint instrn_buf);
     static void ex_load_const(vptr_uint instrn_buf);
 
-    static void ex_instrn(vptr_uint  instrn_buffer, unsigned int instruction) { ::execute_instruction(instrn_buffer, instruction); }
-    static void thcon_load_ind(vptr_uint instrn_buffer, std::uint32_t base_addr_index, std::uint32_t dst_data_index, std::uint32_t offset_index, std::uint32_t autoinc, std::uint32_t size);
-    static void thcon_incr_get_ptr(vptr_uint instrn_buffer, std::uint32_t mem_addr_index, std::uint32_t data_reg_index, std::uint32_t incr_val, std::uint32_t wrap_val, bool rd_wr, bool l0_l1_sel);
-    static void thcon_incr_get_ptr_noinc(vptr_uint instrn_buffer, std::uint32_t mem_addr_index, std::uint32_t data_reg_index, std::uint32_t incr_val, std::uint32_t wrap_val, bool rd_wr, bool l0_l1_sel);
-    static void thcon_reg_to_flops(vptr_uint instrn_buffer, uint32_t mode_32b_16B, uint32_t reg_index, uint32_t flop_index, uint32_t target_select=0, uint32_t byte_offset=0);
-    static void thcon_set_descriptor(vptr_uint instrn_buf,uint reg_index, uint unpacker_id);
-
-    static uint read_packed_size(uint thread); // Return size in bytes of last packer output for a thread.
-    static uint read_accumulated_packed_size(uint thread); // Return accumulated size of tiles processed by the packer
-
     static uint wait(int cycles);
 
     static uint64_t read_wall_clock();
     static uint32_t read_wall_clock_l();
-
-    template <class T, std::enable_if_t<std::is_pointer<T>::value, int> = 0>
-    static T l1_cast(uint32_t l1_offset)
-    {
-        return reinterpret_cast<T>(l1_offset);
-    }
-
-    template <class T>
-    static std::uint32_t l1_cast(T *l1_pointer)
-    {
-        return reinterpret_cast<uint32_t>(l1_pointer);
-    }
 
     static std::uint32_t l1_size() { return L1_SIZE; }
 
@@ -125,29 +81,10 @@ public:
     static inline uint32_t read_stream_register(uint32_t stream_id, uint32_t index);
     static inline uint32_t read_stream_register_field(uint32_t stream_id, uint32_t index, uint32_t shift, uint32_t width);
 
-    static inline void ExtraKernelParams(uint /*thread_id*/, uint /*kernel_id*/, std::initializer_list<uint32_t> /*params*/) { }
-
-    static inline void check_l1_address_range(std::uint32_t byte_addr, std::size_t length);
-
 private:
     static inline volatile uint32_t* noc_stream_registers(uint32_t stream_id);
 };
 
-
-/*inline void c_tensix_core::ex_set_stride_prepacked(cnt_id_t cntset_ind, uint chan_ind, uint xy_stride, uint zw_stride, volatile uint * instrn_buf)
-{
-    ::ex_set_stride_prepacked(cntset_ind, chan_ind, xy_stride, zw_stride, instrn_buf);
-}*/
-
-inline void c_tensix_core::ex_setpkedgof(uint edge_mask, vptr_uint instrn_buf)
-{
-    ::ex_setpkedgof(edge_mask, instrn_buf);
-}
-
-inline void c_tensix_core::ex_clear_dvalid(uint clear_ab, uint reset, vptr_uint instrn_buffer)
-{
-    ::ex_clear_dvalid(clear_ab, reset, instrn_buffer);
-}
 
 inline void c_tensix_core::ex_sem_init(uint semaphore, uint max_value, uint init_value, vptr_uint instrn_buffer)
 {
@@ -167,62 +104,6 @@ inline void c_tensix_core::ex_encc(vptr_uint instrn_buf)
 inline void c_tensix_core::ex_load_const(vptr_uint instrn_buf)
 {
     // Do nothing on grayskull
-}
-
-inline void c_tensix_core::ex_setadc(cnt_id_t cnt_ind, uint chan_ind, uint dim_ind, uint val, vptr_uint instrn_buf)
-{
-    ::ex_setadc(cnt_ind, chan_ind, dim_ind, val, instrn_buf);
-}
-
-inline void c_tensix_core::thcon_load_ind(vptr_uint instrn_buffer, uint base_addr_index, uint dst_data_index, uint offset_index, uint autoinc, uint size)
-{
-    ::thcon_load_ind(instrn_buffer, base_addr_index, dst_data_index, offset_index, autoinc, size);
-}
-
-inline void c_tensix_core::thcon_incr_get_ptr(vptr_uint instrn_buffer,uint mem_addr_index, uint data_reg_index, uint incr_val, uint wrap_val, bool rd_wr, bool l0_l1_sel)
-{
-    ::thcon_incr_get_ptr(instrn_buffer, mem_addr_index, data_reg_index, incr_val, wrap_val, rd_wr, l0_l1_sel);
-}
-
-inline void c_tensix_core::thcon_incr_get_ptr_noinc(vptr_uint instrn_buffer,uint mem_addr_index, uint data_reg_index, uint incr_val, uint wrap_val, bool rd_wr, bool l0_l1_sel)
-{
-    ::thcon_incr_get_ptr_noinc(instrn_buffer, mem_addr_index, data_reg_index, incr_val, wrap_val, rd_wr, l0_l1_sel);
-}
-
-inline void c_tensix_core::thcon_reg_to_flops(vptr_uint instrn_buffer,uint mode_32b_16B, uint reg_index, uint flop_index, uint target_select, uint byte_offset)
-{
-    ::thcon_reg_to_flops(instrn_buffer, mode_32b_16B, reg_index, flop_index, target_select, byte_offset);
-}
-
-inline void c_tensix_core::thcon_set_descriptor(vptr_uint instrn_buf,uint reg_index, uint unpacker_id)
-{
-    ::thcon_set_descriptor(instrn_buf, reg_index, unpacker_id);
-}
-
-inline uint c_tensix_core::read_packed_size(uint thread)
-{
-  uint packed_size = memory_read(RISCV_TDMA_REG_PACKED_SIZE);
-  if (thread == 0) {
-    packed_size &= 0xFFFF;
-  }
-  else {
-    packed_size >>= 16;
-  }
-
-  return packed_size;
-}
-
-inline uint c_tensix_core::read_accumulated_packed_size(uint thread)
-{
-  uint packed_size = memory_read(RISCV_TDMA_REG_ACC_PACKED_SIZE);
-  if (thread == 0) {
-    packed_size &= 0xFFFF;
-  }
-  else {
-    packed_size >>= 16;
-  }
-
-  return packed_size;
 }
 
 inline uint c_tensix_core::wait(int cycles)
@@ -315,9 +196,4 @@ inline uint64_t c_tensix_core::read_wall_clock()
   uint32_t high = memory_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
 
   return ((uint64_t)high << 32) | low;
-}
-
-inline void c_tensix_core::check_l1_address_range(std::uint32_t byte_addr, std::size_t length)
-{
-    FWASSERT("Exceeded L1 of 1MB!!", ((byte_addr + length) <= (1U << 20)));
 }

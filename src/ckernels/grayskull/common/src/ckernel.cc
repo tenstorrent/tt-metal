@@ -1,7 +1,5 @@
 
 #include "ckernel.h"
-#include "ckernel_addr_map.h"
-#include "ckernel_pcbuf.h"
 #include "fw_debug.h"
 #include "ckernel_main.h"
 #include "ckernel_globals.h"
