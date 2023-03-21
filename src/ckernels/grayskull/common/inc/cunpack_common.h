@@ -270,7 +270,6 @@ namespace ckernel::unpacker
       tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
       tile_descriptor.f.x_dim        = 256;
 
-      //cfg[tile_addr]=tile_descriptor.val[0];
       TT_SETDMAREG(0, (tile_descriptor.val[0] & 0xffff), 0, LO_16(p_gpr_unpack::TMP0));
       TT_SETDMAREG(0, ((tile_descriptor.val[0] >> 16) & 0xffff), 0, HI_16(p_gpr_unpack::TMP0));
       TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, tile_addr);

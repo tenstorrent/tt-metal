@@ -38,10 +38,40 @@ inline void llk_unpack_untilize_mop_config() {
 inline void llk_unpack_untilize_hw_configure(const llk_unpack_untilize_params_t *unpack_untilize_params) {
     configure_unpack_AB(
         get_operand_id(unpack_untilize_params->unpA_operand), get_operand_id(unpack_untilize_params->unpA_operand), 1);
-    // Override default settings
-    std::uint32_t input = get_operand_id(unpack_untilize_params->unpA_operand);
+}
+
+inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
+    const llk_unpack_untilize_params_t unpack_untilize_params = {
+        .unpA_operand = unpA_operand,
+    };
+    llk_unpack_untilize_hw_configure(&unpack_untilize_params);
+}
+
+inline void llk_unpack_untilize_init(const uint32_t operand) {
+    llk_unpack_untilize_mop_config();
+
+    wait_for_idle();
+
+    // // Override default settings
+    std::uint32_t input = get_operand_id(operand);
     // Get pointer to registers for current state ID
     volatile uint *cfg = get_cfg_pointer();
+
+    constexpr uint32_t srca_face_height = 1;
+    constexpr uint32_t srcb_face_height = 16;
+
+    uint unpA_ch1_x_stride = (uint) (unpack_dst_format[operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+    uint unpB_ch1_x_stride = (uint) (unpack_dst_format[operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[1]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+    uint unpA_ch1_y_stride = 16*srca_face_height*unpA_ch1_x_stride;
+    uint unpB_ch1_y_stride = 16*srcb_face_height*unpB_ch1_x_stride;
+
+    cfg[UNP0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpA_ch1_y_stride << UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
+                                                    (            0 << UNP0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
+    //cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =  // Z and W stride for dest address (ch1)
+    cfg[UNP1_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpB_ch1_y_stride << UNP1_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
+                                                    (            0 << UNP1_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
+
+
     uint Tile_x_dim = FACE_HEIGHT;
     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = Tile_x_dim | (Tile_x_dim << 16);
     unpack_tile_descriptor_u tile_descriptor;
@@ -62,20 +92,14 @@ inline void llk_unpack_untilize_hw_configure(const llk_unpack_untilize_params_t 
     TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
 }
 
-inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
-    const llk_unpack_untilize_params_t unpack_untilize_params = {
-        .unpA_operand = unpA_operand,
-    };
-    llk_unpack_untilize_hw_configure(&unpack_untilize_params);
-}
+inline void llk_unpack_untilize_uninit(uint32_t operand) {
+    wait_for_idle();
 
-inline void llk_unpack_untilize_init() { llk_unpack_untilize_mop_config(); }
+    configure_unpack_AB(operand, operand, 16, 16, false, true);
+}
 
 template <bool first_pass = true>
 inline void llk_unpack_untilize_(std::uint32_t operand, std::uint32_t block_c_tiles) {
-
-    volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
-    mbox[0] = 10;
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = cb_read_interface[input].fifo_rd_ptr - 1; // Remove header size added by descriptor
     std::uint32_t rem_blocks_in_row = block_c_tiles;

@@ -423,4 +423,17 @@ inline void llk_get_next_op_info(tt::op_info_t& op_info_struct) {
     }
 }
 
+inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsigned int b)
+{
+  unsigned int r = 0;
+  while (a)
+    {
+      if (a & 1)
+        r += b;
+      a >>= 1;
+      b <<= 1;
+    }
+  return r;
+}
+
 }

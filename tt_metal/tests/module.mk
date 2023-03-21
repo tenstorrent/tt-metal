@@ -60,7 +60,7 @@ TT_METAL_TESTS += \
 		 tt_metal/tests/test_reduce_h \
 		 tt_metal/tests/test_reduce_w \
 		 tt_metal/tests/test_reduce_hw \
-		 # tt_metal/tests/test_datacopy_multi_core_multi_dram \  # this does not compile
+		 tt_metal/tests/test_untilize_eltwise_binary
 
 TT_METAL_TESTS_SRCS = $(addsuffix .cpp, $(TT_METAL_TESTS))
 

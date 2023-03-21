@@ -63,20 +63,7 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
     return result;
 }
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
-    std::cout<<name<<": "<<std::endl;
-    int index = 0;
-    for(int i = 0 ; i < rows ; i++) {
-        for(int j = 0 ; j < cols; j++) {
-            std::cout<<data.at(index).to_float()<<", ";
-            index++;
-        }
-        std::cout<<std::endl;
-    }
-    std::cout<<std::endl;
-}
-
-void print_faces(std::vector<bfloat16> data, string name, string fname) {
+void print_faces(std::vector<bfloat16> data, string name) {
     std::cout<<name<<": "<<std::endl;
     int index = 0;
 
@@ -100,7 +87,161 @@ void print_faces(std::vector<bfloat16> data, string name, string fname) {
     std::cout<<std::endl;
 }
 
-bool test_matmul_large_block(bool activations_rm) {
+void create_CBs_for_fused_matmul(tt_metal::Program* program, tt_metal::Device* device, tt_xy_pair core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h) {
+
+    uint32_t single_tile_size = 2 * 1024;
+
+    // Invariants
+    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_addr = 150 * 1024;
+    uint32_t cb0_tiles = M * in0_block_w * 2;
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        src0_cb_index,
+        core,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        src0_cb_addr,
+        tt::DataFormat::Float16_b
+    );
+
+    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_addr = 300 * 1024;
+    uint32_t cb1_tiles = N * in0_block_w * 2;
+    auto cb_src1 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        src1_cb_index,
+        core,
+        cb1_tiles,
+        cb1_tiles * single_tile_size,
+        src1_cb_addr,
+        tt::DataFormat::Float16_b
+    );
+
+    if (not activations_rm and not output_rm) { // no tilize, no untilize
+        uint32_t ouput_cb_index = 16; // output operands start at index 16
+        uint32_t output_cb_addr = 400 * 1024;
+        uint32_t num_output_tiles = M * N;
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            ouput_cb_index,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t interm0_cb_index = 24;
+        uint32_t interm0_cb_addr = 400 * 1024;
+        uint32_t interm0_cb_tiles = M * N;
+        auto cb_interm0 = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            interm0_cb_index,
+            core,
+            interm0_cb_tiles,
+            interm0_cb_tiles * single_tile_size,
+            interm0_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+    } else if (not activations_rm and output_rm) { // no tilize, just untilize
+
+        uint32_t interm0_cb_index = 24;
+        uint32_t interm0_cb_addr = 400 * 1024;
+        uint32_t interm0_cb_tiles = M * N;
+        auto cb_interm0 = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            interm0_cb_index,
+            core,
+            interm0_cb_tiles,
+            interm0_cb_tiles * single_tile_size,
+            interm0_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t ouput_cb_index = 16; // output operands start at index 16
+        uint32_t output_cb_addr = 500 * 1024;
+        uint32_t num_output_tiles = M * N;
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            ouput_cb_index,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        // Supposed to be a small CB only responsible for reorganizing
+        // the output blocks to fill the whole "per core output block width"
+        uint32_t reblock_cb_index = 26;
+        uint32_t reblock_cb_addr = 600 * 1024;
+        uint32_t reblock_cb_tiles = N; // Only space for one row
+        auto cb_reblock = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            reblock_cb_index,
+            core,
+            reblock_cb_tiles,
+            reblock_cb_tiles * single_tile_size,
+            reblock_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+    } else if (activations_rm and not output_rm) { // just tilize, no untilize
+
+        uint32_t src0_tilized_index = 24;
+        uint32_t src_0_tilized_cb_addr = 500 * 1024;
+        auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            src0_tilized_index,
+            core,
+            cb0_tiles,
+            cb0_tiles * single_tile_size,
+            src_0_tilized_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t ouput_cb_index = 16; // output operands start at index 16
+        uint32_t output_cb_addr = 400 * 1024;
+        uint32_t num_output_tiles = M * N;
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            ouput_cb_index,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t interm0_cb_index = 25;
+        uint32_t interm0_cb_addr = 400 * 1024;
+        uint32_t interm0_cb_tiles = M * N;
+        auto cb_interm0 = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            interm0_cb_index,
+            core,
+            interm0_cb_tiles,
+            interm0_cb_tiles * single_tile_size,
+            interm0_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+    } else { // tilize activations and untilize output
+
+    }
+}
+
+bool test_matmul_large_block(bool activations_rm, bool output_rm) {
     bool pass = true;
 
     try {
@@ -149,75 +290,6 @@ bool test_matmul_large_block(bool activations_rm) {
         auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
         auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
-        uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 150 * 1024;
-        uint32_t cb0_tiles = M * in0_block_w * 2;
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            src0_cb_index,
-            core,
-            cb0_tiles,
-            cb0_tiles * single_tile_size,
-            src0_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
-        uint32_t src0_tilized_index = 25;
-        uint32_t src_0_tilized_cb_addr = 500 * 1024;
-        auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            src0_tilized_index,
-            core,
-            cb0_tiles,
-            cb0_tiles * single_tile_size,
-            src_0_tilized_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
-        uint32_t src1_cb_index = 1;
-        uint32_t src1_cb_addr = 300 * 1024;
-        uint32_t cb1_tiles = N * in0_block_w * 2;
-        auto cb_src1 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            src1_cb_index,
-            core,
-            cb1_tiles,
-            cb1_tiles * single_tile_size,
-            src1_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 400 * 1024;
-        uint32_t num_output_tiles = M * N;
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            ouput_cb_index,
-            core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
-        uint32_t interm0_cb_index = 24;
-        uint32_t interm0_cb_addr = 400 * 1024;
-        uint32_t interm0_cb_tiles = M * N;
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            interm0_cb_index,
-            core,
-            interm0_cb_tiles,
-            interm0_cb_tiles * single_tile_size,
-            interm0_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
         std::vector<uint32_t> mm_reader_rt_args{
             dram_buffer_src0_addr,
             (std::uint32_t)dram_src0_noc_xy.x,
@@ -231,17 +303,32 @@ bool test_matmul_large_block(bool activations_rm) {
             M * in0_block_w * single_tile_size, // input 0 block bytes
             N * in0_block_w * single_tile_size}; // input 1 block bytes
 
-        std::vector<uint32_t> writer_rt_args{
-            dram_buffer_dst_addr,
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
-            (std::uint32_t)out_subblock_h, // num tiles per sub block m
-            (std::uint32_t)out_subblock_w, // num tiles per sub block n
-            (std::uint32_t)M/out_subblock_h, // num sub blocks m
-            (std::uint32_t)N/out_subblock_w, // num sub blocks n
-            (std::uint32_t)out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row within sub-block
-            (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row of sub-blocks
-            (std::uint32_t)out_subblock_w*single_tile_size}; // bytes offset to next sub-block
+
+        std::vector<uint32_t> writer_rt_args;
+        string writer_kernel;
+        if (output_rm) {
+            writer_kernel = "kernels/dataflow/writer_unary.cpp";
+            writer_rt_args = {
+                dram_buffer_dst_addr,
+                (std::uint32_t)dram_dst_noc_xy.x,
+                (std::uint32_t)dram_dst_noc_xy.y,
+                uint(M * N)
+            };
+        } else {
+            writer_kernel = "kernels/dataflow/writer_unswizzle.cpp";
+            writer_rt_args = {
+                dram_buffer_dst_addr,
+                (std::uint32_t)dram_dst_noc_xy.x,
+                (std::uint32_t)dram_dst_noc_xy.y,
+                (std::uint32_t)out_subblock_h, // num tiles per sub block m
+                (std::uint32_t)out_subblock_w, // num tiles per sub block n
+                (std::uint32_t)M/out_subblock_h, // num sub blocks m
+                (std::uint32_t)N/out_subblock_w, // num sub blocks n
+                (std::uint32_t)out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row within sub-block
+                (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row of sub-blocks
+                (std::uint32_t)out_subblock_w*single_tile_size
+            }; // bytes offset to next sub-block
+        }
 
         auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -250,9 +337,11 @@ bool test_matmul_large_block(bool activations_rm) {
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
+
+
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unswizzle.cpp",
+            writer_kernel,
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -271,74 +360,38 @@ bool test_matmul_large_block(bool activations_rm) {
 
         int in0_subblock_h = (in0_block_num_tiles / in0_num_subblocks) / in0_block_w;
 
+        create_CBs_for_fused_matmul(program, device, core, activations_rm, output_rm, M, N, in0_block_w, out_subblock_h);
+
         TT_ASSERT(in0_subblock_h * in0_block_w * in0_num_subblocks == in0_block_num_tiles);
         TT_ASSERT(in0_block_w == K);
 
-        vector<uint32_t> compute_kernel_args;
-        if (activations_rm) {
+        vector<uint32_t> compute_kernel_args = {
+            uint(in0_block_w),
+            uint(in0_num_subblocks),
+            uint(in0_block_num_tiles),
+            uint(in0_subblock_num_tiles),
+            uint(in0_subblock_h),
 
-            compute_kernel_args = {
-                uint(in0_block_w),
-                uint(in0_num_subblocks),
-                uint(in0_block_num_tiles),
-                uint(in0_subblock_num_tiles),
-                uint(in0_subblock_h),
+            uint(in1_num_subblocks),
+            uint(in1_block_num_tiles),
+            uint(in1_per_core_w),
 
-                uint(in1_num_subblocks),
-                uint(in1_block_num_tiles),
-                uint(in1_per_core_w),
+            uint(num_blocks),
 
-                uint(num_blocks),
+            uint(out_subblock_h),
+            uint(out_subblock_w),
+            uint(out_subblock_num_tiles),
 
-                uint(out_subblock_h),
-                uint(out_subblock_w),
-                uint(out_subblock_num_tiles),
-            };
-        } else {
-
-            compute_kernel_args = {
-                uint(in0_block_w),
-                uint(in0_num_subblocks),
-                uint(in0_block_num_tiles),
-                uint(in0_subblock_num_tiles),
-
-                uint(in1_num_subblocks),
-                uint(in1_block_num_tiles),
-                uint(in1_per_core_w),
-
-                uint(num_blocks),
-
-                uint(out_subblock_h),
-                uint(out_subblock_w),
-                uint(out_subblock_num_tiles),
-            };
-        }
-
-        vector<string> arg_names = {
-            "in0_block_w", "in0_num_subblocks", "in0_block_num_tiles", "in0_subblock_num_tiles", "in0_subblock_h",
-            "in1_num_subblocks", "in1_block_num_tiles", "in1_per_core_w",
-            "num_blocks",
-            "out_subblock_h", "out_subblock_w", "out_subblock_num_tiles",
+            uint(activations_rm),
+            uint(output_rm)
         };
-
-        int i = 0;
-        std::cout << "Args: " << std::endl;
-        for (uint32_t v: compute_kernel_args) {
-            std::cout << arg_names.at(i++) << ": " << v << std::endl;
-        }
-        std::cout << std::endl;
 
         tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
 
-        string compute_kernel;
-        if (activations_rm) {
-            compute_kernel = "kernels/compute/3T/matmul_large_block_zm_activations_rm";
-        } else {
-            compute_kernel = "kernels/compute/matmul_large_block_zm.cpp";
-        }
+        string compute_kernel = "kernels/compute/3T/matmul_large_block_zm";
 
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,
@@ -354,11 +407,7 @@ bool test_matmul_large_block(bool activations_rm) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
-        if (activations_rm) {
-            pass &= tt_metal::CompileProgramNew(device, program);
-        } else {
-            pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
-        }
+        pass &= tt_metal::CompileProgramNew(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -397,10 +446,12 @@ bool test_matmul_large_block(bool activations_rm) {
             writer_rt_args);
 
         tt_xy_pair debug_core = {1, 1};
-        // read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
-        // read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 1);
 
+        read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
+        // for (uint32_t i = 0; i < 16; i++) {
+        // }
         pass &= tt_metal::LaunchKernels(device, program);
+        // read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 1);
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
 
@@ -408,9 +459,23 @@ bool test_matmul_large_block(bool activations_rm) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-        auto result_flat_layout = convert_to_flat_layout(result_bfp16);
-        auto result_untilized = untilize(result_flat_layout, M*32, N*32);
-        pass &= (tensor.get_values() == result_untilized);
+        if (output_rm) {
+            pass &= (tensor.get_values() == result_bfp16);
+            if (not pass) {
+                print_faces(result_bfp16, "Result");
+            }
+        } else {
+            auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+            auto result_untilized = untilize(result_flat_layout, M*32, N*32);
+            pass &= (tensor.get_values() == result_untilized);
+            if (not pass) {
+                print_faces(result_untilized, "Result");
+            }
+        }
+
+        if (not pass) {
+            print_faces(tensor.get_values(), "Golden");
+        }
 
         pass &= tt_metal::CloseDevice(device);;
 
@@ -433,7 +498,18 @@ bool test_matmul_large_block(bool activations_rm) {
 
 int main(int argc, char **argv) {
     bool pass = true;
-    pass &= test_matmul_large_block(true);
-    pass &= test_matmul_large_block(false);
+
+    // Row major input, tilized output
+    pass &= test_matmul_large_block(true, false);
+
+    // Row major input, untilized output
+    // pass &= test_matmul_large_block(true, true); // Hanging
+
+    // Tilized input, tilized output
+    pass &= test_matmul_large_block(false, false);
+
+    // Tilized input, untilized output
+    pass &= test_matmul_large_block(false, true);
+
     TT_ASSERT(pass);
 }
