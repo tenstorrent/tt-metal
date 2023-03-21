@@ -1,8 +1,9 @@
 #include <cstdint>
 
-#include "compute_hlk_api.h"
+#include "llk_3c.h"
 
-void compute_main() {
+namespace NAMESPACE {
+void MAIN {
 
     uint32_t in0_block_w = get_compile_time_arg_val(0); // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1); // outer row block size (in inner row blocks)
@@ -17,7 +18,7 @@ void compute_main() {
     uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10); // out_subblock_h * out_subblock_w;
     uint32_t batch = get_compile_time_arg_val(11); // batch dim
 
-    matmul_tile_init_once(0);
+    mm_init();
 
     for (uint32_t b = 0; b < batch; b++){
         bool spill = num_blocks > 1;
@@ -38,13 +39,13 @@ void compute_main() {
                     acquire_dst(DstMode::Half);
 
                     if (enable_reload) {
-                        hlk_copy_tile_to_dst_init_short(nullptr);
+                        copy_tile_to_dst_init_short();
                         cb_wait_front(CB::c_intermed0, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             copy_tile(CB::c_intermed0, i, i);
                         }
                         cb_pop_front(CB::c_intermed0, out_subblock_num_tiles);
-                        matmul_tile_init_short(0);
+                        mm_init_short();
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
@@ -98,4 +99,5 @@ void compute_main() {
 
         }
     }
+}
 }
