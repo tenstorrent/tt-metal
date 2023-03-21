@@ -132,7 +132,7 @@ void TensorModule(py::module &m_tensor) {
             )
         )
         .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
-            self.to(device, mem_config);
+            return self.to(device, mem_config);
         }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, "Moves the tensor to device")
         .def("to", py::overload_cast<Host*>(&Tensor::to, py::const_), "Moves the tensor to CPU")
         .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_), "Converts the tensor layout")

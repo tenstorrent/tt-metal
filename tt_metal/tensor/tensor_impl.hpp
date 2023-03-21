@@ -415,14 +415,37 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
 template <typename T>
 inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
     TT_ASSERT(tensor.layout() != target_layout && "Cannot convert to target layout same as it is the same the current layout.");
-    TT_ASSERT(tensor.layout() == Layout::ROW_MAJOR && "Need layout to be in row major to convert to another layout");
-    TT_ASSERT(target_layout == Layout::TILE || target_layout == Layout::CHANNELS_LAST && "Target layout unsupported");
     auto data = *reinterpret_cast<std::vector<T>*>(tensor.data_ptr());
-    if (target_layout == Layout::TILE) {
-        data = convert_layout_row_major_to_tile(tensor.shape(), data);
-    }
-    else if (target_layout == Layout::CHANNELS_LAST) {
-        data = convert_layout_row_major_to_channels_last(tensor.shape(), data);
+    switch (tensor.layout()) {
+        case Layout::ROW_MAJOR:
+            if (target_layout == Layout::TILE) {
+                data = convert_layout_row_major_to_tile(tensor.shape(), data);
+            }
+            else if (target_layout == Layout::CHANNELS_LAST) {
+                data = convert_layout_row_major_to_channels_last(tensor.shape(), data);
+            }
+            else {
+                TT_ASSERT(false && "Unsupported layout conversion");
+            }
+        break;
+        case Layout::TILE:
+            if (target_layout == Layout::ROW_MAJOR) {
+                data = convert_layout_tile_to_row_major(tensor.shape(), data);
+            }
+            else {
+                TT_ASSERT(false && "Unsupported layout conversion");
+            }
+        break;
+        case Layout::CHANNELS_LAST:
+            if (target_layout == Layout::ROW_MAJOR) {
+                data = convert_layout_channels_last_to_row_major(tensor.shape(), data);
+            }
+            else {
+                TT_ASSERT(false && "Unsupported layout conversion");
+            }
+        break;
+        default:
+            TT_ASSERT(false && "Unsupported layout conversion");
     }
     return Tensor(data, tensor.shape(), tensor.dtype(), target_layout);
 }
