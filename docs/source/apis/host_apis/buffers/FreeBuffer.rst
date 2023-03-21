@@ -1,0 +1,4 @@
+FreeBuffer()
+===========================
+
+.. doxygenfunction:: FreeBuffer
