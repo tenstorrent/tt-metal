@@ -27,6 +27,12 @@ void DramBuffer::free() {
     this->allocated_on_device_ = false;
 }
 
+DramBuffer::~DramBuffer() {
+    if (this->allocated_on_device_) {
+        this->free();
+    }
+}
+
 Buffer *L1Buffer::clone() {
     TT_ASSERT(false && "L1 buffer clone is not currently supported");
     return new L1Buffer(this->device_, this->logical_core_, this->size_in_bytes_, this->address_);

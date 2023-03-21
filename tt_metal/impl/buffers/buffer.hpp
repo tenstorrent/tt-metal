@@ -44,7 +44,7 @@ class DramBuffer : public Buffer {
 
     DramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address);
 
-    ~DramBuffer() {}
+    ~DramBuffer();
 
     Buffer *clone();
 
