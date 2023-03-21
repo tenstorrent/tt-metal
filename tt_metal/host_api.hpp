@@ -368,7 +368,7 @@ ComputeKernel *CreateComputeKernel(
 DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes);
 
 /**
- * Creates a DRAM Buffer object, size_in_bytes bytes will be allocated on device. DRAM buffers exist independently from a program
+ * Creates a DRAM Buffer object. DRAM buffers exist independently from a program
  *
  * Return value: DramBuffer *
  * | Argument      | Description                                  | Type     | Valid Range                                           | Required |
@@ -402,15 +402,6 @@ InterleavedDramBuffer *CreateInterleavedDramBuffer(
  */
 L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address);
 
-/**
-*  Frees buffer space from the device it was created on.
-*
-*  Return value: void *
-*
-*  | Argument | Description                          | Type     | Valid Range | Required |
-*  |----------|--------------------------------------|----------|-------------|----------|
-*  | buffer   | The buffer to deallocate from device | Buffer * |             | Yes      |
-*/
 void FreeBuffer(Buffer *buffer);
 
 /**
