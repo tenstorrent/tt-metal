@@ -240,6 +240,65 @@ void create_CBs_for_fused_matmul(tt_metal::Program* program, tt_metal::Device* d
         );
     } else { // tilize activations and untilize output
 
+        // Used for placing tilized activations
+        uint32_t interm0_cb_index = 24;
+        uint32_t interm0_cb_addr = 400 * 1024;
+        uint32_t interm0_cb_tiles = M * N;
+        auto cb_interm0 = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            interm0_cb_index,
+            core,
+            interm0_cb_tiles,
+            interm0_cb_tiles * single_tile_size,
+            interm0_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t ouput_cb_index = 16; // output operands start at index 16
+        uint32_t output_cb_addr = 500 * 1024;
+        uint32_t num_output_tiles = M * N;
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            ouput_cb_index,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        // Used
+        uint32_t interm1_cb_index = 25;
+        uint32_t interm1_cb_addr = 600 * 1024;
+        uint32_t interm1_cb_tiles = M * N;
+        auto cb_interm1 = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            interm1_cb_index,
+            core,
+            interm1_cb_tiles,
+            interm1_cb_tiles * single_tile_size,
+            interm1_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        // Supposed to be a small CB only responsible for reorganizing
+        // the output blocks to fill the whole "per core output block width"
+        uint32_t reblock_cb_index = 26;
+        uint32_t reblock_cb_addr = 700 * 1024;
+        uint32_t reblock_cb_tiles = N; // Only space for one row
+        auto cb_reblock = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            reblock_cb_index,
+            core,
+            reblock_cb_tiles,
+            reblock_cb_tiles * single_tile_size,
+            reblock_cb_addr,
+            tt::DataFormat::Float16_b
+        );
     }
 }
 
@@ -506,7 +565,7 @@ int main(int argc, char **argv) {
     pass &= test_matmul_large_block(true, false);
 
     // Row major input, untilized output
-    // pass &= test_matmul_large_block(true, true); // Hanging
+    pass &= test_matmul_large_block(true, true); // Hanging
 
     // Tilized input, tilized output
     pass &= test_matmul_large_block(false, false);
