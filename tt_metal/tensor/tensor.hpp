@@ -51,15 +51,6 @@ namespace tensor_impl {
 
     template <typename T>
     void write_data(Tensor &tensor, std::vector<T> &data);
-
-    template <typename T>
-    void deepcopy_host_data(const Tensor &src, Tensor &dst);
-
-    template <typename T>
-    void move_host_data(Tensor &&src, Tensor &dst);
-
-    template <typename T>
-    void move_device_data(Tensor &&src, Tensor &dst);
 }
 
 class Tensor {
@@ -85,14 +76,6 @@ class Tensor {
 
         Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
 
-        Tensor(const Tensor &other);
-        Tensor& operator=(const Tensor &other);
-
-        Tensor(Tensor &&other);
-        Tensor& operator=(Tensor &&other);
-
-        ~Tensor();
-
         Tensor to(Device *target_device, const MemoryConfig &mem_config={.interleaved=true}) const;
 
         Tensor to(Host *host) const;
@@ -109,11 +92,10 @@ class Tensor {
         // ======================================================================================
         const std::array<uint32_t, 4>& reshape(int N, int C, int H, int W);
 
-        void free_buffer();
-
         // ======================================================================================
         //                                      Getters
         // ======================================================================================
+
         const std::array<uint32_t, 4>& shape() const { return this->shape_; }
 
         const std::array<uint32_t, 4>& strides() const { return this->strides_; }
@@ -145,13 +127,6 @@ class Tensor {
 
         template <typename T>
         friend void tensor_impl::write_data(Tensor &tensor, std::vector<T> &data);
-
-        template <typename T>
-        friend void tensor_impl::deepcopy_host_data(const Tensor &src, Tensor &dst);
-        template <typename T>
-        friend void tensor_impl::move_host_data(Tensor &&src, Tensor &dst);
-        template <typename T>
-        friend void tensor_impl::move_device_data(Tensor &&src, Tensor &dst);
 
         void *data_ = nullptr;                      // Unpopulated if tensor is on device
         std::array<uint32_t, 4> shape_;             // Outer-most dimension first

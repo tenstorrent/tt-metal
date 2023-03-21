@@ -7,12 +7,11 @@ TT_METAL_IMPL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 TT_METAL_IMPL_SRCS = \
 	tt_metal/impl/device/device.cpp \
+	tt_metal/impl/device/memory_manager.cpp \
 	tt_metal/impl/buffers/buffer.cpp \
 	tt_metal/impl/buffers/interleaved_buffer.cpp \
 	tt_metal/impl/kernels/kernel_args.cpp \
 	tt_metal/impl/kernels/kernel.cpp \
-	tt_metal/impl/memory_manager/red_black_tree.cpp \
-	tt_metal/impl/memory_manager/memory_manager.cpp \
 	tt_metal/impl/program.cpp \
 	tt_metal/impl/dtx/dtx.cpp \
 	tt_metal/impl/dtx/parallelize_generic_tensor_slice.cpp \

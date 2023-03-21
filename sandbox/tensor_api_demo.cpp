@@ -42,10 +42,6 @@ Tensor c = Tensor(shape, Initialize::RANDOM, Layout::ROW_MAJOR, device);
 Tensor d = Tensor(shape, Initialize::RANDOM, Layout::TILES, device);
 d = d.to(host);
 
-// This will clear out the hose side data from d_1 and d_1 will have a valid pointer to buffer and device
-Tensor d_1 = Tensor(shape, Initialize::RANDOM, Layout::TILES);
-d_1 = d_1.to(device);
-
 // DRAM loopback example (without deallocation)
 // Tensor e does not get deallocated
 // e and e_new are different unlinked tensors, changes in one will not be reflected in the other

@@ -33,14 +33,6 @@ Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout);
 
 void print_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print);
 
-void deepcopy_host_data_wrapper(const Tensor &src, Tensor &dst);
-
-void deepcopy_device_data_wrapper(const Tensor &src, Tensor &dst);
-
-void move_host_data_wrapper(Tensor &&src, Tensor &dst);
-
-void move_device_data_wrapper(Tensor &&src, Tensor &dst);
-
 }  // namespace tensor_impl
 
 }  // namespace tt_metal

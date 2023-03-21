@@ -36,6 +36,7 @@ bool test_multi_tile_multi_dram_bank_loopback(Device *device, Host *host) {
     auto host_a_data = *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
     auto loopbacked_a_data = *reinterpret_cast<std::vector<bfloat16>*>(loopbacked_a.data_ptr());
     pass &= host_a_data == loopbacked_a_data;
+
     return pass;
 }
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tt_metal/impl/memory_manager/memory_manager.hpp"
+#include "tt_metal/impl/device/memory_manager.hpp"
 #include "llrt/tt_cluster.hpp"
 
 namespace tt {
@@ -22,9 +22,7 @@ class Device {
    public:
 
     friend void tt_gdb(Device* device, int chip_id, const vector<tt_xy_pair> cores, vector<string> ops);
-    Device(tt::ARCH arch, int pcie_slot) : arch_(arch), cluster_(nullptr), pcie_slot_(pcie_slot), closed_(false) {}
-
-    ~Device();
+    Device(tt::ARCH arch, int pcie_slot) : arch_(arch), cluster_(nullptr), pcie_slot_(pcie_slot) {}
 
     tt::ARCH arch() const { return arch_; }
 
@@ -39,6 +37,10 @@ class Device {
     tt_xy_pair worker_core_from_logical_core(const tt_xy_pair &logical_core) const;
 
     std::vector<tt_xy_pair> worker_cores_from_logical_cores(const std::vector<tt_xy_pair> &logical_cores);
+
+    uint32_t allocate_buffer(int dram_channel, uint32_t size_in_bytes);
+
+    uint32_t allocate_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
 
    private:
     bool cluster_is_initialized() const { return cluster_ != nullptr; }
@@ -55,10 +57,6 @@ class Device {
     bool close();
     friend bool CloseDevice(Device *device);
 
-    uint32_t allocate_buffer(int dram_channel, uint32_t size_in_bytes);
-    uint32_t allocate_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
-    void free_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
-    friend class DramBuffer;
     friend class InterleavedDramBuffer;
 
     static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
@@ -66,7 +64,6 @@ class Device {
     tt_cluster *cluster_;
     int pcie_slot_;
     std::unordered_map<int, MemoryManager *> banked_dram_manager_;
-    bool closed_;
 };
 
 }  // namespace tt_metal

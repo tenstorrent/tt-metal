@@ -37,7 +37,6 @@ int main(int argc, char **argv) {
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::ROW_MAJOR, device);
         Tensor b = tilize(a);
-
         Tensor c = b.to(host);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -48,7 +47,7 @@ int main(int argc, char **argv) {
         auto golden_vec =  *reinterpret_cast<std::vector<bfloat16>*>(golden.data_ptr());
         auto result_vec = *reinterpret_cast<std::vector<bfloat16>*>(c.data_ptr());
         pass &= (result_vec == golden_vec);
-        pass &= tt_metal::CloseDevice(device);
+        pass &= tt_metal::CloseDevice(device);;
 
     } catch (const std::exception &e) {
         pass = false;

@@ -251,7 +251,6 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_output_tiles);
         }
 
-        FreeBuffer(dst_dram_buffer);
         pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
@@ -446,7 +445,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_output_tiles);
         }
 
-        FreeBuffer(dst_dram_buffer);
         pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {

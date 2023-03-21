@@ -344,14 +344,6 @@ bool run_matmul(const bool with_bias) {
         auto result_untilized = untilize(result_flat_layout, M*32, N*32);
 
         pass &= (tensor.get_values() == result_untilized);
-
-        FreeBuffer(src0_dram_buffer);
-        FreeBuffer(src1_dram_buffer);
-        if (with_bias) {
-            FreeBuffer(src2_dram_buffer);
-        }
-        FreeBuffer(dst_dram_buffer);
-
         pass &= tt_metal::CloseDevice(device);;
 
     } catch (const std::exception &e) {

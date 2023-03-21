@@ -154,37 +154,6 @@ inline std::vector<T> convert_layout_channels_last_to_row_major(const std::array
 }
 
 // ======================================================================================
-//                                    Copy and Move Helpers
-// ======================================================================================
-template <typename T>
-void deepcopy_host_data(const Tensor &src, Tensor &dst) {
-    if (not src.on_host()) {
-        return;
-    }
-    if (src.data_ptr() == nullptr) {
-        dst.data_ = nullptr;
-    }
-    std::vector<T> *src_data_ptr = reinterpret_cast<std::vector<T>*>(src.data_ptr());
-    auto data_ptr = new std::vector<T>(*src_data_ptr);
-    dst.data_ = static_cast<void *>(data_ptr);
-}
-
-template <typename T>
-void move_host_data(Tensor &&src, Tensor &dst) {
-    if (not src.on_host()) {
-        return;
-    }
-    if (src.data_ptr() == nullptr) {
-        dst.data_ = nullptr;
-    }
-    std::vector<T> *src_data_ptr = reinterpret_cast<std::vector<T>*>(src.data_ptr());
-    auto data_ptr = new std::vector<T>(*src_data_ptr);
-    dst.data_ = static_cast<void *>(data_ptr);
-    delete src_data_ptr;
-    src.data_ = nullptr;
-}
-
-// ======================================================================================
 //                                         Print
 // ======================================================================================
 std::ostream& operator<<(std::ostream& os, const DataType& dtype);
@@ -421,32 +390,6 @@ inline void convert_layout_or_type_and_write_data(Tensor &tensor, std::vector<T2
         std::vector<T1> converted_data = cast_vec<T1>(data);
         write_data(tensor, converted_data);
     }
-}
-
-// ======================================================================================
-//                                    Copy and Move Helpers
-// ======================================================================================
-template <typename T>
-void deepcopy_device_data(const Tensor &src, Tensor &dst) {
-    if (src.on_host()) {
-        return;
-    }
-    uint32_t size_in_bytes = src.buffer()->size();
-    auto data_vec = read_data_from_device<T>(src, size_in_bytes);
-    initialize_data_on_device<T>(dst, data_vec);
-}
-
-template <typename T>
-void move_device_data(Tensor &&src, Tensor &dst) {
-    if (src.on_host()) {
-        return;
-    }
-    uint32_t size_in_bytes = src.buffer()->size();
-    auto data_vec = read_data_from_device<T>(src, size_in_bytes);
-    initialize_data_on_device<T>(dst, data_vec);
-    src.free_buffer();
-    delete src.buffer_;
-    src.buffer_ = nullptr;
 }
 
 // ======================================================================================

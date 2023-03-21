@@ -402,8 +402,6 @@ InterleavedDramBuffer *CreateInterleavedDramBuffer(
  */
 L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address);
 
-void FreeBuffer(Buffer *buffer);
-
 /**
  * Creates a Circular Buffer (CB) in L1 memory and adds it to the program.
  *
