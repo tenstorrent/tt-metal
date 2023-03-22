@@ -1,4 +1,4 @@
 acquire_dst
 ===========
 
-.. doxygendefine:: acquire_dst
+.. doxygenfunction:: acquire_dst(tt::DstMode mode)

@@ -19,7 +19,6 @@ Compute APIs
   mul_tiles_bcast
 
   matmul_tiles
-  matmul_load_partial
 
   exp_tile
   gelu_tile

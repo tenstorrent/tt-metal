@@ -1,4 +1,4 @@
 release_dst
 ===========
 
-.. doxygendefine:: release_dst
+.. doxygenfunction:: release_dst(tt::DstMode mode)
