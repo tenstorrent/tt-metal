@@ -563,7 +563,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+---------------------+----------------------------+----------+
         | Argument         | Description            | Data type           | Valid range                | Required |
         +==================+========================+=====================+============================+==========+
-        | arch             | Type of TT Device      | ttmetal.device.Arch | tt.device.Arch.GRAYSKULL   | Yes      |
+        | arch             | Type of TT Device      | ttlib.device.Arch   | tt.device.Arch.GRAYSKULL   | Yes      |
         +------------------+------------------------+---------------------+----------------------------+----------+
         | pci_express_slot | PCI Express slot index | int                 |                            | Yes      |
         +------------------+------------------------+---------------------+----------------------------+----------+
@@ -583,7 +583,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
         +==================+========================+=======================+=============+==========+
-        | device           | TT Device to close     | ttmetal.device.Device |             | Yes      |
+        | device           | TT Device to close     | ttlib.device.Device   |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
