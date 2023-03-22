@@ -6,60 +6,9 @@ sys.path.append(f"{f}/..")
 import numpy as np
 
 from pymetal import ttmetal as ttm
-from pymetal.ttmetal.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, pad_activation
+from pymetal.ttmetal.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, convert_weights_2d_matrix
 from python_api_testing.models.utility_functions import print_diff_argmax, is_close
 import torch
-
-def convert_weights_2d_matrix(weights, w_shape):
-    """
-    :param x: Input PyTorch Tensor
-    :type x: class:`torch.Tensor`
-    """
-    ret_shape = [1,1,w_shape[0],w_shape[1]*w_shape[2]*w_shape[3]]
-    if isinstance(weights, torch.Tensor):
-        ret = torch.zeros(np.prod(ret_shape))
-    else:
-        ret = np.zeros(np.prod(ret_shape))
-    idx = 0
-    for k in range(w_shape[0]):
-        for r in range(w_shape[2]):
-            for s in range(w_shape[3]):
-                for c in range(w_shape[1]):
-                    ret[idx] = weights[k][c][r][s]
-                    idx+=1
-    assert idx == np.prod(ret_shape)
-    return ret.reshape(ret_shape).transpose(2,3)
-
-def convert_cl_act_2d_matrix_3x3s1(activation):
-    """
-    :param x: Input PyTorch Tensor
-    :type x: class:`torch.Tensor`
-    """
-    N = activation.shape[0]
-    C = activation.shape[3]
-    H = activation.shape[1]
-    W = activation.shape[2]
-    OH = H - 2 # for stride 1 and 3x3
-    OW = W - 2 # for stride 1 and 3x3
-    nrows = OH*OW
-    ncols = C*9
-    ret_shape = [1,1,nrows,ncols]
-    if isinstance(activation, torch.Tensor):
-        ret = torch.zeros(np.prod(ret_shape))
-    else:
-        ret = np.zeros(np.prod(ret_shape))
-    idx = 0
-    for n in range(N):
-        for oh in range(OH): # for stride 1
-            for ow in range (OW): # for stride 1
-                for r in range(3): # for kernel width = 3
-                    for s in range(3): # for kernel height = 3
-                        for c in range(C):
-                            ret[idx] = activation[n][oh+r][ow+s][c]
-                            idx+=1
-    assert idx == np.prod(ret_shape)
-    return ret.reshape(ret_shape)
-
 
 def run_tilize_conv3x3s1_act_test (K, C, H, W):
     a_activation_shape = [1,C,H,W]
@@ -109,5 +58,5 @@ if __name__ == "__main__":
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()
-    run_tilize_conv3x3s1_act_test(32, 32, 4, 4)
+    run_tilize_conv3x3s1_act_test(32, 32, 5, 5)
     ttm.device.CloseDevice(device)

@@ -95,6 +95,26 @@ def channels_last(x):
 
     return ret.reshape(ret_shape)
 
+def convert_weights_2d_matrix(weights, w_shape):
+    """
+    :param weights: Input PyTorch Tensor
+    :type weights: class:`torch.Tensor`
+    """
+    ret_shape = [1,1,w_shape[0],w_shape[1]*w_shape[2]*w_shape[3]]
+    if isinstance(weights, torch.Tensor):
+        ret = torch.zeros(np.prod(ret_shape))
+    else:
+        ret = np.zeros(np.prod(ret_shape))
+    idx = 0
+    for k in range(w_shape[0]):
+        for r in range(w_shape[2]):
+            for s in range(w_shape[3]):
+                for c in range(w_shape[1]):
+                    ret[idx] = weights[k][c][r][s]
+                    idx+=1
+    assert idx == np.prod(ret_shape)
+    return ret.reshape(ret_shape).transpose(2,3)
+
 def tilize(x):
     """
     This function tilizes a tensor. The last two tensor dims must be divisible by 32, after which this function
