@@ -1,1 +1,1 @@
-from pymetal.ttmetal.fused_ops.linear import *
+from pymetal.ttlib.fused_ops.linear import *

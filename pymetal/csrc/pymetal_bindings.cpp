@@ -231,7 +231,7 @@ void TensorModule(py::module &m_tensor) {
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
         | wOnes    | Width of high values region                                           | int                   | wOnes <= W             | Yes      |
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-        | any      | Any input tensor with desired device and data types for output tensor | ttmetal.tensor.Tensor |                        | Yes      |
+        | any      | Any input tensor with desired device and data types for output tensor | ttlib.tensor.Tensor   |                        | Yes      |
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
         | val_hi   | High value to use                                                     | int                   | Valid bfloat16 integer | Yes      |
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
@@ -257,7 +257,7 @@ void TensorModule(py::module &m_tensor) {
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
         | wOnes    | Width of high values region                                           | int                   | wOnes <= W             | Yes      |
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-        | any      | Any input tensor with desired device and data types for output tensor | ttmetal.tensor.Tensor |                        | Yes      |
+        | any      | Any input tensor with desired device and data types for output tensor | ttlib.tensor.Tensor   |                        | Yes      |
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
     )doc");
     m_tensor.def("pad_h_rm", &pad_h_rm, R"doc(
@@ -290,13 +290,13 @@ void TensorModule(py::module &m_tensor) {
         +-----------+-------------------------------+----------------------------+-------------+----------+
         | Argument  | Description                   | Data type                  | Valid range | Required |
         +===========+===============================+============================+=============+==========+
-        | a         | Input tensor                  | ttmetal.tensor.Tensor      |             | Yes      |
+        | a         | Input tensor                  | ttlib.tensor.Tensor        |             | Yes      |
         +-----------+-------------------------------+----------------------------+-------------+----------+
-        | b         | Input tensor                  | ttmetal.tensor.Tensor      |             | Yes      |
+        | b         | Input tensor                  | ttlib.tensor.Tensor        |             | Yes      |
         +-----------+-------------------------------+----------------------------+-------------+----------+
-        | bcast_op  | Math operation to perform     | ttmetal.tensor.BcastOpMath |             | Yes      |
+        | bcast_op  | Math operation to perform     | ttlib.tensor.BcastOpMath   |             | Yes      |
         +-----------+-------------------------------+----------------------------+-------------+----------+
-        | bcast_dim | Height count of output tensor | ttmetal.tensor.BcastOpDim  |             | Yes      |
+        | bcast_dim | Height count of output tensor | ttlib.tensor.BcastOpDim    |             | Yes      |
         +-----------+-------------------------------+----------------------------+-------------+----------+
     )doc");
 
@@ -307,11 +307,11 @@ void TensorModule(py::module &m_tensor) {
         +-------------+---------------------------------------+-----------------------------+-------------+----------+
         | Argument    | Description                           | Data type                   | Valid range | Required |
         +=============+=======================================+=============================+=============+==========+
-        | a           | Input tensor                          | ttmetal.tensor.Tensor       |             | Yes      |
+        | a           | Input tensor                          | ttlib.tensor.Tensor         |             | Yes      |
         +-------------+---------------------------------------+-----------------------------+-------------+----------+
-        | reduce_math | Aggregating math operation            | ttmetal.tensor.ReduceOpMath |             | Yes      |
+        | reduce_math | Aggregating math operation            | ttlib.tensor.ReduceOpMath   |             | Yes      |
         +-------------+---------------------------------------+-----------------------------+-------------+----------+
-        | reduce_dim  | Dim to perform aggregation over       | ttmetal.tensor.ReduceOpDim  |             | Yes      |
+        | reduce_dim  | Dim to perform aggregation over       | ttlib.tensor.ReduceOpDim    |             | Yes      |
         +-------------+---------------------------------------+-----------------------------+-------------+----------+
         | scalar      | Scalar to apply during math operation | float                       |             | Yes      |
         +-------------+---------------------------------------+-----------------------------+-------------+----------+
@@ -335,7 +335,7 @@ void TensorModule(py::module &m_tensor) {
         +----------+--------------------------------+-----------------------+-------------+----------+
         | Argument | Description                    | Data type             | Valid range | Required |
         +==========+================================+=======================+=============+==========+
-        | a        | Input tensor                   | ttmetal.tensor.Tensor |             | Yes      |
+        | a        | Input tensor                   | ttlib.tensor.Tensor   |             | Yes      |
         +----------+--------------------------------+-----------------------+-------------+----------+
         | N        | Batch count of output tensor   | int                   |             | Yes      |
         +----------+--------------------------------+-----------------------+-------------+----------+
@@ -444,7 +444,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+---------------------+-------------+----------+
         | Argument         | Description            | Data type           | Valid range | Required |
         +==================+========================+=====================+=============+==========+
-        | arch             | Device type            | ttmetal.device.Arch |             | Yes      |
+        | arch             | Device type            | ttlib.device.Arch   |             | Yes      |
         +------------------+------------------------+---------------------+-------------+----------+
         | pci_express_slot | PCI Express slot index | int                 |             | Yes      |
         +------------------+------------------------+---------------------+-------------+----------+
@@ -455,7 +455,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
         +==================+========================+=======================+=============+==========+
-        | device           | Device to initialize   | ttmetal.device.Device |             | Yes      |
+        | device           | Device to initialize   | ttlib.device.Device   |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
     m_device.def("CloseDevice", &CloseDevice, R"doc(
@@ -464,7 +464,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
         +==================+========================+=======================+=============+==========+
-        | device           | Device to close        | ttmetal.device.Device |             | Yes      |
+        | device           | Device to close        | ttlib.device.Device   |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
@@ -487,7 +487,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+-------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                   | Data type             | Valid range | Required |
         +==================+===============================+=======================+=============+==========+
-        | device           | Device whost host to retrieve | ttmetal.device.Device |             | Yes      |
+        | device           | Device whost host to retrieve | ttlib.device.Device   |             | Yes      |
         +------------------+-------------------------------+-----------------------+-------------+----------+
     )doc");
 }
@@ -499,8 +499,8 @@ void DeviceModule(py::module &m_device) {
 
 PYBIND11_MODULE(_C, m) {
 
-    m.attr("__name__") = "ttmetal";
-    m.doc() = "General purpose AI python bindings";
+    m.attr("__name__") = "ttlib";
+    m.doc() = "Python bindings for TT-Metal";
 
     py::module_ m_device = m.def_submodule("device", "Submodule defining a host or device");
     tt::tt_metal::DeviceModule(m_device);

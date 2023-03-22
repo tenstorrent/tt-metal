@@ -3,8 +3,8 @@ import math
 import torch
 import numpy as np
 
-from pymetal import ttmetal as ttm
-from pymetal.ttmetal.utils import (
+from pymetal import ttlib as ttl
+from pymetal.ttlib.utils import (
     _nearest_32 as nearest_32,
     pad_activation,
     pad_weight,
@@ -79,11 +79,11 @@ def get_oom_of_float(float_lst):
 
 def get_FR():
     # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    return ttm.device.GetForceRecompiles()
+    return ttl.device.GetForceRecompiles()
 
 def set_FR(new_val):
     # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    ttm.device.SetForceRecompiles(new_val)
+    ttl.device.SetForceRecompiles(new_val)
     print("Force recompiles=", get_FR())
 
 
@@ -91,7 +91,7 @@ def ttP(x, count=4, offset=0, stride=1):
     if type(x) == torch.Tensor:
         t1 = x.reshape(-1)
     else:
-        host = ttm.device.GetHost()
+        host = ttl.device.GetHost()
         shp = x.shape()
         tt_out = x.to(host)
         torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
@@ -105,34 +105,34 @@ def enable_compile_cache():
     """
     Enables the compiler caching.
     """
-    ttm.device.EnableCompileCache()
+    ttl.device.EnableCompileCache()
 
 def disable_compile_cache():
     """
     Disables the compiler caching.
     """
-    ttm.device.DisableCompileCache()
+    ttl.device.DisableCompileCache()
 
 def get_compile_cache_enabled():
     """
     Returns the current state of compile cache on/off switch.
     """
-    return ttm.device.GetCompileCacheEnabled()
+    return ttl.device.GetCompileCacheEnabled()
 
 def enable_binary_cache():
     """
     Enables the binary loading cache.
     """
-    ttm.device.EnableBinaryCache()
+    ttl.device.EnableBinaryCache()
 
 def disable_binary_cache():
     """
     Disables the binary loading cache.
     """
-    ttm.device.DisableBinaryCache()
+    ttl.device.DisableBinaryCache()
 
 def get_binary_cache_enabled():
     """
     Returns the current state of binary loading cache on/off switch.
     """
-    return ttm.device.GetBinaryCacheEnabled()
+    return ttl.device.GetBinaryCacheEnabled()

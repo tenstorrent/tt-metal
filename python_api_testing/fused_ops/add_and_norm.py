@@ -1,1 +1,1 @@
-from pymetal.ttmetal.fused_ops.add_and_norm import *
+from pymetal.ttlib.fused_ops.add_and_norm import *

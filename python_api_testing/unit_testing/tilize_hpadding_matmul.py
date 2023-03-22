@@ -5,8 +5,8 @@ sys.path.append(f"{f}/..")
 
 import numpy as np
 
-from pymetal import ttmetal as ttm
-from pymetal.ttmetal.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, pad_activation
+from pymetal import ttlib as ttl
+from pymetal.ttlib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, pad_activation
 from python_api_testing.models.utility_functions import print_diff_argmax, is_close
 import torch
 
@@ -19,18 +19,18 @@ def run_tilize_matmul_test(M, K, N):
     A_padded = pad_activation(A)
     B = torch.randn(b_shape) - 0.95
 
-    a = ttm.tensor.Tensor(
+    a = ttl.tensor.Tensor(
         A.flatten().tolist(),
         a_shape,
-        ttm.tensor.DataType.BFLOAT16,
-        ttm.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
         device
     )
-    a_t = ttm.tensor.tilize_with_zero_padding(a)
+    a_t = ttl.tensor.tilize_with_zero_padding(a)
     print("Shape of A_t - " + str(a_t.shape()))
-    b_t = ttm.tensor.Tensor(tilize_to_list(B), b_shape, ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
+    b_t = ttl.tensor.Tensor(tilize_to_list(B), b_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
     print("Shape of B_t - " + str(b_t.shape()))
-    t2 = ttm.tensor.bmm(a_t, b_t)
+    t2 = ttl.tensor.bmm(a_t, b_t)
     assert(t2.shape() == output_shape)
     tt_host_rm = t2.to(host).data()
     pyt_got_back = torch.Tensor(tt_host_rm).reshape(output_shape)
@@ -44,8 +44,8 @@ def run_tilize_matmul_test(M, K, N):
     print("Match=", match.item())
 
 if __name__ == "__main__":
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
-    host = ttm.device.GetHost()
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+    host = ttl.device.GetHost()
     run_tilize_matmul_test(4, 32*9, 32)
-    ttm.device.CloseDevice(device)
+    ttl.device.CloseDevice(device)

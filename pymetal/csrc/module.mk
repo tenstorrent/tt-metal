@@ -22,10 +22,10 @@ $(PYMETAL_LIB): $(COMMON_LIB) $(PYMETAL_OBJS) $(DEVICE_LIB)
 
 .PHONY: pymetal/csrc/setup_inplace_link
 pymetal/csrc/setup_inplace_link: $(PYMETAL_LIB)
-	@mkdir -p $(PYTHON_ENV)/lib/python3.8/site-packages/ttmetal
-	cp $^ $(PYTHON_ENV)/lib/python3.8/site-packages/ttmetal/_C.so
-	rm -f pymetal/ttmetal/_C.so
-	ln -s $(PYTHON_ENV)/lib/python3.8/site-packages/ttmetal/_C.so pymetal/ttmetal
+	@mkdir -p $(PYTHON_ENV)/lib/python3.8/site-packages/ttlib
+	cp $^ $(PYTHON_ENV)/lib/python3.8/site-packages/ttlib/_C.so
+	rm -f pymetal/ttlib/_C.so
+	ln -s $(PYTHON_ENV)/lib/python3.8/site-packages/ttlib/_C.so pymetal/ttlib
 
 # Compile obj files
 $(OBJDIR)/pymetal/csrc/%.o: pymetal/csrc/%.cpp

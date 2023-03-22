@@ -6,10 +6,10 @@ Overview
 
 ttDNN is a simplified Python interface to the compute engine of the TT-Metal.
 
-This will be the future plan. For now, the ``ttmetal`` Python module is a
+This will be the future plan. For now, the ``ttlib`` Python module is a
 unified Python interface that provides both ttDNN and the Tensor library.
 
-ttDNN API through ``ttmetal``
+ttDNN API through ``ttlib``
 =============================
 
 Tensor math operations
@@ -27,29 +27,29 @@ operation (unary, binary etc.).
 Any arguments which are exceptions to this rule will be noted in that
 operation's listing.
 
-.. autofunction:: ttmetal.tensor.add
+.. autofunction:: ttlib.tensor.add
 
-.. autofunction:: ttmetal.tensor.sub
+.. autofunction:: ttlib.tensor.sub
 
-.. autofunction:: ttmetal.tensor.mul
+.. autofunction:: ttlib.tensor.mul
 
-.. autofunction:: ttmetal.tensor.matmul
+.. autofunction:: ttlib.tensor.matmul
 
-.. autofunction:: ttmetal.tensor.bmm
+.. autofunction:: ttlib.tensor.bmm
 
-.. autofunction:: ttmetal.tensor.exp
+.. autofunction:: ttlib.tensor.exp
 
-.. autofunction:: ttmetal.tensor.recip
+.. autofunction:: ttlib.tensor.recip
 
-.. autofunction:: ttmetal.tensor.gelu
+.. autofunction:: ttlib.tensor.gelu
 
-.. autofunction:: ttmetal.tensor.sqrt
+.. autofunction:: ttlib.tensor.sqrt
 
-.. autofunction:: ttmetal.tensor.sigmoid
+.. autofunction:: ttlib.tensor.sigmoid
 
-.. autofunction:: ttmetal.tensor.log
+.. autofunction:: ttlib.tensor.log
 
-.. autofunction:: ttmetal.tensor.tanh
+.. autofunction:: ttlib.tensor.tanh
 
 Tensor manipulation operations
 ------------------------------
@@ -57,47 +57,47 @@ Tensor manipulation operations
 These operations change the tensor shape in some way, giving it new dimensions
 but in general retaining the data.
 
-.. autofunction:: ttmetal.tensor.reshape
+.. autofunction:: ttlib.tensor.reshape
 
-.. autofunction:: ttmetal.tensor.transpose
+.. autofunction:: ttlib.tensor.transpose
 
-.. autofunction:: ttmetal.tensor.transpose_hc
+.. autofunction:: ttlib.tensor.transpose_hc
 
-.. autofunction:: ttmetal.tensor.transpose_hc_rm
+.. autofunction:: ttlib.tensor.transpose_hc_rm
 
-.. autofunction:: ttmetal.tensor.tilize
+.. autofunction:: ttlib.tensor.tilize
 
-.. autofunction:: ttmetal.tensor.untilize
+.. autofunction:: ttlib.tensor.untilize
 
 All other operations
 --------------------
 
-.. autofunction:: ttmetal.tensor.fill_rm
+.. autofunction:: ttlib.tensor.fill_rm
 
-.. autofunction:: ttmetal.tensor.fill_ones_rm
+.. autofunction:: ttlib.tensor.fill_ones_rm
 
-.. autofunction:: ttmetal.tensor.pad_h_rm
+.. autofunction:: ttlib.tensor.pad_h_rm
 
-.. autofunction:: ttmetal.tensor.bcast
+.. autofunction:: ttlib.tensor.bcast
 
-.. autofunction:: ttmetal.tensor.reduce
+.. autofunction:: ttlib.tensor.reduce
 
 Enums
 -----
 
-.. autoclass:: ttmetal.tensor.BcastOpMath
+.. autoclass:: ttlib.tensor.BcastOpMath
     :members: ADD, SUB, MUL
 
-.. autoclass:: ttmetal.tensor.BcastOpDim
+.. autoclass:: ttlib.tensor.BcastOpDim
     :members: H, W, HW
 
-.. autoclass:: ttmetal.tensor.ReduceOpMath
+.. autoclass:: ttlib.tensor.ReduceOpMath
     :members: SUM, MAX
 
-.. autoclass:: ttmetal.tensor.ReduceOpDim
+.. autoclass:: ttlib.tensor.ReduceOpDim
     :members: H, W, HW
 
-``ttmetal`` Mini-Graph Library
+``ttlib`` Mini-Graph Library
 ==============================
 
 Fused Operations
@@ -106,10 +106,10 @@ Fused Operations
 We have a variety of common operations that require fusion of multiple
 base operations together.
 
-.. autofunction:: ttmetal.fused_ops.linear.Linear
+.. autofunction:: ttlib.fused_ops.linear.Linear
 
-.. autofunction:: ttmetal.fused_ops.softmax.softmax
+.. autofunction:: ttlib.fused_ops.softmax.softmax
 
-.. autofunction:: ttmetal.fused_ops.layernorm.Layernorm
+.. autofunction:: ttlib.fused_ops.layernorm.Layernorm
 
-.. autofunction:: ttmetal.fused_ops.add_and_norm.AddAndNorm
+.. autofunction:: ttlib.fused_ops.add_and_norm.AddAndNorm

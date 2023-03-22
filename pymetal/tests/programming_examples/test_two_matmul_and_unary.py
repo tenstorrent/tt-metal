@@ -1,12 +1,12 @@
 import torch
-from pymetal import ttmetal
+from pymetal import ttlib
 
 
 def test_two_matmul_and_unary():
     # Create and initialize device on pcie slot 0
-    device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
-    ttmetal.device.InitializeDevice(device)
-    host = ttmetal.device.GetHost()
+    device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, 0)
+    ttlib.device.InitializeDevice(device)
+    host = ttlib.device.GetHost()
 
     torch.manual_seed(1234)
 
@@ -25,55 +25,55 @@ def test_two_matmul_and_unary():
 
     # Create the tensor on host, convert to tile layout as ops expect inputs in tile layout, and then move to device
     input_t0 = (
-        ttmetal.tensor.Tensor(
+        ttlib.tensor.Tensor(
             input_0.reshape(-1).tolist(),
             input_0.size(),
-            ttmetal.tensor.DataType.BFLOAT16,
-            ttmetal.tensor.Layout.ROW_MAJOR,
+            ttlib.tensor.DataType.BFLOAT16,
+            ttlib.tensor.Layout.ROW_MAJOR,
         )
-        .to(ttmetal.tensor.Layout.TILE)
+        .to(ttlib.tensor.Layout.TILE)
         .to(device)
     )
 
     input_t1 = (
-        ttmetal.tensor.Tensor(
+        ttlib.tensor.Tensor(
             input_1.reshape(-1).tolist(),
             input_1.size(),
-            ttmetal.tensor.DataType.BFLOAT16,
-            ttmetal.tensor.Layout.ROW_MAJOR,
+            ttlib.tensor.DataType.BFLOAT16,
+            ttlib.tensor.Layout.ROW_MAJOR,
         )
-        .to(ttmetal.tensor.Layout.TILE)
+        .to(ttlib.tensor.Layout.TILE)
         .to(device)
     )
 
     input_t2 = (
-        ttmetal.tensor.Tensor(
+        ttlib.tensor.Tensor(
             input_2.reshape(-1).tolist(),
             input_2.size(),
-            ttmetal.tensor.DataType.BFLOAT16,
-            ttmetal.tensor.Layout.ROW_MAJOR,
+            ttlib.tensor.DataType.BFLOAT16,
+            ttlib.tensor.Layout.ROW_MAJOR,
         )
-        .to(ttmetal.tensor.Layout.TILE)
+        .to(ttlib.tensor.Layout.TILE)
         .to(device)
     )
 
     # Run batched matrix mult on input 0 and input 1
     # Output is size [batch, C, M, N]
-    output_t0 = ttmetal.tensor.bmm(input_t0, input_t1)
+    output_t0 = ttlib.tensor.bmm(input_t0, input_t1)
 
     # Run batched matrix mult on bmm out 0 and input 2
     # Output is size [batch, C, M, M]
-    output_t1 = ttmetal.tensor.bmm(output_t0, input_t2)
+    output_t1 = ttlib.tensor.bmm(output_t0, input_t2)
 
     # Run gelu on bmm out 1
     # Output is size [batch, C, M, M]
-    output_t2 = ttmetal.tensor.gelu(output_t1)
+    output_t2 = ttlib.tensor.gelu(output_t1)
 
     # Move final output from device back to host, convert back to row major, then convert to Pytorch tensor
-    output_t2 = output_t2.to(host).to(ttmetal.tensor.Layout.ROW_MAJOR)
+    output_t2 = output_t2.to(host).to(ttlib.tensor.Layout.ROW_MAJOR)
     final_output = torch.Tensor(output_t2.data()).reshape(output_t2.shape())
 
-    ttmetal.device.CloseDevice(device)
+    ttlib.device.CloseDevice(device)
 
     print(final_output)
 

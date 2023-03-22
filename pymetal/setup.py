@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name="ttmetal",
+    name="ttlib",
     version="0.1",
     description="",
     install_requires=[
@@ -9,6 +9,6 @@ setup(
         "numpy==1.20.3",
     ],
     python_requires='>=3.8',
-    packages=["ttmetal"],
-    package_dir={"ttmetal": "ttmetal"},
+    packages=["ttlib"],
+    package_dir={"ttlib": "ttlib"},
 )

@@ -6,19 +6,19 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-from pymetal import ttmetal
+from pymetal import ttlib
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight
 
 # Initialize the device
-device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, 0)
-ttmetal.device.InitializeDevice(device)
-host = ttmetal.device.GetHost()
-ttmetal.device.StartDebugPrintServer(device)
+device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, 0)
+ttlib.device.InitializeDevice(device)
+host = ttlib.device.GetHost()
+ttlib.device.StartDebugPrintServer(device)
 
-RSUM = ttmetal.tensor.ReduceOpMath.SUM
-RW = ttmetal.tensor.ReduceOpDim.W
-RH = ttmetal.tensor.ReduceOpDim.H
-RHW = ttmetal.tensor.ReduceOpDim.HW
+RSUM = ttlib.tensor.ReduceOpMath.SUM
+RW = ttlib.tensor.ReduceOpDim.W
+RH = ttlib.tensor.ReduceOpDim.H
+RHW = ttlib.tensor.ReduceOpDim.HW
 
 if __name__ == "__main__":
     N = 7
@@ -28,8 +28,8 @@ if __name__ == "__main__":
     torch.manual_seed(123)
     x = (torch.randn((N,C,H,W))+0.05).to(torch.bfloat16).to(torch.float32)
 
-    xt = ttmetal.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttmetal.tensor.DataType.BFLOAT16, ttmetal.tensor.Layout.TILE, device)
-    tt_res = ttmetal.tensor.transpose(xt)
+    xt = ttlib.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttlib.tensor.DataType.BFLOAT16, ttlib.tensor.Layout.TILE, device)
+    tt_res = ttlib.tensor.transpose(xt)
     assert(tt_res.shape() == [N,C,W,H])
     tt_host_rm = tt_res.to(host).data()
 
@@ -43,4 +43,4 @@ if __name__ == "__main__":
 
     assert(allok)
 
-ttmetal.device.CloseDevice(device)
+ttlib.device.CloseDevice(device)

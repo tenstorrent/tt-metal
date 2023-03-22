@@ -7,41 +7,41 @@ Overview
 The TT-Metal Tensor library provides easy entry to the data structures and
 device management layer of TT-Metal.
 
-This will be the future plan. For now, the ``ttmetal`` Python module is a
+This will be the future plan. For now, the ``ttlib`` Python module is a
 unified Python interface that provides both ttDNN and the Tensor library.
 
-Tensor API through ``ttmetal``
+Tensor API through ``ttlib``
 ==============================
 
-.. autoclass:: ttmetal.device.Arch
+.. autoclass:: ttlib.device.Arch
     :members: GRAYSKULL
 
-.. autoclass:: ttmetal.device.Device
+.. autoclass:: ttlib.device.Device
     :members:
 
-.. autoclass:: ttmetal.device.Host
-    :members:
-    :special-members: __init__
-
-.. autofunction:: ttmetal.device.CreateDevice
-
-.. autofunction:: ttmetal.device.InitializeDevice
-
-.. autofunction:: ttmetal.device.GetHost
-
-.. autofunction:: ttmetal.device.CloseDevice
-
-.. autoclass:: ttmetal.tensor.Tensor
+.. autoclass:: ttlib.device.Host
     :members:
     :special-members: __init__
 
-.. autofunction:: ttmetal.utils.pad_activation
+.. autofunction:: ttlib.device.CreateDevice
 
-.. autofunction:: ttmetal.utils.pad_weight
+.. autofunction:: ttlib.device.InitializeDevice
 
-.. autofunction:: ttmetal.utils.tilize_to_list
+.. autofunction:: ttlib.device.GetHost
 
-.. autofunction:: ttmetal.utils.untilize
+.. autofunction:: ttlib.device.CloseDevice
+
+.. autoclass:: ttlib.tensor.Tensor
+    :members:
+    :special-members: __init__
+
+.. autofunction:: ttlib.utils.pad_activation
+
+.. autofunction:: ttlib.utils.pad_weight
+
+.. autofunction:: ttlib.utils.tilize_to_list
+
+.. autofunction:: ttlib.utils.untilize
 
 Tensor Examples with ``torch``
 ------------------------------
@@ -62,22 +62,22 @@ Converting a PyTorch Tensor to a TT-Metal Tensor
 .. code-block:: python
 
     ...
-    import ttmetal
+    import ttlib
 
     pcie_0 = 0
-    device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, pcie_0)
+    device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, pcie_0)
 
     pt_tensor = torch.randn(1, 1, 5, 128)
-    padded_pt_tensor = ttmetal.utils.pad_activation(pt_tensor)
+    padded_pt_tensor = ttlib.utils.pad_activation(pt_tensor)
 
-    tilized_pt_tensor = ttmetal.utils.tilize_to_list(padded_pt_tensor)
+    tilized_pt_tensor = ttlib.utils.tilize_to_list(padded_pt_tensor)
 
     tt_shape = list(padded_pt_tensor.shape())
-    tt_tensor = ttmetal.tensor.Tensor(
+    tt_tensor = ttlib.tensor.Tensor(
         tilized_pt_tensor,
         tt_shape,
-        ttmetal.tensor.DataType.BFLOAT16,
-        ttmetal.tensor.Layout.TILE,
+        ttlib.tensor.DataType.BFLOAT16,
+        ttlib.tensor.Layout.TILE,
         device
     )
 
@@ -97,20 +97,20 @@ Converting a TT-Metal Tensor back to PyTorch
 .. code-block:: python
 
     import torch
-    import ttmetal
+    import ttlib
 
     ...
 
     pcie_0 = 0
-    device = ttmetal.device.CreateDevice(ttmetal.device.Arch.GRAYSKULL, pcie_0)
-    host = ttmetal.device.GetHost()
+    device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, pcie_0)
+    host = ttlib.device.GetHost()
 
     shape = tt_tensor.shape()
 
     tt_tensor_out = tt_tensor.to(host)
 
     tt_out_tilized = torch.Tensor(tt_tensor_out.data())
-    tt_out_flat = ttmetal.utils.untilize(tt_out_tilized)
+    tt_out_flat = ttlib.utils.untilize(tt_out_tilized)
     tt_out = tt_out_flat.reshape(shape)
 
 Converting back is even easier.
