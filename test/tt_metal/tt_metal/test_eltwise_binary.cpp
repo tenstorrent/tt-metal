@@ -103,16 +103,16 @@ int main(int argc, char **argv) {
 
         auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "kernels/dataflow/reader_dual_8bank.cpp"
-                      : "kernels/dataflow/reader_binary_diff_lengths.cpp",
+            multibank ? "tt_metal/kernels/dataflow/reader_dual_8bank.cpp"
+                      : "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "kernels/dataflow/writer_unary_8bank.cpp"
-                      : "kernels/dataflow/writer_unary.cpp",
+            multibank ? "tt_metal/kernels/dataflow/writer_unary_8bank.cpp"
+                      : "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -127,7 +127,7 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/eltwise_binary.cpp",
+            "tt_metal/kernels/compute/eltwise_binary.cpp",
             core,
             eltwise_binary_args,
             MathFidelity::HiFi4,

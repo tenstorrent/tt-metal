@@ -322,9 +322,9 @@ void CompileBlankKernel(Device *device, const std::string &out_dir_path) {
         .dummy = 0,
     };
     blank_build_options.set_hlk_args_all_cores(hlk_args, sizeof(hlk_args_t));
-    blank_build_options.set_hlk_file_name_all_cores("kernels/compute/blank.cpp");
-    blank_build_options.ncrisc_kernel_file_name = "kernels/dataflow/blank.cpp";
-    blank_build_options.brisc_kernel_file_name = "kernels/dataflow/blank.cpp";
+    blank_build_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/blank.cpp");
+    blank_build_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
+    blank_build_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
     bool skip_hlkc = false;  // TODO: Hardcoded to false for now
     std::string arch_name = tt::get_string_lowercase(device->arch());
 
@@ -380,7 +380,7 @@ void PopulateKernelGroupWithDataMovementKernels(Program *program, KernelGroup &k
         NOC riscv_0_noc = get_noc_id(kernel_group.riscv_1, NOC::RISCV_0_default);
         auto riscv_0_kernel = CreateDataMovementKernel(
             program,
-            "kernels/dataflow/blank.cpp",
+            "tt_metal/kernels/dataflow/blank.cpp",
             logical_core,
             empty_kernel_args,
             DataMovementProcessor::RISCV_0,
@@ -392,7 +392,7 @@ void PopulateKernelGroupWithDataMovementKernels(Program *program, KernelGroup &k
         NOC riscv_1_noc = get_noc_id(kernel_group.riscv_0, NOC::RISCV_1_default);
         auto riscv_1_kernel = CreateDataMovementKernel(
             program,
-            "kernels/dataflow/blank.cpp",
+            "tt_metal/kernels/dataflow/blank.cpp",
             logical_core,
             empty_kernel_args,
             DataMovementProcessor::RISCV_1,

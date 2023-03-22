@@ -93,7 +93,7 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
 
         tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_unary_8bank_start_id.cpp",
+            "tt_metal/kernels/dataflow/reader_unary_8bank_start_id.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
@@ -101,7 +101,7 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
 
         tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary_8bank_start_id.cpp",
+            "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -117,7 +117,7 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/eltwise_sfpu.cpp",
+            "tt_metal/kernels/compute/eltwise_sfpu.cpp",
             core,
             eltwise_unary_args,
             MathFidelity::HiFi4,

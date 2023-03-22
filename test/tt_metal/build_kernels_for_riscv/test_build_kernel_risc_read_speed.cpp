@@ -15,7 +15,7 @@ int main() {
 
     log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
 
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/risc_read_speed.cpp";
+    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/risc_read_speed.cpp";
 
     generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, "grayskull");
 

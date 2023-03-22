@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
 
         auto reader_cb_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_cb_test.cpp",
+            "tt_metal/kernels/dataflow/reader_cb_test.cpp",
             core,
             reader_cb_kernel_args,
             tt_metal::DataMovementProcessor::RISCV_1,
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
 
         auto writer_cb_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_cb_test.cpp",
+            "tt_metal/kernels/dataflow/writer_cb_test.cpp",
             core,
             writer_cb_kernel_args,
             tt_metal::DataMovementProcessor::RISCV_0,

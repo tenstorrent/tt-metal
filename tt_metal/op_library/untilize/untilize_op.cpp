@@ -101,7 +101,7 @@ Tensor untilize(const Tensor &a) {
     // Tilized reader
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
@@ -109,7 +109,7 @@ Tensor untilize(const Tensor &a) {
     // Untilized writer
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
         core,
         compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -125,7 +125,7 @@ Tensor untilize(const Tensor &a) {
     bool math_approx_mode = false;
     auto untilize_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/untilize.cpp",
+        "tt_metal/kernels/compute/untilize.cpp",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,

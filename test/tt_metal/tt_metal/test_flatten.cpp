@@ -133,14 +133,14 @@ int main(int argc, char **argv) {
 
         auto flatten_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/flatten.cpp",
+            "tt_metal/kernels/dataflow/flatten.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -154,7 +154,7 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/eltwise_copy.cpp",
+            "tt_metal/kernels/compute/eltwise_copy.cpp",
             core,
             eltwise_unary_args,
             MathFidelity::HiFi4,

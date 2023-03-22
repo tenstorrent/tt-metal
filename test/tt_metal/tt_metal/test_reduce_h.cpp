@@ -108,16 +108,16 @@ int main(int argc, char **argv) {
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "kernels/dataflow/reader_unary_transpose_wh_8bank.cpp"
-                      : "kernels/dataflow/reader_unary_transpose_wh.cpp",
+            multibank ? "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp"
+                      : "tt_metal/kernels/dataflow/reader_unary_transpose_wh.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "kernels/dataflow/writer_unary_8bank.cpp" // no need to transpose the output since output Ht=1
-                      : "kernels/dataflow/writer_unary.cpp",
+            multibank ? "tt_metal/kernels/dataflow/writer_unary_8bank.cpp" // no need to transpose the output since output Ht=1
+                      : "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -136,7 +136,7 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto reduce_h_compute_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/reduce_h.cpp",
+            "tt_metal/kernels/compute/reduce_h.cpp",
             core,
             compute_args,
             MathFidelity::HiFi4,

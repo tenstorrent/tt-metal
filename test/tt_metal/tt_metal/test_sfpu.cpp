@@ -82,8 +82,8 @@ bool run_sfpu_test(string sfpu_name) {
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
             multibank ?
-                "kernels/dataflow/reader_unary_8bank.cpp" :
-                "kernels/dataflow/reader_unary_push_4.cpp",
+                "tt_metal/kernels/dataflow/reader_unary_8bank.cpp" :
+                "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
@@ -91,8 +91,8 @@ bool run_sfpu_test(string sfpu_name) {
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             multibank ?
-                "kernels/dataflow/writer_unary_8bank.cpp" :
-                "kernels/dataflow/writer_unary.cpp",
+                "tt_metal/kernels/dataflow/writer_unary_8bank.cpp" :
+                "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -104,7 +104,7 @@ bool run_sfpu_test(string sfpu_name) {
         tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
-        string hlk_kernel_name = "kernels/compute/eltwise_sfpu.cpp";
+        string hlk_kernel_name = "tt_metal/kernels/compute/eltwise_sfpu.cpp";
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
             hlk_kernel_name,

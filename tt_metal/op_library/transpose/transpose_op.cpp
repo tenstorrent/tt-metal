@@ -81,14 +81,14 @@ Tensor transpose_wh(const Tensor &a) {
 
     tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -102,7 +102,7 @@ Tensor transpose_wh(const Tensor &a) {
     bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/transpose_wh.cpp",
+        "tt_metal/kernels/compute/transpose_wh.cpp",
         core,
         eltwise_binary_args,
         MathFidelity::HiFi4,
@@ -232,14 +232,14 @@ Tensor transpose_wh_multi_core(const Tensor &a) {
 
     tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_unary_transpose_wh_8bank_partitioned.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary_8bank_start_id_batched.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id_batched.cpp",
         all_cores,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -253,7 +253,7 @@ Tensor transpose_wh_multi_core(const Tensor &a) {
     bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/transpose_wh.cpp",
+        "tt_metal/kernels/compute/transpose_wh.cpp",
         all_cores,
         eltwise_binary_args,
         MathFidelity::HiFi4,
@@ -383,14 +383,14 @@ Tensor transpose_hc(const Tensor &a) {
 
     tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/transpose_hc_8bank.cpp",
+        "tt_metal/kernels/dataflow/transpose_hc_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -404,7 +404,7 @@ Tensor transpose_hc(const Tensor &a) {
     bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/eltwise_copy.cpp",
+        "tt_metal/kernels/compute/eltwise_copy.cpp",
         core,
         eltwise_binary_args,
         MathFidelity::HiFi4,

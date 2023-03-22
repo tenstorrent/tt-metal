@@ -150,14 +150,14 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_copy_tile_layout.cpp",
+        "tt_metal/kernels/dataflow/reader_copy_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_copy_tile_layout.cpp",
+        "tt_metal/kernels/dataflow/writer_copy_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -172,7 +172,7 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
     bool math_approx_mode = false;
     auto compute_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/eltwise_copy_block.cpp",
+        "tt_metal/kernels/compute/eltwise_copy_block.cpp",
         all_cores,
         eltwise_copy_block,
         MathFidelity::HiFi4,

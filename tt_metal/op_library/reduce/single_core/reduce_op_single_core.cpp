@@ -77,15 +77,15 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
     tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         reduce_dim == ReduceOpDim::H ?
-            "kernels/dataflow/reader_unary_transpose_wh_8bank.cpp" :
-            "kernels/dataflow/reader_unary_8bank.cpp",
+            "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp" :
+            "tt_metal/kernels/dataflow/reader_unary_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);

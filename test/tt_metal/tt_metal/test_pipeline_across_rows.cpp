@@ -220,9 +220,9 @@ int main(int argc, char **argv) {
 
             string receiver_kernel_name;
             if (core_id == 0) {
-                receiver_kernel_name = "kernels/dataflow/reader_first_stage.cpp";
+                receiver_kernel_name = "tt_metal/kernels/dataflow/reader_first_stage.cpp";
             } else {
-                receiver_kernel_name = "kernels/dataflow/receiver_intermediate_stage.cpp";
+                receiver_kernel_name = "tt_metal/kernels/dataflow/receiver_intermediate_stage.cpp";
             }
 
             tt_metal::DataMovementKernelArgs* receiver_kernel_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(cores[core_id], {cb_index, block_size_tiles});
@@ -236,9 +236,9 @@ int main(int argc, char **argv) {
 
             string sender_kernel_name;
             if (core_id == num_cores - 1) {
-                sender_kernel_name = "kernels/dataflow/writer_last_stage.cpp";
+                sender_kernel_name = "tt_metal/kernels/dataflow/writer_last_stage.cpp";
             } else {
-                sender_kernel_name = "kernels/dataflow/sender_intermediate_stage.cpp";
+                sender_kernel_name = "tt_metal/kernels/dataflow/sender_intermediate_stage.cpp";
             }
             tt_metal::DataMovementKernelArgs* sender_kernel_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(cores[core_id], {cb_index, block_size_tiles});
             sender_kernels.push_back(tt_metal::CreateDataMovementKernel(

@@ -15,7 +15,7 @@ int main(int argc, char* argv[]) {
 
     log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
 
-    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/l1_to_dram_copy.cpp";
+    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/l1_to_dram_copy.cpp";
 
     generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, "grayskull");
 

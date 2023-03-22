@@ -87,7 +87,7 @@ Tensor reduce_multi_core_h(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
 
         tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_unary_transpose_wh_8bank_input_cols_partitioned.cpp",
+            "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank_input_cols_partitioned.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
@@ -95,7 +95,7 @@ Tensor reduce_multi_core_h(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
 
         tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary_8bank_start_id.cpp",
+            "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);

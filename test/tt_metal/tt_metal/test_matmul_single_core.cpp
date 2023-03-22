@@ -274,14 +274,14 @@ int main(int argc, char **argv) {
 
         auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_matmul_blocked.cpp",
+            "tt_metal/kernels/dataflow/reader_matmul_blocked.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unswizzle.cpp",
+            "tt_metal/kernels/dataflow/writer_unswizzle.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -321,7 +321,7 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto matmul_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/matmul_large_block_zm.cpp",
+            "tt_metal/kernels/compute/matmul_large_block_zm.cpp",
             core,
             mm_args,
             MathFidelity::HiFi4,

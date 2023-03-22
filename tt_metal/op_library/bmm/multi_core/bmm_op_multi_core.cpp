@@ -121,12 +121,12 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
 
         auto reader = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+            "tt_metal/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
             core, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
         auto writer = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary_8bank_start_id.cpp",
+            "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
             core, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
         vector<uint32_t> compute_args = {
@@ -141,7 +141,7 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         bool math_approx_mode = false;
         auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/bmm.cpp",
+            "tt_metal/kernels/compute/bmm.cpp",
             core,
             eltwise_binary_args,
             MathFidelity::HiFi4,

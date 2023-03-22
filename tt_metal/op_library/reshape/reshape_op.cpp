@@ -107,7 +107,7 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
 
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
         core,
         reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -115,7 +115,7 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
         core,
         writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -132,7 +132,7 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/eltwise_copy.cpp",
+        "tt_metal/kernels/compute/eltwise_copy.cpp",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,

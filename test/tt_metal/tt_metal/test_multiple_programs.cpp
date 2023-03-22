@@ -74,14 +74,14 @@ tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair 
 
     auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_binary.cpp",
+        "tt_metal/kernels/dataflow/reader_binary.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -95,7 +95,7 @@ tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair 
     bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/eltwise_binary.cpp",
+        "tt_metal/kernels/compute/eltwise_binary.cpp",
         core,
         eltwise_binary_args,
         MathFidelity::HiFi4,
@@ -154,14 +154,14 @@ tt_metal::Program *setup_program_two(tt_metal::Device *device, const tt_xy_pair 
 
     auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_matmul_small_block.cpp",
+        "tt_metal/kernels/dataflow/reader_matmul_small_block.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -180,7 +180,7 @@ tt_metal::Program *setup_program_two(tt_metal::Device *device, const tt_xy_pair 
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/matmul.cpp",
+        "tt_metal/kernels/compute/matmul.cpp",
         core,
         mm_args,
         MathFidelity::HiFi4,

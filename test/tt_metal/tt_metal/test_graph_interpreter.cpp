@@ -34,9 +34,9 @@ void run_compile_blank() {
         .dummy = 0,
     };
     build_kernel_for_riscv_options.set_hlk_args_all_cores(hlk_args, sizeof(blank::hlk_args_t));
-    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("kernels/compute/blank.cpp");
-    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/blank.cpp";
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/blank.cpp";
+    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/blank.cpp");
+    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
+    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
 
     generate_binaries_params_t params = {.skip_hlkc = false};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
@@ -209,14 +209,14 @@ bool run_chained_sfpu_test(int chain_length) {
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_unary.cpp",
+            "tt_metal/kernels/dataflow/reader_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -231,7 +231,7 @@ bool run_chained_sfpu_test(int chain_length) {
         bool math_approx_mode = false;
         auto graph_interpreter_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/graph_interpreter.cpp",
+            "tt_metal/kernels/compute/graph_interpreter.cpp",
             core,
             graph_interpreter_args,
             MathFidelity::HiFi4,
@@ -476,14 +476,14 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
         auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_binary.cpp",
+            "tt_metal/kernels/dataflow/reader_binary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -499,7 +499,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         bool math_approx_mode = false;
         auto graph_interpreter_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/graph_interpreter.cpp",
+            "tt_metal/kernels/compute/graph_interpreter.cpp",
             core,
             graph_interpreter_args,
             MathFidelity::HiFi4,
@@ -753,14 +753,14 @@ bool run_forked_binary_test() {
 
         auto nary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_nary.cpp",
+            "tt_metal/kernels/dataflow/reader_nary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -775,7 +775,7 @@ bool run_forked_binary_test() {
         bool math_approx_mode = false;
         auto graph_interpreter_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/graph_interpreter.cpp",
+            "tt_metal/kernels/compute/graph_interpreter.cpp",
             core,
             graph_interpreter_args,
             MathFidelity::HiFi4,

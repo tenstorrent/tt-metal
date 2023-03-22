@@ -184,21 +184,21 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
 
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_matmul_tile_layout_in0_mcast_sender.cpp",
+        "tt_metal/kernels/dataflow/reader_matmul_tile_layout_in0_mcast_sender.cpp",
         mcast_senders,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     auto mm_reader_kernel_receiver = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_matmul_tile_layout_in0_mcast_receiver.cpp",
+        "tt_metal/kernels/dataflow/reader_matmul_tile_layout_in0_mcast_receiver.cpp",
         mcast_receivers,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_matmul_tile_layout.cpp",
+        "tt_metal/kernels/dataflow/writer_matmul_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -237,7 +237,7 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/matmul_large_block_zm.cpp",
+        "tt_metal/kernels/compute/matmul_large_block_zm.cpp",
         all_cores,
         mm_args,
         MathFidelity::HiFi4,

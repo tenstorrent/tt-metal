@@ -69,14 +69,14 @@ tt_metal::Program *create_program(
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_unary_push_4.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
         all_cores,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
         all_cores,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -85,7 +85,7 @@ tt_metal::Program *create_program(
     bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/eltwise_copy.cpp",
+        "tt_metal/kernels/compute/eltwise_copy.cpp",
         all_cores,
         eltwise_unary_args,
         MathFidelity::HiFi4,

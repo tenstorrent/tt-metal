@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
         }
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/dram_copy_sticks.cpp",
+            "tt_metal/kernels/dataflow/dram_copy_sticks.cpp",
             all_cores,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);

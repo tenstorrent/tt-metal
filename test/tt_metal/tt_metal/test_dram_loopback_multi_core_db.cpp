@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
         // Loader (producer kernel) running on BRISC on logical core {0, 0}
         auto producer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/dram_loader_sync_db.cpp",
+            "tt_metal/kernels/dataflow/dram_loader_sync_db.cpp",
             loader_logical_core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
         // Writer (consumer kernel) running on NCRISC on logical core {0, 1}
         auto consumer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/remote_read_remote_write_sync_db.cpp",
+            "tt_metal/kernels/dataflow/remote_read_remote_write_sync_db.cpp",
             writer_logical_core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);

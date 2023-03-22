@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
         auto mcast_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
+            "tt_metal/kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);

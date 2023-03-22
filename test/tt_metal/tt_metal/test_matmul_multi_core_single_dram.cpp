@@ -232,14 +232,14 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
 
     auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/reader_matmul_blocked.cpp",
+        "tt_metal/kernels/dataflow/reader_matmul_blocked.cpp",
         all_cores,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unswizzle.cpp",
+        "tt_metal/kernels/dataflow/writer_unswizzle.cpp",
         all_cores,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -278,7 +278,7 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/matmul_large_block_zm.cpp",
+        "tt_metal/kernels/compute/matmul_large_block_zm.cpp",
         all_cores,
         mm_args,
         MathFidelity::HiFi4,

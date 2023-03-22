@@ -16,15 +16,15 @@ int main(int argc, char* argv[]) {
     std::vector<uint32_t> compute_kernel_args = {
         8
     };
-    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("kernels/compute/eltwise_copy.cpp");
+    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/eltwise_copy.cpp");
 
     build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(tt::HlkOperand::in0, tt::DataFormat::Float16_b);
     build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(tt::HlkOperand::out0, tt::DataFormat::Float16_b);
     // make sure to set this to false on GS (because no FP32 in dst), otherwise pack_src_format will be incorrect
     build_kernel_for_riscv_options.fp32_dest_acc_en = false;
 
-    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/reader_sync.cpp";
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/writer_unary.cpp";
+    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/reader_sync.cpp";
+    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/writer_unary.cpp";
 
     bool skip_hlkc = false;
     if (argc > 1) {

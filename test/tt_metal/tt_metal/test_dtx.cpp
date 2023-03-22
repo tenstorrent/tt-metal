@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
 
         auto dram_to_l1_copy_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/dram_to_l1_copy_with_address_map.cpp",
+            "tt_metal/kernels/dataflow/dram_to_l1_copy_with_address_map.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);

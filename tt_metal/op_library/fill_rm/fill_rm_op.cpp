@@ -47,11 +47,11 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
         DataFormat::Float16_b);
 
     tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
-        program, "kernels/dataflow/fill_rm_8bank.cpp",
+        program, "tt_metal/kernels/dataflow/fill_rm_8bank.cpp",
         core, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
-        program, "kernels/dataflow/blank.cpp",
+        program, "tt_metal/kernels/dataflow/blank.cpp",
         core, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
 
     vector<uint32_t> compute_args = {
@@ -62,7 +62,7 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
-        program, "kernels/compute/blank.cpp",
+        program, "tt_metal/kernels/compute/blank.cpp",
         core, blank_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
     // Compile kernels

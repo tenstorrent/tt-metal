@@ -17,7 +17,7 @@ int main(int argc, char* argv[]) {
     };
 
     // HLK config
-    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("kernels/compute/eltwise_copy.cpp");
+    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/eltwise_copy.cpp");
 
     // data-copy has one input operand and one output operand
     build_kernel_for_riscv_options.set_hlk_operand_dataformat_all_cores(tt::HlkOperand::in0, tt::DataFormat::Float16_b);
@@ -27,8 +27,8 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.fp32_dest_acc_en = false;
 
     // NCRISC / BRISC config
-    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/reader_unary_push_4.cpp";
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/writer_unary.cpp";
+    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/reader_unary_push_4.cpp";
+    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/writer_unary.cpp";
 
     // generate binaries
     bool skip_hlkc = false;

@@ -126,14 +126,14 @@ int main(int argc, char **argv) {
          */
         DataMovementKernel *binary_reader_kernel = CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_binary_diff_lengths.cpp",
+            "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
             core,
             DataMovementProcessor::RISCV_1,
             NOC::RISCV_1_default);
 
         DataMovementKernel *unary_writer_kernel = CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default);
@@ -156,7 +156,7 @@ int main(int argc, char **argv) {
          */
         ComputeKernel *eltwise_binary_kernel = CreateComputeKernel(
             program,
-            "kernels/compute/eltwise_binary.cpp",
+            "tt_metal/kernels/compute/eltwise_binary.cpp",
             core,
             eltwise_binary_args,
             MathFidelity::HiFi4,
@@ -270,14 +270,14 @@ int main(int argc, char **argv) {
 
         binary_reader_kernel = CreateDataMovementKernel(
             program_mul,
-            "kernels/dataflow/reader_binary_diff_lengths.cpp",
+            "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
             core,
             DataMovementProcessor::RISCV_1,
             NOC::RISCV_1_default);
 
         unary_writer_kernel = CreateDataMovementKernel(
             program_mul,
-            "kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default);
@@ -286,7 +286,7 @@ int main(int argc, char **argv) {
 
         eltwise_binary_kernel = CreateComputeKernel(
             program_mul,
-            "kernels/compute/eltwise_binary.cpp",
+            "tt_metal/kernels/compute/eltwise_binary.cpp",
             core,
             eltwise_binary_args,
 

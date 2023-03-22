@@ -168,7 +168,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
+            "tt_metal/kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1}),
             tt_metal::DataMovementProcessor::RISCV_1,
@@ -176,7 +176,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -190,7 +190,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/eltwise_copy.cpp",
+            "tt_metal/kernels/compute/eltwise_copy.cpp",
             core,
             eltwise_unary_args,
             MathFidelity::HiFi4,
@@ -359,7 +359,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
+            "tt_metal/kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1}),
             tt_metal::DataMovementProcessor::RISCV_1,
@@ -367,7 +367,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
+            "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1}),
             tt_metal::DataMovementProcessor::RISCV_0,
@@ -382,7 +382,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/eltwise_copy.cpp",
+            "tt_metal/kernels/compute/eltwise_copy.cpp",
             core,
             eltwise_unary_args,
             MathFidelity::HiFi4,

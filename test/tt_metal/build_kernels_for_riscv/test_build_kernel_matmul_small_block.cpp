@@ -39,7 +39,7 @@ int main(int argc, char* argv[]) {
     };
 
     // HLK config
-    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("kernels/compute/matmul.cpp");
+    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/matmul.cpp");
     build_kernel_for_riscv_options.set_hlk_math_fidelity_all_cores(MathFidelity::HiFi4);
 
     // matmul: 2 input operands, and 1 output operand (operand == buffer)
@@ -51,8 +51,8 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.fp32_dest_acc_en = false;
 
     // NCRISC / BRISC config
-    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/reader_matmul_small_block.cpp";
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/writer_unary.cpp"; // writer unary is generic to support this case
+    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/reader_matmul_small_block.cpp";
+    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/writer_unary.cpp"; // writer unary is generic to support this case
 
     // generate binaries
     bool skip_hlkc = false;

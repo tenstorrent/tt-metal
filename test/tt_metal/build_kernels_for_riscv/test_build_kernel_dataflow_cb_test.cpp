@@ -33,8 +33,8 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::dataflow7, tt::DataFormat::Float16_b);
 
     // NCRISC / BRISC config
-    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/reader_cb_test.cpp";
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/writer_cb_test.cpp";
+    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/reader_cb_test.cpp";
+    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/writer_cb_test.cpp";
 
     fs::create_directories(out_dir_path);
     generate_data_format_descriptors(&build_kernel_for_riscv_options, out_dir_path);

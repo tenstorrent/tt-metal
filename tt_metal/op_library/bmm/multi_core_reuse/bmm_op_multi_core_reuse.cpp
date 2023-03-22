@@ -130,14 +130,14 @@ tt_metal::Program * create_program(
             // Create reader and writer kernels per core
             auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
                 program,
-                "kernels/dataflow/reader_bmm_tile_layout.cpp",
+                "tt_metal/kernels/dataflow/reader_bmm_tile_layout.cpp",
                 core,
                 tt_metal::DataMovementProcessor::RISCV_1,
                 tt_metal::NOC::RISCV_1_default);
 
             auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
                 program,
-                "kernels/dataflow/writer_bmm_tile_layout.cpp",
+                "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
                 core,
                 tt_metal::DataMovementProcessor::RISCV_0,
                 tt_metal::NOC::RISCV_0_default);
@@ -148,7 +148,7 @@ tt_metal::Program * create_program(
             bool math_approx_mode = false;
             auto mm_kernel = tt_metal::CreateComputeKernel(
                 program,
-                "kernels/compute/bmm_large_block_zm.cpp",
+                "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
                 core,
                 mm_args,
                 MathFidelity::HiFi4,

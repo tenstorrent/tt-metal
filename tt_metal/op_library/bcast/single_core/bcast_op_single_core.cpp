@@ -107,7 +107,7 @@ Tensor bcast_single_core(const Tensor &a, const Tensor &b, BcastOpMath::Enum bca
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);

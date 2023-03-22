@@ -370,7 +370,7 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         std::vector<uint32_t> writer_rt_args;
         string writer_kernel;
         if (output_rm) {
-            writer_kernel = "kernels/dataflow/writer_unary.cpp";
+            writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
             writer_rt_args = {
                 dram_buffer_dst_addr,
                 (std::uint32_t)dram_dst_noc_xy.x,
@@ -378,7 +378,7 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
                 uint(M * N)
             };
         } else {
-            writer_kernel = "kernels/dataflow/writer_unswizzle.cpp";
+            writer_kernel = "tt_metal/kernels/dataflow/writer_unswizzle.cpp";
             writer_rt_args = {
                 dram_buffer_dst_addr,
                 (std::uint32_t)dram_dst_noc_xy.x,
@@ -395,7 +395,7 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
 
         auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/reader_matmul_blocked.cpp",
+            "tt_metal/kernels/dataflow/reader_matmul_blocked.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
@@ -454,8 +454,8 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
 
-        string compute_kernel = "kernels/compute/matmul_large_block_3m.cpp";
-        //string compute_kernel = "kernels/compute/3T/matmul_large_block_zm";
+        string compute_kernel = "tt_metal/kernels/compute/matmul_large_block_3m.cpp";
+        //string compute_kernel = "tt_metal/kernels/compute/3T/matmul_large_block_zm";
 
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,

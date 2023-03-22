@@ -16,10 +16,10 @@ int main() {
     log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
 
     // a blank -- no kernel
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/blank.cpp";
+    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
 
     // same as the brisc version but with different arg addresses
-    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/dram_copy.cpp";
+    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/dram_copy.cpp";
 
     generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, "grayskull");
     generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, "grayskull");

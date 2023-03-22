@@ -64,7 +64,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
         DataFormat::Float16_b);
 
     tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
-        program, "kernels/dataflow/transpose_hc_rm_8bank_l1.cpp",
+        program, "tt_metal/kernels/dataflow/transpose_hc_rm_8bank_l1.cpp",
         core, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::RISCV_1_default);
 
     // Compile kernels
@@ -138,12 +138,12 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
         tt_metal::CoreRange core_range({0,i}, {(std::size_t)num_cores_c - 1,i});
         if(i%2 == 0) {
             binary_reader_kernels.push_back(tt_metal::CreateDataMovementKernel(
-                program, "kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",
+                program, "tt_metal/kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",
                 core_range, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::RISCV_1_default));
         }
         else {
             binary_reader_kernels.push_back(tt_metal::CreateDataMovementKernel(
-                program, "kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",
+                program, "tt_metal/kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",
                 core_range, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default));
         }
     }
@@ -152,12 +152,12 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     //     tt_metal::CoreRange core_range({j,0}, {j, (std::size_t)num_cores_r - 1});
     //     if(j%2 == 0) {
     //         binary_reader_kernels.push_back(tt_metal::CreateDataMovementKernel(
-    //             program, "kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",
+    //             program, "tt_metal/kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",
     //             core_range, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::RISCV_1_default));
     //     }
     //     else {
     //         binary_reader_kernels.push_back(tt_metal::CreateDataMovementKernel(
-    //             program, "kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",
+    //             program, "tt_metal/kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",
     //             core_range, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default));
     //     }
     // }

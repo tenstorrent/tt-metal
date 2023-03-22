@@ -102,8 +102,8 @@ int main(int argc, char **argv) {
         auto reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
             multibank ?
-                "kernels/dataflow/transpose_hc_8bank.cpp" :
-                "kernels/dataflow/transpose_hc.cpp",
+                "tt_metal/kernels/dataflow/transpose_hc_8bank.cpp" :
+                "tt_metal/kernels/dataflow/transpose_hc.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
@@ -111,8 +111,8 @@ int main(int argc, char **argv) {
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             multibank ?
-                "kernels/dataflow/writer_unary_8bank.cpp" :
-                "kernels/dataflow/writer_unary.cpp",
+                "tt_metal/kernels/dataflow/writer_unary_8bank.cpp" :
+                "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto blank_binary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/eltwise_copy.cpp",
+            "tt_metal/kernels/compute/eltwise_copy.cpp",
             core,
             kernel_args,
             MathFidelity::HiFi4,

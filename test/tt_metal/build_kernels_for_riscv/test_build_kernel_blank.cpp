@@ -29,9 +29,9 @@ int main(int argc, char* argv[]) {
         .dummy = 0,
     };
     build_kernel_for_riscv_options.set_hlk_args_all_cores(hlk_args, sizeof(blank::hlk_args_t));
-    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("kernels/compute/blank.cpp");
-    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/blank.cpp";
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/blank.cpp";
+    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/blank.cpp");
+    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
+    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
 
     bool skip_hlkc = false;
     if (argc > 1) {

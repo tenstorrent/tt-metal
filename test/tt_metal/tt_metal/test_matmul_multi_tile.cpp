@@ -209,7 +209,7 @@ bool run_matmul(const bool with_bias) {
             tt::DataFormat::Float16_b
         );
 
-        string reader_kernel = "kernels/dataflow/reader_matmul_with_bias_blocked.cpp";
+        string reader_kernel = "tt_metal/kernels/dataflow/reader_matmul_with_bias_blocked.cpp";
 
         auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -220,7 +220,7 @@ bool run_matmul(const bool with_bias) {
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
@@ -241,7 +241,7 @@ bool run_matmul(const bool with_bias) {
         bool math_approx_mode = false;
 
         string compute_kernel_name;
-        compute_kernel_name = "kernels/compute/matmul_with_bias.cpp";
+        compute_kernel_name = "tt_metal/kernels/compute/matmul_with_bias.cpp";
 
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,
