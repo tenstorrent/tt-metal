@@ -428,7 +428,7 @@ CircularBuffer *CreateCircularBuffer(
 bool CompileProgram(
     Device *device,                 // Device - device doesn't have to be initialized to compile the program.
     Program *program,               // Program
-    bool skip_hlkc,                 // Skips HLK to LLK compilation for all compute kernels
+    bool skip_hlkc = false,                 // Skips HLK to LLK compilation for all compute kernels
     bool profile_kernel = false);   // Set the compile flag for kernels to report profiling timer marks
 
 bool CompileProgramNew(

@@ -96,6 +96,16 @@ Tensor bmm(const Tensor& a, const Tensor& b) {
     }
 }
 
+Tensor large_bmm(const Tensor& a, const Tensor& b, bool tilize_a, bool untilize_out) {
+    // TT_ASSERT(
+    //     bmm_op_utils::get_parallelization_strategy(a, b) == BmmOpParallelizationStrategy::SINGLE_CORE,
+    //     "Only single core large_bmm supported so far");
+    if (bmm_op_utils::get_parallelization_strategy(a, b) != BmmOpParallelizationStrategy::SINGLE_CORE) {
+        std::cout << "WARNING: Only single core mode supported for large_bmm. Falling back to single core.";
+    }
+    return large_bmm_single_core(a, b, tilize_a, untilize_out);
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

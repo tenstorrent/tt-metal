@@ -400,8 +400,6 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
-
-
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             writer_kernel,
@@ -455,7 +453,6 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         bool math_approx_mode = false;
 
         string compute_kernel = "tt_metal/kernels/compute/matmul_large_block_3m.cpp";
-        //string compute_kernel = "tt_metal/kernels/compute/3T/matmul_large_block_zm";
 
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,

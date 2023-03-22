@@ -280,6 +280,22 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("bmm", &bmm, R"doc(
         Perform a batched matmul ``A x B`` with two tensors, where batch dims match.
     )doc");
+    m_tensor.def("large_bmm", &large_bmm, R"doc(
+        Perform a batched matmul ``A x B`` with two tensors, where batch dims match.
+        This op also supports tilizing tensor A and untilizing the output if you so choose.
+
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | Argument     | Description                                                                                | Data type | Valid range | Required |
+        +==============+============================================================================================+===========+=============+==========+
+        | a            | LHS matmul operand                                                                         | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | b            | RHS matmul operand                                                                         | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | tilize_a     | Whether or not to tilize a (useful if a is in row major layout)                            | bool      |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | untilize_out | Whether or not to untilize the output (useful if a consuming op requires row major layout) | bool      |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+    )doc");
 
     // broadcast math
     m_tensor.def("bcast", &bcast, R"doc(

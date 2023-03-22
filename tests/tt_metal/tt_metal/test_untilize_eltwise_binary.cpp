@@ -194,7 +194,6 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
             program,
-            //"tt_metal/kernels/compute/3T/untilize_A_and_eltwise_binary",
             "tt_metal/kernels/compute/untilA_elwbin_3m.cpp",
             core,
             eltwise_binary_args,
