@@ -918,8 +918,7 @@ WARN_LOGFILE           =
 # Note: If this tag is empty the current directory is searched.
 
 INPUT                  = src/firmware/riscv/common/dataflow_api.h \
-                         tt_metal/host_api.hpp \
-                         kernels/hostdevcommon/compute_hlk_api.h
+                         tt_metal/host_api.hpp
 
 # This tag can be used to specify the character encoding of the source files
 # that doxygen parses. Internally doxygen uses the UTF-8 encoding. Doxygen uses
