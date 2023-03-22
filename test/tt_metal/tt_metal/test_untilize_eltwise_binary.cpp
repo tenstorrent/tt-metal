@@ -194,7 +194,8 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/3T/untilize_A_and_eltwise_binary",
+            //"kernels/compute/3T/untilize_A_and_eltwise_binary",
+            "kernels/compute/untilA_elwbin_3m.cpp",
             core,
             eltwise_binary_args,
             MathFidelity::HiFi4,
@@ -207,7 +208,8 @@ int main(int argc, char **argv) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgramNew(device, program, skip_hlkc);
+        //pass &= tt_metal::CompileProgramNew(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

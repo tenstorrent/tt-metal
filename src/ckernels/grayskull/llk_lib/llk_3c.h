@@ -462,7 +462,7 @@ ALWI void graph_interpreter_init() // TODO(AP): probably duplicated, remove
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated(0,1) ));
 }
 
-} // namespace llrt
+} // namespace ckernel
 
 // TODO(AP): use of namespace in a header
 using namespace tt; // for CB::c_in visibility

@@ -151,11 +151,7 @@ int main(int argc, char **argv) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
-        //if (do_max) {
         pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
-        //} else {
-        //pass &= tt_metal::CompileProgramNew(device, program, skip_hlkc);
-        //}
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

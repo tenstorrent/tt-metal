@@ -454,7 +454,8 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
 
-        string compute_kernel = "kernels/compute/3T/matmul_large_block_zm";
+        string compute_kernel = "kernels/compute/matmul_large_block_3m.cpp";
+        //string compute_kernel = "kernels/compute/3T/matmul_large_block_zm";
 
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,
@@ -470,7 +471,8 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgramNew(device, program);
+        pass &= tt_metal::CompileProgram(device, program, false);
+        //pass &= tt_metal::CompileProgramNew(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
