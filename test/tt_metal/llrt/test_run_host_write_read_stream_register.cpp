@@ -5,7 +5,7 @@
 
 #include "llrt.hpp"
 #include "test_libs/tiles.hpp"
-#include "tensor/tensor.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_libs/conv_pattern.hpp"
 #include "hostdevcommon/registers.hpp"
 

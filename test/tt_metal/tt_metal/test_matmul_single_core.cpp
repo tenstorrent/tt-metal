@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "tensor/tensor.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -339,7 +339,7 @@ int main(int argc, char **argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         SHAPE shape = {1, 1, M * 32, K * 32};
-        tt::Tensor<bfloat16> tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
         auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);

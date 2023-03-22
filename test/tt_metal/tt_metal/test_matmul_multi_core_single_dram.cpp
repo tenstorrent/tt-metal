@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "tensor/tensor.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -329,7 +329,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}", out_subblock_h, in0_block_w, K / in0_block_w, M / out_subblock_h);
         log_info(LogTest, "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}", out_subblock_w, in0_block_w, K / in0_block_w, N / out_subblock_w);
         SHAPE shape = {1, 1, M * 32, K * 32};
-        tt::Tensor<bfloat16> tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 identity
         auto golden = select_columns(tensor.get_values(), M, K, N);
         ////////////////////////////////////////////////////////////////////////////

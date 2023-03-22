@@ -41,15 +41,15 @@ int main(int argc, char **argv) {
         ConvParameters conv_params = ConvParameters(3, 3, 1, 1, 0, 0);
         std::array<uint32_t, 4> act_shape = {1, 64, 10, 10};
         std::array<uint32_t, 4> weight_shape = {576, 64, 3, 3};
-        tt::Tensor<bfloat16> tensor = tt::initialize_tensor<bfloat16>(act_shape, tt::Initialize::RANDOM, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(act_shape, tt::deprecated::Initialize::RANDOM, std::chrono::system_clock::now().time_since_epoch().count());
         std::array<std::array<uint32_t, 2>, 4> pad_size = {{{0, 0}, {0, 0}, {conv_params.PadH, conv_params.PadH}, {conv_params.PadW, conv_params.PadW}}};
         bfloat16 pad_value = (uint32_t) 0;
         // convolution input is padded on the host. TODO: padding should be moved to device reader kernel
-        tt::Tensor<bfloat16> tensor_padded = tt::pad(tensor, pad_size, pad_value);
-        auto tensor_p = tt::permute(tensor_padded, {0, 2, 3, 1}); // NHWC
+        tt::deprecated::Tensor<bfloat16> tensor_padded = tt::deprecated::pad(tensor, pad_size, pad_value);
+        auto tensor_p = tt::deprecated::permute(tensor_padded, {0, 2, 3, 1}); // NHWC
         // Overwrite the weight tensor with identity matrix after intializing it.
-        tt::Tensor<bfloat16> weight_tensor = tt::initialize_tensor<bfloat16>(weight_shape, tt::Initialize::ZEROS);
-        auto weight_tensor_p = tt::permute(weight_tensor, {0, 2, 3, 1}); // NHWC
+        tt::deprecated::Tensor<bfloat16> weight_tensor = tt::deprecated::initialize_tensor<bfloat16>(weight_shape, tt::deprecated::Initialize::ZEROS);
+        auto weight_tensor_p = tt::deprecated::permute(weight_tensor, {0, 2, 3, 1}); // NHWC
 
         // generate address map to generic reader kernel
         std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> addr_ = gen_source_addresses_for_conv_act_layout_transform(tensor_p.get_shape(), conv_params, sizeof(bfloat16));
@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
         // For identity test -
         auto golden_output_vec = golden_act_vector;
         // For zero weight test -
-        //tt::Tensor<bfloat16> golden_output_tensor = tt::initialize_tensor<bfloat16>(output_shape, tt::Initialize::ZEROS);
+        //tt::deprecated::Tensor<bfloat16> golden_output_tensor = tt::deprecated::initialize_tensor<bfloat16>(output_shape, tt::deprecated::Initialize::ZEROS);
         //auto golden_output_vec = golden_output_tensor.get_values();
 
         uint32_t single_tile_size = 2 * 1024;

@@ -5,7 +5,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "tensor/tensor.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////
 // 1. Host writes data to buffer in DRAM

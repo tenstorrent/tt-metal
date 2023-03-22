@@ -5,7 +5,7 @@
 
 #include "llrt.hpp"
 #include "test_libs/tiles.hpp"
-#include "tensor/tensor.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_libs/conv_pattern.hpp"
 
 int main(int argc, char** argv)
@@ -45,10 +45,10 @@ int main(int argc, char** argv)
             auto shape = std::get<0>(test_case);
             auto conv_params = std::get<1>(test_case);
 
-            tt::Tensor<std::uint32_t> tensor = tt::initialize_tensor<std::uint32_t>(shape, tt::Initialize::RANDOM, tt::tiles_test::get_seed_from_systime());
+            tt::deprecated::Tensor<std::uint32_t> tensor = tt::deprecated::initialize_tensor<std::uint32_t>(shape, tt::deprecated::Initialize::RANDOM, tt::tiles_test::get_seed_from_systime());
             std::array<std::array<uint32_t, 2>, 4> pad_size = {{{0, 0}, {0, 0}, {conv_params.PadH, conv_params.PadH}, {conv_params.PadW, conv_params.PadW}}};
-            tt::Tensor<std::uint32_t> tensor_padded = tt::pad(tensor, pad_size);
-            auto tensor_p = tt::permute(tensor_padded, {0, 2, 3, 1}); // NHWC
+            tt::deprecated::Tensor<std::uint32_t> tensor_padded = tt::deprecated::pad(tensor, pad_size);
+            auto tensor_p = tt::deprecated::permute(tensor_padded, {0, 2, 3, 1}); // NHWC
             auto src_vec = tensor_p.get_values();
 
             // This will create the 2D matrix by modeling what dram to l1 read patterns are

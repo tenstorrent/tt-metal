@@ -13,7 +13,7 @@
 #include "llrt.hpp"
 #include "test_libs/tiles.hpp"
 #include "test_libs/conv_pattern.hpp"
-#include "tensor/tensor.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 int main(int argc, char** argv)
 {
@@ -37,8 +37,8 @@ int main(int argc, char** argv)
 
 
         SHAPE shape = {1, 16, 32, 32};
-        tt::Tensor<std::uint32_t> tensor = tt::initialize_tensor<std::uint32_t>(shape, tt::Initialize::INCREMENT);
-        auto tensor_p = tt::permute(tensor, {0, 2, 3, 1}); // NHWC
+        tt::deprecated::Tensor<std::uint32_t> tensor = tt::deprecated::initialize_tensor<std::uint32_t>(shape, tt::deprecated::Initialize::INCREMENT);
+        auto tensor_p = tt::deprecated::permute(tensor, {0, 2, 3, 1}); // NHWC
 
         auto src_vec = tensor_p.get_values();
         cluster->write_dram_vec(src_vec, tt_target_dram{chip_id, dram_channel_id, 0}, starting_dram_address); // write to address

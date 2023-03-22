@@ -5,7 +5,7 @@
 
 #include "llrt.hpp"
 #include "test_libs/tiles.hpp"
-#include "tensor/tensor.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_libs/conv_pattern.hpp"
 #include "common/bfloat16.hpp"
 #include "hostdevcommon/registers.hpp"
@@ -135,7 +135,7 @@ int main(int argc, char** argv)
 
         SHAPE shape = {1, 1, 32, 256};
 
-        tt::Tensor<bfloat16> tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::RANDOM, 100, tt::tiles_test::get_seed_from_systime()); // TODO: make randomized!
+        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, tt::tiles_test::get_seed_from_systime()); // TODO: make randomized!
         auto src_vec = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
         pass &= run_eltwise_sync(
             cluster,

@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "tensor/tensor.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
 
 #include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
@@ -478,7 +478,7 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         SHAPE shape = {1, 1, M * 32, K * 32};
-        tt::Tensor<bfloat16> tensor = tt::initialize_tensor<bfloat16>(shape, tt::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
         vector<uint32_t> activations;
         if (activations_rm) {

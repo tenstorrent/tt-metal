@@ -1,6 +1,6 @@
 #pragma once
 #include<map>
-#include "tensor/tensor.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "common/assert.hpp"
 #include "common/constants.hpp"
 using namespace tt::constants;
@@ -25,7 +25,7 @@ class ConvParameters {
 };
 
 template <typename T>
-std::vector<std::vector<T>> move_act_dram_to_l1(tt::Tensor<T> &input_nhwc, ConvParameters conv_params) {
+std::vector<std::vector<T>> move_act_dram_to_l1(tt::deprecated::Tensor<T> &input_nhwc, ConvParameters conv_params) {
     std::vector<std::vector<T>> output;
     auto in_shape = input_nhwc.get_shape();
     auto input_values = input_nhwc.get_values();
@@ -59,7 +59,7 @@ std::vector<std::vector<T>> move_act_dram_to_l1(tt::Tensor<T> &input_nhwc, ConvP
 }
 
 template <typename T>
-std::vector<T> move_act_dram_to_l1_tilized(tt::Tensor<T> &input_nhwc, uint32_t dram_read_size_bytes, std::vector<uint32_t> address_map) {
+std::vector<T> move_act_dram_to_l1_tilized(tt::deprecated::Tensor<T> &input_nhwc, uint32_t dram_read_size_bytes, std::vector<uint32_t> address_map) {
     const auto& input_nhwc_values = input_nhwc.get_values();
     std::vector<T> l1_tilized_act;
     assert(dram_read_size_bytes % sizeof(T) == 0);
@@ -194,7 +194,7 @@ std::vector<T> flatten(std::vector<std::vector<T>> &act_matrix) {
 }
 
 template <typename T>
-std::vector<std::vector<T>> move_weights_dram_to_l1(tt::Tensor<T> &input_nhwc) {
+std::vector<std::vector<T>> move_weights_dram_to_l1(tt::deprecated::Tensor<T> &input_nhwc) {
     std::vector<std::vector<T>> output;
     std::array<uint32_t, 4> in_shape = input_nhwc.get_shape();
     const auto& input_nhwc_values = input_nhwc.get_values();
@@ -215,7 +215,7 @@ std::vector<std::vector<T>> move_weights_dram_to_l1(tt::Tensor<T> &input_nhwc) {
 }
 
 template <typename T>
-std::vector<std::vector<T>> move_weights_dram_to_l1_mm(tt::Tensor<T> &input_nhwc) {
+std::vector<std::vector<T>> move_weights_dram_to_l1_mm(tt::deprecated::Tensor<T> &input_nhwc) {
     std::vector<std::vector<T>> output;
     std::array<uint32_t, 4> in_shape = input_nhwc.get_shape();
     const auto& input_nhwc_values = input_nhwc.get_values();

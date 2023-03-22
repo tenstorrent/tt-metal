@@ -2,12 +2,13 @@
 #include <vector>
 #include <array>
 #include <random>
-#include<functional>
+#include <functional>
 
 using SHAPE = std::array<std::uint32_t, 4>;
 
-namespace tt
-{
+namespace tt {
+
+namespace deprecated {
 
 enum class Initialize
 {
@@ -214,4 +215,7 @@ Tensor<T> pad(Tensor<T> &input, std::array<std::array<uint32_t, 2>, 4> pad_size,
     // output.values = out;
     return Tensor<T>(out, out_shape);
 }
+
+} // end namespace deprecated
+
 } // end namespace tt
