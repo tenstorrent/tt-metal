@@ -1,15 +1,15 @@
-ttDNN
-*****
+TT-DNN
+******
 
 Overview
 ========
 
-ttDNN is a simplified Python interface to the compute engine of the TT-Metal.
+TT-DNN is a simplified Python interface to the compute engine of the TT-Metal.
 
 This will be the future plan. For now, the ``ttlib`` Python module is a
-unified Python interface that provides both ttDNN and the Tensor library.
+unified Python interface that provides both TT-DNN and the Tensor library.
 
-ttDNN API through ``ttlib``
+tt-DNN API through ``ttlib``
 =============================
 
 Tensor math operations

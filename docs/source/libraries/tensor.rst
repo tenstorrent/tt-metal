@@ -8,7 +8,7 @@ The TT-Metal Tensor library provides easy entry to the data structures and
 device management layer of TT-Metal.
 
 This will be the future plan. For now, the ``ttlib`` Python module is a
-unified Python interface that provides both ttDNN and the Tensor library.
+unified Python interface that provides both TT-DNN and the Tensor library.
 
 Tensor API through ``ttlib``
 ==============================
