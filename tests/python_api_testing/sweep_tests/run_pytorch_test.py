@@ -33,7 +33,7 @@ def run_pytorch_test(args):
     ################# PARSE ARGS #################
     pcie_slot = args.pcie_slot
     logger.info(f"Running on device {pcie_slot} for test.")
-    sys.exit(0)
+
     ################# PARSE TEST CONFIGS #################
     with open(args.input_test_config, "r") as stream:
         try:

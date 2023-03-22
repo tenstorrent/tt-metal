@@ -29,7 +29,7 @@ def run_test(
         tensor_input = data_gen_func(input_shape)
         tensor_inputs.append(tensor_input)
 
-    ttmetal_out = ttmetal_op(pcie_slot, *tensor_inputs)
+    ttmetal_out = ttmetal_op(*tensor_inputs, pcie_slot)
     pytorch_out = pytorch_op(*tensor_inputs)
 
     result, output = output_comparison_func(pytorch_out, ttmetal_out)
