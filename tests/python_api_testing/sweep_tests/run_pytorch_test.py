@@ -9,6 +9,10 @@ from pathlib import Path
 from loguru import logger
 from functools import partial
 
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+
 from python_api_testing.sweep_tests import comparison_funcs
 
 from python_api_testing.sweep_tests.common import (
@@ -111,7 +115,7 @@ def run_pytorch_test(args):
                     input_shapes,
                     data_seed,
                     env_dict,
-                    op_map[test_name]["ttmetal_op"],
+                    op_map[test_name]["ttlib_op"],
                     op_map[test_name]["pytorch_op"],
                     input_shapes,
                     datagen_funcs,

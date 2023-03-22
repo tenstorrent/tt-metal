@@ -1,5 +1,5 @@
 import torch
-from pymetal import ttlib as ttl
+import ttlib as ttl
 
 
 def datacopy(x, pcie_slot, *args, **kwargs):

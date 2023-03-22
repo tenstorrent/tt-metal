@@ -16,7 +16,7 @@ fieldnames = [
 
 
 def run_test(
-    ttmetal_op,
+    ttlib_op,
     pytorch_op,
     input_shapes,
     data_gen_funcs,
@@ -29,10 +29,10 @@ def run_test(
         tensor_input = data_gen_func(input_shape)
         tensor_inputs.append(tensor_input)
 
-    ttmetal_out = ttmetal_op(*tensor_inputs, pcie_slot)
+    ttlib_out = ttlib_op(*tensor_inputs, pcie_slot)
     pytorch_out = pytorch_op(*tensor_inputs)
 
-    result, output = output_comparison_func(pytorch_out, ttmetal_out)
+    result, output = output_comparison_func(pytorch_out, ttlib_out)
     return result, output
 
 
