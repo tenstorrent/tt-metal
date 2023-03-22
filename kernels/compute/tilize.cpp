@@ -2,12 +2,15 @@
 
 #include "llk_3c.h"
 
+//#include "debug_print.h"
+
 namespace NAMESPACE {
 void MAIN {
 
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
-    tilize_init(CB::c_in0, per_core_block_cnt);
+    //UNPACK(( DPRINT << "Block count=" << U32(per_core_block_cnt) << " tile count=" << per_core_block_tile_cnt << ENDL() ));
+    tilize_init(CB::c_in0, per_core_block_tile_cnt);
 
     for(uint32_t b=0;b<per_core_block_cnt;++b)
     {

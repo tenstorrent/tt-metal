@@ -329,15 +329,6 @@ ComputeKernel *CreateComputeKernel(
     bool fp32_dest_acc_en,
     bool math_approx_mode);
 
-ComputeKernel *CreateComputeKernelNew(
-    Program *program,
-    const std::string &file_name,
-    const tt_xy_pair &core,
-    ComputeKernelArgs *kernel_args,
-    MathFidelity math_fidelity,
-    bool fp32_dest_acc_en,
-    bool math_approx_mode);
-
 /**
  * Creates a multi-core compute kernel object, and adds it to the program.
  *

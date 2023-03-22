@@ -5,6 +5,8 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 
+#include "llrt/tt_debug_print_server.hpp"
+
 #include "llrt/llrt.hpp"
 
 
@@ -75,6 +77,8 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
+
+        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         // ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -156,7 +160,7 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/3T/untilize",
+            "kernels/compute/untilize.cpp",
             core,
             eltwise_unary_args,
             MathFidelity::HiFi4,
@@ -171,7 +175,7 @@ int main(int argc, char **argv) {
             dram_buffer_size, false);
 
         vector<uint32_t> golden = gold_standard_untilize(src_vec, {num_tiles_r * 32, num_tiles_c * 32});
-        pass &= tt_metal::CompileProgramNew(device, program);
+        pass &= tt_metal::CompileProgram(device, program, false);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

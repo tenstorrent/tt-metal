@@ -124,7 +124,7 @@ Tensor tilize(const Tensor &a) {
     bool math_approx_mode = false;
     auto tilize_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/3T/tilize",
+        "kernels/compute/tilize.cpp",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,
@@ -135,7 +135,7 @@ Tensor tilize(const Tensor &a) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CompileProgramNew(device, program);
+    tt_metal::CompileProgram(device, program, false);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
@@ -292,7 +292,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     bool math_approx_mode = false;
     auto tilize_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/3T/tilize",
+        "kernels/compute/tilize.cpp",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,
@@ -303,7 +303,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CompileProgramNew(device, program);
+    tt_metal::CompileProgram(device, program, false);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
@@ -503,7 +503,7 @@ Tensor tilize_conv_activation(const Tensor &a) {
     bool math_approx_mode = false;
     auto tilize_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/3T/tilize",
+        "kernels/compute/tilize.cpp",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,
@@ -515,7 +515,7 @@ Tensor tilize_conv_activation(const Tensor &a) {
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
     bool skip_hlkc = false;
-    tt_metal::CompileProgramNew(device, program);
+    tt_metal::CompileProgram(device, program, false);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

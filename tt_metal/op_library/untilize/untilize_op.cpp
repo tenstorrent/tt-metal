@@ -125,7 +125,7 @@ Tensor untilize(const Tensor &a) {
     bool math_approx_mode = false;
     auto untilize_kernel = tt_metal::CreateComputeKernel(
         program,
-        "kernels/compute/3T/untilize",
+        "kernels/compute/untilize.cpp",
         core,
         eltwise_unary_args,
         MathFidelity::HiFi4,
@@ -136,7 +136,7 @@ Tensor untilize(const Tensor &a) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CompileProgramNew(device, program);
+    tt_metal::CompileProgram(device, program, false);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

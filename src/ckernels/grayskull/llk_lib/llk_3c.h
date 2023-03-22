@@ -433,8 +433,8 @@ ALWI void untilize_init(uint32_t icb, uint32_t block)
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 
     UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_untilize_init(0) ));
     UNPACK(( llk_unpack_untilize_hw_configure_disaggregated(icb) ));
+    UNPACK(( llk_unpack_untilize_init(icb) )); // init must be after configure
 }
 
 ALWI void untilize_and_copy(uint32_t icb, uint32_t itile, uint32_t idst, uint32_t block)

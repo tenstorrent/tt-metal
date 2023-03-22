@@ -108,7 +108,7 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/3T/eltwise_copy",
+            "kernels/compute/eltwise_copy_3m.cpp",
             core,
             eltwise_unary_args,
             MathFidelity::HiFi4,
@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgramNew(device, program);
+        pass &= tt_metal::CompileProgram(device, program, false);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

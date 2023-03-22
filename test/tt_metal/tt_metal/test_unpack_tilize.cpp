@@ -5,6 +5,8 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 
+#include "llrt/tt_debug_print_server.hpp"
+
 #include "llrt/llrt.hpp"
 #include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
 
@@ -63,6 +65,8 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
+
+        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         // ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -144,7 +148,7 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "kernels/compute/3T/tilize",
+            "kernels/compute/tilize.cpp",
             core,
             eltwise_unary_args,
             MathFidelity::HiFi4,
@@ -160,7 +164,7 @@ int main(int argc, char **argv) {
             dram_buffer_size, false);
 
         vector<uint32_t> golden = gold_standard_tilize(src_vec, {num_tiles_r * 32, num_tiles_c * 32});
-        pass &= tt_metal::CompileProgramNew(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -204,7 +208,7 @@ int main(int argc, char **argv) {
             std::cout << "GOLDEN" << std::endl;
             print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles);
 
-            std::cout << "RESULT" << std::endl;
+            std::cout << "FAILED RESULT" << std::endl;
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
         }
         tt_xy_pair debug_core = {1, 1};
