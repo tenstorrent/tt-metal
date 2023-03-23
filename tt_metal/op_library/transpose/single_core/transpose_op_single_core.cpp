@@ -165,7 +165,7 @@ Tensor transpose_hc_single_core(const Tensor &a) {
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
-    u32 Ct = H/TILE_HEIGHT;
+    u32 Ct = C/TILE_HEIGHT;
 
     uint32_t num_tensor_tiles = N*C*H*W / TILE_HW;
 

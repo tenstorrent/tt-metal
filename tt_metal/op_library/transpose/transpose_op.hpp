@@ -12,8 +12,8 @@ struct TransposeOpDim {
 };
 
 struct TransposeOpParallelizationStrategy {
-    enum Enum { MULTI_CORE_WH = 0, SINGLE_CORE = 1 };
-    static const vector<Enum> all() { return { MULTI_CORE_WH, SINGLE_CORE }; }
+    enum Enum { MULTI_CORE_WH = 0, MULTI_CORE_HC = 1, SINGLE_CORE = 2 };
+    static const vector<Enum> all() { return { MULTI_CORE_WH, MULTI_CORE_HC, SINGLE_CORE }; }
 };
 
 // TODO: Accept parallelization
@@ -24,6 +24,7 @@ inline Tensor transpose_hc(const Tensor &a) { return transpose_(a, TransposeOpDi
 
 Tensor transpose_single_core(const Tensor &a, TransposeOpDim::Enum transpose_dim);
 Tensor transpose_wh_multi_core(const Tensor &a);
+Tensor transpose_hc_multi_core(const Tensor &a);
 
 }  // namespace tt_metal
 
