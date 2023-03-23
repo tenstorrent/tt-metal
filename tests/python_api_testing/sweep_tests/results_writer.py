@@ -32,6 +32,9 @@ def write_csv_to_xlsx(args):
     workbook = xlsxwriter.Workbook(output_xlsx_file)
     worksheet = workbook.add_worksheet()
 
+    # Formatters for writing to cell
+    PERCENT_FORMAT = workbook.add_format({"num_format": "0.00%"})
+
     with open(input_csv_file, "r") as f:
         csv_reader = csv.reader(f)
 
@@ -72,6 +75,11 @@ def write_csv_to_xlsx(args):
                         worksheet.write(row_idx, col_idx, col)
                         col_idx += 1
 
+                # HACK for matmul perf
+                if args.add_matmul_perf:
+                    worksheet.write(row_idx, col_idx, "math_util (%)")
+                    col_idx += 1
+
             else:
                 for col in row:
                     # Shapes column
@@ -96,6 +104,21 @@ def write_csv_to_xlsx(args):
                         )
                         col_idx += 1
 
+                # HACK for matmul perf
+                if args.add_matmul_perf:
+                    M, K, N = shapes[0][2], shapes[0][3], shapes[1][3]
+                    num_cores_used = int(row[8])
+                    kernel_runtime = int(row[12])
+
+                    total_ops = 2 * M * K * N
+                    ideal_compute_cycles = total_ops / (
+                        512 * num_cores_used
+                    )  # HiFi4: 512 OPs/CC/Tensix core
+                    total_cycles = kernel_runtime * 1.2  # ns * 1.2GHz clock
+                    math_util = ideal_compute_cycles / total_cycles
+                    worksheet.write(row_idx, col_idx, math_util, PERCENT_FORMAT)
+                    col_idx += 1
+
     workbook.close()
 
 
@@ -116,6 +139,11 @@ if __name__ == "__main__":
         "-nt",
         "--no-timestamp",
         help="Don't add timestamp to output file name",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--add-matmul-perf",
+        help="Add math utilization for matmul to last column",
         action="store_true",
     )
 
