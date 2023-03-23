@@ -5,8 +5,8 @@ from pathlib import Path
 from itertools import chain
 from functools import partial
 
-from reg_scripts.common import run_single_test, run_process_and_get_result, report_tests, TestEntry, error_out_if_test_report_has_failures, TestSuiteType, get_git_home_dir_str
-from reg_scripts.cmdline_args import get_tt_metal_arguments_from_cmdline_args, get_cmdline_args
+from tests.reg_scripts.common import run_single_test, run_process_and_get_result, report_tests, TestEntry, error_out_if_test_report_has_failures, TestSuiteType, get_git_home_dir_str
+from tests.reg_scripts.cmdline_args import get_tt_metal_arguments_from_cmdline_args, get_cmdline_args
 
 TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_add_two_ints", "test_add_two_ints"),
