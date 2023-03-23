@@ -14,7 +14,7 @@ $(PYTHON_ENV)/.installed: tt_metal/python_env/requirements.txt
 	touch $@
 
 $(PYTHON_ENV)/%: $(PYTHON_ENV)/.installed
-	bash -c "source $(PYTHON_ENV)/bin/activate && pip install -e . --extra-index-url https://download.pytorch.org/whl/cpu"
+	bash -c "source $(PYTHON_ENV)/bin/activate"
 
 $(PYTHON_ENV)/.installed-dev: python_env tt_metal/python_env/requirements-dev.txt
 	bash -c "source $(PYTHON_ENV)/bin/activate && pip3.8 install -r tt_metal/python_env/requirements-dev.txt"
