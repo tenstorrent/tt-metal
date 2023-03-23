@@ -10,6 +10,7 @@ using namespace tt;
 tt_metal::Program * create_program_mcast_in0_in1(
     tt_metal::Device *device,
     uint32_t single_tile_size,
+    tt_xy_pair start_core,
     tt_xy_pair core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
@@ -31,8 +32,8 @@ tt_metal::Program * create_program_mcast_in0_in1(
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
     TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N <= 400);
 
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
+    uint32_t start_core_x = start_core.x;
+    uint32_t start_core_y = start_core.y;
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
@@ -320,6 +321,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
 tt_metal::Program * create_program_mcast_in0(
     tt_metal::Device *device,
     uint32_t single_tile_size,
+    tt_xy_pair start_core,
     tt_xy_pair core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
@@ -341,8 +343,8 @@ tt_metal::Program * create_program_mcast_in0(
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
     TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N <= 400);
 
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
+    uint32_t start_core_x = start_core.x;
+    uint32_t start_core_y = start_core.y;
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
@@ -568,6 +570,7 @@ tt_metal::Program * create_program_mcast_in0(
 tt_metal::Program * create_program_mcast_in1(
     tt_metal::Device *device,
     uint32_t single_tile_size,
+    tt_xy_pair start_core,
     tt_xy_pair core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
@@ -589,8 +592,8 @@ tt_metal::Program * create_program_mcast_in1(
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
     TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N <= 400);
 
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
+    uint32_t start_core_x = start_core.x;
+    uint32_t start_core_y = start_core.y;
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
@@ -873,6 +876,7 @@ Tensor matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, bool bca
 
     uint32_t num_blocks_total = (Mt / per_core_M) * (Nt / per_core_N);
     TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
+    tt_xy_pair start_core = {0, 0};
     tt_xy_pair core_range = bmm_op_utils::get_core_range((Mt / per_core_M), (Nt / per_core_N), num_cores_y, num_cores_x);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -895,19 +899,14 @@ Tensor matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, bool bca
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    uint32_t dram_buffer_size_act = src0_dram_buffer->size();; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_size_weights = src1_dram_buffer->size(); // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_size_out = dst_dram_buffer->size(); // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    TT_ASSERT(in0_dram_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
-    TT_ASSERT(in1_dram_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
-    TT_ASSERT(out_dram_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
     tt_metal::Program * program;
 
     if (core_range.x > 1 && core_range.y > 1) {
         program = create_program_mcast_in0_in1(
             device,
             single_tile_size,
+            start_core,
             core_range,
             B, Mt, Nt, Kt,
             bcast_batch,
@@ -922,6 +921,7 @@ Tensor matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, bool bca
         program = create_program_mcast_in0(
             device,
             single_tile_size,
+            start_core,
             core_range,
             B, Mt, Nt, Kt,
             bcast_batch,
@@ -936,6 +936,7 @@ Tensor matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, bool bca
         program = create_program_mcast_in1(
             device,
             single_tile_size,
+            start_core,
             core_range,
             B, Mt, Nt, Kt,
             bcast_batch,

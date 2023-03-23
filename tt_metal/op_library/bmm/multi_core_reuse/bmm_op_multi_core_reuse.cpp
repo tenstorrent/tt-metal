@@ -291,13 +291,6 @@ Tensor matmul_multi_core_reuse_(const Tensor &a, const Tensor &b, bool bcast_bat
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    uint32_t dram_buffer_size_act = src0_dram_buffer->size(); // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_size_weights = src1_dram_buffer->size(); // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_size_out = dst_dram_buffer->size(); // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-
-    TT_ASSERT(in0_dram_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
-    TT_ASSERT(in1_dram_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
-    TT_ASSERT(out_dram_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
 
     tt_metal::Program * program = create_program(
         device,
