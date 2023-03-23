@@ -422,13 +422,40 @@ ALWI void tilize_init(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
-ALWI void tilize_and_copy(uint32_t icb, uint32_t itile, uint32_t idst, uint32_t block)
+ALWI void tilize_init_short(uint32_t icb, uint32_t block)
 {
-    UNPACK(( llk_unpack_tilize(icb, itile, block) ));
-    MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
+
+    UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
-ALWI void untilize_init(uint32_t icb, uint32_t block)
+ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
+{
+
+    UNPACK(( llk_unpack_tilize_block(icb, block) ));
+
+    for (uint32_t t = 0; t < block; t++) {
+        // Acquire dst
+        MATH(( llk_math_wait_for_dest_available<SYNC>() ));
+        PACK(( llk_packer_wait_for_math_done() ));
+
+        // Datacopy
+        MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(0) ));
+        PACK(( llk_pack<false, SYNC, false >(0, ocb)  ));
+
+        // Release dest
+        MATH(( llk_math_dest_section_done<SYNC>() ));
+        PACK(( llk_pack_dest_section_done<SYNC>() ));
+    }
+
+}
+
+ALWI void tilize_uninit()
+{
+    UNPACK(( llk_unpack_tilize_uninit() ));
+}
+
+ALWI void untilize_init(uint32_t icb)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
@@ -443,10 +470,35 @@ ALWI void untilize_init(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_untilize_init(icb) )); // init must be after configure
 }
 
-ALWI void untilize_and_copy(uint32_t icb, uint32_t itile, uint32_t idst, uint32_t block)
+ALWI void untilize_init_short(uint32_t icb)
 {
-    UNPACK(( llk_unpack_untilize(icb, itile, block) ));
-    MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
+
+    UNPACK(( llk_unpack_untilize_init(icb) ));
+}
+
+ALWI void untilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
+{
+
+    UNPACK(( llk_unpack_untilize(icb, block) ));
+
+    for (uint32_t t = 0; t < block; t++) {
+        // Acquire dst
+        MATH(( llk_math_wait_for_dest_available<SYNC>() ));
+        PACK(( llk_packer_wait_for_math_done() ));
+
+        // Datacopy
+        MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(0) ));
+        PACK(( llk_pack<false, SYNC, false >(0, ocb)  ));
+
+        // Release dest
+        MATH(( llk_math_dest_section_done<SYNC>() ));
+        PACK(( llk_pack_dest_section_done<SYNC>() ));
+    }
+}
+
+ALWI void untilize_uninit(uint32_t icb) {
+    UNPACK(( llk_unpack_untilize_uninit(icb) ));
 }
 
 ALWI void get_next_op_info(tt::op_info_t& op_info)

@@ -452,7 +452,7 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
 
-        string compute_kernel = "tt_metal/kernels/compute/matmul_large_block_3m.cpp";
+        string compute_kernel = "tt_metal/kernels/compute/matmul_large_block.cpp";
 
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,
@@ -565,7 +565,7 @@ int main(int argc, char **argv) {
     pass &= test_matmul_large_block(true, false);
 
     // Row major input, untilized output
-    pass &= test_matmul_large_block(true, true); // Hanging
+    pass &= test_matmul_large_block(true, true);
 
     // Tilized input, tilized output
     pass &= test_matmul_large_block(false, false);

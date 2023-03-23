@@ -71,7 +71,7 @@ inline void llk_unpack_tilize_init(const uint32_t unpA_operand, const uint32_t u
 
 }
 
-inline void llk_unpack_tilize_(std::uint32_t operand, std::uint32_t block_c_tiles) {
+inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
 
     std::uint32_t input = get_operand_id(operand);
     for (std::uint32_t tile_index = 0; tile_index < block_c_tiles; tile_index++) {
@@ -122,12 +122,12 @@ inline void llk_unpack_tilize_(std::uint32_t operand, std::uint32_t block_c_tile
 
 }
 
-inline void llk_unpack_tilize(std::uint32_t operand, int tile_index, std::uint32_t block_c_tiles) {
-     // Since unpack is tightly coupled with math, and math datacopy works on the tile level,
-    // we need a mechanism to only run the unpacking of a block once
-    bool nop = tile_index != 0;
-    if (nop) {
-        return;
-    }
-    llk_unpack_tilize_(operand, block_c_tiles);
-}
+// inline void llk_unpack_tilize(std::uint32_t operand, int tile_index, std::uint32_t block_c_tiles) {
+//      // Since unpack is tightly coupled with math, and math datacopy works on the tile level,
+//     // we need a mechanism to only run the unpacking of a block once
+//     bool nop = tile_index != 0;
+//     if (nop) {
+//         return;
+//     }
+//     llk_unpack_tilize_(operand, block_c_tiles);
+// }

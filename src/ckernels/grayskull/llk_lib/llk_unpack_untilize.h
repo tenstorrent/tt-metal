@@ -163,15 +163,7 @@ inline void llk_unpack_untilize_(std::uint32_t operand, std::uint32_t block_c_ti
     // Need to update the read pointer here
 }
 
-inline void llk_unpack_untilize(std::uint32_t operand, int tile_index, std::uint32_t block_c_tiles) {
-    // Since unpack is tightly coupled with math, and math datacopy works on the tile level,
-    // we need a mechanism to only run the unpacking of a block once
-    // volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
-    // mbox[0] = 10;
-    bool nop = tile_index != 0;
-    if (nop) {
-        return;
-    }
+inline void llk_unpack_untilize(std::uint32_t operand, std::uint32_t block_c_tiles) {
     llk_unpack_untilize_<true>(operand, block_c_tiles);
     llk_unpack_untilize_<false>(operand, block_c_tiles);
 }

@@ -573,7 +573,7 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_a, b
             bool math_approx_mode = false;
             auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
                 program,
-                "kernels/compute/matmul_large_block_3m.cpp",
+                "tt_metal/kernels/compute/matmul_large_block.cpp",
                 core,
                 bmm_args,
                 MathFidelity::HiFi4,
