@@ -32,7 +32,6 @@ def run_large_matmul_test(Ha, Wa, Wb, tilize_a, untilize_out):
         ttl.tensor.DataType.BFLOAT16,
         layout_a,
         device,
-        ttl.tensor.MemoryConfig(False, 0)
     )
     ttb = ttl.tensor.Tensor(
         tilize_to_list(b),
@@ -40,7 +39,6 @@ def run_large_matmul_test(Ha, Wa, Wb, tilize_a, untilize_out):
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,
         device,
-        ttl.tensor.MemoryConfig(False, 1)
     )
 
     out = ttl.tensor.large_bmm(tta, ttb, tilize_a, untilize_out)

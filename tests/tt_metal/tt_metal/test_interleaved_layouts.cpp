@@ -369,7 +369,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
             program,
             "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
             core,
-            tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1}),
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 

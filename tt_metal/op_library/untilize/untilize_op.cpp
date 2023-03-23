@@ -91,11 +91,6 @@ Tensor untilize(const Tensor &a) {
     DataMovementKernelArgs *compile_time_args;
     if (stick_size_is_power_of_two) {
         writer_kernel_args.push_back(log2(stick_size));
-
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1});
-    } else {
-        compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {0});
     }
 
     // Tilized reader
@@ -111,7 +106,6 @@ Tensor untilize(const Tensor &a) {
         program,
         "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
         core,
-        compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 

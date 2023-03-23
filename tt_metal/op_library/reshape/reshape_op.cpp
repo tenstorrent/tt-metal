@@ -98,11 +98,6 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     DataMovementKernelArgs *writer_compile_time_args;
     if (new_stick_size_is_power_of_two) {
         writer_kernel_args.push_back(log2(new_stick_size));
-
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1});
-    } else {
-        writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {0});
     }
 
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
@@ -117,7 +112,6 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
         program,
         "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
         core,
-        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 

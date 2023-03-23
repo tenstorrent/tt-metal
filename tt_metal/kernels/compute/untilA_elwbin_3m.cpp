@@ -63,8 +63,7 @@ for (uint32_t block = 0U; block < per_core_num_blocks; ++block) {
   for (uint32_t r = 0; r < per_core_block_r_tiles; r++) {
     llk_unpack_untilize_init(0);
     llk_wait_tiles(0, per_core_block_c_tiles);
-    llk_unpack_untilize_<true>(0, per_core_block_c_tiles);
-    llk_unpack_untilize_<false>(0, per_core_block_c_tiles);
+    llk_unpack_untilize(0, per_core_block_c_tiles);
     llk_unpack_untilize_uninit(0);
     llk_pop_tiles(0, per_core_block_c_tiles);
     llk_pop_tiles(1, per_core_block_c_tiles);

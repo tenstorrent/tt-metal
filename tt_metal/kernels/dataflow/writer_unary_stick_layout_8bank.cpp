@@ -19,23 +19,12 @@ void kernel_main() {
     const uint32_t num_tiles_c = stick_size / 64; // Assuming 2 bytes per datum, there are 64 bytes per tile row
     uint32_t stick_id          = 0;
 
-    constexpr bool stick_size_is_power_of_two = (get_compile_time_arg_val(0) == 1);
-    #if (stick_size_is_power_of_two)
-    const uint32_t log_base_2_of_bank_unit_size = get_arg_val<uint32_t>(3);
-    const InterleavedPow2AddrGen s = {
-        .bank_base_address = dst_addr,
-        .num_used_banks = num_dram_channels,
-        .log_base_2_of_num_used_banks = log_base_2_of_num_dram_channels,
-        .log_base_2_of_bank_unit_size = log_base_2_of_bank_unit_size
-    };
-    #else
     const InterleavedAddrGen s = {
         .bank_base_address = dst_addr,
         .num_used_banks = num_dram_channels,
         .log_base_2_of_num_used_banks = log_base_2_of_num_dram_channels,
         .bank_unit_size = stick_size
     };
-    #endif
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {
         // We reserve back an entire tile row and issue a bunch of reads

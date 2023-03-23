@@ -426,13 +426,13 @@ typedef struct {
     uint32_t bank_unit_size; // Num bytes in bank unit.
 
     FORCE_INLINE
-    std::uint64_t get_noc_addr(const uint32_t id) const {
+    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0) const {
         uint32_t bank_id = id & (this->num_used_banks - 1);
 
         // So far, only using this for DRAM, but will eventually generalize to allow usage in L1 as well
         uint32_t dram_x = dram_channel_to_noc_x[bank_id];
         uint32_t dram_y = dram_channel_to_noc_y[bank_id];
-        uint32_t dram_addr = mulsi3(id >> this->log_base_2_of_num_used_banks, this->bank_unit_size) + this->bank_base_address;
+        uint32_t dram_addr = mulsi3(id >> this->log_base_2_of_num_used_banks, this->bank_unit_size) + this->bank_base_address + offset;
 
         uint64_t noc_addr = get_noc_addr_helper(dram_x, dram_y, dram_addr);
         return noc_addr;
@@ -464,7 +464,7 @@ typedef struct {
 
 FORCE_INLINE
 std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedAddrGen& s) {
+    const uint32_t id, const InterleavedAddrGen& s, uint32_t offset = 0) {
     /*
         Alternative API for getting the noc address when we are reading using a swizzled
         layout. This version assumes bank unit size can be arbitrary size. Use
@@ -476,7 +476,7 @@ std::uint64_t get_noc_addr(
 
         InterleavedAddrGen: Check struct for attribute definitions.
     */
-    return s.get_noc_addr(id);
+    return s.get_noc_addr(id, offset);
 }
 
 FORCE_INLINE
