@@ -2,6 +2,12 @@ from abc import abstractmethod
 import torch
 from transformers import BertForQuestionAnswering
 
+import sys
+from pathlib import Path
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
 from pymetal import ttlib as ttl
 from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel

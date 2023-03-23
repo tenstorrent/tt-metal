@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
 f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
 
 import numpy as np
 
@@ -10,27 +10,30 @@ from pymetal.ttlib.utils import tilize_to_list, tilize, untilize, channels_last,
 from python_api_testing.models.utility_functions import print_diff_argmax, is_close
 import torch
 
-def run_tilize_matmul_test(M, K, N):
+def run_tilize_matmul_test (M, K, N):
+
+    a_shape_logical = [1,K,1,M]
     a_shape = [1,1,M,K]
     a_shape_padded = [1,1,_nearest_32(M),K]
     b_shape = [1,1,K,N]
     output_shape = [1,1,_nearest_32(M),N]
-    A = torch.randn(a_shape)
+
+    A_pre_cl = torch.randn(a_shape_logical)
+    A = channels_last(A_pre_cl)
     A_padded = pad_activation(A)
     B = torch.randn(b_shape) - 0.95
 
     a = ttl.tensor.Tensor(
-        A.flatten().tolist(),
-        a_shape,
+        torch.flatten(A).tolist(),
+        a_shape_logical,
         ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.Layout.CHANNELS_LAST,
         device
     )
     a_t = ttl.tensor.tilize_with_zero_padding(a)
-    print("Shape of A_t - " + str(a_t.shape()))
     b_t = ttl.tensor.Tensor(tilize_to_list(B), b_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
-    print("Shape of B_t - " + str(b_t.shape()))
-    t2 = ttl.tensor.bmm(a_t, b_t)
+
+    t2 = ttl.tensor.matmul(a_t, b_t)
     assert(t2.shape() == output_shape)
     tt_host_rm = t2.to(host).data()
     pyt_got_back = torch.Tensor(tt_host_rm).reshape(output_shape)
