@@ -115,6 +115,40 @@ def convert_weights_2d_matrix(weights, w_shape):
     assert idx == np.prod(ret_shape)
     return ret.reshape(ret_shape).transpose(2,3)
 
+def convert_act_2d_matrix(activation, kernel_y, kernel_x, stride_y, stride_x, pad_y, pad_x):
+    """
+    :param activation: Input PyTorch Tensor
+    :type activation: class:`torch.Tensor`
+    """
+    N = activation.shape[0]
+    C = activation.shape[1]
+    H = activation.shape[2]
+    W = activation.shape[3]
+
+    OH = (int) ((H - kernel_y + 2*pad_y) // stride_y) + 1
+    OW = ((W - kernel_x + 2*pad_x) // stride_x) + 1
+    nrows = OH*OW
+    ncols = C*kernel_x*kernel_y
+    ret_shape = [1,N,nrows,ncols]
+    if isinstance(activation, torch.Tensor):
+        ret = torch.zeros(np.prod(ret_shape))
+    else:
+        ret = np.zeros(np.prod(ret_shape))
+    idx = 0
+    for n in range(N):
+        for h in range(-1*pad_y, H+pad_y-kernel_y+1, stride_y):
+            for w in range(-1*pad_x, W+pad_x-kernel_x+1, stride_x):
+                for r in range(kernel_y):
+                    for s in range(kernel_x):
+                        for c in range(C):
+                            h_offs = h+r
+                            w_offs = w+s
+                            pad = h_offs < 0 or h_offs >= H or w_offs < 0 or w_offs >= W
+                            ret[idx] = 0 if pad else activation[n][c][h_offs][w_offs]
+                            idx+=1
+    assert idx == np.prod(ret_shape)
+    return ret.reshape(ret_shape)
+
 def tilize(x):
     """
     This function tilizes a tensor. The last two tensor dims must be divisible by 32, after which this function

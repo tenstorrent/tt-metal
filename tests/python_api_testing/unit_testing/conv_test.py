@@ -15,7 +15,7 @@ def run_tilize_conv3x3s1_act_test (K, C, H, W):
     a_activation_shape = [1,C,H,W]
     b_weights_shape = [K,C,3,3]
 
-    A_pyt = torch.randn(a_activation_shape)
+    A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
     A_cl = channels_last(A_pyt)
     A = ttl.tensor.Tensor(
         torch.flatten(A_cl).tolist(),
@@ -29,7 +29,7 @@ def run_tilize_conv3x3s1_act_test (K, C, H, W):
     A_t = ttl.tensor.tilize_conv_activation(A)
 
     # Prepare weights
-    B_pyt = torch.randn(b_weights_shape)
+    B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
     B_matrix = convert_weights_2d_matrix(B_pyt, b_weights_shape)
 
     B_t = ttl.tensor.Tensor(tilize_to_list(B_matrix), B_matrix.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
@@ -40,7 +40,7 @@ def run_tilize_conv3x3s1_act_test (K, C, H, W):
     OW = W - 2
     matmul_output_shape_t = [1,1,_nearest_32(OH*OW), K]
     assert(C_t.shape() == matmul_output_shape_t)
-    tt_host_rm = C_t.to(host).data()
+    tt_host_rm = np.array(C_t.to(host).data(), dtype=float)
     pyt_got_back = torch.Tensor(tt_host_rm).reshape(matmul_output_shape_t)
     # untilize and remove padding
     C_ut = untilize(pyt_got_back)[:,:,0:(OH*OW),:]
