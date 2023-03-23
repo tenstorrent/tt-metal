@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t output_cb_addr = 300 * 1024;
-        uint32_t num_output_tiles = 1;
+        uint32_t num_output_tiles = 8;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
             device,

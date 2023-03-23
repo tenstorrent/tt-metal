@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t output_cb_addr = 300 * 1024;
-        uint32_t num_output_tiles = 1;
+        uint32_t num_output_tiles = 8;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
             device,
@@ -192,6 +192,8 @@ int main(int argc, char **argv) {
             num_tiles});
 
 
+        tt_xy_pair debug_core = {1, 1};
+        read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -211,8 +213,6 @@ int main(int argc, char **argv) {
             std::cout << "FAILED RESULT" << std::endl;
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
         }
-        tt_xy_pair debug_core = {1, 1};
-        read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
 
         pass &= tt_metal::CloseDevice(device);
 
