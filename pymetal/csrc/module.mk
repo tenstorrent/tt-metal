@@ -20,12 +20,8 @@ $(PYMETAL_LIB): $(COMMON_LIB) $(PYMETAL_OBJS) $(DEVICE_LIB)
 	@mkdir -p $(LIBDIR)
 	$(CXX) $(PYMETAL_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(LDFLAGS) $(PYMETAL_LDFLAGS)
 
-.PHONY: pymetal/csrc/setup_inplace_link
-pymetal/csrc/setup_inplace_link: $(PYMETAL_LIB)
-	# @mkdir -p $(PYTHON_ENV)/lib/python3.8/site-packages/ttlib
-	# cp $^ $(PYTHON_ENV)/lib/python3.8/site-packages/ttlib/_C.so
-	# rm -f pymetal/ttlib/_C.so
-	# ln -s $(PYTHON_ENV)/lib/python3.8/site-packages/ttlib/_C.so
+.PHONY: pymetal/csrc/setup_local_so
+pymetal/csrc/setup_local_so: $(PYMETAL_LIB)
 	rm -f pymetal/ttlib/_C.so
 	cp $^ pymetal/ttlib/_C.so
 
