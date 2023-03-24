@@ -116,6 +116,9 @@ class Tensor {
 
         bool interleaved() const;
 
+        // Size in bytes of a single element held in tensor
+        uint32_t element_size() const;
+
     private:
         const std::array<uint32_t, 4> compute_strides() const {
             return {shape_[1]*shape_[2]*shape_[3], shape_[2]*shape_[3], shape_[3], 1};

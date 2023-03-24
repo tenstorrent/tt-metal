@@ -105,6 +105,10 @@ bool Tensor::interleaved() const {
     return mem_config_.interleaved;
 }
 
+uint32_t Tensor::element_size() const {
+    return tensor_impl::element_size_bytes_wrapper(this->dtype_);
+}
+
 const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
     vector<int> ns{N, C, H, W};
     int neg_idx = -1;
