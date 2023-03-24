@@ -66,10 +66,11 @@ void kernel_main() {
     };
 
     volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
+    // mbox[0] = 5;
 
     uint32_t row_offset = 0;
+    int some_var = 0;
     for(uint32_t b = 0; b < num_blocks; b++) {
-        uint32_t row_bank_id = in0_tensor_start_row_id;
         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
@@ -79,7 +80,7 @@ void kernel_main() {
         // Read in0 row major... will have to read partial rows
         // because the input is row major, but the "block" doesn't
         // cover the full row
-        // int some_var = 0;
+        uint32_t row_bank_id = in0_tensor_start_row_id;
         for (uint32_t h = 0; h < in0_block_h; h++) {
             for (uint32_t i = 0; i < 32; i++) {
                 uint64_t in0_row_noc_addr = get_noc_addr(row_bank_id, s0, row_offset);
@@ -89,6 +90,7 @@ void kernel_main() {
             }
             noc_async_read_barrier();
         }
+        // mbox[0] = b;
         row_offset = (row_offset + in0_partial_row_size) % in0_row_size;
 
         uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;

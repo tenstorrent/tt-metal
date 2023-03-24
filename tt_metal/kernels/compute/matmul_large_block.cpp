@@ -2,17 +2,17 @@
 
 #include "llk_3c.h"
 
-inline void tilize_activation(uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb)
+inline void tilize_activation(uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb)
 {
-    tilize_init_short(CB::c_in0, in0_block_w);
+    tilize_init_short(in0_cb, in0_block_w);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
         for (uint32_t h = 0; h < in0_subblock_h; h++) {
-            cb_wait_front(CB::c_in0, in0_block_w);
+            cb_wait_front(in0_cb, in0_block_w);
             cb_reserve_back(out_cb, in0_block_w);
-            tilize_block(CB::c_in0, in0_block_w, out_cb);
+            tilize_block(in0_cb, in0_block_w, out_cb);
             cb_push_back(out_cb, in0_block_w);
-            cb_pop_front(CB::c_in0, in0_block_w);
+            cb_pop_front(in0_cb, in0_block_w);
         }
     }
 
@@ -26,7 +26,8 @@ inline void reblock_and_untilize(
     uint32_t out_subblock_w,
     uint32_t out_block_w,
     uint32_t interm_cb_id,
-    uint32_t reblock_cb_id)
+    uint32_t reblock_cb_id,
+    uint32_t out_cb_id)
 {
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
@@ -53,15 +54,23 @@ inline void reblock_and_untilize(
         // Untilize
         untilize_init_short(reblock_cb_id);
         cb_wait_front(reblock_cb_id, out_block_w);
-        cb_reserve_back(CB::c_out0, out_block_w);
-        untilize_block(reblock_cb_id, out_block_w, CB::c_out0);
+        cb_reserve_back(out_cb_id, out_block_w);
+        untilize_block(reblock_cb_id, out_block_w, out_cb_id);
         cb_pop_front(reblock_cb_id, out_block_w);
-        cb_push_back(CB::c_out0, out_block_w);
+        cb_push_back(out_cb_id, out_block_w);
         untilize_uninit(reblock_cb_id);
 
         within_block_index += out_subblock_w;
     }
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
+}
+
+inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles) {
+    cb_reserve_back(cb_id, out_subblock_num_tiles);
+    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+        pack_tile(i, cb_id);
+    }
+    cb_push_back(cb_id, out_subblock_num_tiles);
 }
 
 namespace NAMESPACE {
@@ -92,27 +101,43 @@ void MAIN {
 
     bool enable_reload = false;
 
-    uint32_t matmul_act_cb_id = 0;
-    uint32_t matmul_out_intermediate_cb_id = 24;
-    if constexpr (tilize_in) {
-        // If we tilize, matmul doesn't consume original input,
-        // it consumes what is produced by tilize
-        matmul_act_cb_id = 24;
-        matmul_out_intermediate_cb_id = 25; // Given 24 is no longer available, we use 25 instead
-    }
+    // CB mapping of in0, union of all possible variants (with
+    // and without fusing combinations of tilize/untilize)
+    // in0:
+    //   input 0
+    // in1:
+    //   input 1
+    // interm0:
+    //   If under tilized mode, this is CB in which we write the tilized
+    //   input 0
+    // interm1:
+    //   intermediate CB we write to so that we store partial matmul results
+    // interm2:
+    //   if under untilize mode, this is the CB we write to so that we store
+    //   the final matmul result
+    // interm3:
+    //   if under untilize mode, this is the CB we write to so that we can
+    //   reblock the output
+    uint32_t in0_cb                                   = CB::c_in0;
+    uint32_t tilize_mode_tilized_in0_cb               = CB::c_intermed0;
+    uint32_t matmul_partials_cb                       = CB::c_intermed1;
+    uint32_t untilize_mode_final_matmul_partials_cb   = CB::c_intermed2;
+    uint32_t untilize_mode_reblock_cb                 = CB::c_intermed3;
+    uint32_t out0_cb                                  = CB::c_out0;
 
-    uint32_t reblock_cb_id = 26; // Only used if untilize is required
-
+    volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
     mm_init();
     for(uint32_t block = 0; block < num_blocks; block++)
     {
         bool last_out = block == (num_blocks-1);
-
         if constexpr (tilize_in) {
-            tilize_activation(in0_subblock_h, in0_block_w, in0_num_subblocks, matmul_act_cb_id);
+            tilize_activation(in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
+            mm_init_short();
+            cb_wait_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
+        } else {
+            cb_wait_front(in0_cb, in0_block_num_tiles);
         }
 
-        cb_wait_front(matmul_act_cb_id, in0_block_num_tiles);
         cb_wait_front(CB::c_in1, in1_block_num_tiles);
         int in0_index_subblock_offset = 0;
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -123,13 +148,13 @@ void MAIN {
 
                 if (enable_reload) {
                     copy_tile_to_dst_init_short();
-                    cb_wait_front(matmul_out_intermediate_cb_id, out_subblock_num_tiles);
+                    cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
                     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                        copy_tile(matmul_out_intermediate_cb_id, i, i);
+                        copy_tile(matmul_partials_cb, i, i);
                     }
-                    cb_pop_front(matmul_out_intermediate_cb_id, out_subblock_num_tiles);
+                    cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
+                    mm_init_short();
                 }
-                mm_init_short();
 
                 // Compute output sub-block from in0_subblock x in1_subblock
                 int dst_index = 0;
@@ -140,7 +165,11 @@ void MAIN {
                         for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                             int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                             int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                            matmul_tiles(matmul_act_cb_id, CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                            if constexpr (tilize_in) {
+                                matmul_tiles(tilize_mode_tilized_in0_cb, CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                            } else {
+                                matmul_tiles(in0_cb, CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                            }
                             in1_index_inner_dim_offset += in1_per_core_w;
                         }
                         dst_index++;
@@ -148,29 +177,14 @@ void MAIN {
                     in0_index_h_offset += in0_block_w;
                 }
 
-                if constexpr (not untilize_out) {
-                    if (last_out) {
-                        // Pack out to output buffer
-                        cb_reserve_back(CB::c_out0, out_subblock_num_tiles);
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, CB::c_out0);
-                        }
-                        cb_push_back(CB::c_out0, out_subblock_num_tiles);
+                if (last_out) {
+                    if constexpr (not untilize_out) {
+                        pack_matmul_subblock(out0_cb, out_subblock_num_tiles);
                     } else {
-                        // Move partial result to interm buffer
-                        cb_reserve_back(matmul_out_intermediate_cb_id, out_subblock_num_tiles);
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, matmul_out_intermediate_cb_id);
-                        }
-                        cb_push_back(matmul_out_intermediate_cb_id, out_subblock_num_tiles);
+                        pack_matmul_subblock(untilize_mode_final_matmul_partials_cb, out_subblock_num_tiles);
                     }
                 } else {
-                    // Move partial result to interm buffer
-                    cb_reserve_back(matmul_out_intermediate_cb_id, out_subblock_num_tiles);
-                    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                        pack_tile(i, matmul_out_intermediate_cb_id);
-                    }
-                    cb_push_back(matmul_out_intermediate_cb_id, out_subblock_num_tiles);
+                    pack_matmul_subblock(matmul_partials_cb, out_subblock_num_tiles);
                 }
 
                 release_dst(DstMode::Half);
@@ -186,9 +200,11 @@ void MAIN {
                         out_subblock_h,
                         out_subblock_w,
                         out_block_w,
-                        matmul_out_intermediate_cb_id,
-                        reblock_cb_id
+                        untilize_mode_final_matmul_partials_cb,
+                        untilize_mode_reblock_cb,
+                        out0_cb
                     );
+                    mm_init_short();
                 }
             }
 
@@ -197,9 +213,12 @@ void MAIN {
 
         if constexpr (spill) enable_reload = true;
 
-        cb_pop_front(matmul_act_cb_id, in0_block_num_tiles);
+        if constexpr (tilize_in) {
+            cb_pop_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
+        } else {
+            cb_pop_front(in0_cb, in0_block_num_tiles);
+        }
         cb_pop_front(CB::c_in1, in1_block_num_tiles);
-
     }
 
 }

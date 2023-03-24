@@ -54,7 +54,7 @@ if __name__ == "__main__":
 
     TILE_HEIGHT = TILE_WIDTH = 32
 
-    Ha = 8 * TILE_HEIGHT
+    Ha = 16 * TILE_HEIGHT
     Wa = 4 * TILE_WIDTH
     Wb = 4 * TILE_WIDTH
     run_large_matmul_test(Ha, Wa, Wb, False, False)
