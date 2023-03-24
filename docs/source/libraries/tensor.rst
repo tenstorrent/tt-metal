@@ -12,7 +12,7 @@ Operations in ttDNN library also utilize this library: operation take TT Tensors
 This library only supports tensors of rank 4, where the sizes of last two dimensions must be both multiple of 32.
 
 
-TT Tensor library provides support for different memory layouts of data stored within tensor. 
+TT Tensor library provides support for different memory layouts of data stored within tensor.
 
 ROW_MAJOR layout will store values in memory row by row, starting from last dimension of tensor.
 
@@ -21,9 +21,9 @@ A tile is a (32, 32) shaped subsection of tensor.
 Tiles are stored in memory in row major order, and then values inside tiles are stored in row major order.
 
 .. code-block::
-    
+
     #Tensor of shape (2, 64, 64)
-    
+
     #batch=0
     [    0,    1,    2, ...,   63,
         64,   65,   66, ...,  127,
@@ -47,7 +47,7 @@ Tiles are stored in memory in row major order, and then values inside tiles are 
       32,   33, ...,   63,   96,   97, ...,  127, ..., 2016, 2017, ..., 2047, # second tile of batch=0
     ...
     2080, 2081, ..., 2111, 2144, 2145, ..., 2175, ..., 4064, 4065, ..., 4095, # fourth (last) tile of batch=0
-    
+
     4096, ..., 6111,                                                           # first tile of batch=1
     ...
     6176, ..., 8191 ]                                                          # fourth (last) tile of batch=0
@@ -57,11 +57,11 @@ Tensor API
 
 .. autoclass:: ttlib.tensor.Tensor
     :members: data, layout, print, pretty_print, shape
-    
+
 Examples of converting between PyTorch Tesnor and TT Tensor
 -----------------------------------------------------------
 
-Rember that TT Tensors must
+Remember that TT Tensors must
 
 * have rank 4
 * have their final two dimensions (height and width) divisible by 32
@@ -95,8 +95,8 @@ This example shows how to move a TT Tensor output from device to host and how to
 
     # move TT Tensor output from TT accelerator device to host
     # and then on host, change memory layout of TT Tensor to ROW_MAJOR
-    tt_output = output.to(host).to(ttlib.tensor.Layout.ROW_MAJOR) 
-    
+    tt_output = output.to(host).to(ttlib.tensor.Layout.ROW_MAJOR)
+
     # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
     # and then reshape PyTorch tensor to shape of TT Tensor
     py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
