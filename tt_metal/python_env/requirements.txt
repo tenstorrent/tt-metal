@@ -1,5 +1,9 @@
 wheel==0.37.1
 pyyaml==5.3.1
+numpy==1.20.3
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==1.13.1+cpu
 
 # For docs
 -r ../../docs/requirements-docs.txt

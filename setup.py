@@ -26,8 +26,6 @@ class MyBuild(build_ext):
             full_lib_path = build_lib + "/" + filename
 
             src = "build/lib/libpymetal_csrc.so"
-            print("KSDJFKLDSJFLKDSJSKLDFJSDLKFJSDLKFJSDFKJ")
-            print(full_lib_path)
             self.copy_file(src, full_lib_path)
 
 short_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
@@ -57,8 +55,4 @@ setup(
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=MyBuild),
     zip_safe=False,
-    install_requires=[
-        "torch==1.13.1+cpu",
-        "numpy==1.20.3",
-    ],
 )

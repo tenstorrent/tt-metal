@@ -14,8 +14,16 @@ We must first specify you're in a dev environment.
 
     export TT_METAL_ENV=dev
 
-We recommend exporting ``TT_METAL_ENV`` in your ``.rc`` for whatever shell
-you're using if you're a developer.
+Next, we need to set ``PYTHONPATH`` for the local Python we will use. This is
+so that tests will be able to find local versions of the modules from the root
+directory, rather than having to ambiguously rely on the ``cwd`` of the script
+caller, or use a ``site-packages`` module etc.
+
+::
+
+    export PYTHONPATH=<this repo dir>
+
+We recommend exporting these environment variables to your shell's ``.rc``.
 
 To build the Python environment, library, and git hook scripts,
 
