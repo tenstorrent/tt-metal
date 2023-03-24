@@ -449,6 +449,7 @@ test-list:
     shape:
       shape-list:
         - [[1, 1, 32, 32]] # Single core
+        - [[3, 1, 320, 384]] # Multi core
       num-shapes: 1
     datagen:
       function: gen_rand
@@ -462,7 +463,8 @@ test-list:
   transpose-hc:
     shape:
       shape-list:
-        - [[1, 32, 32, 32]] # Single core
+        - [[1, 32, 32, 32]] # Multi core (There is no single core case and this is the smallest input)
+        - [[3, 320, 384, 32]] # Multi core
       num-shapes: 1
     datagen:
       function: gen_rand
