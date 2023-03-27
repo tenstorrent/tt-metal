@@ -127,6 +127,20 @@ def gen_scaled_dirichlet_per_tile(size, start=1, step=1, max=1):
     return output
 
 
+def gen_checkerboard(size, low=0, high=100):
+    value = torch.Tensor(1).uniform_(low, high).item()
+
+    # Create a checkerboard of alternating signed values
+    checkerboard = torch.full([size[-2], size[-1]], value)
+    checkerboard[1::2, ::2] = value * -1
+    checkerboard[::2, 1::2] = value * -1
+
+    # Duplicate across batch dims
+    output = torch.tile(checkerboard, (*size[:-2], 1, 1))
+
+    return output
+
+
 def gen_arange(size):
     numel = torch.Size(size).numel()
     return torch.arange(numel, dtype=torch.float32).reshape(size)

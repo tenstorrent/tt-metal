@@ -400,17 +400,15 @@ test-list:
         - [[1, 1, 32, 3840]] # Multi core h
       num-shapes: 1
     datagen:
-      function: gen_scaled_dirichlet_along_dim
+      function: gen_checkerboard
       args:
-        start: 1
-        step: 1
-        max: 1
-        dim: -2
+        low: 0
+        high: 100
     comparison:
       function: comp_allclose
       args:
         rtol: 0
-        atol: 0.3
+        atol: 0.1
     output-file: all_op_parallelization_sweep.csv
   reduce-sum-w:
     shape:
@@ -419,17 +417,15 @@ test-list:
         - [[1, 1, 3840, 32]] # Multi core w
       num-shapes: 1
     datagen:
-      function: gen_scaled_dirichlet_along_dim
+      function: gen_checkerboard
       args:
-        start: 1
-        step: 1
-        max: 1
-        dim: -1
+        low: 0
+        high: 100
     comparison:
       function: comp_allclose
       args:
         rtol: 0
-        atol: 0.3
+        atol: 0.1
     output-file: all_op_parallelization_sweep.csv
   reduce-sum-hw:
     shape:
@@ -438,16 +434,15 @@ test-list:
         - [[1, 1, 512, 512]] # Multi core hw (== multi core w + multi core h)
       num-shapes: 1
     datagen:
-      function: gen_scaled_dirichlet_per_tile
+      function: gen_checkerboard
       args:
-        start: 1
-        step: 1
-        max: 1
+        low: 0
+        high: 100
     comparison:
       function: comp_allclose
       args:
         rtol: 0
-        atol: 0.3
+        atol: 0.1
     output-file: all_op_parallelization_sweep.csv
   # TRANSPOSE
   transpose-wh:
