@@ -32,7 +32,7 @@ def run_pytorch_test(args):
             f"Directory {output_folder} already exists! Remove this folder or provide a different path to start pytorch tests."
         )
         sys.exit(1)
-    output_folder.mkdir()
+    output_folder.mkdir(parents=True)
     logger.info(f"Starting pytorch tests in: {output_folder}")
 
     ################# PARSE ARGS #################
