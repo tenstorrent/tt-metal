@@ -953,15 +953,18 @@ Tensor matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, bool bca
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
     bool pass = true;
-    tt_metal::CompileProgram(device, program);
+    constexpr bool skip_hlkc = false;
+    pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-    tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+    pass &= tt_metal::LaunchKernels(device, program);
 
     delete program;
+
+    TT_ASSERT(pass);
 
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;
