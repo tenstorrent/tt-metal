@@ -3,8 +3,8 @@ import math
 import torch
 import numpy as np
 
-from pymetal import ttlib as ttl
-from pymetal.ttlib.utils import (
+from libs import ttlib as ttl
+from libs.ttlib.utils import (
     _nearest_32 as nearest_32,
     pad_activation,
     pad_weight,

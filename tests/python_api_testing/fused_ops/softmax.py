@@ -1,1 +1,1 @@
-from pymetal.ttlib.fused_ops.softmax import *
+from libs.ttlib.fused_ops.softmax import *

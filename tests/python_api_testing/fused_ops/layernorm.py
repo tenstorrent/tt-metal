@@ -1,1 +1,1 @@
-from pymetal.ttlib.fused_ops.layernorm import *
+from libs.ttlib.fused_ops.layernorm import *

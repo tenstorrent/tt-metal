@@ -7,8 +7,8 @@ sys.path.append(f"{f}/../..")
 
 import numpy as np
 
-from pymetal import ttlib as ttl
-from pymetal.ttlib.utils import tilize_to_list, tilize, channels_last
+from libs import ttlib as ttl
+from libs.ttlib.utils import tilize_to_list, tilize, channels_last
 import torch
 
 

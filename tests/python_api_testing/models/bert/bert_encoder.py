@@ -1,7 +1,7 @@
 import torch
 from transformers import BertForQuestionAnswering
 
-from pymetal import ttlib as ttl
+from libs import ttlib as ttl
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
 from python_api_testing.fused_ops.add_and_norm import AddAndNorm

@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../..")
 
 import numpy as np
 
-from pymetal import ttlib as ttl
+from libs import ttlib as ttl
 from models.utility_functions import untilize
 
 

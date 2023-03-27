@@ -1,5 +1,5 @@
 import pytest
-from pymetal import ttlib
+from libs import ttlib
 import torch
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
