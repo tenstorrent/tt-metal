@@ -4,8 +4,8 @@ import random
 from itertools import chain
 from functools import partial
 
-from tests.reg_scripts.common import run_single_test, run_process_and_get_result, report_tests, TestEntry, error_out_if_test_report_has_failures, TestSuiteType
-from tests.reg_scripts.cmdline_args import get_cmdline_args, get_llrt_arguments_from_cmdline_args
+from tests.scripts.common import run_single_test, run_process_and_get_result, report_tests, TestEntry, error_out_if_test_report_has_failures, TestSuiteType
+from tests.scripts.cmdline_args import get_cmdline_args, get_llrt_arguments_from_cmdline_args
 
 
 SILICON_DRIVER_TEST_ENTRIES = (

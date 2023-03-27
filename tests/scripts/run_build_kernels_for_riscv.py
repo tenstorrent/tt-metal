@@ -2,8 +2,8 @@ from functools import partial
 import concurrent.futures
 import argparse
 
-from tests.reg_scripts.common import run_single_test, run_process_and_get_result, report_tests, TestEntry, error_out_if_test_report_has_failures, TestSuiteType
-from tests.reg_scripts.cmdline_args import get_cmdline_args, get_build_kernels_for_riscv_arguments_from_cmdline_args
+from tests.scripts.common import run_single_test, run_process_and_get_result, report_tests, TestEntry, error_out_if_test_report_has_failures, TestSuiteType
+from tests.scripts.cmdline_args import get_cmdline_args, get_build_kernels_for_riscv_arguments_from_cmdline_args
 
 BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES = (
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_add_two_ints", "test_build_kernel_add_two_ints"),

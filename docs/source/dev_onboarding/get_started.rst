@@ -73,7 +73,7 @@ Python installation:
 
     make tt_metal/tests
     export TT_METAL_HOME=<this repo dir>
-    python -m tests.reg_scripts.run_tt_metal
+    python -m tests.scripts.run_tt_metal
 
 .. only:: not html
 

@@ -1,7 +1,7 @@
 import argparse
 from functools import partial
 
-from tests.reg_scripts.common import TestSuiteType
+from tests.scripts.common import TestSuiteType
 
 
 class CmdlineArgs:

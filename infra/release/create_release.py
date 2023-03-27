@@ -14,7 +14,7 @@ from toolz.itertoolz import groupby, first
 from toolz.dicttoolz import valmap
 from toolz.functoolz import compose
 
-from reg_scripts import common
+from tests.scripts import common
 
 
 class ReleaseConstants:
@@ -38,7 +38,7 @@ class ReleaseConstants:
                 "build_kernels_for_riscv/tests/",
                 "pymetal/tests/",
                 "release/",
-                "reg_scripts/",
+                "tests/",
                 "kernels/compute/draft/",
                 ".gitmodules",  # needed for submodules
                 "python_api_testing/",

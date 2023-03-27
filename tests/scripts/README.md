@@ -16,10 +16,10 @@ The main idea with command-line parameters is that we have two types of
 parameters: **common** and **specific**.
 
 **Common** parameters are added to the parser under `add_common_args_` function
-in `reg_scripts.cmdline_args`.
+in `scripts.cmdline_args`.
 
 **Specific** parameters are added to the parser under
-`add_test_type_specific_args_` function in `reg_scripts.cmdline_args`. The
+`add_test_type_specific_args_` function in `scripts.cmdline_args`. The
 specific test suite type is provided as a enum key from the user, in this case
 the regression script.
 
@@ -27,7 +27,7 @@ the regression script.
 
 To actually use params in the regression script, the user must
 1) Instantiate the parser by calling `get_cmdline_args(TestSuiteType)`, where
-`TestSuiteType` is a specific type as provided in `reg_scripts.common`. Ex.
+`TestSuiteType` is a specific type as provided in `scripts.common`. Ex.
 ```
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.LLRT)
@@ -59,7 +59,7 @@ simple steps.
 
 1) Tell the parser what to look for. If you are familiar with `argparse` in
 Python, this is trivial. Under the function `add_test_type_specific_args_` in
-`reg_scripts.cmdline_args`, either add a new `TestSuiteType` handler or under
+`scripts.cmdline_args`, either add a new `TestSuiteType` handler or under
 an existing one, add an `argparser` call with appropriate arguments. For this
 example, let's say we want to add an argument for `num_devices` for
 `LLRT` tests.
