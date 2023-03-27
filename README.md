@@ -11,8 +11,8 @@ ssh-keygen
 
 3. Clone the repo.
 ```
-git clone git@<HOST>:<REPO>.git --recurse-submodules
-cd <REPO>
+git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules
+cd tt-metal
 ```
 
 4. Build and activate the TT-Metal environment:
@@ -34,5 +34,4 @@ Navigate your web browser to `http://<ip address>:<port>`, where `<ip address>`
 is the IP address of the machine on which you launched the web server. For
 example: `http://10.250.37.37:4242`, for port ``4242``.
 
-7. Follow the `Getting Started` instructions on the Documentation page. 
-
+7. Follow the `Getting Started` instructions on the Documentation page.

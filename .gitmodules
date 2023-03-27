@@ -1,10 +1,11 @@
 [submodule "src/ckernels/sfpi"]
 	path = src/ckernels/sfpi
-	url = git@github.com:tenstorrent-accel/sfpi-rel.git
+	url = git@github.com:tenstorrent-metal/sfpi-rel.git
 
 [submodule "third_party/pybind11"]
 	path = tt_metal/third_party/pybind11
 	url = https://github.com/pybind/pybind11.git
+
 [submodule "third_party/lfs"]
 	path = tt_metal/third_party/lfs
-	url = git@github.com:tenstorrent-accel/lfs.git
+	url = git@github.com:tenstorrent-metal/lfs.git
