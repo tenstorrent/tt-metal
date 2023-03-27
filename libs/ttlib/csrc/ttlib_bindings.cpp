@@ -11,8 +11,8 @@
 #include "tt_metal/op_library/untilize/untilize_op.hpp"
 #include "tt_metal/op_library/reshape/reshape_op.hpp"
 
-#include "pymetal_bindings.hpp"
-#include "pymetal/csrc/type_caster.hpp"
+#include "ttlib_bindings.hpp"
+#include "type_caster.hpp"
 
 namespace py = pybind11;
 

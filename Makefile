@@ -102,7 +102,7 @@ LIBS_TO_BUILD = \
 	tt_metal \
 	tools \
 	python_env \
-	pymetal
+	libs
 
 ifdef TT_METAL_ENV_IS_DEV
 LIBS_TO_BUILD += \
@@ -113,7 +113,7 @@ endif
 # These must be in dependency order (enforces no circular deps)
 include tt_metal/common/common.mk
 include tt_metal/module.mk
-include pymetal/module.mk
+include libs/module.mk
 
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV

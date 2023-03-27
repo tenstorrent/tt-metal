@@ -63,7 +63,7 @@ release/machine_setup/assets/
 
 # PyBind extensions and wheel setup
 *.egg-info/
-pymetal/**/*.so
+*.so
 .installed.cfg
 *.egg
 
