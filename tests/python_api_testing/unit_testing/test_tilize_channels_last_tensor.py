@@ -1,5 +1,7 @@
+import pytest
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../..")
 
@@ -9,7 +11,8 @@ from pymetal import ttlib as ttl
 from pymetal.ttlib.utils import tilize_to_list, tilize, channels_last
 import torch
 
-if __name__ == "__main__":
+
+def test_tilize_channels_last_tensor():
     pcie_0 = 0
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_0)
     ttl.device.InitializeDevice(device)
@@ -24,11 +27,13 @@ if __name__ == "__main__":
         pt_tensor.shape,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.CHANNELS_LAST,
-        device
+        device,
     )
     tt_res = ttl.tensor.tilize(tt_tensor)
     tt_res_array = np.array(tt_res.to(host).data(), dtype=float).reshape(cl_shape)
 
     golden_pt_tensor = tilize(cl_pt_tensor)
-    assert (abs(golden_pt_tensor - tt_res_array) < 0.02).all(), "Max abs difference for tilize can be 0.02 due to bfloat conversions"
+    assert (
+        abs(golden_pt_tensor - tt_res_array) < 0.02
+    ).all(), "Max abs difference for tilize can be 0.02 due to bfloat conversions"
     ttl.device.CloseDevice(device)

@@ -1,16 +1,46 @@
+import pytest
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../..")
 
 import numpy as np
 
 from pymetal import ttlib as ttl
-from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
+from python_api_testing.models.utility_functions import (
+    pad_activation,
+    pad_weight,
+    tilize,
+    untilize,
+    tilize_to_list,
+    print_diff_argmax,
+    pad_weight,
+    is_close,
+)
 import torch
 
-def run_large_matmul_test(Ha, Wa, Wb, tilize_a, untilize_out):
+
+@pytest.mark.parametrize(
+    "tilize_a, untilize_out",
+    (
+        (False, False),
+        (False, True),
+        (True, False),
+        (True, True),
+    ),
+)
+def test_run_large_matmul_test(tilize_a, untilize_out):
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+
+    TILE_HEIGHT = TILE_WIDTH = 32
+
+    Ha = 16 * TILE_HEIGHT
+    Wa = 4 * TILE_WIDTH
+    Wb = 4 * TILE_WIDTH
     torch.manual_seed(0)
+    host = ttl.device.GetHost()
     a_shape = [1, 1, Ha, Wa]
     b_shape = [1, 1, Wa, Wb]
 
@@ -45,20 +75,6 @@ def run_large_matmul_test(Ha, Wa, Wb, tilize_a, untilize_out):
     if not untilize_out:
         out_pytorch = untilize(out_pytorch)
 
-    assert (out_pytorch == a).all(), "Output should be identical to pytorch"
-
-if __name__ == "__main__":
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-
-    TILE_HEIGHT = TILE_WIDTH = 32
-
-    Ha = 16 * TILE_HEIGHT
-    Wa = 4 * TILE_WIDTH
-    Wb = 4 * TILE_WIDTH
-    run_large_matmul_test(Ha, Wa, Wb, False, False)
-    run_large_matmul_test(Ha, Wa, Wb, False, True)
-    run_large_matmul_test(Ha, Wa, Wb, True, False)
-    run_large_matmul_test(Ha, Wa, Wb, True, True)
     ttl.device.CloseDevice(device)
+
+    assert (out_pytorch == a).all(), "Output should be identical to pytorch"

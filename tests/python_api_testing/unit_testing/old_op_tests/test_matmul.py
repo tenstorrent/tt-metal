@@ -1,7 +1,9 @@
+import pytest
 from pymetal import ttlib
 import torch
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
+@pytest.mark.skip(reason="This is an old test that needs to be deleted")
 def test_matmul():
 
     device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, 0)
