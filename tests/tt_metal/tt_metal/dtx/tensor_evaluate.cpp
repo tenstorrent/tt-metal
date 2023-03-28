@@ -1,14 +1,14 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tensor/tensor.hpp"
-#include "tt_metal/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "libs/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "constants.hpp"
 
 #include <algorithm>
 #include <functional>
 #include <random>
 
-#include "tt_metal/impl/dtx/dtx.hpp"
-#include "tt_metal/impl/dtx/dtx_passes.hpp"
+#include "libs/dtx/dtx.hpp"
+#include "libs/dtx/dtx_passes.hpp"
 
 using namespace tt;
 

@@ -100,9 +100,9 @@ LIBS_TO_BUILD = \
 	device \
 	llrt \
 	tt_metal \
-	tools \
 	python_env \
-	libs
+	libs \
+	tools
 
 ifdef TT_METAL_ENV_IS_DEV
 LIBS_TO_BUILD += \

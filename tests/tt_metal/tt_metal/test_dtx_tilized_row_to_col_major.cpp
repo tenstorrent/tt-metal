@@ -1,8 +1,8 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include "tt_metal/impl/dtx/dtx.hpp"
-#include "tt_metal/impl/dtx/dtx_passes.hpp"
+#include "libs/dtx/dtx.hpp"
+#include "libs/dtx/dtx_passes.hpp"
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 

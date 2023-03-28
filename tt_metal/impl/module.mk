@@ -14,21 +14,6 @@ TT_METAL_IMPL_SRCS = \
 	tt_metal/impl/memory_manager/allocators/free_list.cpp \
 	tt_metal/impl/memory_manager/memory_manager.cpp \
 	tt_metal/impl/program.cpp \
-	tt_metal/impl/dtx/dtx.cpp \
-	tt_metal/impl/dtx/parallelize_generic_tensor_slice.cpp \
-	tt_metal/impl/dtx/pass_collapse_transformations.cpp \
-	tt_metal/impl/dtx/pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1.cpp \
-	tt_metal/impl/dtx/pass_generate_transfer_addresses.cpp \
-	tt_metal/impl/dtx/pass_reverse_transformations.cpp \
-	tt_metal/impl/dtx/pass_transpose_xy.cpp \
-	tt_metal/impl/dtx/pass_transpose_yz.cpp \
-	tt_metal/impl/dtx/pass_row_major_memory_store.cpp \
-	tt_metal/impl/dtx/pass_convert_abstract_tensor_to_channels_last_layout.cpp \
-	tt_metal/impl/dtx/pass_tilize.cpp \
-	tt_metal/impl/dtx/pass_util.cpp \
-	tt_metal/impl/dtx/util.cpp \
-	tt_metal/impl/dtx/util_vector_of_ints.cpp \
-	tt_metal/impl/dtx/evaluate.cpp
 
 TT_METAL_IMPL_OBJS = $(addprefix $(OBJDIR)/, $(TT_METAL_IMPL_SRCS:.cpp=.o))
 TT_METAL_IMPL_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_IMPL_SRCS:.cpp=.d))
