@@ -18,6 +18,8 @@ from libs.tt_lib.utils import (
     roundup32,
     float_to_bits,
     divup,
+    channels_last,
+    convert_weights_2d_matrix
 )
 
 def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag = 2.0, max_mag_fraction = 0.02):

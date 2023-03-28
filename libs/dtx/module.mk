@@ -10,6 +10,7 @@ DTX_SRCS = \
 	libs/dtx/parallelize_generic_tensor_slice.cpp \
 	libs/dtx/pass_collapse_transformations.cpp \
 	libs/dtx/pass_convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1.cpp \
+	libs/dtx/pass_convert_tensor_layout_CL1_to_2Dmatrix_conv1x1_s1.cpp \
 	libs/dtx/pass_generate_transfer_addresses.cpp \
 	libs/dtx/pass_reverse_transformations.cpp \
 	libs/dtx/pass_transpose_xy.cpp \

@@ -336,7 +336,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     return output;
 }
 
-Tensor tilize_conv_activation(const Tensor &a) {
+Tensor tilize_conv_activation(const Tensor &a, bool conv1x1 = false) {
     TT_ASSERT(a.layout() == Layout::CHANNELS_LAST, "Conv activation should be in channels last layout");
 
     //vector<int> shape = {5, 4,4};
@@ -348,7 +348,12 @@ Tensor tilize_conv_activation(const Tensor &a) {
     node0->groups[0]->shape = shape;
     dtx_right->transformations.push_back(node0);
     bool pass = true;
-    pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1(dtx_right);
+    if (conv1x1) {
+        pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv1x1_s1(dtx_right);
+    }
+    else {
+        pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1(dtx_right);
+    }
     // Get the 2d matrix shape
     auto matrix_shape = dtx_right->transformations.back()->groups[0]->shape;
     assert(matrix_shape.size() == 3);

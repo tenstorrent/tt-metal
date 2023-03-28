@@ -24,6 +24,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp \
 	libs/tt_dnn/op_library/bmm/bmm_op.cpp \
 	libs/tt_dnn/op_library/bmm/single_core/bmm_op_single_core.cpp \
+	libs/tt_dnn/op_library/bmm/single_core/bmm_op_single_core_single_block.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core/bmm_op_multi_core.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse/bmm_op_multi_core_reuse.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast/bmm_op_multi_core_reuse_mcast.cpp \
@@ -31,6 +32,8 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast_generalized/bmm_op_multi_core_reuse_mcast_generalized.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_padding/bmm_op_multi_core_reuse_padding.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast_padding/bmm_op_multi_core_reuse_mcast_padding.cpp \
+	libs/tt_dnn/op_library/conv/conv_op.cpp \
+	libs/tt_dnn/op_library/conv/conv_op_single_block.cpp \
 	libs/tt_dnn/op_library/tilize/tilize_op.cpp \
 	libs/tt_dnn/op_library/untilize/untilize_op.cpp \
 	libs/tt_dnn/op_library/reshape/reshape_op.cpp

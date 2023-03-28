@@ -493,6 +493,55 @@ bool test_channels_last_to_2D_matrix() {
     return pass;
 }
 
+bool test_channels_last_to_2D_matrix_conv1x1() {
+    bool pass = true;
+
+
+    // FULL TEST
+
+    vector<int> shape = {5, 4,4};
+
+    // Right side: AbstractTensor --> consumer conv/mm
+    DataTransformations * dtx_right = new DataTransformations();
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = shape;
+    dtx_right->transformations.push_back(node0);
+    pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv1x1_s1(dtx_right);
+    pass &= row_major_memory_store(dtx_right);
+
+    cout << "\n\nDTX_RIGHT" << endl;
+    dtx_right->print();
+
+
+    // Left side: AbstractTensor --> producer memory buffer
+    DataTransformations * dtx_left = new DataTransformations();
+    TransformationNode * node1 = new TransformationNode("producer", 1);
+    node1->groups[0]->shape = shape;
+    dtx_left->transformations.push_back(node1);
+    pass &= convert_abstract_tensor_to_channels_last_layout(dtx_left);
+
+    cout << "\n\nDTX_LEFT" << endl;
+    dtx_left->print();
+
+    DataTransformations * combined = reverse_and_combine_transformations(dtx_left, dtx_right);
+    cout << "\n\nDTX_COMBINED" << endl;
+    combined->print();
+
+    pass &= optimize_away_transpose(combined);
+    cout << "\n\nDTX_OPTIMIZED" << endl;
+    combined->print();
+
+    pass &= collapse_transformations(combined);
+    cout << "\n\nDTX_COLLAPSED" << endl;
+    combined->print();
+    pass &= generate_transfer_addresses(combined);
+    combined->print();
+
+
+
+    return pass;
+}
+
 void run_dtx_tests() {
     bool pass = true;
 
@@ -536,6 +585,9 @@ void run_dtx_tests() {
     // In progress
     pass &= test_channels_last_to_2D_matrix();
     printf("test_channels_last_to_2D_matrix - %d\n\n", pass);
+
+    pass &= test_channels_last_to_2D_matrix_conv1x1();
+    printf("test_channels_last_to_2D_matrix_conv1x1 - %d\n\n", pass);
 
     if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
     else cout << "TESTS FAILED\n\n\n" << endl;

@@ -13,23 +13,23 @@ import torch
 
 
 @pytest.mark.parametrize(
-    "tilize_a, untilize_out",
+    "Hat, Wat, Wbt, tilize_a, untilize_out, single_block_single_bank",
     (
-        (False, False),
-        (False, True),
-        (True, False),
-        (True, True),
+        (16, 4, 4, False, False, False),
+        (16, 4, 4, False, True, False),
+        (16, 4, 4, True, False, False),
+        (16, 4, 4, True, True, False),
+        (8, 4, 4, True, True, True),
     ),
 )
-def test_run_large_matmul_test(tilize_a, untilize_out):
+def test_run_large_matmul_test(Hat, Wat, Wbt, tilize_a, untilize_out, single_block_single_bank):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-
     TILE_HEIGHT = TILE_WIDTH = 32
 
-    Ha = 16 * TILE_HEIGHT
-    Wa = 4 * TILE_WIDTH
-    Wb = 4 * TILE_WIDTH
+    Ha = Hat * TILE_HEIGHT
+    Wa = Wat * TILE_WIDTH
+    Wb = Wbt * TILE_WIDTH
     torch.manual_seed(0)
     host = ttl.device.GetHost()
     a_shape = [1, 1, Ha, Wa]
@@ -52,6 +52,7 @@ def test_run_large_matmul_test(tilize_a, untilize_out):
         ttl.tensor.DataType.BFLOAT16,
         layout_a,
         device,
+        ttl.tensor.MemoryConfig(False, 0) if single_block_single_bank else ttl.tensor.MemoryConfig(True, -1)
     )
     ttb = ttl.tensor.Tensor(
         tilize_to_list(b),
@@ -59,13 +60,19 @@ def test_run_large_matmul_test(tilize_a, untilize_out):
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,
         device,
+        ttl.tensor.MemoryConfig(False, 0) if single_block_single_bank else ttl.tensor.MemoryConfig(True, -1)
     )
 
-    out = ttl.tensor.large_bmm(tta, ttb, tilize_a, untilize_out)
-    out_pytorch = torch.tensor(out.to(host).data()).reshape(a_shape)
+    if single_block_single_bank:
+        print("Running single MM block")
+        out = ttl.tensor.large_bmm_single_block(tta, ttb, tilize_a, untilize_out)
+    else:
+        print("Running 2 MM block")
+        out = ttl.tensor.large_bmm(tta, ttb, tilize_a, untilize_out)
+    out_shape = [1,1,Ha,Wb]
+    out_pytorch = torch.tensor(out.to(host).data()).reshape(out_shape)
     if not untilize_out:
         out_pytorch = untilize(out_pytorch)
-
     ttl.device.CloseDevice(device)
 
     assert (out_pytorch == a).all(), "Output should be identical to pytorch"

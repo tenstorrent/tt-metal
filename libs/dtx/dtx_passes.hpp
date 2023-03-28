@@ -62,6 +62,8 @@ bool slice_into_tiles_and_store(DataTransformations * dtx, vector<int> dim_order
 // TO DO: rename to: convert_MathTensor_to_2Dmatrix_conv3x3_s1()
 bool convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1(DataTransformations * dtx);
 
+bool convert_tensor_layout_CL1_to_2Dmatrix_conv1x1_s1(DataTransformations * dtx);
+
 bool convert_abstract_tensor_to_channels_last_layout(DataTransformations * dtx);
 
 // Convert from a particular layout, stored in 1 place (ex, CPU), to the same layout, stored in 8 places (ex. device DRAM), with sharding

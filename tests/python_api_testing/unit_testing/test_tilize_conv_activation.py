@@ -12,7 +12,9 @@ from libs.tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _
 import torch
 
 
-def run_tilize_conv3x3s1_act_test(C, H, W):
+def run_tilize_conv_act_test(C, H, W, R, S):
+    assert R == S
+    assert R == 3 or R == 1
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
@@ -29,15 +31,15 @@ def run_tilize_conv3x3s1_act_test(C, H, W):
         ttl.tensor.MemoryConfig(False, 0),
     )
     # Tilize conv activation on device
-    A_t = ttl.tensor.tilize_conv_activation(A)
-    OH = H - 2
-    OW = W - 2
-    output_shape = [1, 1, _nearest_32(OH * OW), C * 9]
+    A_t = ttl.tensor.tilize_conv_activation(A, True)
+    OH = H - R + 1
+    OW = W - S + 1
+    output_shape = [1, 1, _nearest_32(OH * OW), C * R * S]
     pyt_got_back = np.array(A_t.to(host).data(), dtype=float).reshape(output_shape)
     print("Pytorch tensor got back shape - " + str(pyt_got_back.shape))
     # untilize and remove padding
     A_ut = untilize(pyt_got_back)[:, :, 0 : (OH * OW), :]
-    A_golden = convert_act_2d_matrix(A_pyt, 3, 3, 1, 1, 0, 0)
+    A_golden = convert_act_2d_matrix(A_pyt, R, S, 1, 1, 0, 0)
     ttl.device.CloseDevice(device)
     assert A_ut.shape == A_golden.shape
     print(abs(A_golden - A_ut).max())
@@ -46,5 +48,6 @@ def run_tilize_conv3x3s1_act_test(C, H, W):
     ).all(), "Max abs difference for tilize can be 0.02 due to bfloat conversions"
 
 
-def test_run_tilize_conv3x3s1_act_test():
-    run_tilize_conv3x3s1_act_test(32, 5, 5)
+def test_run_tilize_convs1_act_test():
+    run_tilize_conv_act_test(32, 5, 5, 3, 3)
+    run_tilize_conv_act_test(32, 5, 5, 1, 1)
