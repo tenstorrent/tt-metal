@@ -14,167 +14,384 @@
 using namespace std;
 using namespace tt;
 
-void add_profile_kernel_to_make_cmd(std::stringstream &make_cmd) {
-    make_cmd << " PROFILE_KERNEL=1";
-}
-
-void add_noc_index_to_make_cmd(std::stringstream &make_cmd, const std::uint8_t noc_index) {
-    make_cmd << " NOC_INDEX=" << std::to_string(noc_index);
-}
-
-void add_kernel_compile_time_args_to_make_cmd(std::stringstream &make_cmd, const std::vector<std::uint32_t>& kernel_compile_time_args) {
-    for (int i = 0; i<kernel_compile_time_args.size(); i++) {
-        make_cmd << " KERNEL_COMPILE_TIME_ARG_" << i << "=" << std::to_string(kernel_compile_time_args[i]);
+std::string RISCID_to_string(RISCID id) {
+    switch (id) {
+        case NC: return "NC";
+        case BR: return "BR";
+        case TR0: return "TR0";
+        case TR1: return "TR1";
+        case TR2: return "TR2";
+        default: TT_ASSERT(false);
     }
+    return string();
 }
 
-void add_kernel_compile_time_args_to_make_cmd(std::string &make_cmd_string, const std::vector<std::uint32_t>& kernel_compile_time_args) {
-    stringstream make_cmd;
-    for (int i = 0; i<kernel_compile_time_args.size(); i++) {
-        make_cmd << " KERNEL_COMPILE_TIME_ARG_" << i << "=" << std::to_string(kernel_compile_time_args[i]);
+struct CompileDefines {
+    RISCID           hwthread               { RISCID::NC }; // 0=NC, 1=UNPACK, BR=4
+    uint32_t         mailbox_addr           { 0 };
+    uint32_t         perf_dump_level        { 0 };
+    uint32_t         noc_index              { 0 };
+    bool             firmware               { false };
+    bool             profile_kernel         { false };
+    vector<uint32_t> compile_time_args;
+    string           kernel_inc;
+
+    bool is_trisc() const { return (hwthread >= RISCID::TR0) && (hwthread <= RISCID::TR2); }
+    bool is_brisc() const { return hwthread == RISCID::BR; }
+    bool is_ncrisc() const { return hwthread == RISCID::NC; }
+};
+
+struct TriscParams {
+    // TODO: commonize this with runtime_common.hpp?
+    uint32_t TRISC_BASE { l1_mem::address_map::TRISC_BASE };
+    uint32_t TRISC_L1_MAILBOX_OFFSET { l1_mem::address_map::TRISC_L1_MAILBOX_OFFSET };
+    uint32_t trisc_sizes[3] = { l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE };
+    uint32_t trisc_mailbox_addresses[3] = {
+        TRISC_BASE + TRISC_L1_MAILBOX_OFFSET,
+        TRISC_BASE + trisc_sizes[0] + TRISC_L1_MAILBOX_OFFSET,
+        TRISC_BASE + trisc_sizes[0] + trisc_sizes[1] + TRISC_L1_MAILBOX_OFFSET};
+    int32_t get_trisc_size(RISCID id) const {
+        switch (id) {
+            case RISCID::TR0:
+            case RISCID::TR1:
+            case RISCID::TR2: return trisc_sizes[id-RISCID::TR0];
+            default:;
+        }
+        return 0;
     }
-    make_cmd_string += make_cmd.str() + " ";
-}
+    int32_t get_trisc_base(RISCID id) { if (id >= RISCID::TR0 && id <= RISCID::TR2) { return TRISC_BASE; } return 0; }
+    int32_t get_mailbox_addr(RISCID id) const {
+        switch (id) {
+            case RISCID::TR0:
+            case RISCID::TR1:
+            case RISCID::TR2: return trisc_mailbox_addresses[id-RISCID::TR0];
+            default:;
+        }
+        return 0;
+    }
+};
 
+struct CompileContext {
+    string home_;
+    string gpp_           { "/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++ " };
+    string gcc_           { "/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-gcc " }; // TODO(AP): this wasn't really necessary for assembler
+    string objcopy_       { "/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objcopy " };
+    string kernel_subdir_; // full path to kernel subdir
 
+    CompileContext(const string& kernel_subdir) {
+        home_ = std::getenv("TT_METAL_HOME");
+        TT_ASSERT(home_.size() > 0);
+        if (home_.back() != '/')
+            home_.push_back('/');
+        kernel_subdir_ = kernel_subdir; // example: "eltwise_binary_writer_unary_8bank_reader_dual_8bank/7036516950107541145"
+        gpp_ = home_ + gpp_;
+        gcc_ = home_ + gcc_;
+        objcopy_ = home_ + objcopy_;
+    }
 
-//////////////////
-// BRISC       //
-//////////////////
+    ~CompileContext() {
+    }
 
-void generate_binary_for_brisc(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string &out_dir_path, const std::string& arch_name, const std::uint8_t noc_index, const std::vector<std::uint32_t>& kernel_compile_time_args, bool profile_kernel) {
-    log_info(tt::LogBuildKernels, "Compiling BRISC");
+    string generate_includes(const CompileDefines& defs) {
+        vector<string> includes; // relative to home_
+        vector<string> includes_abs; // absolute
+        if (defs.is_trisc()) {
+            // TODO(AP): allocating the vec every time is suboptimal
+            includes = move(vector<string>({
+                "",
+                "src/ckernels/grayskull/llk_lib/",
+                "src/ckernels/grayskull/common/inc",
+                "src/ckernels/sfpi/include",
+                "src/firmware/riscv/common",
+                "src/firmware/riscv/grayskull/noc",
+                "src/firmware/riscv/grayskull",
+                "tt_metal",
+                "build/src/firmware/riscv/grayskull/noc", // TODO(AP): this looks wrong, but nonetheless matches the old makefile for TRISCS
+                "build/src/ckernels/gen/out", // TODO(AP): same as above - point into build where there's no src/
+                "build/src/firmware/riscv/grayskull/"}
+            ));
+            includes_abs.push_back(kernel_subdir_);
+        } else if (defs.is_brisc()) {
+            includes = move(vector<string>({
+                "",
+                "src/ckernels/grayskull/common/inc",
+                "src/ckernels/sfpi/include",
+                "src/firmware/riscv/common",
+                "src/firmware/riscv/grayskull",
+                "src/firmware/riscv/grayskull/noc",
+                "src/firmware/riscv/targets/ncrisc",
+                "tt_metal"}
+            ));
+            includes_abs.push_back(kernel_subdir_ + "/brisc");
+        } else {
+            includes = move(vector<string>({
+                "",
+                "src/ckernels/grayskull/common/inc",
+                "src/ckernels/sfpi/include",
+                "src/firmware/riscv/common",
+                "src/firmware/riscv/grayskull",
+                "src/firmware/riscv/grayskull/noc",
+                "src/firmware/riscv/targets/ncrisc",
+                "tt_metal"}
+            ));
+            includes_abs.push_back(kernel_subdir_ + "/ncrisc");
+        }
 
-    string root_dir = std::getenv("TT_METAL_HOME");
-    auto old_cwd = fs::current_path(); //getting path
-    fs::current_path(root_dir); //setting path
+        string result = "";
+        for (auto s: includes)
+            result += " -I" + home_ + s; // convert to absolute path
+        for (auto s: includes_abs)
+            result += " -I" + s; // already absolute path
+        result += " ";
 
-    stringstream make_clean_cmd;
-    stringstream make_cmd;
-    std::string make_flags = " OUTPUT_DIR=" + fs::absolute(out_dir_path).string() + "/brisc ";
+        // TODO(AP): this seems odd, Makefile had both relative iquote and absolute
+        // in general this first pass conversion to c++ compiler driver just replicates the Makefile cmdlines verbatim
+        // but it looks like a lot of the include paths in the original Makefile were intermixed in unintended ways
+        vector<string> iquote_includes_abs;
+        if (defs.is_brisc() || defs.is_ncrisc()) {
+            iquote_includes_abs.push_back("/src/firmware/riscv/common/");
+            iquote_includes_abs.push_back("/src/firmware/riscv/grayskull/");
+            if (!defs.is_ncrisc()) // TODO(AP): cleanup, looks like some quirk of original Makefile
+                iquote_includes_abs.push_back("/src/firmware/riscv/grayskull/noc/");
+        }
+        for (auto s: iquote_includes_abs)
+            result += " -iquote " + home_ + s;
 
-    // this is in the top-level outdir because "/brisc" is deleted by make clean, but we log the output of make clean as well
-    string log_file = fs::absolute(out_dir_path).string() + "/brisc_build.log";
-    utils::create_file(log_file);
+        vector<string> iquote_includes;
+        if (defs.is_trisc()) {
+            iquote_includes.push_back("src/");
+            iquote_includes.push_back(".");
+        } else if (defs.is_brisc() || defs.is_ncrisc()) {
+            iquote_includes.push_back(".");
+        }
+        for (auto s: iquote_includes)
+            result += " -iquote " + s;
+        return result;
+    }
 
-    // Build clean
-    make_clean_cmd << " make -C src/firmware/riscv/targets/brisc clean " << make_flags;
+    string generate_gpp_options(const CompileDefines& defs, bool is_asm) {
+        string options_string =
+            " -march=rv32i -mabi=ilp32 \"-mgrayskull\" -MD -MP -flto -ffast-math -g -Wall -Werror";
+        if (!is_asm) // TODO(AP): wasn't necessary to split for assembler
+            options_string +=
+                " -std=c++17 -Wno-unknown-pragmas -fno-use-cxa-atexit "
+                " -Wno-error=multistatement-macros -Wno-error=parentheses "
+                " -Wno-error=unused-but-set-variable -Wno-unused-variable -fno-exceptions ";
+        string result = "";
+        switch  (defs.hwthread) {
+            case RISCID::NC:
+                result += " -Os";
+            break;
+            case RISCID::BR:
+                result += " -Os";
+                result += " -fno-tree-loop-distribute-patterns";
+            break;
+            default:
+                result += " -O3";
+            break;
+        }
+        result += options_string;
+        return result;
+    }
+
+    string generate_defines(const CompileDefines& defs) {
+        string result = "";
+        switch (defs.hwthread) {
+            case RISCID::NC:
+                result += " -DCOMPILE_FOR_NCRISC ";
+            break;
+            case RISCID::TR0:
+                result += " -DUCK_CHLKC_UNPACK ";
+                result += " -DNAMESPACE=chlkc_unpack ";
+                result += " -DARCH_GRAYSKULL";
+            break;
+            case RISCID::TR1:
+                result += " -DUCK_CHLKC_MATH ";
+                result += " -DNAMESPACE=chlkc_math ";
+                result += " -DARCH_GRAYSKULL";
+            break;
+            case RISCID::TR2:
+                result += " -DUCK_CHLKC_PACK ";
+                result += " -DNAMESPACE=chlkc_pack ";
+                result += " -DARCH_GRAYSKULL";
+            break;
+            case RISCID::BR:
+                result += " -DCOMPILE_FOR_BRISC ";
+            break;
+            default: break;
+        }
+
+        if (defs.mailbox_addr != 0)
+            result += " -DMAILBOX_ADDR=" + to_string(defs.mailbox_addr);
+        if (defs.perf_dump_level != 0 || defs.is_trisc()) // TODO(AP): double check
+            result += " -DPERF_DUMP_LEVEL=" + to_string(defs.perf_dump_level);
+        result += " -DTENSIX_FIRMWARE"; // TODO(AP): verify where firmware flag comes from
+        if (defs.profile_kernel)
+            result += " -DPROFILE_KERNEL=1";
+        for (int j = 0; j < defs.compile_time_args.size(); j++)
+            result += " -DKERNEL_COMPILE_TIME_ARG_" + to_string(j) + "=" + to_string(defs.compile_time_args[j]);
+        if (!defs.is_trisc())
+            result += " -DNOC_INDEX=" + to_string(defs.noc_index);
+        if (defs.firmware)
+            result += " -DTENSIX_FIRMWARE";
+        result += " -DLOCAL_MEM_EN=0 ";
+        return result;
+    }
+
+    string get_compile_cmd(const CompileDefines& defs, const string& hwthread_name, const string& obj_name, const string& cpp_name)
+    {
+        //"-c -o /home/andrei/git/gp.ai/built_kernels/"
+        //ctx.kernel_name_has_str_ = eltwise_binary_writer_unary_8bank_reader_dual_8bank/7036516950107541145/
+        //"tensix_thread1/ckernel.o"
+        //src/ckernel.cc
+        string gpp_str;
+        bool is_asm = (cpp_name.find(".S") != std::string::npos);
+        if (is_asm) // TODO(AP): wasn't necessary to split for assembler
+            gpp_str = gcc_;
+        else
+            gpp_str = gpp_;
+
+        gpp_str += generate_gpp_options(defs, is_asm);
+        gpp_str += generate_includes(defs);
+        gpp_str += generate_defines(defs);
+        gpp_str += "-c -o " + kernel_subdir_ + hwthread_name + obj_name + " " + cpp_name;
+        return gpp_str;
+    }
+
+    vector<string> get_verilog_cmd(const CompileDefines& defs, const string& thread_name, const string& elfname) {
+        ///home/andrei/git/gp.ai/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objcopy
+        // -O verilog /home/andrei/git/gp.ai//built_kernels/eltwise_binary_writer_unary_8bank_reader_dual_8bank/7036516950107541145/ncrisc/ncrisc.elf
+        // /home/andrei/git/gp.ai//built_kernels/eltwise_binary_writer_unary_8bank_reader_dual_8bank/7036516950107541145/ncrisc/ncrisc.hex.tmp
+        string hk = kernel_subdir_ + thread_name;
+        string result = objcopy_ + " -O verilog " + hk + elfname + ".elf " + hk + elfname + ".hex.tmp";
+        vector<string> results;
+        results.push_back(result);
+        result = string("python3 ") + home_ + "src/firmware/riscv/toolchain/hex8tohex32.py " + hk+elfname+".hex.tmp" + " " + hk+elfname + ".hex";
+        results.push_back(result);
+        return results;
+    }
+
+    vector<string> get_link_cmd(const CompileDefines& defs, const string& hwthread_name, const vector<string>& obj_names)
+    {
+        // /home/andrei/git/gp.ai//src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++
+        string linkopts = " -march=rv32i -mabi=ilp32 -mgrayskull -flto -ffast-math -Wl,--gc-sections"
+                          " -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--defsym=__firmware_start=0 "
+                          " -nostartfiles -g";
+        if (defs.is_trisc()) {
+            linkopts += " -Wl,--defsym=__trisc_base=" + to_string(TriscParams().get_trisc_base(defs.hwthread));
+            linkopts += " -Wl,--defsym=__trisc0_size=" + to_string(TriscParams().get_trisc_size(RISCID::TR0));
+            linkopts += " -Wl,--defsym=__trisc1_size=" + to_string(TriscParams().get_trisc_size(RISCID::TR1));
+            linkopts += " -Wl,--defsym=__trisc2_size=" + to_string(TriscParams().get_trisc_size(RISCID::TR2));
+            linkopts += " -fno-exceptions"; // TODO(AP): odd that this was not present for brisc in the Makefile
+        } else if (defs.is_brisc() || defs.is_ncrisc()) {
+            // TODO(AP): where does this come from for BR?
+            linkopts += " -Wl,--defsym=__trisc_base=27648 -Wl,--defsym=__trisc0_size=16384 -Wl,--defsym=__trisc1_size=16384 -Wl,--defsym=__trisc2_size=16384 ";
+            if (defs.is_brisc()) // TODO(AP): not on ncrisc, why?
+                linkopts += " -fno-tree-loop-distribute-patterns";
+        }
+
+        string hk = string(" ") + kernel_subdir_;
+        string link_str = gpp_;
+        link_str += " -L" + home_ + "/src/firmware/riscv/toolchain ";
+        link_str += linkopts;
+        switch  (defs.hwthread) {
+            case RISCID::NC:
+            link_str += " -Os";
+            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/ncrisc.ld "; break;
+            case RISCID::TR0:
+            link_str += " -O3";
+            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/trisc0.ld "; break;
+            case RISCID::TR1:
+            link_str += " -O3";
+            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/trisc1.ld "; break;
+            case RISCID::TR2:
+            link_str += " -O3";
+            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/trisc2.ld "; break;
+            default:
+            TT_ASSERT(defs.hwthread == RISCID::BR);
+            link_str += " -Os";
+            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/brisc.ld "; break;
+        }
+        for (auto oname: obj_names)
+            link_str += hk + hwthread_name + oname;
+
+        string elfname;
+        switch (defs.hwthread) {
+            case RISCID::NC:
+                elfname = "ncrisc";
+            break;
+            case RISCID::BR:
+                elfname = "brisc";
+            break;
+            case RISCID::TR0:
+                elfname = "tensix_thread0";
+            break;
+            case RISCID::TR1:
+                elfname = "tensix_thread1";
+            break;
+            case RISCID::TR2:
+                elfname = "tensix_thread2";
+            break;
+            default: TT_ASSERT(false); break;
+        }
+        // add -o target.elf
+        link_str += " -o " + hk + hwthread_name + elfname + ".elf";
+        return vector<string>({link_str, elfname});
+    }
+};
+
+void generate_binary_for_risc(
+    RISCID risc_id,
+    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
+    const std::string &out_dir_path,
+    const std::string& arch_name,
+    const std::uint8_t noc_index,
+    const std::vector<std::uint32_t>& kernel_compile_time_args,
+    bool profile_kernel) {
 
     // default ARCH_NAME is grayskull in Makefile
-    TT_ASSERT(
-        (arch_name.compare("grayskull") == 0) || (arch_name.compare("wormhole") == 0) ||
-        (arch_name.compare("wormhole_b0") == 0));
+    TT_ASSERT( (arch_name.compare("grayskull") == 0) || (arch_name.compare("wormhole") == 0) || (arch_name.compare("wormhole_b0") == 0) );
 
-    // Build
-    if (arch_name.compare("grayskull") != 0) {
-        make_cmd << " ARCH_NAME=" << arch_name;
-    }
-
-    make_cmd << " make -C src/firmware/riscv/targets/brisc";
-    make_cmd << make_flags;
-
-    // Make a directory "brisc_kernel" in the out_dir_path
-    std::string kernel_dir = out_dir_path + "/brisc_kernel";
-    fs::create_directories(kernel_dir);
-    // Pass this directoy as include path the the BRISC makefile
-    make_cmd << " KERNEL_INC=" << fs::absolute(kernel_dir).string();
-
-    // If flag is set, print kernel profiling timer marks
-    if (profile_kernel)
-    {
-        add_profile_kernel_to_make_cmd(make_cmd);
-    }
-    // Add NOC_INDEX for brisc
-    add_noc_index_to_make_cmd(make_cmd, noc_index);
-    // Add a list of KERNEL_COMPILE_TIME_ARGs for brisc
-    add_kernel_compile_time_args_to_make_cmd(make_cmd, kernel_compile_time_args);
-
-    // copy the BRISC kernel to that directory, w/ a generic filename kernel.cpp (this is what brisc.cc includes)
-    string kernel_file_name = build_kernel_for_riscv_options->brisc_kernel_file_name;
-    fs::copy(kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
-
-    // copy unpack/pack data formats to the kernel dir
-    if (fs::exists(out_dir_path + "/chlkc_unpack_data_format.h")) {
-        fs::copy(out_dir_path + "/chlkc_unpack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
-        fs::copy(out_dir_path + "/chlkc_pack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
-    }
-
-    log_debug(tt::LogBuildKernels, "    Make clean cmd: {}", make_clean_cmd.str());
-    if (!tt::utils::run_command(make_clean_cmd.str(), log_file, false)) {
-        log_fatal(tt::LogBuildKernels, " BRISC clean failed -- cmd: {}", make_clean_cmd.str());
-        exit(1);
-    }
-    log_debug(tt::LogBuildKernels, "    Make compile cmd: {}", make_cmd.str());
-    if (!tt::utils::run_command(make_cmd.str(), log_file, false)) {
-        log_fatal(tt::LogBuildKernels, " BRISC Build failed -- cmd: {}", make_cmd.str());
-        exit(1);
-    }
-
-    fs::current_path(old_cwd); // restore cwd
-}
-
-
-//////////////////
-// NCRISC       //
-//////////////////
-
-void generate_binary_for_ncrisc(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string &out_dir_path, const std::string& arch_name, const std::uint8_t noc_index, const std::vector<std::uint32_t>& kernel_compile_time_args, bool profile_kernel) {
-    log_info(tt::LogBuildKernels, "Compiling NCRISC");
-
-    string root_dir = std::getenv("TT_METAL_HOME");
-    auto old_cwd = fs::current_path();
-    fs::current_path(root_dir); // make build work from any cwd
-
-    stringstream make_clean_cmd;
-    stringstream make_cmd;
-    std::string make_flags = " OUTPUT_DIR=" + fs::absolute(out_dir_path).string() + "/ncrisc ";
+    log_info(tt::LogBuildKernels, "Compiling RISCID={}", risc_id);
 
     // this is in the top-level outdir because "/ncrisc" is deleted by make clean, but we log the output of make clean as well
-    string log_file = fs::absolute(out_dir_path).string() + "/ncrisc_build.log";
+    string log_file = fs::absolute(out_dir_path).string() + "/risc_build_" + RISCID_to_string(risc_id) + ".log";
     utils::create_file(log_file);
 
-    bool is_perf_dump_en = false;
-    bool is_perf_spill_dram = false;
-    uint32_t perf_dump_level = 0;
-
-    // Build clean
-    make_clean_cmd << " make -C src/firmware/riscv/targets/ncrisc clean " << make_flags;
-
-    // default ARCH_NAME is grayskull in Makefile
-    TT_ASSERT(
-        (arch_name.compare("grayskull") == 0) || (arch_name.compare("wormhole") == 0) ||
-        (arch_name.compare("wormhole_b0") == 0));
-
-    // Build
-    if (arch_name.compare("grayskull") != 0) {
-        make_cmd << " ARCH_NAME=" << arch_name;
+    CompileContext ctx(out_dir_path);
+    string kernel_dir = out_dir_path;
+    string thread_bin_subdir;
+    switch (risc_id) {
+        case RISCID::NC: thread_bin_subdir = "/ncrisc/"; break;
+        case RISCID::BR: thread_bin_subdir = "/brisc/"; break;
+        case RISCID::TR0: thread_bin_subdir = "/tensix_thread0/"; break;
+        case RISCID::TR1: thread_bin_subdir = "/tensix_thread1/"; break;
+        case RISCID::TR2: thread_bin_subdir = "/tensix_thread2/"; break;
     }
-
-    make_cmd << " make -C src/firmware/riscv/targets/ncrisc";
-    make_cmd << make_flags;
-    make_cmd << " PERF_DUMP=" << to_string(is_perf_dump_en);
-    make_cmd << " INTERMED_DUMP=" << to_string(is_perf_spill_dram);
-    make_cmd << " PERF_DUMP_LEVEL=" << to_string(perf_dump_level);
-
-    // Make a directory "ncrisc_kernel" in the out_dir_path
-    std::string kernel_dir = out_dir_path + "/ncrisc_kernel";
+    kernel_dir += "/";
+    kernel_dir += thread_bin_subdir;
     fs::create_directories(kernel_dir);
-    // Pass this directoy as include path the the NCRISC makefile
-    make_cmd << " KERNEL_INC=" << fs::absolute(kernel_dir).string();
 
-    // If flag is set, print kernel profiling timer marks
-    if (profile_kernel)
-    {
-        add_profile_kernel_to_make_cmd(make_cmd);
+    CompileDefines defs;
+    defs.hwthread = risc_id;
+    defs.noc_index = noc_index;
+    defs.profile_kernel = profile_kernel;
+    defs.compile_time_args = kernel_compile_time_args;
+    defs.kernel_inc = fs::absolute(kernel_dir).string();
+    defs.mailbox_addr = TriscParams().get_mailbox_addr(risc_id);
+
+    // copy the NCRISC/BRISC kernel to that directory, w/a generic filename kernel.cpp (this is what ncrisc.cc includes)
+    // Note that for TRISCS this is not needed because they are currently generated in a previous pass and included
+    // indirectly from ckernel_main.cc
+    // ckernel_main.cc then includes "chlkc_list.h" which in turn includes one of previously generated cpps for each trisc thread
+    string kernel_file_name;
+    if (defs.is_ncrisc()) {
+        kernel_file_name = build_kernel_for_riscv_options->ncrisc_kernel_file_name;
+        fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
+    } else if (defs.is_brisc()) {
+        kernel_file_name = build_kernel_for_riscv_options->brisc_kernel_file_name;
+        fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
     }
-    // Add NOC_INDEX for ncrisc
-    add_noc_index_to_make_cmd(make_cmd, noc_index);
-    // Add a list of KERNEL_COMPILE_TIME_ARGs for ncrisc
-    add_kernel_compile_time_args_to_make_cmd(make_cmd, kernel_compile_time_args);
-
-    // copy the NCRISC kernel to that directory, w/ a generic filename kernel.cpp (this is what ncrisc.cc includes)
-    string kernel_file_name = build_kernel_for_riscv_options->ncrisc_kernel_file_name;
-    fs::copy(kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
 
     // copy unpack/pack data formats to the kernel dir
     if (fs::exists(out_dir_path + "/chlkc_unpack_data_format.h")) {
@@ -182,265 +399,194 @@ void generate_binary_for_ncrisc(tt::build_kernel_for_riscv_options_t* build_kern
         fs::copy(out_dir_path + "/chlkc_pack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
     }
 
-    log_debug(tt::LogBuildKernels, "    Make clean cmd: {}", make_clean_cmd.str());
-    if (!tt::utils::run_command(make_clean_cmd.str(), log_file, false)) {
-        log_fatal(tt::LogBuildKernels, " NCRISC clean failed -- cmd: {}", make_clean_cmd.str());
+    vector<string> bcpps = {"brisc.cc", "risc_common.cc", "tdma_xmov.c", "noc.c", "substitutes.cpp", "tmu-crt0.S"};
+    vector<string> bobjs = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0.o"};
+    vector<string> bobjl = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0.o"};
+    vector<string> bcwds = {"",        "",              "",            "",      "",                  ""};
+
+    vector<string> ncpps = {"ncrisc.cc", "context.cc", "contextASM.S", "risc_common.cc", "risc_chip_specific.c", "substitutes.cpp", "tmu-crt0.S"};
+    vector<string> nobjs = {"ncrisc.o",  "context.o",  "contextASM.o", "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"};
+    vector<string> nobjl = {"ncrisc.o",  "context.o",  "contextASM.o", "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"};
+    vector<string> ncwds = {"",  "",  "", "",  "", "",   ""};
+
+    vector<string> tcpps = {"src/ckernel.cc", "src/ckernel_template.cc", "src/ckernel_main.cc", "substitutes.cpp", "tmu-crt0.S" };
+    vector<string> tobjs = {"ckernel.o",      "ckernel_template.o",      "ckernel_main.o",      "substitutes.o",   "tmu-crt0.o" };
+    // TODO(AP): reorder link objects
+    vector<string> tobjl = {"ckernel_main.o", "substitutes.o",           "ckernel_template.o",  "ckernel.o",       "tmu-crt0.o" };
+    vector<string> tcwds = {"",               "",                        "",                    "",                "" };
+
+    vector<string> cpps, objs, cwds, objls;
+    string compile_cwd;
+    switch (risc_id) {
+        case RISCID::NC:
+            ncwds[0] = "src/firmware/riscv/targets/ncrisc";
+            ncwds[3] = "src/firmware/riscv/common";
+            ncwds[4] = "src/firmware/riscv/grayskull";
+            ncwds[5] = "src/firmware/riscv/toolchain";
+            cpps = move(ncpps); objs = move(nobjs); cwds = move(ncwds);
+            objls = move(nobjl);
+        break;
+        case RISCID::BR:
+            bcwds[0] = "src/firmware/riscv/targets/brisc";
+            bcwds[1] = "src/firmware/riscv/common";
+            bcwds[2] = "src/firmware/riscv/grayskull";
+            bcwds[3] = "src/firmware/riscv/grayskull/noc";
+            bcwds[4] = "src/firmware/riscv/toolchain";
+            cpps = move(bcpps); objs = move(bobjs); cwds = move(bcwds);
+            objls = move(bobjl);
+        break;
+        case RISCID::TR0:
+        case RISCID::TR1:
+        case RISCID::TR2:
+            tcwds[0] = "src/ckernels/grayskull/common";
+            tcwds[3] = "src/firmware/riscv/toolchain"; // TODO(AP): refactor
+            cpps = move(tcpps); objs = move(tobjs); cwds = move(tcwds);
+            objls = move(tobjl);
+        break;
+    }
+
+    string pushd_cmd;
+
+    vector<thread> compile_threads;
+    for (int i = 0; i < cpps.size(); i++) {
+        if (cwds[i] != "")
+            pushd_cmd = "cd " + ctx.home_ + cwds[i] + " && ";
+        string gpp_cmd = pushd_cmd + ctx.get_compile_cmd(defs, thread_bin_subdir, objs[i], cpps[i]);
+        auto lambda = [gpp_cmd, log_file, defs]() {
+            log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", gpp_cmd);
+            if (!tt::utils::run_command(gpp_cmd, log_file, false)) {
+                log_fatal(tt::LogBuildKernels, "{}RISC Build failed -- cmd: {}", RISCID_to_string(defs.hwthread), gpp_cmd);
+                exit(1);
+            }
+        };
+        std::thread t(lambda);
+        compile_threads.push_back(std::move(t));
+    }
+    for (auto& t: compile_threads) t.join();
+
+    pushd_cmd = string("cd ") + ctx.home_ + "src/ckernels && "; // TODO(AP): Optimize
+
+    vector<string> link = ctx.get_link_cmd(defs, thread_bin_subdir, objls);
+    log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", pushd_cmd + link[0]);
+    if (!tt::utils::run_command(pushd_cmd + link[0], log_file, false)) {
+        log_fatal(tt::LogBuildKernels, "{}RISC link failed -- cmd: {}", RISCID_to_string(defs.hwthread), link[0]);
         exit(1);
     }
-    log_debug(tt::LogBuildKernels, "    Make compile cmd: {}", make_cmd.str());
-    if (!tt::utils::run_command(make_cmd.str(), log_file, false)) {
-        log_fatal(tt::LogBuildKernels, " NCRISC Build failed -- cmd: {}", make_cmd.str());
-        exit(1);
-    }
-    fs::current_path(old_cwd); // restore cwd
+
+    pushd_cmd = string("cd ") + ctx.kernel_subdir_ + thread_bin_subdir + " && "; // TODO(AP): Optimize
+    auto verilogcmds = ctx.get_verilog_cmd(defs, thread_bin_subdir, link[1]);
+    tt::utils::run_command(pushd_cmd + verilogcmds[0], log_file, false);
+    tt::utils::run_command(pushd_cmd + verilogcmds[1], log_file, false);
 }
 
 
 //////////////////
 // TRISCs       //
 //////////////////
-
-// fwd declarations (these funcs are used only in this file)
-void compile_ckernels_for_all_triscs(string, string root, string chlkc_src_dir, vector<uint32_t> kernel_compile_time_args);
-void compile_ckernels_for_trisc(string chlkc_src_dir, string output_dir, string make_src_args, string make_args, uint32_t trisc_mailbox_addr, int thread_id, string kernel_file_name);
 void generate_data_format_descriptors(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
 void generate_math_approx_mode_descriptor(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
 void generate_math_fidelity_descriptor(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
 
-void generate_binaries_for_triscs(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const string &out_dir_path, const string& arch_name, bool skip_hlkc, bool parallel, std::vector<uint32_t> kernel_compile_time_args) {
-
-    string root_dir = std::getenv("TT_METAL_HOME");
-
-    log_info(tt::LogBuildKernels, "Compiling HLK to TRISCs");
-
-    // currently assuming HLK is the same across all cores
-    string hlk_file_name = build_kernel_for_riscv_options->hlk_desc.get_hlk_file_name();
-    auto hlk_defines = build_kernel_for_riscv_options->hlk_defines;
-
-    // we have a directory per op in the output directory
-    string op_path = out_dir_path;
-    fs::create_directories(op_path);
-
-    log_debug(tt::LogBuildKernels, "build_kernel_for_riscv_options->fp32_dest_acc_en = {}", build_kernel_for_riscv_options->fp32_dest_acc_en);
-
-    if (not skip_hlkc) {
-        // hlkc_api
-        hlk_file_name = compile_hlk(
-            hlk_file_name,
-            op_path,
-            arch_name,
-            hlk_defines,
-            false, // is_perf_dump_en,
-            false, // untilize
-            false, // enable_cache,
-            false,  // pack_microblocks -- not supported
-            build_kernel_for_riscv_options->fp32_dest_acc_en,
-            parallel);
-
-        generate_data_format_descriptors(build_kernel_for_riscv_options, op_path);
-        generate_math_fidelity_descriptor(build_kernel_for_riscv_options, op_path);
-        generate_math_approx_mode_descriptor(build_kernel_for_riscv_options, op_path);
-    }
-
-    compile_ckernels_for_all_triscs(arch_name, root_dir, op_path, kernel_compile_time_args);
-}
-
-void generate_binaries_for_triscs_new(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const string &out_dir_path, const string& arch_name, bool parallel, std::vector<uint32_t> kernel_compile_time_args) {
-
-    string root_dir = std::getenv("TT_METAL_HOME");
-    auto old_cwd = fs::current_path(); //getting path
-    fs::current_path(root_dir); //setting path
-
-    // Right now, to support compiling multiple threads, I am overloading
-    // the concept of hlk filename to point to a directory with llks
-    // Really need to refactor soon, however fastest change to check in
-    // critical work
-    string llk_directory_name = build_kernel_for_riscv_options->hlk_desc.get_hlk_file_name();
-
-    auto hlk_defines = build_kernel_for_riscv_options->hlk_defines;
-
-    // we have a directory per op in the output directory
-    string op_path = out_dir_path;
-    fs::create_directories(op_path);
-
-    log_debug(tt::LogBuildKernels, "build_kernel_for_riscv_options->fp32_dest_acc_en = {}", build_kernel_for_riscv_options->fp32_dest_acc_en);
-
-    // Copy llks into new folder
-    fs::copy(llk_directory_name + "/chlkc_unpack.cpp", op_path + "/chlkc_unpack.cpp", fs::copy_options::overwrite_existing);
-    fs::copy(llk_directory_name + "/chlkc_math.cpp", op_path + "/chlkc_math.cpp", fs::copy_options::overwrite_existing);
-    fs::copy(llk_directory_name + "/chlkc_pack.cpp", op_path + "/chlkc_pack.cpp", fs::copy_options::overwrite_existing);
-
-    generate_data_format_descriptors(build_kernel_for_riscv_options, op_path);
-    generate_math_fidelity_descriptor(build_kernel_for_riscv_options, op_path);
-    generate_math_approx_mode_descriptor(build_kernel_for_riscv_options, op_path);
-
-    // For time being
-    const string make_ckernels_compile_dir = root_dir + "/src/ckernels/" + arch_name + "/common";
-    const string make_ckernels_link_dir = root_dir + "/src/ckernels";
-
-    string make_src_args = "-C ";
-    make_src_args += make_ckernels_compile_dir;
-    make_src_args += " HLKC_KERNELS=1 ";
-    make_src_args += " -j8 ";
-
-    add_kernel_compile_time_args_to_make_cmd(make_src_args, kernel_compile_time_args);
-    // TODO: commonize this with runtime_common.hpp?
-    uint32_t TRISC_BASE = l1_mem::address_map::TRISC_BASE;
-    uint32_t TRISC_L1_MAILBOX_OFFSET = l1_mem::address_map::TRISC_L1_MAILBOX_OFFSET;
-
-    uint32_t trisc_sizes[3] = {
-        l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE};
-
-    uint32_t trisc_mailbox_addresses[3] = {
-        TRISC_BASE + TRISC_L1_MAILBOX_OFFSET,
-        TRISC_BASE + trisc_sizes[0] + TRISC_L1_MAILBOX_OFFSET,
-        TRISC_BASE + trisc_sizes[0] + trisc_sizes[1] + TRISC_L1_MAILBOX_OFFSET};
-
-    string make_args = "-C ";
-    make_args += make_ckernels_link_dir;
-    // Add Trisc sizes to Make arg command
-    make_args += " TRISC0_SIZE=" + to_string(trisc_sizes[0]) + " TRISC1_SIZE=" + to_string(trisc_sizes[1]) +
-                 " TRISC2_SIZE=" + to_string(trisc_sizes[2]);
-    make_args += " ARCH_NAME=" + arch_name;
-    // make_args += " DEVICE_RUNNER=" + (model|versim|silicon);
-    make_args += " TRISC_BASE=" + to_string(TRISC_BASE);
-
-    string used_kernels[3] = {"chlkc_unpack", "chlkc_math", "chlkc_pack"};
-
-    std::vector<std::thread> ths(3);
-    for (int thread_id = 0; thread_id < 3; thread_id++) {
-        stringstream ckernels_compile_output_dir;
-        ckernels_compile_output_dir << op_path << "/tensix_thread" << (uint)thread_id;
-
-        ths[thread_id] = std::thread(
-            compile_ckernels_for_trisc,
-            op_path,
-            ckernels_compile_output_dir.str(),
-            make_src_args,
-            make_args,
-            trisc_mailbox_addresses[thread_id],
-            thread_id,
-            used_kernels[thread_id]
-            );
-    }
-    for (int thread_id = 0; thread_id < 3; thread_id++) {
-        ths[thread_id].join();
-    }
-
-    fs::current_path(old_cwd); // restore cwd
-}
-
-void compile_ckernels_for_all_triscs(string arch_name, string root, string chlkc_src_dir, vector<uint32_t> kernel_compile_time_args) {
-    fs::remove("hlk_ckernels_compile.log");  // clean the log file
-
-    const string make_ckernels_compile_dir = root + "/src/ckernels/" + arch_name + "/common";
-    const string make_ckernels_link_dir = root + "/src/ckernels";
-
-    string make_src_args = "-C ";
-    make_src_args += make_ckernels_compile_dir;
-    make_src_args += " HLKC_KERNELS=1 ";
-    make_src_args += " -j8 ";
-
-    add_kernel_compile_time_args_to_make_cmd(make_src_args, kernel_compile_time_args);
-
-
-    // TODO: commonize this with runtime_common.hpp?
-    uint32_t TRISC_BASE = l1_mem::address_map::TRISC_BASE;
-    uint32_t TRISC_L1_MAILBOX_OFFSET = l1_mem::address_map::TRISC_L1_MAILBOX_OFFSET;
-
-    uint32_t trisc_sizes[3] = {
-        l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE};
-
-    uint32_t trisc_mailbox_addresses[3] = {
-        TRISC_BASE + TRISC_L1_MAILBOX_OFFSET,
-        TRISC_BASE + trisc_sizes[0] + TRISC_L1_MAILBOX_OFFSET,
-        TRISC_BASE + trisc_sizes[0] + trisc_sizes[1] + TRISC_L1_MAILBOX_OFFSET};
-
-    string make_args = "-C ";
-    make_args += make_ckernels_link_dir;
-    // Add Trisc sizes to Make arg command
-    make_args += " TRISC0_SIZE=" + to_string(trisc_sizes[0]) + " TRISC1_SIZE=" + to_string(trisc_sizes[1]) +
-                 " TRISC2_SIZE=" + to_string(trisc_sizes[2]);
-    make_args += " ARCH_NAME=" + arch_name;
-    // make_args += " DEVICE_RUNNER=" + (model|versim|silicon);
-    make_args += " TRISC_BASE=" + to_string(TRISC_BASE);
-
-    string used_kernels[3] = {"chlkc_unpack", "chlkc_math", "chlkc_pack"};
-
-    std::vector<std::thread> ths(3);
-    for (int thread_id = 0; thread_id < 3; thread_id++) {
-        stringstream ckernels_compile_output_dir;
-        ckernels_compile_output_dir << chlkc_src_dir << "/tensix_thread" << (uint)thread_id;
-
-        ths[thread_id] = std::thread(
-            compile_ckernels_for_trisc,
-            chlkc_src_dir,
-            ckernels_compile_output_dir.str(),
-            make_src_args,
-            make_args,
-            trisc_mailbox_addresses[thread_id],
-            thread_id,
-            used_kernels[thread_id]
-            );
-    }
-    for (int thread_id = 0; thread_id < 3; thread_id++) {
-        ths[thread_id].join();
-    }
-}
-
-void compile_ckernels_for_trisc(string chlkc_src_dir, string output_dir, string make_src_args, string make_args, uint32_t trisc_mailbox_addr, int thread_id, string kernel_file_name)
+void gen_trisc_cpp(const string& src_name, const string& dst_name, vector<string>& prolog)
 {
-    stringstream make_cmd;
-    stringstream make_gen_cmd;
-    stringstream make_src_cmd;
-    string full_output_dir = fs::absolute(output_dir).string();
-    string common_output_dir = fs::absolute(output_dir).string();
-    string log_file = chlkc_src_dir + "/" + "hlk_ckernels_compile_thread" + to_string(thread_id) + ".log";
+    std::ofstream out(dst_name);
+    for (auto s: prolog)
+        out << s;
+    out << "#include \"" << src_name << "\"\n";
+}
 
-    //bool is_perf_dump_en = perf_desc.device_perf_mode != perf::PerfDumpMode::Disable;
-    //bool is_perf_spill_dram = perf_desc.device_perf_mode == perf::PerfDumpMode::IntermediateDump;
-    bool is_perf_dump_en = false;
-    bool is_perf_spill_dram = false;
-
-    // Build ckernels/src
-    make_src_cmd << " make " << make_src_args;
-    make_src_cmd << " KERNELS='" << kernel_file_name << '\'';
-    make_src_cmd << " PERF_DUMP=" << to_string(is_perf_dump_en);
-    make_src_cmd << " INTERMED_DUMP=" << to_string(is_perf_spill_dram);
-    //make_src_cmd << " PERF_DUMP_LEVEL=" << to_string(perf_desc.perf_dump_level);
-    make_src_cmd << " PERF_DUMP_LEVEL=" << to_string(0);
-    make_src_cmd << " MAILBOX_ADDR=" << trisc_mailbox_addr;
-    make_src_cmd << " HLKC_INC=" << fs::absolute(chlkc_src_dir).string();
-    make_src_cmd << " OUTPUT_DIR=" << common_output_dir;
-
-    // std::cout is not thread-safe
-    // cout << "    Make compile cmd: " << make_src_cmd.str() << "\n";
-    log_debug(tt::LogBuildKernels, "    TRISC {} Make compile cmd: {}", thread_id, make_src_cmd.str());
-    if (!tt::utils::run_command(make_src_cmd.str(), log_file, false)) {
-        string err_msg = "Build ckernels/src failed for a thread " + to_string(thread_id) + " with CKernels '" + kernel_file_name + "'";
-        throw std::runtime_error(err_msg);
+std::string gen_trisc_cpps(
+    string input_hlk_file_path,
+    string out_dir_path,
+    string device_name,
+    const hlk_defines_map_t& defines,
+    bool dump_perf_events,
+    bool untilize_output,
+    bool enable_cache,
+    bool pack_microblocks,
+    bool fp32_dest_acc_en
+)
+{
+    string hlkc_path;
+    string tt_metal_home;
+    if (!getenv("TT_METAL_HOME")) {
+        fs::path cwd = fs::current_path();
+        tt_metal_home = cwd.string();
+    } else {
+        tt_metal_home = string(getenv("TT_METAL_HOME"));
     }
 
-    // FIXME: This doesn't sound right --> For the HLKC generated kernel dont send the kernel list. inclusion is controlled through defines???
-    string no_kernels = "";
-    bool is_hlkc_kernel = true;
+    string out_file_name_base = "chlkc";
+    string unpack_base        = out_dir_path + "/" + out_file_name_base + "_unpack";
+    string math_base          = out_dir_path + "/" + out_file_name_base   + "_math";
+    string pack_base          = out_dir_path + "/" + out_file_name_base  + "_pack";
+    string unpack_cpp         = unpack_base + ".cpp";
+    string unpack_llk_args_h  = unpack_base + "_llk_args.h";
+    string math_cpp           = math_base + ".cpp";
+    string math_llk_args_h    = math_base + "_llk_args.h";
+    string pack_cpp           = pack_base + ".cpp";
+    string pack_llk_args_h    = pack_base + "_llk_args.h";
 
-    make_cmd << " make " << make_args;
-    make_cmd << " FIRMWARE_NAME=tensix_thread" << (uint32_t)thread_id;
-    make_cmd << " KERNELS=''";
-    make_cmd << " LINKER_SCRIPT_NAME=trisc" << (uint32_t)thread_id << ".ld";
-    make_cmd << " TEST='chlkc'";
-    make_cmd << " OUTPUT_DIR=" << full_output_dir;
-    make_cmd << " CKERNELS_COMMON_OUT_DIR=" << common_output_dir;
-    make_cmd << " CLEAN_OUTPUT_DIR=0";
+    vector<string> unpack_prolog;
+    unpack_prolog.push_back("#define TRISC_UNPACK\n");
+    unpack_prolog.push_back("#include \"defines_generated.h\"\n");
+    vector<string> math_prolog;
+    math_prolog.push_back("#define TRISC_MATH\n");
+    math_prolog.push_back("#include \"defines_generated.h\"\n");
+    vector<string> pack_prolog;
+    pack_prolog.push_back("#define TRISC_PACK\n");
+    pack_prolog.push_back("#include \"defines_generated.h\"\n");
 
-    // std::cout is not thread-safe
-    // cout << "    Make link cmd: " << make_cmd.str() << "\n";
-    log_debug(tt::LogBuildKernels, "    TRISC {} Make link cmd: {}", thread_id, make_cmd.str());
-    if (!tt::utils::run_command(make_cmd.str(), log_file, false)) {
-        string err_msg = "Link ckernels/src failed for a thread " + to_string(thread_id) + " with CKernels '" + kernel_file_name + "'";
-        throw std::runtime_error(err_msg);
+    std::thread t0( [&]() { gen_trisc_cpp(input_hlk_file_path, unpack_cpp, unpack_prolog); } );
+    std::thread t1( [&]() { gen_trisc_cpp(input_hlk_file_path, math_cpp, math_prolog); } );
+    std::thread t2( [&]() { gen_trisc_cpp(input_hlk_file_path, pack_cpp, pack_prolog); } );
+    t0.join(); t1.join(); t2.join();
+
+    string input_hlk_with_defines = input_hlk_file_path;
+    {
+        // Here we generate an auxiliary header with defines added via add_define() call
+        // this header is then included from the kernel
+        // We also append the include path to generated dir to hlkc cmldline.
+        std::ofstream gen_defines_file;
+        string generated_defines_fname = out_dir_path + "/defines_generated.h";
+        gen_defines_file.open(generated_defines_fname, std::ios_base::out);
+
+        for (auto it = defines.begin(); it != defines.end(); ++it) {
+            gen_defines_file << "#define " << it->first << " " << it->second << endl;
+        }
+
+        // this string will be returned from the function to be reused in subsequent calls
+        input_hlk_with_defines += " -I" + out_dir_path + " ";
+        hlkc_path += " " + input_hlk_with_defines;
     }
+
+    return input_hlk_with_defines;
+}
+
+void generate_src_for_triscs(
+    tt::build_kernel_for_riscv_options_t* topts,
+    const string &out_dir_path,
+    const string& arch_name,
+    std::vector<uint32_t> kernel_compile_time_args) {
+
+    // Note: Dirs (and descriptors) must be created by a prior call of generate_descriptors()
+    // So, this call currently doesn't work in isolation
+
+    log_info(tt::LogBuildKernels, "Generating defines for TRISCs");
+
+    string hlk_file_name = topts->hlk_desc.get_hlk_file_name();
+    auto hlk_defines = topts->hlk_defines;
+
+    gen_trisc_cpps(
+        hlk_file_name,
+        out_dir_path,
+        arch_name,
+        hlk_defines,
+        false, // is_perf_dump_en,
+        false, // untilize
+        false, // enable_cache,
+        false,  // pack_microblocks -- not supported
+        topts->fp32_dest_acc_en);
 }
 
 std::pair<vector<DataFormat>,vector<DataFormat>> extend_unpack_data_format_vectors_to_all_cbs(const vector<DataFormat> &src_formats, const vector<DataFormat> &dst_formats) {
@@ -691,30 +837,73 @@ void generate_math_approx_mode_descriptor(build_kernel_for_riscv_options_t* buil
 }
 
 void generate_binaries_all_riscs(
-    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string& out_dir_path, const std::string& arch_name,
+    tt::build_kernel_for_riscv_options_t* opts, const std::string& out_dir_path, const std::string& arch_name,
     generate_binaries_params_t p)
 {
-    std::vector<std::thread*> threads;
+    generate_descriptors(opts, out_dir_path);
+
+    std::vector<std::thread> threads;
     std::function<void()> lambdas[] = {
-        [build_kernel_for_riscv_options, out_dir_path, arch_name, p] () { generate_binaries_for_triscs(build_kernel_for_riscv_options, out_dir_path, arch_name, p.skip_hlkc, p.parallel_hlk, p.compute_kernel_compile_time_args); },
-        [build_kernel_for_riscv_options, out_dir_path, arch_name, p] () { generate_binary_for_ncrisc(build_kernel_for_riscv_options, out_dir_path, arch_name, p.nc_noc_index, p.nc_kernel_compile_time_args); },
-        [build_kernel_for_riscv_options, out_dir_path, arch_name, p] () { generate_binary_for_brisc(build_kernel_for_riscv_options, out_dir_path, arch_name, p.br_noc_index, p.br_kernel_compile_time_args); },
+        [opts, out_dir_path, arch_name, p] () {
+            generate_binaries_for_triscs(
+                opts, out_dir_path, arch_name, p.compute_kernel_compile_time_args);
+        },
+        [opts, out_dir_path, arch_name, p] () {
+            generate_binary_for_ncrisc(
+                opts, out_dir_path, arch_name, p.nc_noc_index, p.nc_kernel_compile_time_args);
+        },
+        [opts, out_dir_path, arch_name, p] () {
+            generate_binary_for_brisc(
+                opts, out_dir_path, arch_name, p.br_noc_index, p.br_kernel_compile_time_args);
+        },
     };
 
     bool flags[3] = { p.compile_trisc, p.compile_ncrisc, p.compile_brisc };
 
     // compile all 3 in parallel if requested, otherwise compile just NC,BR in parallel
-    for (int j = 0; j < 3; j++) {
-        if (flags[j]) {
-            if (j == 0 && !p.parallel_trncbr)
-                lambdas[0](); // launch trisc sequentially
-            else
-                threads.push_back( new std::thread(lambdas[j]) );
-        }
-    }
+    // TODO(AP): re-paralllelize
+    for (int j = 0; j < 3; j++)
+        if (flags[j])
+            threads.push_back( thread(lambdas[j]) );
 
-    for (auto th: threads) {
-        th->join();
-        delete th;
+    for (auto& th: threads)
+        th.join();
+}
+
+void generate_binaries_for_triscs(
+    tt::build_kernel_for_riscv_options_t* topts,
+    const std::string &dir,
+    const std::string& arch_name,
+    const std::vector<std::uint32_t>& kernel_compile_time_args,
+    bool profile_kernel)
+{
+
+    generate_src_for_triscs(topts, dir, arch_name, kernel_compile_time_args);
+    auto lambda0 = [=]() { generate_binary_for_risc(RISCID::TR0, topts, dir, arch_name, 0, kernel_compile_time_args, profile_kernel); };
+    auto lambda1 = [=]() { generate_binary_for_risc(RISCID::TR1, topts, dir, arch_name, 0, kernel_compile_time_args, profile_kernel); };
+    auto lambda2 = [=]() { generate_binary_for_risc(RISCID::TR2, topts, dir, arch_name, 0, kernel_compile_time_args, profile_kernel); };
+    if (0) {
+        lambda0();
+        lambda1();
+        lambda2();
+    } else {
+        auto t0 = std::thread(lambda0);
+        auto t1 = std::thread(lambda1);
+        auto t2 = std::thread(lambda2);
+        t0.join(); t1.join(); t2.join();
     }
+}
+
+// TODO(AP): can move joins for these threads to happen later (to compiler launch)
+void generate_descriptors(
+    tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir)
+{
+    fs::create_directories(op_dir);
+
+    std::thread td( [=]() { generate_data_format_descriptors(opts, op_dir); } );
+    std::thread tm( [=]() { generate_math_fidelity_descriptor(opts, op_dir); } );
+    std::thread ta( [=]() { generate_math_approx_mode_descriptor(opts, op_dir); } );
+    td.join();
+    tm.join();
+    ta.join();
 }

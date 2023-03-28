@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 
-import fileinput
 import itertools
 import sys
 
-ptr = 0
-data = []
-
-def write_data():
+def write_data(outf, data, ptr):
     if len(data) != 0:
-        print("@%08x" % (ptr >> 2))
+        outf.write("@%08x\n" % (ptr >> 2))
         while len(data) % 4 != 0:
             data.append(0)
         for word_bytes in zip(*([iter(data)]*4)):
-            print("".join(["%02x" % b for b in reversed(word_bytes)]))
+            outf.write("".join(["%02x" % b for b in reversed(word_bytes)]) + "\n")
 
-for line in fileinput.input():
+assert(len(sys.argv) > 2)
+in_lines = open(sys.argv[1]).readlines()
+data = []
+ptr = 0
+outf = open(sys.argv[2], "wt")
+for line in in_lines:
     if line.startswith("@"):
         addr = int(line[1:], 16)
         if addr > ptr+4:
-            write_data()
+            write_data(outf, data, ptr)
             ptr = addr
             data = []
             while ptr % 4 != 0:
@@ -31,4 +32,4 @@ for line in fileinput.input():
     else:
         data += [int(tok, 16) for tok in line.split()]
 
-write_data()
+write_data(outf, data, ptr)

@@ -442,12 +442,6 @@ bool CompileProgram(
     bool skip_hlkc = false,                 // Skips HLK to LLK compilation for all compute kernels
     bool profile_kernel = false);   // Set the compile flag for kernels to report profiling timer marks
 
-bool CompileProgramNew(
-    Device *device,
-    Program *program,
-    bool profile_kernel = false);
-
-
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)

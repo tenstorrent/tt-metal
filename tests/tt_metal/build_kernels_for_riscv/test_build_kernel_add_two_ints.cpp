@@ -17,7 +17,7 @@ int main() {
 
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/riscv_draft/add_two_ints.cpp";
 
-    generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, "grayskull");
+    generate_binary_for_risc(RISCID::BR, &build_kernel_for_riscv_options, out_dir_path, "grayskull");
 
     // WH doesn't work? FIXME: SFPU issues?
     //generate_all_fw(&build_kernel_for_riscv_options, "wormhole");

@@ -23,15 +23,10 @@ namespace fs = std::filesystem;
 
 void gen_trisc_cpp(const string& src_name, const string& dst_name, vector<string>& prolog)
 {
-    //std::ifstream in(src_name);
-    //std::stringstream buffer;
-    //buffer << in.rdbuf();
-
     std::ofstream out(dst_name);
     for (auto s: prolog)
         out << s;
     out << "#include \"" << src_name << "\"\n";
-    //out << buffer.str();
 }
 
 // returns the name of temporary hlk .cpp with generated #defines in the beginning

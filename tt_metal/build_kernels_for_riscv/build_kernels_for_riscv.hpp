@@ -8,40 +8,21 @@
 #include "build_kernels_for_riscv/data_format.hpp"
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
 
-// external APIs to generate binaries
+enum RISCID { NC = 0, TR0 = 1, TR1 = 2, TR2 = 3, BR = 4 };
+static_assert(RISCID::TR1 == RISCID::TR0+1 && RISCID::TR2 == RISCID::TR1+1);
 
-void generate_data_format_descriptors(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, std::string out_dir_path);
+void generate_data_format_descriptors(
+    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
+    std::string out_dir_path);
 
-void generate_binary_for_brisc(
-        tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-        const std::string &out_dir_path,
-        const std::string& arch_name,
-        const std::uint8_t noc_index=0,
-        const std::vector<std::uint32_t>& kernel_compile_time_args = {},
-        bool profile_kernel = false);
-
-void generate_binary_for_ncrisc(
-        tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-        const std::string &out_dir_path,
-        const std::string& arch_name,
-        const std::uint8_t noc_index=1,
-        const std::vector<std::uint32_t>& kernel_compile_time_args = {},
-        bool profile_kernel = false);
-
-void generate_binaries_for_triscs(
-        tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-        const std::string &out_dir_path,
-        const std::string& arch_name,
-        bool skip_hlkc=false,
-        bool parallel = false,
-        std::vector<uint32_t> kernel_compile_time_args = {});
-
-void generate_binaries_for_triscs_new(
-        tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-        const std::string &out_dir_path,
-        const std::string& arch_name,
-        bool parallel = false,
-        std::vector<uint32_t> kernel_compile_time_args = {});
+void generate_binary_for_risc(
+    RISCID id,
+    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
+    const std::string &out_dir_path,
+    const std::string& arch_name,
+    const std::uint8_t noc_index=0,
+    const std::vector<std::uint32_t>& kernel_compile_time_args = {},
+    bool profile_kernel = false);
 
 struct generate_binaries_params_t {
     bool            skip_hlkc = false;
@@ -64,3 +45,45 @@ struct generate_binaries_params_t {
 void generate_binaries_all_riscs(
     tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string& out_dir_path, const std::string& arch_name,
     generate_binaries_params_t params);
+
+inline void generate_binary_for_brisc(
+    tt::build_kernel_for_riscv_options_t* topts,
+    const std::string &dir,
+    const std::string& arch_name,
+    const std::uint8_t noc_index=0,
+    const std::vector<std::uint32_t>& kernel_compile_time_args = {},
+    bool profile_kernel = false)
+{
+    // PROF_BEGIN("CCGEN_BR")
+    generate_binary_for_risc(RISCID::BR, topts, dir, arch_name, noc_index, kernel_compile_time_args, profile_kernel);
+    // PROF_END("CCGEN_BR")
+}
+
+inline void generate_binary_for_ncrisc(
+    tt::build_kernel_for_riscv_options_t* topts,
+    const std::string &dir,
+    const std::string& arch_name,
+    const std::uint8_t noc_index=1,
+    const std::vector<std::uint32_t>& kernel_compile_time_args = {},
+    bool profile_kernel = false)
+{
+    // PROF_BEGIN("CCGEN_NC")
+    generate_binary_for_risc(RISCID::NC, topts, dir, arch_name, noc_index, kernel_compile_time_args, profile_kernel);
+    // PROF_END("CCGEN_NC")
+}
+
+void generate_src_for_triscs(
+    tt::build_kernel_for_riscv_options_t* topts,
+    const string &out_dir_path,
+    const string& arch_name,
+    std::vector<uint32_t> kernel_compile_time_args);
+
+void generate_binaries_for_triscs(
+    tt::build_kernel_for_riscv_options_t* topts,
+    const std::string &dir,
+    const std::string& arch_name,
+    const std::vector<std::uint32_t>& kernel_compile_time_args = {},
+    bool profile_kernel = false);
+
+void generate_descriptors(
+    tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir);

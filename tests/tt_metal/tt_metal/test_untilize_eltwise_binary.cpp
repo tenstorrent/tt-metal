@@ -207,7 +207,6 @@ int main(int argc, char **argv) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
-        //pass &= tt_metal::CompileProgramNew(device, program, skip_hlkc);
         pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
 
         ////////////////////////////////////////////////////////////////////////////

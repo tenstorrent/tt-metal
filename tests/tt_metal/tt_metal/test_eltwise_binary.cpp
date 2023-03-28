@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);;
-        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
+        //tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

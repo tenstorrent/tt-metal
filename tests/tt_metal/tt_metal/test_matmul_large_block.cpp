@@ -489,7 +489,6 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         ////////////////////////////////////////////////////////////////////////////
         bool skip_hlkc = false;
         pass &= tt_metal::CompileProgram(device, program, false);
-        //pass &= tt_metal::CompileProgramNew(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
