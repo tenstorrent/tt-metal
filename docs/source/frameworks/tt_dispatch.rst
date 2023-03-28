@@ -20,15 +20,15 @@ The following example shows how to create, initialize, and close TT accelerator 
 
 .. code-block:: python
 
-    from pymetal import ttlib as ttlib
+    from libs import ttlib as ttlib
 
     # Create an instance of TT accelerator device.
     # This is device of type GRAYSKULL and is attached to PCIexpress slot number 0 on host.
     device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, 0)
-    
+
     # Initialize the instance of TT accelerator device before it can be used.
     ttlib.device.InitializeDevice(device)
-    
+
     # Run models on TT accelerator device
     ...
 
