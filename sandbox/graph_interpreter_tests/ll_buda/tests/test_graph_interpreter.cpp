@@ -38,7 +38,7 @@ void run_compile_blank() {
     build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/blank.cpp";
     build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/blank.cpp";
 
-    generate_binaries_params_t params = {.skip_hlkc = false};
+    generate_binaries_params_t params;
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 }
 
