@@ -116,7 +116,7 @@ void TensorModule(py::module &m_tensor) {
                 ttlib.tensor.Layout.ROW_MAJOR,
             )
 
-        .. method:: to(self: ttlib.tensor.Tensor, arg0: ttlib.device.Device, ) -> ttlib.tensor.Tensor
+        .. method:: to(self: ttlib.tensor.Tensor, arg0: ttlib.device.Device) -> ttlib.tensor.Tensor
 
             Moves TT Tensor form host device to TT accelerator device.
 

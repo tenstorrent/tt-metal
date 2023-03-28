@@ -312,7 +312,7 @@ ALWI void pack_relu_config(uint32_t enable) {
     PACK(( llk_pack_relu_config(enable) ));
 }
 
-#if defined(BCAST_DIM) and defined(BCAST_LLKOP)
+#if (defined(BCAST_DIM) and defined(BCAST_LLKOP)) or defined(__DOXYGEN__)
 void init_bcast(uint32_t icb0, uint32_t icb1)
 {
     // BCAST_LLKOP define is either ELWADD, ELWSUB or ELWMUL
@@ -362,7 +362,7 @@ ALWI void add_bcast_rows_init_short() // TODO(AP): generalize or automate
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>() ));
 }
 
-#if defined(REDUCE_OP) and defined(REDUCE_DIM)
+#if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
 ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, float scaler)
 {
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));

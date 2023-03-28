@@ -29,5 +29,6 @@ Compute APIs
   tanh_tile
 
   reduce_tile
-  tilize_and_copy
   transpose_wh_tile
+
+.. only:: not html
