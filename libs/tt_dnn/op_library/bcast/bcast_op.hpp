@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tt_metal/tensor/tensor.hpp"
+#include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
 using namespace tt::tt_metal;

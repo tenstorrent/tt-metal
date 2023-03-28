@@ -24,9 +24,6 @@ TT_METAL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 include tt_metal/impl/module.mk
 
 TT_METAL_SRCS = \
-	tt_metal/tensor/tensor_impl_wrapper.cpp \
-	tt_metal/tensor/tensor_impl.cpp \
-	tt_metal/tensor/tensor.cpp \
 	tt_metal/tt_metal.cpp
 
 TT_METAL_OBJS = $(addprefix $(OBJDIR)/, $(TT_METAL_SRCS:.cpp=.o))
@@ -45,9 +42,5 @@ $(TT_METAL_LIB): $(COMMON_LIB) $(TT_METAL_OBJS) $(TT_METAL_IMPL_LIB) $(LLRT_LIB)
 # include EVERYTHING under tt_metal, forcing the build step to use only build directives in this file
 # rather than the specialized ones in each submodule
 $(OBJDIR)/tt_metal/tt_metal.o: tt_metal/tt_metal.cpp
-	@mkdir -p $(@D)
-	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TT_METAL_INCLUDES) $(TT_METAL_DEFINES) -c -o $@ $<
-
-$(OBJDIR)/tt_metal/tensor/%.o: tt_metal/tensor/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TT_METAL_INCLUDES) $(TT_METAL_DEFINES) -c -o $@ $<

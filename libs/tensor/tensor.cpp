@@ -1,7 +1,7 @@
-#include "tt_metal/tensor/tensor.hpp"
+#include "tensor/tensor.hpp"
 
-#include "tt_metal/tensor/tensor_impl.hpp"
-#include "tt_metal/tensor/tensor_impl_wrapper.hpp"
+#include "tensor/tensor_impl.hpp"
+#include "tensor/tensor_impl_wrapper.hpp"
 #include "common/bfloat16.hpp"
 #include "llrt/llrt.hpp"
 #include "constants.hpp"

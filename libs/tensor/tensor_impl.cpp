@@ -1,5 +1,5 @@
-#include "tt_metal/tensor/tensor_impl.hpp"
-#include "tt_metal/tensor/tensor_impl_wrapper.hpp"
+#include "tensor/tensor_impl.hpp"
+#include "tensor/tensor_impl_wrapper.hpp"
 
 namespace tt {
 

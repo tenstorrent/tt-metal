@@ -1,5 +1,5 @@
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tensor/tensor.hpp"
+#include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 
 #include <algorithm>

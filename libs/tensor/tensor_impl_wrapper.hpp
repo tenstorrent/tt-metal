@@ -1,7 +1,7 @@
 #pragma once
 
-#include "tt_metal/tensor/tensor.hpp"
-#include "tt_metal/tensor/tensor_impl.hpp"
+#include "tensor/tensor.hpp"
+#include "tensor/tensor_impl.hpp"
 
 namespace tt {
 

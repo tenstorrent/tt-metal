@@ -1,5 +1,5 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_metal/tensor/tensor.hpp"
+#include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
 #include "constants.hpp"

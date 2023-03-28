@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tt_metal/tensor/tensor.hpp"
+#include "tensor/tensor.hpp"
 
 namespace tt {
 

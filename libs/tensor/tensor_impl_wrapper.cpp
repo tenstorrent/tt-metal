@@ -1,4 +1,4 @@
-#include "tt_metal/tensor/tensor_impl_wrapper.hpp"
+#include "tensor/tensor_impl_wrapper.hpp"
 
 #include "common/bfloat16.hpp"
 
