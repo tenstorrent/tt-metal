@@ -15,10 +15,10 @@
 #include <iomanip>
 #include <queue>
 
-#include "libs/dtx/dtx.hpp"
-#include "libs/dtx/util_vector_of_ints.hpp"
-#include "libs/dtx/util.hpp"
-#include "libs/dtx/dtx_passes.hpp"
+#include "dtx/dtx.hpp"
+#include "dtx/util_vector_of_ints.hpp"
+#include "dtx/util.hpp"
+#include "dtx/dtx_passes.hpp"
 
 using namespace std;
 

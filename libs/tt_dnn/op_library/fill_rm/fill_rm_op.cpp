@@ -1,4 +1,4 @@
-#include "libs/tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
+#include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "common/test_tiles.hpp"
 
 #include "tt_metal/host_api.hpp"

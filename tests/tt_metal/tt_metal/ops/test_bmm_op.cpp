@@ -1,6 +1,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tensor/tensor.hpp"
-#include "libs/tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "constants.hpp"
 
 #include <algorithm>

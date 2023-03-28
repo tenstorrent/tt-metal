@@ -1,4 +1,4 @@
-#include "libs/tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include <algorithm>
 #include "tt_metal/host_api.hpp"
 #include "common/constants.hpp"

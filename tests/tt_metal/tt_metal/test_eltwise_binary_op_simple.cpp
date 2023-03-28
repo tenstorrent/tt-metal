@@ -5,7 +5,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tensor/tensor.hpp"
-#include "libs/tt_dnn/op_library/eltwise_binary/add.hpp"
+#include "tt_dnn/op_library/eltwise_binary/add.hpp"
 
 using namespace tt;
 using namespace std;

@@ -1,10 +1,10 @@
 #include <math.h>
 
-#include "libs/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
-#include "libs/dtx/dtx.hpp"
-#include "libs/dtx/dtx_passes.hpp"
+#include "dtx/dtx.hpp"
+#include "dtx/dtx_passes.hpp"
 
 #include "llrt/tt_debug_print_server.hpp"
 using namespace tt::constants;

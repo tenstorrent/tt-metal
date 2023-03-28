@@ -1,6 +1,6 @@
 TTLIB_LIB = $(LIBDIR)/libttlib_csrc.so
 TTLIB_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
-TTLIB_INCLUDES = $(COMMON_INCLUDES) $(shell python3-config --includes) -I$(TT_METAL_HOME)/tt_metal/third_party/pybind11/include
+TTLIB_INCLUDES = $(LIBS_INCLUDES) $(shell python3-config --includes) -I$(TT_METAL_HOME)/tt_metal/third_party/pybind11/include
 TTLIB_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -L$(TT_METAL_HOME) -ldevice -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal -ltt_dnn -lyaml-cpp -lprofiler -lbuild_kernels_for_riscv
 TTLIB_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 

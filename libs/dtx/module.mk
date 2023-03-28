@@ -1,7 +1,7 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 DTX_LIB = $(LIBDIR)/libdtx.a
 DTX_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
-DTX_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal/impl
+DTX_INCLUDES = $(LIBS_INCLUDES) -I$(TT_METAL_HOME)/tt_metal/impl
 DTX_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lllrt -ltt_metal
 DTX_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 

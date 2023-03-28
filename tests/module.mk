@@ -1,4 +1,4 @@
-TEST_INCLUDES = -I$(TT_METAL_HOME)/tests/
+TEST_INCLUDES = -I$(TT_METAL_HOME)/tests/ -I$(TT_METAL_HOME)/libs/.
 
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV

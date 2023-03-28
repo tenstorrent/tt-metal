@@ -33,7 +33,7 @@ TT_DNN_SRCS = \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
-TT_DNN_INCLUDES = $(COMMON_INCLUDES)
+TT_DNN_INCLUDES = $(LIBS_INCLUDES)
 TT_DNN_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lllrt -ltt_metal -ldtx
 TT_DNN_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
