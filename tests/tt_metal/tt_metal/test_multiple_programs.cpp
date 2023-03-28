@@ -270,12 +270,12 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Applications
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgram(device, program1, skip_hlkc);
+
+        pass &= tt_metal::CompileProgram(device, program1);
 
         // Both programs use the same CB addresses but they can be compiled one after
         // the other because they use the same data formats
-        pass &= tt_metal::CompileProgram(device, program2, skip_hlkc);
+        pass &= tt_metal::CompileProgram(device, program2);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Program One

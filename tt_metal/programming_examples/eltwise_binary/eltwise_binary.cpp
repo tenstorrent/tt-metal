@@ -168,8 +168,7 @@ int main(int argc, char **argv) {
         /*
         * Compile kernels used during execution
         */
-        constexpr bool skip_hlkc = false;
-        pass &= CompileProgram(device, program, skip_hlkc);
+        pass &= CompileProgram(device, program);
 
         /*
          * Create source data and write to DRAM.
@@ -303,7 +302,7 @@ int main(int argc, char **argv) {
         /*
          * Compile kernels.
          */
-        pass &= CompileProgram(device, program_mul, skip_hlkc);
+        pass &= CompileProgram(device, program_mul);
 
         /*
          * Send new input data.

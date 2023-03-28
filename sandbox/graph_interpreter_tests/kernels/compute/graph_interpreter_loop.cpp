@@ -12,6 +12,7 @@ struct hlk_args_t {
 void compute_main(const hlk_args_t *args) {
 
     // Need to pre-initialize an op_info struct and pass into get_next_op_info and modify in that func, since hlkc doesn't support funcs returning vals yet
+    // TODO(AP): revisit after hlkc removal
     op_info_t op_info = {0, 0, 0, 0, 0, 0, 0};
 
     for (int count = 0; count < args->num_repetitions; count++) {

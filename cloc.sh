@@ -20,7 +20,7 @@ function count_loc {
 echo "Core code:"
 count_loc tt_metal/build_kernels_for_riscv tests
 count_loc tt_metal/common
-count_loc hlkc meow_hash
+count_loc meow_hash
 count_loc tt_metal/hostdevcommon
 count_loc tt_metal tests,op_library
 count_loc pymetal
@@ -75,7 +75,7 @@ echo
 # external libraries
 # only one file so it breaks
 echo "External libraries:"
-count_loc hlkc/meow_hash
+count_loc tt_metal/utils/meow_hash
 echo
 echo
 

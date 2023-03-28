@@ -324,8 +324,7 @@ Tensor matmul(const Tensor &a, const Tensor &b) {
                 in0_block_w, out_subblock_h, out_subblock_w,
                 per_core_M, per_core_N);
 
-        bool skip_hlkc = false;
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
+        pass &= ll_buda::CompileProgram(device, program);
         pass &= write_runtime_args_to_device(
             device,
             num_cores_r, num_cores_c,

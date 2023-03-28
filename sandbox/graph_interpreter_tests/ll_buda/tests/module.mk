@@ -34,7 +34,7 @@ LL_BUDA_TESTS += ll_buda/tests/test_add_two_ints \
 LL_BUDA_TESTS_SRCS = $(addsuffix .cpp, $(LL_BUDA_TESTS))
 
 LL_BUDA_TEST_INCLUDES = $(LL_BUDA_INCLUDES) -Itt_gdb -Ill_buda/tests -Icompile_trisc -Iverif
-LL_BUDA_TESTS_LDFLAGS = -lll_buda_impl -lll_buda -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -lhlkc_api -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
+LL_BUDA_TESTS_LDFLAGS = -lll_buda_impl -lll_buda -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
 
 LL_BUDA_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(LL_BUDA_TESTS_SRCS:.cpp=.o))
 LL_BUDA_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(LL_BUDA_TESTS_SRCS:.cpp=.d))

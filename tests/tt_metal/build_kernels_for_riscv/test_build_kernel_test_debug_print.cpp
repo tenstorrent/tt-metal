@@ -33,13 +33,9 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/ncrisc/test_debug_print_nc.cpp";
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/test_debug_print_br.cpp";
 
-    bool skip_hlkc = false;
-    if (argc > 1) {
-        skip_hlkc = true;
-    }
 
     std::vector<uint32_t> compute_kernel_args = {1};
-    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc, .compile_trisc = true, .compile_ncrisc = true, .compile_brisc = true, .compute_kernel_compile_time_args = compute_kernel_args};
+    generate_binaries_params_t params = {.compile_trisc = true, .compile_ncrisc = true, .compile_brisc = true, .compute_kernel_compile_time_args = compute_kernel_args};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 
     return 0;

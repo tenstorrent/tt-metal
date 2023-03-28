@@ -66,8 +66,8 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
         core, blank_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
     // Compile kernels
-    bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+
+    tt_metal::CompileProgram(device, program);
     tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteRuntimeArgsToDevice(
         device, binary_reader_kernel, core,

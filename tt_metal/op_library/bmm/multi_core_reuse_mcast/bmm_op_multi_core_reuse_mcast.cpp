@@ -953,8 +953,7 @@ Tensor matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, bool bca
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
     bool pass = true;
-    constexpr bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+    tt_metal::CompileProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

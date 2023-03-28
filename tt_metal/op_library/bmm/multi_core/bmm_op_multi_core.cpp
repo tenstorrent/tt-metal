@@ -176,8 +176,8 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         );
         num_tiles_written += num_output_tiles_per_core[i];
     }
-    bool skip_hlkc = false;
-    pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+
+    pass &= tt_metal::CompileProgram(device, program);
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
     pass &= tt_metal::LaunchKernels(device, program);

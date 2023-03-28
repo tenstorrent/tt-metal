@@ -136,8 +136,8 @@ Tensor eltwise_binary_multi_core(const Tensor &a, const Tensor &b, BinaryOpType:
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+
+    tt_metal::CompileProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

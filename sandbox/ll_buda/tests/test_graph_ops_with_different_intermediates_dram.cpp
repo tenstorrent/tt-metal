@@ -216,8 +216,7 @@ tt_binary_program_t create_binary_op_program(
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
 
-        bool skip_hlkc = false;
-        bool pass = ll_buda::CompileProgram(device, program, skip_hlkc);
+        bool pass = ll_buda::CompileProgram(device, program);
 
         if (not pass)
             program = 0;

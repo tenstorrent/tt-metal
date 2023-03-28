@@ -76,8 +76,8 @@ Tensor pad_h_rm(const Tensor &a, int paddedH) {
         core, blank_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
     // Compile kernels
-    bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+
+    tt_metal::CompileProgram(device, program);
     tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteRuntimeArgsToDevice(
         device,

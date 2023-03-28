@@ -55,12 +55,7 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/writer_unary.cpp"; // writer unary is generic to support this case
 
     // generate binaries
-    bool skip_hlkc = false;
-    if (argc > 1) {
-        skip_hlkc = true;
-    }
-
-    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc, .compute_kernel_compile_time_args = compute_kernel_args};
+    generate_binaries_params_t params = {.compute_kernel_compile_time_args = compute_kernel_args};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 
     return 0;

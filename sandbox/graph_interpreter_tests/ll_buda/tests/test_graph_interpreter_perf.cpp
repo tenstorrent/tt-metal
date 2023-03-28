@@ -38,7 +38,7 @@ void run_compile_blank() {
     build_kernel_for_riscv_options.ncrisc_kernel_file_name = "kernels/dataflow/blank.cpp";
     build_kernel_for_riscv_options.brisc_kernel_file_name = "kernels/dataflow/blank.cpp";
 
-    generate_binaries_params_t params = {.skip_hlkc = false};
+    generate_binaries_params_t params;
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 }
 
@@ -368,8 +368,7 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
         ////////////////////////////////////////////////////////////////////////////
         ll_buda::Program *program = create_program(device, single_tile_size, cb_num_tiles, num_cores, graph_interpreter_kernel_args_per_core);
 
-        bool skip_hlkc = false;
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
+        pass &= ll_buda::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Create input
@@ -608,9 +607,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
+        pass &= ll_buda::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Create input

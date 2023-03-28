@@ -250,9 +250,7 @@ bool run_chained_sfpu_test(int chain_length) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
+        pass &= ll_buda::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Write op info to L1
@@ -515,9 +513,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
+        pass &= ll_buda::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Write op info to L1
@@ -790,9 +786,7 @@ bool run_forked_binary_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
+        pass &= ll_buda::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Write op info to L1

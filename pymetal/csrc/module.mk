@@ -1,7 +1,7 @@
 PYMETAL_LIB = $(LIBDIR)/libpymetal_csrc.so
 PYMETAL_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
 PYMETAL_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal -I$(TT_METAL_HOME)/. $(shell python3-config --includes) -I$(TT_METAL_HOME)/tt_metal/third_party/pybind11/include
-PYMETAL_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -L$(TT_METAL_HOME) -ldevice -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal -lyaml-cpp -lhlkc_api -lprofiler -lbuild_kernels_for_riscv
+PYMETAL_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -L$(TT_METAL_HOME) -ldevice -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal -lyaml-cpp -lprofiler -lbuild_kernels_for_riscv
 PYMETAL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 PYMETAL_SRCS = \

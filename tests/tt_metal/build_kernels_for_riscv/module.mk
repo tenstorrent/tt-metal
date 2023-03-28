@@ -28,7 +28,7 @@ BUILD_KERNELS_FOR_RISCV_TESTS = \
 BUILD_KERNELS_FOR_RISCV_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(BUILD_KERNELS_FOR_RISCV_TESTS:tests/%:%)))
 
 BUILD_KERNELS_FOR_RISCV_TEST_INCLUDES = $(TEST_INCLUDES) $(BUILD_KERNELS_FOR_RISCV_INCLUDES)
-BUILD_KERNELS_FOR_RISCV_TESTS_LDFLAGS = -lpthread -lstdc++fs -lbuild_kernels_for_riscv -lhlkc_api -lcommon -lyaml-cpp -ldl
+BUILD_KERNELS_FOR_RISCV_TESTS_LDFLAGS = -lpthread -lstdc++fs -lbuild_kernels_for_riscv -lcommon -lyaml-cpp -ldl
 
 BUILD_KERNELS_FOR_RISCV_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(BUILD_KERNELS_FOR_RISCV_TESTS_SRCS:.cpp=.o))
 BUILD_KERNELS_FOR_RISCV_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(BUILD_KERNELS_FOR_RISCV_TESTS_SRCS:.cpp=.d))

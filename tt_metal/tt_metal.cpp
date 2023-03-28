@@ -231,7 +231,6 @@ bool GenerateBinaries(
     Device *device,
     build_kernel_for_riscv_options_t *build_kernel_for_riscv_options,
     const std::string &op_path,
-    bool skip_hlkc,
     bool profile_kernel,
     const KernelGroup &kernel_group,
     const tt_xy_pair &logical_core)
@@ -297,7 +296,6 @@ void CompileBlankKernel(Device *device, const std::string &out_dir_path) {
     blank_build_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/blank.cpp");
     blank_build_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
     blank_build_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
-    bool skip_hlkc = false;  // TODO: Hardcoded to false for now
     std::string arch_name = tt::get_string_lowercase(device->arch());
 
     generate_binaries_params_t default_params;
@@ -401,7 +399,7 @@ size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const tt_xy_pair 
     return kg_compile_hash;
 }
 
-bool CompileProgram(Device *device, Program *program, bool skip_hlkc, bool profile_kernel) {
+bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
 
@@ -446,7 +444,7 @@ bool CompileProgram(Device *device, Program *program, bool skip_hlkc, bool profi
             //if (enable_compile_cache)
             //    cout << "======= Compiling" << std::endl;
             // PROF_BEGIN("CCGEN_BIN")
-            GenerateBinaries(device, &dummy_op, op_path, skip_hlkc, profile_kernel, kernel_group, logical_core);
+            GenerateBinaries(device, &dummy_op, op_path, profile_kernel, kernel_group, logical_core);
             // PROF_END("CCGEN_BIN")
             force_recompiles = std::max(0, force_recompiles-1);
         } else {

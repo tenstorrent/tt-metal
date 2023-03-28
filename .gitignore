@@ -14,7 +14,6 @@ build
 /out/
 
 /test_*
-hlkc/hllkc_api.a
 core_graph_lib/core_graph_lib_integration_tests
 coremodel/model/release/
 
@@ -23,8 +22,6 @@ device_desc.yaml
 /clean
 *coverage.txt
 blobgen_cmd_log
-
-.hlkc_cache
 
 __pycache__
 

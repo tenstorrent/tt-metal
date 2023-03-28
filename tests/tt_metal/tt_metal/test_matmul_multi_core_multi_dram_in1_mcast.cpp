@@ -443,9 +443,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        constexpr bool skip_hlkc = false;
         constexpr bool profile_device = true;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc, profile_device);
+        pass &= tt_metal::CompileProgram(device, program, profile_device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

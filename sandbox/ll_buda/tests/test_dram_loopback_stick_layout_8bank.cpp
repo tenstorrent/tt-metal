@@ -62,9 +62,8 @@ bool interleaved_stick_reader_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
         bool profile_kernel = true;
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc, profile_kernel);
+        pass &= ll_buda::CompileProgram(device, program, profile_kernel);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

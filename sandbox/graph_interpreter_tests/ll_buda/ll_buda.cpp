@@ -183,13 +183,12 @@ bool GenerateBinaries(
     Device *device,
     build_kernel_for_riscv_options_t *build_kernel_for_riscv_options,
     const std::string &op_path,
-    bool skip_hlkc,
     const KernelGroup &kernel_group,
     const tt_xy_pair &logical_core) {
     std::string arch_name = tt::get_string_lowercase(device->device_type());
 
     if (kernel_group.compute != nullptr) {
-        generate_binaries_for_triscs(build_kernel_for_riscv_options, op_path, arch_name, skip_hlkc, true);
+        generate_binaries_for_triscs(build_kernel_for_riscv_options, op_path, arch_name, true);
     }
 
     std::thread br_comp([build_kernel_for_riscv_options, op_path, arch_name, kernel_group, logical_core]() {
@@ -241,7 +240,7 @@ void CompileBlankKernel(Device *device, const std::string &out_dir_path) {
     blank_build_options.set_hlk_file_name_all_cores("kernels/compute/blank.cpp");
     blank_build_options.ncrisc_kernel_file_name = "kernels/dataflow/blank.cpp";
     blank_build_options.brisc_kernel_file_name = "kernels/dataflow/blank.cpp";
-    bool skip_hlkc = false;  // TODO: Hardcoded to false for now
+      // TODO: Hardcoded to false for now
     std::string arch_name = tt::get_string_lowercase(device->device_type());
 
     generate_binaries_params_t default_params;
@@ -345,7 +344,7 @@ size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const tt_xy_pair 
     return kg_compile_hash;
 }
 
-bool CompileProgram(Device *device, Program *program, bool skip_hlkc) {
+bool CompileProgram(Device *device, Program *program) {
     bool pass = true;
     ll_buda_profiler.markStart("CompileProgram");
 
@@ -381,7 +380,7 @@ bool CompileProgram(Device *device, Program *program, bool skip_hlkc) {
             continue;
         }
 
-        GenerateBinaries(device, &dummy_op, op_path, skip_hlkc, kernel_group, logical_core);
+        GenerateBinaries(device, &dummy_op, op_path, kernel_group, logical_core);
         compiled_hashes.insert(kernel_group_hash);
     }
 

@@ -131,8 +131,8 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+
+    tt_metal::CompileProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

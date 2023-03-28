@@ -292,9 +292,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
         std::cout << "GOING TO COMPILE PROGRAM." << std::endl;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgram(device, program);
         std::cout << "DONE COMPILING THE PROGRAM. GOING TO WRITE TO DRAM." << std::endl;
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

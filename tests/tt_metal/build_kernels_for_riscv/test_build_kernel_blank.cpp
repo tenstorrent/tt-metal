@@ -33,11 +33,8 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
 
-    bool skip_hlkc = false;
-    if (argc > 1) {
-        skip_hlkc = true;
-    }
-    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc};
+
+    generate_binaries_params_t params;
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 
     return 0;

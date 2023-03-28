@@ -68,9 +68,9 @@ Tensor transpose_hc_rm(const Tensor &a) {
         core, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::RISCV_1_default);
 
     // Compile kernels
-    bool skip_hlkc = false;
+
     bool profile_kernel = true;
-    tt_metal::CompileProgram(device, program, skip_hlkc, profile_kernel);
+    tt_metal::CompileProgram(device, program, profile_kernel);
     tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteRuntimeArgsToDevice(
         device,
@@ -163,10 +163,10 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     // }
 
     // Compile kernels
-    bool skip_hlkc = false;
+
     std::cout << "Compiling kernels " << std::endl;
     bool profile_kernel = true;
-    tt_metal::CompileProgram(device, program, skip_hlkc, profile_kernel);
+    tt_metal::CompileProgram(device, program, profile_kernel);
     std::cout << "Configure device with program " << std::endl;
     tt_metal::ConfigureDeviceWithProgram(device, program);
     std::cout << "Num cores " << num_cores_r * num_cores_c << std::endl;

@@ -201,8 +201,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -393,8 +392,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

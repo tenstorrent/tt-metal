@@ -55,8 +55,8 @@ int main(int argc, char **argv) {
         /*
         * Compile kernels used during execution
         */
-        bool skip_hlkc = false;
-        pass &= CompileProgram(device, program, skip_hlkc);
+
+        pass &= CompileProgram(device, program);
 
         /*
         * Create input data and runtime arguments, then execute

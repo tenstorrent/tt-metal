@@ -165,12 +165,11 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
         vector<uint32_t> golden = gold_standard_flatten(src_vec, {num_tiles_r * 32, num_tiles_c * 32});
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

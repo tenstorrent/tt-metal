@@ -143,8 +143,8 @@ Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum b
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+
+    tt_metal::CompileProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

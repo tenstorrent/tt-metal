@@ -135,8 +135,8 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     );
 
     // Compile kernels
-    bool skip_hlkc = false;
-    tt_metal::CompileProgram(device, program, skip_hlkc);
+
+    tt_metal::CompileProgram(device, program);
     tt_metal::ConfigureDeviceWithProgram(device, program);
 
     tt_metal::WriteRuntimeArgsToDevice(

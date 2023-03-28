@@ -96,8 +96,6 @@ endif
 LIBS_TO_BUILD = \
 	common \
 	src/ckernels \
-	hlkc \
-	hlkc/api \
 	build_kernels_for_riscv \
 	device \
 	llrt \

@@ -26,7 +26,7 @@ for tests under ``tt_metal``, which uses the profiler, the following is the ``LD
 
 ..  code-block:: MAKEFILE
 
-    TT_METAL_TESTS_LDFLAGS = -ltt_metal_impl -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -lhlkc_api -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
+    TT_METAL_TESTS_LDFLAGS = -ltt_metal_impl -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
 
 With the instance of the ``Profiler`` class, ``markStart`` and ``markStop`` functions can be used to
 profile the module. Again taking ``tt_metal`` as an example, ``tt_metal_profiler`` is

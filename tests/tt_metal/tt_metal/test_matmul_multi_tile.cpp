@@ -256,8 +256,7 @@ bool run_matmul(const bool with_bias) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

@@ -234,8 +234,7 @@ std::vector<uint32_t> calculate_unary_op(string sfpu_name, std::vector<uint32_t>
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
 
-        bool skip_hlkc = false;
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
+        pass &= ll_buda::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -385,8 +384,7 @@ std::vector<uint32_t> calculate_binary_op(const int op_id, const char* op_name, 
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
 
-        bool skip_hlkc = false;
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc);
+        pass &= ll_buda::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

@@ -47,7 +47,7 @@ the current test device side output `profile_log_device.csv`
 e.g.
 ```
     constexpr bool profile_device = true;
-    pass &= tt_metal::CompileProgram(device, program, skip_hlkc, profile_device);
+    pass &= tt_metal::CompileProgram(device, program, profile_device);
     .
     .
     .

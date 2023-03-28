@@ -94,8 +94,7 @@ Program compilation
 
 .. code-block:: cpp
 
-   constexpr bool skip_hlkc = false;
-   pass &= CompileProgram(device, program, skip_hlkc);
+   pass &= CompileProgram(device, program);
 
 Next we compile our program.
 

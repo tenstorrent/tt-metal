@@ -308,8 +308,7 @@ Tensor matmul_multi_core_reuse_(const Tensor &a, const Tensor &b, bool bcast_bat
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
     bool pass = true;
-    constexpr bool skip_hlkc = false;
-    pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+    pass &= tt_metal::CompileProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

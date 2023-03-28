@@ -33,13 +33,9 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/writer_unary.cpp";
 
     // generate binaries
-    bool skip_hlkc = false;
-    if (argc > 1) {
-        skip_hlkc = true;
-    }
 
     // by default the NOCS for br=0, nc=1
-    generate_binaries_params_t params = {.skip_hlkc = skip_hlkc, .br_noc_index = 1, .nc_noc_index = 0, .compute_kernel_compile_time_args = compute_kernel_args};
+    generate_binaries_params_t params = {.br_noc_index = 1, .nc_noc_index = 0, .compute_kernel_compile_time_args = compute_kernel_args};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
 
     return 0;

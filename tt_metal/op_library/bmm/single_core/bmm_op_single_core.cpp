@@ -146,8 +146,8 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
                 {out_dram_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
             );
 
-            bool skip_hlkc = false;
-            pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+
+            pass &= tt_metal::CompileProgram(device, program);
             pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         }
         pass &= tt_metal::LaunchKernels(device, program);

@@ -7,7 +7,6 @@
 #include <string>
 
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
-#include "hlkc/hlkc_api.h"
 #include "l1_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 
@@ -499,7 +498,7 @@ std::string gen_trisc_cpps(
     string input_hlk_file_path,
     string out_dir_path,
     string device_name,
-    const hlk_defines_map_t& defines,
+    const std::map<std::string, std::string>& defines,
     bool dump_perf_events,
     bool untilize_output,
     bool enable_cache,

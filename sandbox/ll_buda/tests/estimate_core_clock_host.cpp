@@ -38,9 +38,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        constexpr bool skip_hlkc = false;
         constexpr bool profile_kernel = true;
-        pass &= ll_buda::CompileProgram(device, program, skip_hlkc, profile_kernel);
+        pass &= ll_buda::CompileProgram(device, program, profile_kernel);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

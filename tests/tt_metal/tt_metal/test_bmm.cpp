@@ -124,8 +124,7 @@ int main(int argc, char **argv) {
             math_approx_mode
         );
 
-        bool skip_hlkc = false;
-        pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+        pass &= tt_metal::CompileProgram(device, program);
 
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
