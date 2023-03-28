@@ -20,41 +20,41 @@ The following example shows how to create, initialize, and close TT accelerator 
 
 .. code-block:: python
 
-    from libs import ttlib as ttlib
+    from libs import tt_lib as tt_lib
 
     # Create an instance of TT accelerator device.
     # This is device of type GRAYSKULL and is attached to PCIexpress slot number 0 on host.
-    device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
 
     # Initialize the instance of TT accelerator device before it can be used.
-    ttlib.device.InitializeDevice(device)
+    tt_lib.device.InitializeDevice(device)
 
     # Run models on TT accelerator device
     ...
 
     # Close TT accelerator device after finished using it.
-    ttlib.device.CloseDevice(device)
+    tt_lib.device.CloseDevice(device)
 
 
 
-.. autoclass:: ttlib.device.Host
+.. autoclass:: tt_lib.device.Host
     :members:
     :special-members: __init__
 
-.. autoclass:: ttlib.device.Device
+.. autoclass:: tt_lib.device.Device
     :members:
     :special-members: __init__
 
-.. autoclass:: ttlib.device.Arch
+.. autoclass:: tt_lib.device.Arch
     :members: GRAYSKULL
 
-.. autofunction:: ttlib.device.CreateDevice
+.. autofunction:: tt_lib.device.CreateDevice
 
-.. autofunction:: ttlib.device.InitializeDevice
+.. autofunction:: tt_lib.device.InitializeDevice
 
-.. autofunction:: ttlib.device.GetHost
+.. autofunction:: tt_lib.device.GetHost
 
-.. autofunction:: ttlib.device.CloseDevice
+.. autofunction:: tt_lib.device.CloseDevice
 
 
 

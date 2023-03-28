@@ -6,19 +6,19 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-from libs import ttlib
+from libs import tt_lib
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
-RSUM = ttlib.tensor.ReduceOpMath.SUM
-RW = ttlib.tensor.ReduceOpDim.W
-RH = ttlib.tensor.ReduceOpDim.H
-RHW = ttlib.tensor.ReduceOpDim.HW
+RSUM = tt_lib.tensor.ReduceOpMath.SUM
+RW = tt_lib.tensor.ReduceOpDim.W
+RH = tt_lib.tensor.ReduceOpDim.H
+RHW = tt_lib.tensor.ReduceOpDim.HW
 
 # Initialize the device
-device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, 0)
-ttlib.device.InitializeDevice(device)
-host = ttlib.device.GetHost()
-ttlib.device.StartDebugPrintServer(device)
+device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+tt_lib.device.InitializeDevice(device)
+host = tt_lib.device.GetHost()
+tt_lib.device.StartDebugPrintServer(device)
 
 def new_gelu(x):
     """
@@ -43,42 +43,42 @@ if __name__ == "__main__":
             x = x*x
         if op == "log":
             x = (x+10.0)*100.0
-        xt = ttlib.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttlib.tensor.DataType.BFLOAT16, ttlib.tensor.Layout.TILE, device)
+        xt = tt_lib.tensor.Tensor(tilize_to_list(x), [N, C, H, W], tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.TILE, device)
         if op == "relu":
             print("---- Testing relu")
-            tt_res = ttlib.tensor.relu(xt)
+            tt_res = tt_lib.tensor.relu(xt)
             ref = x.relu()
         if op == "log":
             print("---- Testing log")
-            tt_res = ttlib.tensor.tanh(xt)
+            tt_res = tt_lib.tensor.tanh(xt)
             ref = x.log()
         if op == "tanh":
             print("---- Testing tanh")
-            tt_res = ttlib.tensor.tanh(xt)
+            tt_res = tt_lib.tensor.tanh(xt)
             ref = torch.tanh(x)
         if op == "recip":
             print("---- Testing recip")
-            tt_res = ttlib.tensor.recip(xt)
+            tt_res = tt_lib.tensor.recip(xt)
             ref = 1.0/x
         if op == "sigmoid":
             print("---- Testing sigmoid")
-            tt_res = ttlib.tensor.sigmoid(xt)
+            tt_res = tt_lib.tensor.sigmoid(xt)
             ref = torch.sigmoid(x)
         if op == "gelu":
             print("---- Testing gelu")
-            tt_res = ttlib.tensor.gelu(xt)
+            tt_res = tt_lib.tensor.gelu(xt)
             ref = new_gelu(x)
         elif op == "exp":
             print("---- Testing exp")
-            tt_res = ttlib.tensor.exp(xt)
+            tt_res = tt_lib.tensor.exp(xt)
             ref = x.exp()
         elif op == "sqrt":
             print("---- Testing sqrt")
-            tt_res = ttlib.tensor.sqrt(xt)
+            tt_res = tt_lib.tensor.sqrt(xt)
             ref = x.sqrt()
         tt_host_rm = tt_res.to(host).data()
         pyt_got_back_rm = torch.Tensor(tt_host_rm).reshape(shape)
         pyt_got_back_rm = untilize(pyt_got_back_rm)
         print_diff_argmax(pyt_got_back_rm, ref)
 
-ttlib.device.CloseDevice(device)
+tt_lib.device.CloseDevice(device)

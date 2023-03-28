@@ -6,8 +6,8 @@ sys.path.append(f"{f}/..")
 
 import numpy as np
 
-from libs import ttlib as ttl
-from libs.ttlib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, convert_weights_2d_matrix, convert_act_2d_matrix
+from libs import tt_lib as ttl
+from libs.tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, convert_weights_2d_matrix, convert_act_2d_matrix
 
 import torch
 

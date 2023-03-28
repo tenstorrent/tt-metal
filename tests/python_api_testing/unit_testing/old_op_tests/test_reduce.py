@@ -6,19 +6,19 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-from libs import ttlib
+from libs import tt_lib
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
-RSUM = ttlib.tensor.ReduceOpMath.SUM
-RW = ttlib.tensor.ReduceOpDim.W
-RH = ttlib.tensor.ReduceOpDim.H
-RHW = ttlib.tensor.ReduceOpDim.HW
+RSUM = tt_lib.tensor.ReduceOpMath.SUM
+RW = tt_lib.tensor.ReduceOpDim.W
+RH = tt_lib.tensor.ReduceOpDim.H
+RHW = tt_lib.tensor.ReduceOpDim.HW
 
 # Initialize the device
-device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, 0)
-ttlib.device.InitializeDevice(device)
-host = ttlib.device.GetHost()
-ttlib.device.StartDebugPrintServer(device)
+device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+tt_lib.device.InitializeDevice(device)
+host = tt_lib.device.GetHost()
+tt_lib.device.StartDebugPrintServer(device)
 
 if __name__ == "__main__":
     N = 2
@@ -32,11 +32,11 @@ if __name__ == "__main__":
     reduce_dims_pyt = [[3], [2], [3,2]]
     reduce_shapes = [[N, C, H, 32], [N, C, 32, W], [N, C, 32, 32]]
     for rtype, expected_shape, rdims_pyt in zip(reduce_dims_tt, reduce_shapes, reduce_dims_pyt):
-        xt = ttlib.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttlib.tensor.DataType.BFLOAT16, ttlib.tensor.Layout.TILE, device)
+        xt = tt_lib.tensor.Tensor(tilize_to_list(x), [N, C, H, W], tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.TILE, device)
         mul = 0.5
         if rtype == RHW:
             mul = 1.0
-        tt_res = ttlib.tensor.reduce(xt, RSUM, rtype, mul)
+        tt_res = tt_lib.tensor.reduce(xt, RSUM, rtype, mul)
         assert(tt_res.shape() == expected_shape)
         tt_host_rm = tt_res.to(host).data()
 
@@ -60,4 +60,4 @@ if __name__ == "__main__":
 
         assert(allok)
 
-ttlib.device.CloseDevice(device)
+tt_lib.device.CloseDevice(device)

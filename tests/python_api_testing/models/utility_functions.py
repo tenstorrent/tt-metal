@@ -3,8 +3,8 @@ import math
 import torch
 import numpy as np
 
-from libs import ttlib as ttl
-from libs.ttlib.utils import (
+from libs import tt_lib as ttl
+from libs.tt_lib.utils import (
     _nearest_32 as nearest_32,
     pad_activation,
     pad_weight,

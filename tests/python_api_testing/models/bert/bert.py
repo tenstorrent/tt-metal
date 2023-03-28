@@ -8,7 +8,7 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-from libs import ttlib as ttl
+from libs import tt_lib as ttl
 from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel

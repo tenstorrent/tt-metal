@@ -25,16 +25,16 @@ class MyBuild(build_ext):
                 continue
             full_lib_path = build_lib + "/" + filename
 
-            src = "build/lib/libttlib_csrc.so"
+            src = "build/lib/libtt_lib_csrc.so"
             self.copy_file(src, full_lib_path)
 
 short_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
 date = subprocess.check_output(['git', 'show', '-s', '--format=%cd', "--date=format:%y%m%d", 'HEAD']).decode('ascii').strip()
 version = "0.1." + date + "+dev.gs." + short_hash
 
-ttlib_C = TTExtension("ttlib._C")
+tt_lib_C = TTExtension("tt_lib._C")
 
-ext_modules = [ttlib_C]
+ext_modules = [tt_lib_C]
 
 packages = find_namespace_packages(
     where="libs",
@@ -42,7 +42,7 @@ packages = find_namespace_packages(
 )
 
 setup(
-    name='ttlib',
+    name='tt_lib',
     version=version,
     author='Tenstorrent',
     url="http://www.tenstorrent.com",

@@ -1,1 +1,1 @@
-from libs.ttlib.fused_ops.softmax import *
+from libs.tt_lib.fused_ops.softmax import *

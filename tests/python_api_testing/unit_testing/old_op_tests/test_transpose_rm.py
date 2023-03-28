@@ -6,14 +6,14 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-from libs import ttlib
+from libs import tt_lib
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight
 
 # Initialize the device
-device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, 0)
-ttlib.device.InitializeDevice(device)
-host = ttlib.device.GetHost()
-ttlib.device.StartDebugPrintServer(device)
+device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+tt_lib.device.InitializeDevice(device)
+host = tt_lib.device.GetHost()
+tt_lib.device.StartDebugPrintServer(device)
 
 if __name__ == "__main__":
     torch.manual_seed(123)
@@ -23,7 +23,7 @@ if __name__ == "__main__":
     W = 64
     x = torch.randn((N,C,H,W)).to(torch.float16)
 
-    xt = ttlib.tensor.Tensor(x.reshape(-1).tolist(), [N, C, H, W], ttlib.tensor.DataType.BFLOAT16, ttlib.tensor.Layout.ROW_MAJOR, device)
+    xt = tt_lib.tensor.Tensor(x.reshape(-1).tolist(), [N, C, H, W], tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR, device)
 
     # test that reading back from row major is about the same (+/- BF16 conversion)
     xt_data = xt.to(host).data()
@@ -33,7 +33,7 @@ if __name__ == "__main__":
     print_diff_argmax(tt_got_back_rm, x)
 
     # apply  h-padding
-    xtp = ttlib.tensor.transpose_hc_rm(xt)
+    xtp = tt_lib.tensor.transpose_hc_rm(xt)
     assert(xtp.shape() == [N,H,C,W])
     xtp_data = xtp.to(host).data()
     tt_got_back = torch.Tensor(xtp_data).reshape((N,H,C,W))
@@ -42,4 +42,4 @@ if __name__ == "__main__":
     hc_ref = x.permute(0, 2, 1, 3)
     print_diff_argmax(tt_got_back, hc_ref)
 
-ttlib.device.CloseDevice(device)
+tt_lib.device.CloseDevice(device)

@@ -6,10 +6,10 @@ Overview
 
 TT-DNN is a simplified Python interface to the compute engine of the TT-Metal.
 
-This will be the future plan. For now, the ``ttlib`` Python module is a
+This will be the future plan. For now, the ``tt_lib`` Python module is a
 unified Python interface that provides both TT-DNN and the Tensor library.
 
-tt-DNN API through ``ttlib``
+tt-DNN API through ``tt_lib``
 =============================
 
 Tensor math operations
@@ -27,29 +27,29 @@ operation (unary, binary etc.).
 Any arguments which are exceptions to this rule will be noted in that
 operation's listing.
 
-.. autofunction:: ttlib.tensor.add
+.. autofunction:: tt_lib.tensor.add
 
-.. autofunction:: ttlib.tensor.sub
+.. autofunction:: tt_lib.tensor.sub
 
-.. autofunction:: ttlib.tensor.mul
+.. autofunction:: tt_lib.tensor.mul
 
-.. autofunction:: ttlib.tensor.matmul
+.. autofunction:: tt_lib.tensor.matmul
 
-.. autofunction:: ttlib.tensor.bmm
+.. autofunction:: tt_lib.tensor.bmm
 
-.. autofunction:: ttlib.tensor.exp
+.. autofunction:: tt_lib.tensor.exp
 
-.. autofunction:: ttlib.tensor.recip
+.. autofunction:: tt_lib.tensor.recip
 
-.. autofunction:: ttlib.tensor.gelu
+.. autofunction:: tt_lib.tensor.gelu
 
-.. autofunction:: ttlib.tensor.sqrt
+.. autofunction:: tt_lib.tensor.sqrt
 
-.. autofunction:: ttlib.tensor.sigmoid
+.. autofunction:: tt_lib.tensor.sigmoid
 
-.. autofunction:: ttlib.tensor.log
+.. autofunction:: tt_lib.tensor.log
 
-.. autofunction:: ttlib.tensor.tanh
+.. autofunction:: tt_lib.tensor.tanh
 
 Tensor manipulation operations
 ------------------------------
@@ -57,47 +57,47 @@ Tensor manipulation operations
 These operations change the tensor shape in some way, giving it new dimensions
 but in general retaining the data.
 
-.. autofunction:: ttlib.tensor.reshape
+.. autofunction:: tt_lib.tensor.reshape
 
-.. autofunction:: ttlib.tensor.transpose
+.. autofunction:: tt_lib.tensor.transpose
 
-.. autofunction:: ttlib.tensor.transpose_hc
+.. autofunction:: tt_lib.tensor.transpose_hc
 
-.. autofunction:: ttlib.tensor.transpose_hc_rm
+.. autofunction:: tt_lib.tensor.transpose_hc_rm
 
-.. autofunction:: ttlib.tensor.tilize
+.. autofunction:: tt_lib.tensor.tilize
 
-.. autofunction:: ttlib.tensor.untilize
+.. autofunction:: tt_lib.tensor.untilize
 
 All other operations
 --------------------
 
-.. autofunction:: ttlib.tensor.fill_rm
+.. autofunction:: tt_lib.tensor.fill_rm
 
-.. autofunction:: ttlib.tensor.fill_ones_rm
+.. autofunction:: tt_lib.tensor.fill_ones_rm
 
-.. autofunction:: ttlib.tensor.pad_h_rm
+.. autofunction:: tt_lib.tensor.pad_h_rm
 
-.. autofunction:: ttlib.tensor.bcast
+.. autofunction:: tt_lib.tensor.bcast
 
-.. autofunction:: ttlib.tensor.reduce
+.. autofunction:: tt_lib.tensor.reduce
 
 Enums
 -----
 
-.. autoclass:: ttlib.tensor.BcastOpMath
+.. autoclass:: tt_lib.tensor.BcastOpMath
     :members: ADD, SUB, MUL
 
-.. autoclass:: ttlib.tensor.BcastOpDim
+.. autoclass:: tt_lib.tensor.BcastOpDim
     :members: H, W, HW
 
-.. autoclass:: ttlib.tensor.ReduceOpMath
+.. autoclass:: tt_lib.tensor.ReduceOpMath
     :members: SUM, MAX
 
-.. autoclass:: ttlib.tensor.ReduceOpDim
+.. autoclass:: tt_lib.tensor.ReduceOpDim
     :members: H, W, HW
 
-``ttlib`` Mini-Graph Library
+``tt_lib`` Mini-Graph Library
 ==============================
 
 Fused Operations
@@ -106,10 +106,10 @@ Fused Operations
 We have a variety of common operations that require fusion of multiple
 base operations together.
 
-.. autofunction:: ttlib.fused_ops.linear.Linear
+.. autofunction:: tt_lib.fused_ops.linear.Linear
 
-.. autofunction:: ttlib.fused_ops.softmax.softmax
+.. autofunction:: tt_lib.fused_ops.softmax.softmax
 
-.. autofunction:: ttlib.fused_ops.layernorm.Layernorm
+.. autofunction:: tt_lib.fused_ops.layernorm.Layernorm
 
-.. autofunction:: ttlib.fused_ops.add_and_norm.AddAndNorm
+.. autofunction:: tt_lib.fused_ops.add_and_norm.AddAndNorm

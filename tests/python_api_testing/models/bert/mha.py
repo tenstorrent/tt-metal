@@ -10,7 +10,7 @@ import torch
 from transformers import BertTokenizer, BertForQuestionAnswering
 import numpy as np
 
-from libs import ttlib as ttl
+from libs import tt_lib as ttl
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 from utility_functions import get_FR, set_FR
 from utility_functions import enable_compile_cache, enable_binary_cache

@@ -6,21 +6,21 @@ sys.path.append(f"{f}/..")
 
 import torch
 
-from libs import ttlib
+from libs import tt_lib
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight
 
 # Initialize the device
-device = ttlib.device.CreateDevice(ttlib.device.Arch.GRAYSKULL, 0)
-ttlib.device.InitializeDevice(device)
-host = ttlib.device.GetHost()
-ttlib.device.StartDebugPrintServer(device)
+device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+tt_lib.device.InitializeDevice(device)
+host = tt_lib.device.GetHost()
+tt_lib.device.StartDebugPrintServer(device)
 
-BCW = ttlib.tensor.BcastOpDim.W
-BCH = ttlib.tensor.BcastOpDim.H
-BCHW = ttlib.tensor.BcastOpDim.HW
-BCMUL = ttlib.tensor.BcastOpMath.MUL
-BCSUB = ttlib.tensor.BcastOpMath.SUB
-BCADD = ttlib.tensor.BcastOpMath.ADD
+BCW = tt_lib.tensor.BcastOpDim.W
+BCH = tt_lib.tensor.BcastOpDim.H
+BCHW = tt_lib.tensor.BcastOpDim.HW
+BCMUL = tt_lib.tensor.BcastOpMath.MUL
+BCSUB = tt_lib.tensor.BcastOpMath.SUB
+BCADD = tt_lib.tensor.BcastOpMath.ADD
 
 if __name__ == "__main__":
     torch.manual_seed(123)
@@ -34,12 +34,12 @@ if __name__ == "__main__":
     bhw = torch.randn((1,1,1,1))
 
     for btorch, btype in zip([bw, bh, bhw], [BCW, BCH, BCHW]):
-        xt = ttlib.tensor.Tensor(tilize_to_list(x), [N, C, H, W], ttlib.tensor.DataType.BFLOAT16, ttlib.tensor.Layout.TILE, device)
+        xt = tt_lib.tensor.Tensor(tilize_to_list(x), [N, C, H, W], tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.TILE, device)
         btshape = list(btorch.shape)
         bpadded = pad_weight(btorch) # need to zero-pad the bcast tensors to 32 in H,W
-        bt = ttlib.tensor.Tensor(tilize_to_list(bpadded), list(bpadded.shape), ttlib.tensor.DataType.BFLOAT16, ttlib.tensor.Layout.TILE, device)
+        bt = tt_lib.tensor.Tensor(tilize_to_list(bpadded), list(bpadded.shape), tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.TILE, device)
 
-        tt_res = ttlib.tensor.bcast(xt, bt, BCADD, btype)
+        tt_res = tt_lib.tensor.bcast(xt, bt, BCADD, btype)
         # test that reading back from row major is about the same (+/- BF16 conversion)
         tt_host_rm = tt_res.to(host).data()
         pyt_got_back_rm = torch.Tensor(tt_host_rm).reshape((N,C,H,W))
@@ -51,4 +51,4 @@ if __name__ == "__main__":
         absdiff = print_diff_argmax(pyt_got_back_rm, ref)
         assert(absdiff < 0.05)
 
-ttlib.device.CloseDevice(device)
+tt_lib.device.CloseDevice(device)

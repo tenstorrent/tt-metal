@@ -8,7 +8,7 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-from libs import ttlib as ttl
+from libs import tt_lib as ttl
 from python_api_testing.fused_ops.add_and_norm import AddAndNorm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
 from utility_functions import enable_compile_cache, enable_binary_cache

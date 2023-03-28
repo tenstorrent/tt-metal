@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../..")
 import torch
 from transformers import BertForQuestionAnswering
 
-from libs import ttlib as ttl
+from libs import tt_lib as ttl
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
 from fused_ops.linear import Linear as TtLinear
 
