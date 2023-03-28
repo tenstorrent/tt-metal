@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-// #include "tt_gdb/tt_gdb.hpp"
+#include "tt_metal/tools/tt_gdb/tt_gdb.hpp"
 
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -148,7 +148,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles});
 
-        // tt::tt_metal::tt_gdb(device, 0, program->cores(), program->cores_to_ops());
+        // tt::tt_metal::tt_gdb(device, 0, program->logical_cores(), program->cores_to_ops());
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

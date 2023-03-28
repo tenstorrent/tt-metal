@@ -66,7 +66,19 @@ std::string Program::core_to_op(const tt_xy_pair &core) const {
         if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
             std::string bin_path = kernel->binary_path(core);
             size_t bin_path_size = bin_path.size();
-            for (int i = bin_path_size - 1; i--; i > -1) {
+
+
+            // The hash corresponds to string after last '/'
+            int i;
+            for (i = bin_path_size - 1; i > -1; i--) {
+                if (bin_path.at(i) == '/') {
+                    i--;
+                    break;
+                }
+            }
+
+            // The op name corresponds to string after second last '/'
+            for (; i > -1; i--) {
                 if (bin_path.at(i) == '/') {
                     std::string op = bin_path.substr(i + 1, bin_path_size - i - 1);
                     return op;

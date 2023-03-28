@@ -115,7 +115,7 @@ inline string get_second_token(string &input) {
 
 void print_cmd(tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core, string variable, string thread_type, string op) {
     string debug_file_path = "built_kernels/" + op + "/" + thread_type + "/" + thread_type + "_debug_dwarf_info.json";
-    const string cmd = "python3 tt_gdb/pydwarf2.py " + thread_type + " " + op;
+    const string cmd = "python3 tt_metal/tools/tt_gdb/pydwarf2.py " + thread_type + " " + op;
     int ret = system(cmd.c_str());
 
     // Error
@@ -314,7 +314,7 @@ void launch_core_map(PythonCoreMapInfo info) {
         shows certain debug info
     */
 
-    const string cmd = "python3 tools/tt_gdb/tt_gdb_table.py " + disaggregate_python_core_map_info(info);
+    const string cmd = "python3 tt_metal/tools/tt_gdb/tt_gdb_table.py " + disaggregate_python_core_map_info(info);
 
     std::cout << "Launched python core view with this cmd: " << cmd << std::endl;
     int ret = system(cmd.c_str());
