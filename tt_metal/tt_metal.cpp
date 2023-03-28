@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <filesystem>
+#include <mutex>
 #include <unordered_set>
 #include <string>
 
@@ -8,6 +9,9 @@
 #include "llrt/tt_debug_print_server.hpp"
 
 #include "tools/cpuprof/cpuprof.h"
+
+using std::unique_lock;
+using std::mutex;
 
 namespace tt { namespace llrt {
 extern bool llrt_enable_binary_cache;
@@ -399,6 +403,26 @@ size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const tt_xy_pair 
     return kg_compile_hash;
 }
 
+struct HashLookup {
+    static HashLookup& inst() {
+        static HashLookup inst_;
+        return inst_;
+    }
+
+    bool exists(size_t khash) {
+        unique_lock<mutex> lock(mutex_);
+        return hashes_.find(khash) != hashes_.end();
+    }
+    void add(size_t khash) {
+        unique_lock<mutex> lock(mutex_);
+        hashes_.insert(khash);
+    }
+
+private:
+    std::mutex mutex_;
+    std::unordered_set<size_t> hashes_;
+};
+
 bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
@@ -409,7 +433,6 @@ bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
     // Compute kernels generate dependencies for data movement kernels
     // Kernels running on a core need to be grouped together for compilation
     // The same group of kernels shouldn't be compiled multiple times
-    std::unordered_set<size_t> compiled_hashes;
     auto op_idx = 0;
     for (auto &[logical_core, kernel_group] : program->core_to_kernel_group()) {
         ValidateL1Buffers(device, program, logical_core); // PROF_BEGIN("CCGEN_PREAMBLE")
@@ -432,7 +455,8 @@ bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
         ConfigureForCompilation(kernel_group.riscv_0, &dummy_op, logical_core, op_path);
         ConfigureForCompilation(kernel_group.riscv_1, &dummy_op, logical_core, op_path);
 
-        if (compiled_hashes.find(kernel_group_hash) != compiled_hashes.end()) {
+        if (HashLookup::inst().exists(kernel_group_hash)) {
+            //std::cout << "--- Kernel Cache hit" << std::endl;
             continue;
         }
 
@@ -451,7 +475,7 @@ bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
             //if (enable_compile_cache)
             //    cout << "======= Skipping compiling..." << std::endl;
         }
-        compiled_hashes.insert(kernel_group_hash);
+        HashLookup::inst().add(kernel_group_hash);
     }
 
     tt_metal_profiler.markStop("CompileProgram");
