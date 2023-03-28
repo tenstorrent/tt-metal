@@ -5,7 +5,7 @@ ARCH_NAME ?= grayskull
 OUT ?= $(TT_METAL_HOME)/build/src/ckernels/gen/out
 
 # Generate ops functions for ckernels
-OPS_YAML = $(TT_METAL_HOME)/src/meta/$(ARCH_NAME)/instructions/yaml/assembly.yaml
+OPS_YAML = $(TT_METAL_HOME)/tt_metal/src/meta/$(ARCH_NAME)/instructions/yaml/assembly.yaml
 OPS_TARGET = $(OUT)/ckernel_ops.h
 OPS_SCRIPT = ./genops_ckernel.py
 

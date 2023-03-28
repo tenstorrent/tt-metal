@@ -72,9 +72,9 @@ struct TriscParams {
 
 struct CompileContext {
     string home_;
-    string gpp_           { "/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++ " };
-    string gcc_           { "/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-gcc " }; // TODO(AP): this wasn't really necessary for assembler
-    string objcopy_       { "/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objcopy " };
+    string gpp_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++ " };
+    string gcc_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-gcc " }; // TODO(AP): this wasn't really necessary for assembler
+    string objcopy_       { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objcopy " };
     string kernel_subdir_; // full path to kernel subdir
 
     CompileContext(const string& kernel_subdir) {
@@ -98,12 +98,12 @@ struct CompileContext {
             // TODO(AP): allocating the vec every time is suboptimal
             includes = move(vector<string>({
                 "",
-                "src/ckernels/grayskull/llk_lib/",
-                "src/ckernels/grayskull/common/inc",
-                "src/ckernels/sfpi/include",
-                "src/firmware/riscv/common",
-                "src/firmware/riscv/grayskull/noc",
-                "src/firmware/riscv/grayskull",
+                "tt_metal/src/ckernels/grayskull/llk_lib/",
+                "tt_metal/src/ckernels/grayskull/common/inc",
+                "tt_metal/src/ckernels/sfpi/include",
+                "tt_metal/src/firmware/riscv/common",
+                "tt_metal/src/firmware/riscv/grayskull/noc",
+                "tt_metal/src/firmware/riscv/grayskull",
                 "tt_metal",
                 "build/src/firmware/riscv/grayskull/noc", // TODO(AP): this looks wrong, but nonetheless matches the old makefile for TRISCS
                 "build/src/ckernels/gen/out", // TODO(AP): same as above - point into build where there's no src/
@@ -113,24 +113,24 @@ struct CompileContext {
         } else if (defs.is_brisc()) {
             includes = move(vector<string>({
                 "",
-                "src/ckernels/grayskull/common/inc",
-                "src/ckernels/sfpi/include",
-                "src/firmware/riscv/common",
-                "src/firmware/riscv/grayskull",
-                "src/firmware/riscv/grayskull/noc",
-                "src/firmware/riscv/targets/ncrisc",
+                "tt_metal/src/ckernels/grayskull/common/inc",
+                "tt_metal/src/ckernels/sfpi/include",
+                "tt_metal/src/firmware/riscv/common",
+                "tt_metal/src/firmware/riscv/grayskull",
+                "tt_metal/src/firmware/riscv/grayskull/noc",
+                "tt_metal/src/firmware/riscv/targets/ncrisc",
                 "tt_metal"}
             ));
             includes_abs.push_back(kernel_subdir_ + "/brisc");
         } else {
             includes = move(vector<string>({
                 "",
-                "src/ckernels/grayskull/common/inc",
-                "src/ckernels/sfpi/include",
-                "src/firmware/riscv/common",
-                "src/firmware/riscv/grayskull",
-                "src/firmware/riscv/grayskull/noc",
-                "src/firmware/riscv/targets/ncrisc",
+                "tt_metal/src/ckernels/grayskull/common/inc",
+                "tt_metal/src/ckernels/sfpi/include",
+                "tt_metal/src/firmware/riscv/common",
+                "tt_metal/src/firmware/riscv/grayskull",
+                "tt_metal/src/firmware/riscv/grayskull/noc",
+                "tt_metal/src/firmware/riscv/targets/ncrisc",
                 "tt_metal"}
             ));
             includes_abs.push_back(kernel_subdir_ + "/ncrisc");
@@ -148,17 +148,17 @@ struct CompileContext {
         // but it looks like a lot of the include paths in the original Makefile were intermixed in unintended ways
         vector<string> iquote_includes_abs;
         if (defs.is_brisc() || defs.is_ncrisc()) {
-            iquote_includes_abs.push_back("/src/firmware/riscv/common/");
-            iquote_includes_abs.push_back("/src/firmware/riscv/grayskull/");
+            iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/common/");
+            iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/grayskull/");
             if (!defs.is_ncrisc()) // TODO(AP): cleanup, looks like some quirk of original Makefile
-                iquote_includes_abs.push_back("/src/firmware/riscv/grayskull/noc/");
+                iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/grayskull/noc/");
         }
         for (auto s: iquote_includes_abs)
             result += " -iquote " + home_ + s;
 
         vector<string> iquote_includes;
         if (defs.is_trisc()) {
-            iquote_includes.push_back("src/");
+            iquote_includes.push_back("tt_metal/src/");
             iquote_includes.push_back(".");
         } else if (defs.is_brisc() || defs.is_ncrisc()) {
             iquote_includes.push_back(".");
@@ -265,7 +265,7 @@ struct CompileContext {
         string result = objcopy_ + " -O verilog " + hk + elfname + ".elf " + hk + elfname + ".hex.tmp";
         vector<string> results;
         results.push_back(result);
-        result = string("python3 ") + home_ + "src/firmware/riscv/toolchain/hex8tohex32.py " + hk+elfname+".hex.tmp" + " " + hk+elfname + ".hex";
+        result = string("python3 ") + home_ + "tt_metal/src/firmware/riscv/toolchain/hex8tohex32.py " + hk+elfname+".hex.tmp" + " " + hk+elfname + ".hex";
         results.push_back(result);
         return results;
     }
@@ -291,25 +291,25 @@ struct CompileContext {
 
         string hk = string(" ") + kernel_subdir_;
         string link_str = gpp_;
-        link_str += " -L" + home_ + "/src/firmware/riscv/toolchain ";
+        link_str += " -L" + home_ + "/tt_metal/src/firmware/riscv/toolchain ";
         link_str += linkopts;
         switch  (defs.hwthread) {
             case RISCID::NC:
             link_str += " -Os";
-            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/ncrisc.ld "; break;
+            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/ncrisc.ld "; break;
             case RISCID::TR0:
             link_str += " -O3";
-            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/trisc0.ld "; break;
+            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/trisc0.ld "; break;
             case RISCID::TR1:
             link_str += " -O3";
-            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/trisc1.ld "; break;
+            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/trisc1.ld "; break;
             case RISCID::TR2:
             link_str += " -O3";
-            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/trisc2.ld "; break;
+            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/trisc2.ld "; break;
             default:
             TT_ASSERT(defs.hwthread == RISCID::BR);
             link_str += " -Os";
-            link_str += " -T" + home_ + "/src/firmware/riscv/toolchain/brisc.ld "; break;
+            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/brisc.ld "; break;
         }
         for (auto oname: obj_names)
             link_str += hk + hwthread_name + oname;
@@ -418,27 +418,27 @@ void generate_binary_for_risc(
     string compile_cwd;
     switch (risc_id) {
         case RISCID::NC:
-            ncwds[0] = "src/firmware/riscv/targets/ncrisc";
-            ncwds[3] = "src/firmware/riscv/common";
-            ncwds[4] = "src/firmware/riscv/grayskull";
-            ncwds[5] = "src/firmware/riscv/toolchain";
+            ncwds[0] = "tt_metal/src/firmware/riscv/targets/ncrisc";
+            ncwds[3] = "tt_metal/src/firmware/riscv/common";
+            ncwds[4] = "tt_metal/src/firmware/riscv/grayskull";
+            ncwds[5] = "tt_metal/src/firmware/riscv/toolchain";
             cpps = move(ncpps); objs = move(nobjs); cwds = move(ncwds);
             objls = move(nobjl);
         break;
         case RISCID::BR:
-            bcwds[0] = "src/firmware/riscv/targets/brisc";
-            bcwds[1] = "src/firmware/riscv/common";
-            bcwds[2] = "src/firmware/riscv/grayskull";
-            bcwds[3] = "src/firmware/riscv/grayskull/noc";
-            bcwds[4] = "src/firmware/riscv/toolchain";
+            bcwds[0] = "tt_metal/src/firmware/riscv/targets/brisc";
+            bcwds[1] = "tt_metal/src/firmware/riscv/common";
+            bcwds[2] = "tt_metal/src/firmware/riscv/grayskull";
+            bcwds[3] = "tt_metal/src/firmware/riscv/grayskull/noc";
+            bcwds[4] = "tt_metal/src/firmware/riscv/toolchain";
             cpps = move(bcpps); objs = move(bobjs); cwds = move(bcwds);
             objls = move(bobjl);
         break;
         case RISCID::TR0:
         case RISCID::TR1:
         case RISCID::TR2:
-            tcwds[0] = "src/ckernels/grayskull/common";
-            tcwds[3] = "src/firmware/riscv/toolchain"; // TODO(AP): refactor
+            tcwds[0] = "tt_metal/src/ckernels/grayskull/common";
+            tcwds[3] = "tt_metal/src/firmware/riscv/toolchain"; // TODO(AP): refactor
             cpps = move(tcpps); objs = move(tobjs); cwds = move(tcwds);
             objls = move(tobjl);
         break;
@@ -463,7 +463,7 @@ void generate_binary_for_risc(
     }
     for (auto& t: compile_threads) t.join();
 
-    pushd_cmd = string("cd ") + ctx.home_ + "src/ckernels && "; // TODO(AP): Optimize
+    pushd_cmd = string("cd ") + ctx.home_ + "tt_metal/src/ckernels && "; // TODO(AP): Optimize
 
     vector<string> link = ctx.get_link_cmd(defs, thread_bin_subdir, objls);
     log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", pushd_cmd + link[0]);

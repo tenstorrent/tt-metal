@@ -66,11 +66,11 @@ TOOLS = $(OUT)/tools
 # Top level flags, compiler, defines etc.
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-	BASE_INCLUDES=-Isrc/firmware/riscv/wormhole -Isrc/firmware/riscv/wormhole/wormhole_b0_defines
+	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_b0_defines
 else ifeq ("$(ARCH_NAME)", "wormhole")
-	BASE_INCLUDES=-Isrc/firmware/riscv/wormhole -Isrc/firmware/riscv/wormhole/wormhole_a0_defines
+	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_a0_defines
 else
-	BASE_INCLUDES=-Isrc/firmware/riscv/$(ARCH_NAME)
+	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/$(ARCH_NAME)
 endif
 
 # TODO: rk reduce this to one later
@@ -123,6 +123,5 @@ endif
 
 build: $(LIBS_TO_BUILD)
 
-clean_fw: src/firmware/clean
-clean: src/ckernels/clean clean_fw
+clean: src/ckernels/clean
 	rm -rf $(OUT)
