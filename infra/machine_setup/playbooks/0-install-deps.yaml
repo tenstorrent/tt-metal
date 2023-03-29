@@ -3,24 +3,20 @@
   hosts: all
   become: true
   tasks:
-    - name: Add apt repo for rose tools
-      apt_repository:
-        repo: ppa:rosecompiler/rose-development
     - name: Install packages
       apt:
         update_cache: yes
         pkg:
           - software-properties-common=0.99.9.11
           - build-essential=12.8ubuntu1.1
-          - python3.8-venv=3.8.10-0ubuntu1~20.04.6
+          - python3.8-venv==3.8.10-0ubuntu1~20.04.6
           - libgoogle-glog-dev=0.4.0-1build1
           - ruby=1:2.7+1
           - libyaml-cpp-dev=0.6.2-4ubuntu1
           - git=1:2.25.1-1ubuntu3.10
           - git-lfs=2.9.2-1
           - clang-6.0=1:6.0.1-14
-          - rose=0.11.67.0.1-0
-          - rose-tools=0.11.67.0.1-0
+          - libboost-all-dev=1.71.0.0ubuntu2
 
 - name: Install doxygen
   hosts: all
