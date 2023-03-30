@@ -29,7 +29,7 @@ DTX_DEPS = $(addprefix $(OBJDIR)/, $(DTX_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 libs/dtx: $(DTX_LIB)
 
-$(DTX_LIB): $(COMMON_LIB) $(TT_METAL_LIB) $(DTX_OBJS)
+$(DTX_LIB): $(COMMON_LIB) $(TT_METAL_LIB) $(TENSOR_LIB) $(DTX_OBJS)
 	@mkdir -p $(@D)
 	ar rcs -o $@ $(DTX_OBJS)
 
