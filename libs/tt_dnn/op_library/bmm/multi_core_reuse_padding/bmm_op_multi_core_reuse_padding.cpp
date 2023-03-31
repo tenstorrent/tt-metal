@@ -339,8 +339,7 @@ Tensor matmul_multi_core_reuse_padding_(const Tensor &a, const Tensor &b, bool b
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
     bool pass = true;
-    constexpr bool skip_hlkc = false;
-    pass &= tt_metal::CompileProgram(device, program, skip_hlkc);
+    pass &= tt_metal::CompileProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
