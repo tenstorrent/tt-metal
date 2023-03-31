@@ -4,7 +4,7 @@ Tensor
 Overview
 ========
 
-The TT Tensor library provides support for creation and manipulation of TT Tesnors.
+The TT Tensor library provides support for creation and manipulation of TT Tensors.
 
 This library is used by TT-Dispatch to represent tensors that can be sent to and received from TT-Metal platform.
 Operations in ttDNN library also utilize this library: operation take TT Tensors as inputs and return TT Tensors as outputs.
@@ -56,10 +56,16 @@ Tensor API
 ==========
 
 .. autoclass:: tt_lib.tensor.Tensor
-    :members: data, layout, print, pretty_print, shape
+    :members: to, data, layout, print, pretty_print, shape
+    :special-members: __init__
 
-Examples of converting between PyTorch Tesnor and TT Tensor
------------------------------------------------------------
+MemoryConfig
+============
+.. autoclass:: tt_lib.tensor.MemoryConfig
+    :special-members: __init__
+
+Examples of converting between PyTorch Tensor and TT Tensor
+===========================================================
 
 Remember that TT Tensors must
 
@@ -89,7 +95,7 @@ After creating TT Tensor, this example also shows how to set memory layout of TT
 Converting a TT Tensor to a PyTorch Tensor
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-This example shows how to move a TT Tensor output from device to host and how to conver a TT Tensor to PyTorch tensor.
+This example shows how to move a TT Tensor output from device to host and how to convert a TT Tensor to PyTorch tensor.
 
 .. code-block:: python
 

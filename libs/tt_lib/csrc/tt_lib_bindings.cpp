@@ -71,7 +71,10 @@ void TensorModule(py::module &m_tensor) {
         .value("BFLOAT16", DataType::BFLOAT16)
         .value("UINT32", DataType::UINT32);
 
-    auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig");
+    auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
+        Class defining memory configuration for storing tensor data on TT Accelerator device.
+        There are eight DRAM memory banks on TT Accelerator device, indexed as 0, 1, 2, ..., 7.
+    )doc");
 
     pyMemoryConfig
         .def(
@@ -81,65 +84,43 @@ void TensorModule(py::module &m_tensor) {
                 }
             ),
             py::arg("interleaved") = true,
-            py::arg("dram_channel") = -1
+            py::arg("dram_channel") = -1, R"doc(
+                Create MemoryConfig class.
+                If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
+                Otherwise, tensor data will be stored in a DRAM bank selected by dram_channel (valid values are 0, 1, ..., 7).
+
+                Example of creating MemoryConfig specifying that tensor data should be stored in DRAM bank 3.
+
+                .. code-block:: python
+
+                    mem_config = tt_lib.tensor.MemoryConfig(False, 3)
+            )doc"
         )
         .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
         .def_readonly("dram_channel", &MemoryConfig::dram_channel, "DRAM channel holding tensor data. Only used when tensor is not interleaved");
 
     auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor", R"doc(
-        .. method:: __init__(self: tt_lib.tensor.Tensor, data: List[float], shape: List[int[4]], data_type: tt_lib.tensor.DataType, layout: tt_lib.tensor.Layout) -> None
+        
 
-        Class constructor. Supports tensors of rank 4 where the size of both of the last two dimensions is a multiple of 32.
+        Class constructor supports tensors of rank 4 where the size of both last two dimensions is a multiple of 32.
         The constructor takes following arguments:
 
-        +------------+---------------------------------------------+------------------------+---------------------------------+----------+
-        |  Argument  |                 Description                 |       Data type        |           Valid range           | Required |
-        +============+=============================================+========================+=================================+==========+
-        | data       | Data to store in TT tensor                  | List[float/int]        |                                 | Yes      |
-        +------------+---------------------------------------------+------------------------+---------------------------------+----------+
-        | shape      | Shape of TT tensor                          | List[int[4]]           |                                 | Yes      |
-        +------------+---------------------------------------------+------------------------+---------------------------------+----------+
-        | data_type  | Data type of numbers in TT tensor           | tt_lib.tensor.DataType | tt_lib.tensor.DataType.BFLOAT16 | Yes      |
-        +------------+---------------------------------------------+-------------------------+--------------------------------+----------+
-        | layout     | Layout of tensor data in memory             | tt_lib.tensor.Layout   | tt_lib.tensor.Layout.ROW_MAJOR  | Yes      |
-        +------------+---------------------------------------------+------------------------+---------------------------------+----------+
-
-        Example of creating a TT Tensor:
-
-        .. code-block:: python
-
-            py_tensor = torch.randn((1, 1, 32, 32))
-            tt_lib.tensor.Tensor(
-                py_tensor.reshape(-1).tolist(),
-                py_tensor.size(),
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.ROW_MAJOR,
-            )
-
-        .. method:: to(self: tt_lib.tensor.Tensor, arg0: tt_lib.device.Device) -> tt_lib.tensor.Tensor
-
-            Moves TT Tensor form host device to TT accelerator device.
-
-            .. code-block:: python
-
-                tt_tensor = tt_tensor.to(tt_device)
-
-        .. method:: to(self: tt_lib.tensor.Tensor, arg0: tt_lib.device.Host) -> tt_lib.tensor.Tensor
-
-            Move TT Tensor form TT accelerator device to host device.
-
-            .. code-block:: python
-
-                tt_tensor = tt_tensor.to(host)
-
-        .. method:: to(self: tt_lib.tensor.Tensor, arg0: tt_lib.tensor.Layout) -> tt_lib.tensor.Tensor
-
-            Convert TT Tensor to provided memory layout. Available layouts are TILE and ROW_MAJOR.
-
-            .. code-block:: python
-
-                tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE)
-
+        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
+        |  Argument  |                 Description                            |       Data type           |           Valid range           | Required |
+        +============+========================================================+===========================+=================================+==========+
+        | data       | Data to store in TT tensor                             | List[float/int]           |                                 | Yes      |
+        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
+        | shape      | Shape of TT tensor                                     | List[int[4]]              |                                 | Yes      |
+        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
+        | data_type  | Data type of numbers in TT tensor                      | tt_lib.tensor.DataType    | tt_lib.tensor.DataType.BFLOAT16 | Yes      |
+        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
+        | layout     | Layout of tensor data in memory                        | tt_lib.tensor.Layout      | tt_lib.tensor.Layout.ROW_MAJOR  | Yes      |
+        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
+        | device     | Device on whihc tensor will be created                 | tt_lib.device.Device      | Host or TT accelerator device   | No       |
+        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
+        | mem_config | Layout of tensor in TT Accelerator device memory banks | tt_lib.tensor.MemoryConfig|                                 | No       |
+        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
+        
     )doc");
 
     pyTensor
@@ -148,52 +129,120 @@ void TensorModule(py::module &m_tensor) {
                 [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
                     return Tensor(data, shape, data_type, layout);
                 }
-            )
+            ), R"doc(
+                Example of creating a TT Tensor on host:
+
+                .. code-block:: python
+
+                    py_tensor = torch.randn((1, 1, 32, 32))
+                    tt_lib.tensor.Tensor(
+                        py_tensor.reshape(-1).tolist(),
+                        py_tensor.size(),
+                        tt_lib.tensor.DataType.BFLOAT16,
+                        tt_lib.tensor.Layout.ROW_MAJOR,
+                    )
+            )doc"
         )
         .def(
             py::init<>(
                 [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
                     return Tensor(data, shape, data_type, layout, device);
                 }
-            )
+            ), R"doc(
+                Example of creating a TT Tensor on TT accelerator device:
+
+                .. code-block:: python
+
+                    py_tensor = torch.randn((1, 1, 32, 32))
+                    tt_device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+                    // ...
+                    tt_lib.tensor.Tensor(
+                        py_tensor.reshape(-1).tolist(),
+                        py_tensor.size(),
+                        tt_lib.tensor.DataType.BFLOAT16,
+                        tt_lib.tensor.Layout.ROW_MAJOR,
+                        tt_device
+                    )
+            )doc"
         )
         .def(
             py::init<>(
                 [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
                     return Tensor(data, shape, data_type, layout, device, mem_config);
                 }
-            )
+            ), R"doc(
+                Example of creating a TT Tensor on TT accelerator device with specified mem_config:
+
+                .. code-block:: python
+
+                    py_tensor = torch.randn((1, 1, 32, 32))
+                    tt_device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+                    mem_config = tt_lib.tensor.MemoryConfig(Fasle, 3)
+                    // ...
+                    tt_lib.tensor.Tensor(
+                        py_tensor.reshape(-1).tolist(),
+                        py_tensor.size(),
+                        tt_lib.tensor.DataType.BFLOAT16,
+                        tt_lib.tensor.Layout.ROW_MAJOR,
+                        tt_device,
+                        mem_config
+                    )
+            )doc"
         )
         .def(
             py::init<>(
                 [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
                     return Tensor(data, shape, data_type, layout);
                 }
-            )
+            ), R"doc(
+                Not supported.
+            )doc"
         )
         .def(
             py::init<>(
                 [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
                     return Tensor(data, shape, data_type, layout, device);
                 }
-            )
+            ), R"doc(
+                Not supported.
+            )doc"
         )
         .def(
             py::init<>(
                 [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
                     return Tensor(data, shape, data_type, layout, device, mem_config);
                 }
-            )
+            ), R"doc(
+                Not supported.
+            )doc"
         )
         .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
             return self.to(device, mem_config);
-        }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true})
-        .def("to", py::overload_cast<Host*>(&Tensor::to, py::const_))
-        .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_))
+        }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+            Moves TT Tensor form host device to TT accelerator device.
+            
+            .. code-block:: python
+
+                tt_tensor = tt_tensor.to(tt_device)
+        )doc")
+        .def("to", py::overload_cast<Host*>(&Tensor::to, py::const_), R"doc(
+            Move TT Tensor form TT accelerator device to host device.
+
+            .. code-block:: python
+
+                tt_tensor = tt_tensor.to(host)
+        )doc")
+        .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_), R"doc(
+            Convert TT Tensor to provided memory layout. Available layouts are TILE and ROW_MAJOR.
+
+            .. code-block:: python
+
+                tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE)
+        )doc")
         .def("print", [](const Tensor &self, Layout print_layout) {
             return self.print(print_layout);
         }, py::arg("print_layout") = Layout::ROW_MAJOR, R"doc(
-            Prints the tensor as a flat list of numbers. By default the tensor will be printed in row major order.
+            Prints the tensor as a flat list of numbers. By default, the tensor will be printed in row major order.
 
             .. code-block:: python
 

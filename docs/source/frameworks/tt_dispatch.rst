@@ -14,7 +14,7 @@ TT Device
 =========
 
 TT Device is a library used to interact with Tenstorrent accelerator device.
-The host machine executing Python code is described by class Host, while Tenstorrent accellerator device is described by class Device.
+The host machine executing Python code is described by class Host, while Tenstorrent accelerator device is described by class Device.
 
 The following example shows how to create, initialize, and close TT accelerator device.
 
