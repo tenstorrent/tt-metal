@@ -5,6 +5,8 @@ Getting Started
 
 Ensure you're using the developer repo: ``tenstorrent-metal/tt-metal.git``
 
+CI-Generated.
+
 Setting up the dev environment
 ------------------------------
 

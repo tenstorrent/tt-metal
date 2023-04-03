@@ -1,19 +1,19 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v3.2.0
-    hooks:
-    -   id: trailing-whitespace
-    -   id: end-of-file-fixer
-    -   id: check-yaml
-        args: ["--unsafe"]
-    -   id: check-added-large-files
--  repo: local
-   hooks:
-    -   id: verify-commit-message
-        name: Verify commit message format
-        entry: python -m infra.git_hooks.verify_commit_message
-        language: python
-        verbose: true
-        stages: [commit-msg]
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v3.2.0
+  hooks:
+    - id: trailing-whitespace
+    - id: end-of-file-fixer
+    - id: check-yaml
+      args: ["--unsafe"]
+    - id: check-added-large-files
+- repo: local
+  hooks:
+    - id: verify-commit-message
+      name: Verify commit message format
+      entry: python -m infra.git_hooks.verify_commit_message
+      language: python
+      verbose: true
+      stages: [commit-msg]
