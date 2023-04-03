@@ -1,0 +1,16 @@
+name: Build and deploy docs to Austin Colo VPN
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: '${{ github.workflow }}'
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy-docs-austin:
+    uses: ./.github/workflows/docs-build-deploy.yaml
+    with:
+      runs-on-group: cloud-docs
+    secrets:
+      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
