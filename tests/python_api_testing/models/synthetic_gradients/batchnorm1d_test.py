@@ -2,43 +2,36 @@ import math
 from pathlib import Path
 import sys
 f = f"{Path(__file__).parent}"
-# sys.path.append(f"{f}/..")
-# sys.path.append(f"{f}/../..")
-# sys.path.append(f"{f}/")
-# sys.path.append("/home/farbabi/git/tt-metal")
+
 sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../libs")
 
-print(f, sys.path)
 import torch
 from torch import nn
 from torchvision import transforms, datasets
 
-import pymetal
-# from pymetal import ttlib as ttl
+import libs
+from libs import tt_lib as ttl
 
-from pymetal import ttmetal as ttm, ttlib as ttl
-from utility_functions import tilize_to_list, untilize
-from batch_norm import batchnorm1d_inference
+from models.utility_functions import tilize_to_list, untilize
 from sweep_tests.comparison_funcs import comp_pcc
 
 epsilon = 1e-5
 
 def batchnorm1d_inference(gamma, beta, running_mean, running_var, epsilon):
 
-    BCHW = ttm.tensor.BcastOpDim.HW
-    BCADD = ttm.tensor.BcastOpMath.ADD
+    BCHW = ttl.tensor.BcastOpDim.HW
+    BCADD = ttl.tensor.BcastOpMath.ADD
 
     def batchnorm1d_inference_(X):
-        var_plus_eps = ttm.tensor.bcast(running_var, epsilon, BCADD, BCHW)
-        sqrt_var = ttm.tensor.sqrt(var_plus_eps)
-        sqrt_inv = ttm.tensor.recip(sqrt_var)
-        x_minus_mean = ttm.tensor.sub(X, running_mean)
-        x_div_sqrt = ttm.tensor.mul(x_minus_mean, sqrt_inv)
-        x_gamma = ttm.tensor.mul(x_div_sqrt, gamma)
-        Y = ttm.tensor.add(x_gamma, beta)
+        var_plus_eps = ttl.tensor.bcast(running_var, epsilon, BCADD, BCHW)
+        sqrt_var = ttl.tensor.sqrt(var_plus_eps)
+        sqrt_inv = ttl.tensor.recip(sqrt_var)
+        x_minus_mean = ttl.tensor.sub(X, running_mean)
+        x_div_sqrt = ttl.tensor.mul(x_minus_mean, sqrt_inv)
+        x_gamma = ttl.tensor.mul(x_div_sqrt, gamma)
+        Y = ttl.tensor.add(x_gamma, beta)
         return Y
 
     return batchnorm1d_inference_
@@ -80,38 +73,38 @@ def run_btchnorm_inference(bn_size):
     weight_bn_tt = torch.zeros(1, 1, 32, bn_size)
     weight_bn_tt[:, :, :1, :] = weight_bn_src
     tilized_weight_bn_tt= tilize_to_list(weight_bn_tt)
-    gamma = ttm.tensor.Tensor(tilized_weight_bn_tt, [1, 1, 32, bn_size], ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
+    gamma = ttl.tensor.Tensor(tilized_weight_bn_tt, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
     bias_bn_src = bias_bn.view(1, 1, 1, bn_size)
     bias_bn_tt = torch.zeros(1, 1, 32, bn_size)
     bias_bn_tt[:, :, :1, :] = bias_bn_src
     tilized_bias_bn_tt= tilize_to_list(bias_bn_tt)
-    beta = ttm.tensor.Tensor(tilized_bias_bn_tt, [1, 1, 32, bn_size], ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
+    beta = ttl.tensor.Tensor(tilized_bias_bn_tt, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
     running_mean_bn_src = running_mean.view(1, 1, 1, bn_size)
     running_mean_bn_tt = torch.zeros(1, 1, 32, bn_size)
     running_mean_bn_tt[:, :, :1, :] = running_mean_bn_src
     tilized_running_mean_tt= tilize_to_list(running_mean_bn_tt)
-    running_mean_tt = ttm.tensor.Tensor(tilized_running_mean_tt, [1, 1, 32, bn_size], ttm.tensor.DataType.BFLOAT16,ttm.tensor.Layout.TILE, device)
+    running_mean_tt = ttl.tensor.Tensor(tilized_running_mean_tt, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
     running_var_bn_src = running_var.view(1, 1, 1, bn_size)
     running_var_bn_tt = torch.zeros(1, 1, 32, bn_size)
     running_var_bn_tt[:, :, :1, :] = running_var_bn_src
     tilized_running_var_tt= tilize_to_list(running_var_bn_tt)
-    running_var_tt = ttm.tensor.Tensor(tilized_running_var_tt, [1, 1, 32, bn_size], ttm.tensor.DataType.BFLOAT16,ttm.tensor.Layout.TILE, device)
+    running_var_tt = ttl.tensor.Tensor(tilized_running_var_tt, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
-    epsilon_tt = ttm.tensor.Tensor([epsilon] + [0 for _ in range(32 * 32 - 1)], [1, 1, 32, 32], ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
+    epsilon_tt = ttl.tensor.Tensor([epsilon] + [0 for _ in range(32 * 32 - 1)], [1, 1, 32, 32], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
     inputs_bn_src = inputs.view(1, 1, 1, bn_size)
     inputs_bn_tt = torch.zeros(1, 1, 32, bn_size)
     inputs_bn_tt[:, :, :1, :] = inputs_bn_src
     tilized_inputs_tt = tilize_to_list(inputs_bn_tt)
-    X_tt = ttm.tensor.Tensor(tilized_inputs_tt, [1, 1,  32, bn_size], ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
+    X_tt = ttl.tensor.Tensor(tilized_inputs_tt, [1, 1,  32, bn_size], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
 
     # run through models
     output_bn_torch = bn_torch(inputs)
-    bn_tt =  batchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, epsilon_tt, bn_size , device)
+    bn_tt =  batchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, epsilon_tt)
     output_bn_tt = bn_tt(X_tt)
 
     output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.to(host).data()).reshape(output_bn_tt.shape()))
@@ -126,8 +119,8 @@ def run_btchnorm_inference(bn_size):
 
 if __name__ == "__main__":
     # Initialize the device
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
-    host = ttm.device.GetHost()
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+    host = ttl.device.GetHost()
     run_btchnorm_inference(1024)
-    ttm.device.CloseDevice(device)
+    ttl.device.CloseDevice(device)
