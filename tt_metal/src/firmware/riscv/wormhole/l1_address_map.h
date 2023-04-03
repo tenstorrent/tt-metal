@@ -47,6 +47,7 @@ struct address_map {
   static constexpr std::int32_t OVERLAY_BLOB_BASE = TRISC2_BASE + TRISC2_SIZE;
   static constexpr std::int32_t EPOCH_RUNTIME_CONFIG_BASE = OVERLAY_BLOB_BASE + OVERLAY_BLOB_SIZE;
   static constexpr std::int32_t DATA_BUFFER_SPACE_BASE = OVERLAY_BLOB_BASE + OVERLAY_BLOB_SIZE + EPOCH_RUNTIME_CONFIG_SIZE + TILE_HEADER_BUF_SIZE;
+  static constexpr std::int32_t BRISC_LOCAL_MEM_BASE = DATA_BUFFER_SPACE_BASE; // Only used during init.
 
   // Trisc Mailboxes
   static constexpr std::int32_t TRISC_L1_MAILBOX_OFFSET = 4;

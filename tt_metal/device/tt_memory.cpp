@@ -97,6 +97,7 @@ memory memory::from_discontiguous_risc_hex(std::istream& in, memory::risc_type_t
            risc_l1_local_memory_base_addr = l1_mem::address_map::NCRISC_LOCAL_MEM_BASE >> 2;
            break;
      case BRISC: is_brisc=true;
+           risc_l1_local_memory_base_addr = l1_mem::address_map::BRISC_LOCAL_MEM_BASE >> 2;
            break;
      default:
            throw runtime_error("Invalid risc core type.");
@@ -121,9 +122,9 @@ memory memory::from_discontiguous_risc_hex(std::istream& in, memory::risc_type_t
       }
     }
     // Remap local memory address from hex into location in l1 where copy of the local  memory content resides.
-    // During trisc|ncrisc init firmware will copy data from l1 into local memory
+    // During *risc init firmware will copy data from l1 into local memory
     // During brisc init firmware will use DMA to copy ncrisc firmware to l1 to iram
-    if ((is_trisc || is_ncrisc) && (((word_addr << 2) & 0xfff00000) == l1_mem::address_map::RISC_LOCAL_MEM_BASE)) {
+    if (((word_addr << 2) & 0xfff00000) == l1_mem::address_map::RISC_LOCAL_MEM_BASE) {
        word_addr = (word_addr & ((l1_mem::address_map::MAX_L1_LOADING_SIZE >> 2) - 1)) + risc_l1_local_memory_base_addr;
     } else if ((is_ncrisc) && (((word_addr << 2) & 0xfff00000) == l1_mem::address_map::NCRISC_IRAM_MEM_BASE)) {
        word_addr = (word_addr & ((l1_mem::address_map::MAX_L1_LOADING_SIZE >> 2) - 1)) + (l1_mem::address_map::NCRISC_FIRMWARE_BASE >> 2);

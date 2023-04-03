@@ -273,7 +273,7 @@ void local_mem_copy() {
    // Removed gating conditional here since getting maybe-unitialized error under
    // 'DEBUG_MODE=1' compilation. It should have been an assert anyway.
    // TODO(agrebenisan and/or apokrovsky): Can we use print server for assertions?
-   l1_local_mem_start_addr = (volatile uint*)l1_mem::address_map::RISC_LOCAL_MEM_BASE; // TODO(AP) - is this correct?
+   l1_local_mem_start_addr = (volatile uint*)l1_mem::address_map::BRISC_LOCAL_MEM_BASE;
 
    uint word_num = ((uint)__local_mem_rodata_end_addr - (uint)__local_mem_rodata_start_addr)>>2;
 
