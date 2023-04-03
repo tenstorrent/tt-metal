@@ -11,7 +11,7 @@ ssh-keygen
 
 3. Clone the repo.
 ```
-git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules
+git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules
 cd tt-metal
 ```
 
