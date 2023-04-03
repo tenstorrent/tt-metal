@@ -325,7 +325,12 @@ Tensor conv_as_large_bmm_single_core_single_block_(const Tensor& a, const Tensor
 
     uint32_t total_bytes = num_rows * num_cols * 2; // 2 for bfloat16
     assert(total_bytes == t_bytes);
-
+    if (use_single_bank_reader) {
+        assert(address_map.size() == num_rows * 3);
+    }
+    else {
+        assert(address_map.size() == num_rows * 4);
+    }
     uint32_t Ba = 1;
     uint32_t Ca = 1;
     auto Ha = num_rows;
@@ -452,7 +457,7 @@ Tensor conv_as_large_bmm_single_core_single_block_(const Tensor& a, const Tensor
         // in1 block info
         uint32_t in1_num_subblocks = (Wbt / out_subblock_w);
         uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w*in1_num_subblocks;
-        uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
+        uint32_t in1_block_w = out_subblock_w * in1_num_subblocks;
 
         // NOC coordinates for single bank reader
         auto in0_dram_noc_xy = src0_dram_buffer->noc_coordinates();
@@ -558,25 +563,25 @@ std::cout << "Num transfers of zeroes " << num_transfers_of_zeroes << std::endl;
                 core, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
             vector<uint32_t> compute_kernel_args = {
-            uint(in0_block_w),
-            uint(in0_num_subblocks),
-            uint(in0_block_num_tiles),
-            uint(in0_subblock_num_tiles),
-            uint(in0_subblock_h),
+                in0_block_w,
+                in0_num_subblocks,
+                in0_block_num_tiles,
+                in0_subblock_num_tiles,
+                in0_subblock_h,
 
-            uint(in1_num_subblocks),
-            uint(in1_block_num_tiles),
-            uint(in1_per_core_w),
+                in1_num_subblocks,
+                in1_block_num_tiles,
+                in1_block_w,
 
-            uint(num_blocks),
+                num_blocks,
 
-            uint(out_subblock_h),
-            uint(out_subblock_w),
-            uint(out_subblock_num_tiles),
+                out_subblock_h,
+                out_subblock_w,
+                out_subblock_num_tiles,
 
-            uint(tilize_a),
-            uint(untilize_out)
-        };
+                tilize_a,
+                untilize_out
+            };
 
         tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
 

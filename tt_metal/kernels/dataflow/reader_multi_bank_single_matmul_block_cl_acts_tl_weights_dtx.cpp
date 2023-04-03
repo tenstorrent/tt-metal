@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug_print.h"
 void kernel_main() {
     // Arguments for in1
     uint32_t src1_addr  = get_arg_val<uint32_t>(0);
@@ -48,9 +47,7 @@ void kernel_main() {
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
     cb_reserve_back(cb_id_in0, in0_tiles);
-    DPRINT << "Reserved in0 tiles" << ENDL();
     cb_reserve_back(cb_id_in1, in1_tiles);
-    DPRINT << "Reserved in1 tiles" << ENDL();
     l1_write_addr_in1 = get_write_ptr(cb_id_in1);
     // Read weights
     for(uint32_t in1_tile = 0; in1_tile < in1_tiles; in1_tile+=1) {
@@ -78,7 +75,6 @@ void kernel_main() {
     }
 
     noc_async_read_barrier();
-    DPRINT << "NOC Async read barrier returned" << ENDL();
     cb_push_back(cb_id_in0, in0_tiles);
     cb_push_back(cb_id_in1, in1_tiles);
 }

@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug_print.h"
 void kernel_main() {
     // Arguments for in1
     uint32_t src1_addr  = get_arg_val<uint32_t>(0);
@@ -32,16 +31,13 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
     uint64_t src1_noc_addr = get_noc_addr(src1_noc_x, src1_noc_y, src1_addr);
     cb_reserve_back(cb_id_in0, in0_tiles);
-    DPRINT << "Reserved in0 tiles" << ENDL();
     cb_reserve_back(cb_id_in1, in1_tiles);
-    DPRINT << "Reserved in1 tiles" << ENDL();
     l1_write_addr_in1 = get_write_ptr(cb_id_in1);
     // Read all weights with one call
     noc_async_read(src1_noc_addr, l1_write_addr_in1, in1_block_size_bytes);
 
     // Read activations using address map
     l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-    uint32_t index = 0;
     for (uint32_t index = 0; index < address_map_size; index+=3) {
         uint32_t src_addr = src0_addr + address_map[index];
         // Destination address at address_map[index+1] unused. Contiguous writes to L1.
@@ -57,7 +53,6 @@ void kernel_main() {
     }
 
     noc_async_read_barrier();
-    DPRINT << "NOC Async read barrier returned" << ENDL();
     cb_push_back(cb_id_in0, in0_tiles);
     cb_push_back(cb_id_in1, in1_tiles);
 }

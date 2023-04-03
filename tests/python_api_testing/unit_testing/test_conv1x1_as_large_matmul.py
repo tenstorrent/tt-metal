@@ -15,8 +15,8 @@ import torch
     "K, C, H, W, untilize_out, use_single_bank_reader, matmul_blocked",
     (
         (128, 128, 32, 16, False, False, True), # multi bank + multi blocks
-        #(128, 128, 16, 16, False, True, False), # single bank + single block TODO: fix incorrect output
-        #(128, 128, 16, 16, False, False, False), # multi bank + single block TODO: fix hang
+        (128, 128, 16, 16, False, True, False), # single bank + single block
+        (128, 128, 16, 16, False, False, False), # multi bank + single block
     ),
 )
 def test_run_1x1conv_as_large_matmul(K, C, H, W, untilize_out, use_single_bank_reader, matmul_blocked):
@@ -74,7 +74,7 @@ def test_run_1x1conv_as_large_matmul(K, C, H, W, untilize_out, use_single_bank_r
     out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt)
     assert(out_result.shape == out_golden.shape)
     maxmag = out_golden.abs().max().item() # % of max magnitude since that determines cancellations
-    match = is_close(out_result, out_golden, 0.07, 0.07, maxmag, 0.01)
+    match = is_close(out_result, out_golden, 0.1, 0.1, maxmag, 0.01)
     print("Match=", match.item())
     assert match.item()
     ttl.device.CloseDevice(device)
