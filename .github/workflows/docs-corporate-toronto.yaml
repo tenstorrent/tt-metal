@@ -8,10 +8,6 @@ concurrency:
   group: '${{ github.workflow }}'
   cancel-in-progress: true
 
-concurrency:
-  group: '${{ github.workflow }}'
-  cancel-in-progress: true
-
 jobs:
   build-and-deploy-docs-toronto:
     uses: ./.github/workflows/docs-build-deploy.yaml
