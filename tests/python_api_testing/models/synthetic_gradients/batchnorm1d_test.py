@@ -2,17 +2,24 @@ import math
 from pathlib import Path
 import sys
 f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
+# sys.path.append(f"{f}/..")
+# sys.path.append(f"{f}/../..")
+# sys.path.append(f"{f}/")
+# sys.path.append("/home/farbabi/git/tt-metal")
 sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/")
-sys.path.append("/home/farbabi/git/tt-metal")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+sys.path.append(f"{f}/../../../../libs")
+
 print(f, sys.path)
 import torch
 from torch import nn
 from torchvision import transforms, datasets
 
 import pymetal
-from pymetal import ttmetal as ttm
+# from pymetal import ttlib as ttl
+
+from pymetal import ttmetal as ttm, ttlib as ttl
 from utility_functions import tilize_to_list, untilize
 from batch_norm import batchnorm1d_inference
 from sweep_tests.comparison_funcs import comp_pcc
