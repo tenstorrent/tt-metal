@@ -237,7 +237,7 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
         }
         else if (core_range.y > 0)
             return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING;
-        return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING;
+        return BmmOpParallelizationStrategy::MULTI_CORE;
     }
     else if (num_output_tiles > 1) {
         return BmmOpParallelizationStrategy::MULTI_CORE;
