@@ -188,7 +188,7 @@ int main(int argc, char** argv)
         tt::llrt::utils::log_current_ai_clk(cluster);
         if (pass) {
             uint32_t num_tiles = 1;
-            const char* expected1 = "   2\nTestConstCharStrNC{1,1}\n0.1235\n0.1200\n0.1226\n____\nBR{1,1}\n++++\n";
+            const char* expected1 = "   2\nTestConstCharStrNC{1,1}\n0.1235\n0.1200\n0.1226\n____\nTestStrBR{1,1}\n++++\n";
             pass &= run_test_debug_print(cluster, 0, xy_start, xy_end1x1, num_tiles, 4, expected1);
             // run_test will wait for a flush of buffer, so we don't need to check for a race condition for the next run_test
 
@@ -196,13 +196,13 @@ int main(int argc, char** argv)
             // in this second test we test for cumulative string in the output to avoid recreating the server
             int max_payload_size = sizeof(DebugPrintMemLayout::data);
             std::string n_underscores(max_payload_size*2, '_');
-            std::string expected2 = "   2\nTestConstCharStrNC{1,1}\n0.1235\n0.1200\n0.1226\n" + n_underscores + "\nBR{1,1}\n++++\n";
+            std::string expected2 = "   2\nTestConstCharStrNC{1,1}\n0.1235\n0.1200\n0.1226\n" + n_underscores + "\nTestStrBR{1,1}\n++++\n";
             pass &= run_test_debug_print(cluster, 0, xy_start, xy_end1x1, num_tiles, max_payload_size*2, expected2.c_str());
 
 
             // Run a test on 5x5 tiles, expect ordered output due to RAISE/WAIT signals in debug prints
             string expected3_1 = "   2\nTestConstCharStrNC{";
-            string expected3_2 = "}\n0.1235\n0.1200\n0.1226\n_____\nBR{";
+            string expected3_2 = "}\n0.1235\n0.1200\n0.1226\n_____\nTestStrBR{";
             string expected3_3 = "}\n++++\n";
             string expected3 = "";
             for (int y = xy_start.y; y < xy_end5x5.y; y++)
@@ -216,7 +216,7 @@ int main(int argc, char** argv)
             // the debug diagnostic message gets printed.
             // We should fail starting at max_payload_size-2 string length, due to 2 other bytes used for size and code
             // 0xFFFF is a value for ARG3 that the code in test_debug_print_nc.cpp expects to see to trigger this failure case.
-            std::string expected4 = string(debug_print_overflow_error_message) + "BR{1,1}\n++++\n";
+            std::string expected4 = string(debug_print_overflow_error_message) + "TestStrBR{1,1}\n++++\n";
             pass &= run_test_debug_print(cluster, 0, xy_start, xy_end1x1, num_tiles, 0xFFFF, expected4.c_str());
         }
     } catch (const std::exception& e) {

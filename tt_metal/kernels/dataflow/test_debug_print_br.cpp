@@ -19,7 +19,7 @@ void kernel_main() {
 
     // TODO(AP): enabling this string DPRINT currently causes a 4GB vector to be returned from
     // std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id);
-    //DPRINT << "TestConstCharStr"; TODO(AP): needs fixing
+    DPRINT << "TestStr";
     DPRINT << 'B' << 'R' << '{' << x << ',' << y << '}' << ENDL();
     for (u32 a = 0; a < ARG0; a++)
         DPRINT << '+';
