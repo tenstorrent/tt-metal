@@ -30,7 +30,7 @@ env python tests/scripts/run_tt_metal.py
 env pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -s
 env python tests/python_api_testing/models/bert/bert.py
 
-env pytest tests/python_api_testing/models/t5/t5_dense_act_dense.py
+env pytest tests/python_api_testing/models/t5 -k t5_dense_act_dense
 env python tests/python_api_testing/models/t5/t5_layer_norm.py
 env python tests/python_api_testing/models/t5/t5_layer_ff.py
 env python tests/python_api_testing/models/t5/t5_layer_self_attention.py
