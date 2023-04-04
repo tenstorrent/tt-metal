@@ -32,7 +32,7 @@ env python tests/python_api_testing/models/bert/bert.py
 
 env pytest tests/python_api_testing/models/t5 -k t5_dense_act_dense
 env pytest tests/python_api_testing/models/t5 -k t5_layer_norm
-env python tests/python_api_testing/models/t5/t5_layer_ff.py
+env pytest tests/python_api_testing/models/t5 -k t5_layer_ff
 env python tests/python_api_testing/models/t5/t5_layer_self_attention.py
 env python tests/python_api_testing/models/t5/t5_layer_cross_attention.py
 

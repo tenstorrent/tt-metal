@@ -16,9 +16,9 @@ from transformers import T5Model
 from utility_functions import print_diff_argmax
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor, read_model_config, print_corr_coef
-from python_api_testing.models.t5.t5_dense_act_dense import TtT5DenseActDense
+from python_api_testing.models.t5.test_t5_layer_norm import TtT5LayerNorm
+from python_api_testing.models.t5.test_t5_dense_act_dense import TtT5DenseActDense
 from python_api_testing.models.t5.t5_dense_gated_act_dense import TtT5DenseGatedActDense
-from python_api_testing.models.t5.t5_layer_norm import TtT5LayerNorm
 
 
 # class T5LayerFF(nn.Module):
@@ -59,7 +59,7 @@ class TtT5LayerFF(nn.Module):
         return hidden_states
 
 
-def test_T5LayerFF_inference(device):
+def run_test_T5LayerFF_inference(device):
     hf_reference_model = T5Model.from_pretrained("t5-small")
     hf_reference_model.eval()
 
@@ -102,8 +102,8 @@ def test_T5LayerFF_inference(device):
         logger.warning("test_T5LayerFF_inference Failed!")
 
 
-if __name__ == "__main__":
+def test_T5LayerFF_inference():
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
-    test_T5LayerFF_inference(device)
+    run_test_T5LayerFF_inference(device)
     ttm.device.CloseDevice(device)
