@@ -199,6 +199,18 @@ void Tensor::print(Layout print_layout, bool pretty_print) const {
     tensor_impl::print_wrapper(*this, print_layout, pretty_print);
 }
 
+Tensor Tensor::pad(const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, uint32_t pad_value) const {
+    TT_ASSERT(on_host() && "Tensor must be on host for padding");
+    TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
+    return tensor_impl::pad_wrapper(*this, output_tensor_shape, input_tensor_start, pad_value);
+}
+
+Tensor Tensor::unpad(const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) const {
+    TT_ASSERT(on_host() && "Tensor must be on host for unpadding");
+    TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
+    return tensor_impl::unpad_wrapper(*this, output_tensor_start, output_tensor_end);
+}
+
 // Prints like numpy print function to make it more readable. Only supports row major layout.
 void Tensor::pretty_print() const {
     print(Layout::ROW_MAJOR, /*pretty_print=*/true);

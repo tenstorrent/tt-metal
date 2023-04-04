@@ -240,6 +240,24 @@ void TensorModule(py::module &m_tensor) {
 
                 tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE)
         )doc")
+        .def("pad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, uint32_t pad_value) {
+            return self.pad(output_tensor_shape, input_tensor_start, pad_value);
+        }, R"doc(
+            Pads TT Tensor.
+
+            .. code-block:: python
+
+                tt_tensor = tt_tensor.pad(output_tensor_shape, input_tensor_start, pad_value)
+        )doc")
+        .def("unpad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+            return self.unpad(output_tensor_start, output_tensor_end);
+        }, R"doc(
+            Unpads TT Tensor.
+
+            .. code-block:: python
+
+                tt_tensor = tt_tensor.unpad(output_tensor_start, output_tensor_end)
+        )doc")
         .def("print", [](const Tensor &self, Layout print_layout) {
             return self.print(print_layout);
         }, py::arg("print_layout") = Layout::ROW_MAJOR, R"doc(

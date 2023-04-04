@@ -99,6 +99,10 @@ class Tensor {
 
         Tensor to(Layout target_layout) const;
 
+        Tensor pad(const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, uint32_t pad_value) const;
+
+        Tensor unpad(const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) const;
+
         void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
 
         // Prints like numpy print function to make it more readable. Only supports row major layout.

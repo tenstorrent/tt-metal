@@ -31,6 +31,10 @@ Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const Memo
 
 Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout);
 
+Tensor pad_wrapper(const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, uint32_t pad_value);
+
+Tensor unpad_wrapper(const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end);
+
 void print_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print);
 
 void deepcopy_host_data_wrapper(const Tensor &src, Tensor &dst);
