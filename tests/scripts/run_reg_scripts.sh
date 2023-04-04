@@ -27,7 +27,7 @@ env python tests/scripts/run_llrt.py --skip-driver-tests
 env ./build/test/llrt/test_silicon_driver
 env python tests/scripts/run_tt_metal.py
 
-env pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -s
+./tests/scripts/run_python_api_unit_tests.sh
 env python tests/python_api_testing/models/bert/bert.py
 
 env pytest tests/python_api_testing/models/t5 -k t5_dense_act_dense
