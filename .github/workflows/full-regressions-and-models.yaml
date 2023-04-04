@@ -1,0 +1,24 @@
+name: Scheduled build and run all regressions and models
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */4 * * *"
+
+jobs:
+  build-and-deploy-docs:
+    runs-on:
+      group: gs-pool
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+      - name: Export and echo TT_METAL_HOME
+        run: |
+          export TT_METAL_HOME=$(pwd)
+          echo $TT_METAL_HOME
+      - name: Build tt-metal
+        run: make build
+      - name: Build tt-metal tests
+        run: make tests
