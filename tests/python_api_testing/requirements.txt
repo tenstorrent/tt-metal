@@ -5,3 +5,4 @@ transformers==4.20.1
 xlsxwriter==3.0.8
 tiktoken
 tqdm
+sentencepiece
