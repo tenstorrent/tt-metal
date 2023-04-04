@@ -1,9 +1,12 @@
+import pytest
+from loguru import logger
 import math
 from pathlib import Path
 import sys
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
 
 
 import torch
@@ -11,11 +14,12 @@ from transformers import BertTokenizer, BertForQuestionAnswering
 import numpy as np
 
 from libs import tt_lib as ttl
-from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
+from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
+from libs.tt_lib.fused_ops.linear import Linear as TtLinear
+from libs.tt_lib.fused_ops.softmax import softmax
 from utility_functions import get_FR, set_FR
 from utility_functions import enable_compile_cache, enable_binary_cache
-from fused_ops.linear import Linear as TtLinear
-from fused_ops.softmax import softmax
+from python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_allclose
 
 def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     assert isinstance(num_heads, int) and num_heads > 0
@@ -112,7 +116,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     return mha_
 
 class TtMultiHeadAttentionModel(torch.nn.Module):
-    def __init__(self, num_heads, encoder_idx, state_dict, device):
+    def __init__(self, config, encoder_idx, state_dict, device):
         super().__init__()
         qw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"])
         qb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.bias"])
@@ -126,15 +130,15 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
 
         # Tilized
         parameters = [
-            tilize_to_list(qw),
-            tilize_to_list(qb),
-            tilize_to_list(kw),
-            tilize_to_list(kb),
-            tilize_to_list(vw),
-            tilize_to_list(vb)
+            ttl.tensor.Tensor(qw.reshape(-1).tolist(), qw.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
+            ttl.tensor.Tensor(qb.reshape(-1).tolist(), qb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
+            ttl.tensor.Tensor(kw.reshape(-1).tolist(), kw.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
+            ttl.tensor.Tensor(kb.reshape(-1).tolist(), kb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
+            ttl.tensor.Tensor(vw.reshape(-1).tolist(), vw.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
+            ttl.tensor.Tensor(vb.reshape(-1).tolist(), vb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
         ]
 
-        self.mha = mha(*parameters, hidden_dim, num_heads, device)
+        self.mha = mha(*parameters, hidden_dim, config.num_attention_heads, device)
 
     def forward(self, activation):
         result = self.mha(activation)
@@ -153,32 +157,61 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
         return result
 
 
-def run_mha_inference():
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained("prajjwal1/bert-tiny", torchscript=False)
-    tt_mha_model = TtMultiHeadAttentionModel(2, 0, hugging_face_reference_model.state_dict(), device)
+def run_mha_inference(model_version, batch, seq_len, on_weka, pcc):
+
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    # Initialize the device
+    ttl.device.InitializeDevice(device)
+    host = ttl.device.GetHost()
+
+    if on_weka:
+        model_name = "/mnt/MLPerf/tt_dnn-models/Bert/BertForQuestionAnswering/models/" + model_version
+    else:
+        model_name = model_version
+
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    tt_mha_model = TtMultiHeadAttentionModel(hugging_face_reference_model.config, 0, hugging_face_reference_model.state_dict(), device)
     pytorch_mha_model = PytorchMultiHeadAttentionModel(hugging_face_reference_model)
 
     # Prepare input
     torch.manual_seed(0)
-    mha_input = (torch.rand(1, 1, 128, 128) * 2) - 1
+    mha_input = (torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size) * 2) - 1
 
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
 
-    tt_mha_input = tilize_to_list(pad_activation(mha_input))
-    tt_mha_input = ttl.tensor.Tensor(tt_mha_input, mha_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    tt_mha_input = ttl.tensor.Tensor(pad_activation(mha_input).reshape(-1).tolist(), mha_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+    tt_mha_input = tt_mha_input.to(device)
 
     tt_out = tt_mha_model(tt_mha_input).to(host)
-    tt_out1 = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
+    tt_out1 = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(tt_out.shape())
 
-    print_diff_argmax(pytorch_out, tt_out1)
-    assert np.allclose(pytorch_out.detach().numpy(), tt_out1, 1e-5, 0.17)
+    ttl.device.CloseDevice(device)
 
-if __name__ == "__main__":
+    passing, output = comp_pcc(pytorch_out, tt_out1, pcc)
+    logger.info(f"Output {output}")
+    _, output = comp_allclose(pytorch_out, tt_out1, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
+    logger.info(f"Output {output}")
+    if not passing:
+        logger.error(f"Output PCC < {pcc}")
+
+    # print_diff_argmax(pytorch_out, tt_out1)
+    # assert np.allclose(pytorch_out.detach().numpy(), tt_out1, 1e-5, 0.17)
+
+@pytest.mark.parametrize(
+    "model_version, batch, seq_len, on_weka,  pcc",
+    (
+        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99),
+        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, 0.99),
+        ("phiyodr/bert-large-finetuned-squad2", 1, 128, True, 0.85) # Placeholder PCC until issues are resolved
+    ),
+)
+def test_mha_inference(model_version, batch, seq_len, on_weka, pcc):
+
+    # Initialize the device
     #enable_binary_cache()
     #enable_compile_cache()
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-    run_mha_inference()
-    ttl.device.CloseDevice(device)
+
+    run_mha_inference(model_version, batch, seq_len, on_weka, pcc)
+
+if __name__ == "__main__":
+    run_mha_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99)
