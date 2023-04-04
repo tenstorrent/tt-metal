@@ -18,7 +18,9 @@ class CircularBuffer {
         uint32_t size_in_bytes,
         uint32_t address,
         DataFormat data_format) :
-        logical_core_(logical_core), buffer_index_(buffer_index), num_tiles_(num_tiles), size_in_bytes_(size_in_bytes), address_(address), data_format_(data_format) {}
+        logical_core_(logical_core), buffer_index_(buffer_index), num_tiles_(num_tiles), size_in_bytes_(size_in_bytes), address_(address), data_format_(data_format) {
+            TT_ASSERT(address_ >= UNRESERVED_BASE, "First " + std::to_string(UNRESERVED_BASE) + " bytes in L1 are reserved");
+        }
 
     tt_xy_pair logical_core() const { return logical_core_; }
 

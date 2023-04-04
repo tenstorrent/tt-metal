@@ -106,7 +106,7 @@ void create_CBs_for_fused_matmul(tt_metal::Program* program, tt_metal::Device* d
     uint32_t num_output_tiles = M * N;
 
     // Invariants
-    uint32_t src0_cb_addr = 100 * 1024;
+    uint32_t src0_cb_addr = 120 * 1024;
     uint32_t cb0_tiles = M * in0_block_w * 2;
     auto cb_in0 = tt_metal::CreateCircularBuffer(
         program,
