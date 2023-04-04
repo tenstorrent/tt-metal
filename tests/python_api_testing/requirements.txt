@@ -1,8 +1,8 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 datasets==2.9.0
 torchvision==0.14.1+cpu
-transformers==4.20.1
+git+https://github.com/huggingface/transformers
 xlsxwriter==3.0.8
-tiktoken
-tqdm
-sentencepiece
+tiktoken==0.3.3
+tqdm==4.65.0
+sentencepiece==0.1.97
