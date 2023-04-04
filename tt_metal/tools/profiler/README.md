@@ -85,7 +85,6 @@ Sample generated csv for a run on core 0,0:
 
 ### Post-processing device profiler
 
-
 1. Set up the environment for running the plotter:
 
 ```
@@ -95,17 +94,23 @@ source env/bin/activate
 pip install -r requirements.txt
 ```
 
-2. Run plotter webapp:
+2. Run plotter webapp with:
 ```
 cd tt_metal/tools/profiler/
 ./process_device_log.py
 ```
 
-3. Navigate to `<machine IP>:8050` to view output chart.
+3. Navigate to `<machine IP>:8050` to the Device Profiler Dashboard to view stats and timeline plots.
 
-4. The following artifact will also be generated under the `tt_metal/tools/profiler/` folder:
+4. The following artifact will also be generated under the `tt_metal/tools/profiler/output` folder:
     - `device_perf.html` contains the interactive time series plot
     - `device_stats.txt` contains the extended stats for the run
-    - `device_arranged_timestamps.csv` contains all timestamps arranged by each row dedicated to cores
+    - `device_rearranged_timestamps.csv` contains all timestamps arranged by each row dedicated to cores
 
-5. For convenience all of these files are tarball into `device_perf_results.tar`
+5. For convenience all of these artifacts are tarballed into `device_perf_results.tar`. The file is Under the same output folder as the artifacts and can be downloaded by clicking the `DOWNLOAD ARTIFACTS` button on the webapp.
+
+6. Use  `./process_device_log.py --help` to get a list of available cli options to run the post processes differently. Some of the available options are:
+    - Path to device side profiler log csv
+    - Path to artifacts output folder
+    - Custom webapp port
+    - Disabling printing stats, running webapp, generating plots and other portions of the default post-process flow

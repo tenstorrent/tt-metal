@@ -1,5 +1,7 @@
-class test_base:
-    timerAnalysisBase = {
+from merge_meta_class import MergeMetaclass
+
+class default_setup(metaclass=MergeMetaclass):
+    timerAnalysis = {
         "FW start": {
             "across": "risc",
             "type": "adjacent",
@@ -67,11 +69,24 @@ class test_base:
         (4, "Firmware End"),
     ]
 
+    coreFreq = 1.2 #GHz
+
     displayStats = ["Count","Average","Max","Median","Min"]
 
-    outputFolder = "output"
+    plotBaseHeight = 200
+    plotPerCoreHeight = 90
 
-class test_matmul_multi_core_multi_dram(test_base):
+    webappPort = 8050
+
+    outputFolder = "output"
+    deviceInputLog = "logs/profile_log_device.csv"
+    deviceRearranged = "device_rearranged_timestamps.csv"
+    devicePerfHTML = "timeline.html"
+    deviceStatsTXT = "device_stats.txt"
+    deviceTarball = "device_perf_results.tgz"
+
+
+class test_matmul_multi_core_multi_dram(default_setup):
     timerAnalysis = {
         "Compute~": {
             "across": "core",
@@ -82,7 +97,7 @@ class test_matmul_multi_core_multi_dram(test_base):
     }
 
 
-class test_matmul_multi_core_multi_dram_in0_mcast(test_base):
+class test_matmul_multi_core_multi_dram_in0_mcast(default_setup):
     timerAnalysis = {
         "NCRISC start sender -> BRISC kernel end": {
             "across": "core",
@@ -99,7 +114,7 @@ class test_matmul_multi_core_multi_dram_in0_mcast(test_base):
     }
 
 
-class test_matmul_multi_core_multi_dram_in1_mcast(test_base):
+class test_matmul_multi_core_multi_dram_in1_mcast(default_setup):
     timerAnalysis = {
         "NCRISC start sender -> BRISC kernel end": {
             "across": "core",
@@ -115,7 +130,7 @@ class test_matmul_multi_core_multi_dram_in1_mcast(test_base):
         }
     }
 
-class test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast(test_base):
+class test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast(default_setup):
     timerAnalysis = {
         "NC_in0_s_in1_r -> B_end": {
             "across": "core",
