@@ -8,26 +8,28 @@ sys.path.append(f"{f}/../..")
 import numpy as np
 
 from libs import tt_lib as ttl
-from python_api_testing.models.utility_functions import untilize, tilize_to_list, channels_last, convert_weights_2d_matrix, print_diff_argmax, pad_weight, is_close
+from libs.tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, convert_weights_2d_matrix
+from python_api_testing.models.utility_functions import print_diff_argmax, is_close
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 import torch
 
 @pytest.mark.parametrize(
-    "K, C, H, W, untilize_out, use_single_bank_reader, matmul_blocked",
+    "K, C, H, W",
     (
-        (128, 128, 32, 16, False, False, True), # multi bank + multi blocks
-        (128, 128, 16, 16, False, True, False), # single bank + single block
-        (128, 128, 16, 16, False, False, False), # multi bank + single block
+        (128, 128, 32, 16),
+        (128, 128, 10, 10),
     ),
 )
-def test_run_1x1conv_as_large_matmul(K, C, H, W, untilize_out, use_single_bank_reader, matmul_blocked):
+def test_run_1x1conv_as_large_matmul(K, C, H, W):
     #torch.manual_seed(0)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
     a_activation_shape = [1,C,H,W]
     b_weights_shape = [K,C,1,1]
-    mm_output_shape = [1,1,H*W,K]
+    OH = H
+    OW = W
+    mm_output_shape = [1,1,_nearest_32(OH*OW),K]
 
     A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
     A_cl = channels_last(A_pyt)
@@ -36,9 +38,7 @@ def test_run_1x1conv_as_large_matmul(K, C, H, W, untilize_out, use_single_bank_r
         a_activation_shape,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.CHANNELS_LAST,
-        device,
-        ttl.tensor.MemoryConfig(False, 0) if use_single_bank_reader else ttl.tensor.MemoryConfig(True, -1)
-        )
+        device)
 
     # Prepare weights
     B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
@@ -50,22 +50,16 @@ def test_run_1x1conv_as_large_matmul(K, C, H, W, untilize_out, use_single_bank_r
         B_matrix.shape,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,
-        device,
-        ttl.tensor.MemoryConfig(False, 0) if use_single_bank_reader else ttl.tensor.MemoryConfig(True, -1)
-        )
+        device)
 
     # Run TT metal OP
-    if matmul_blocked:
-        out = ttl.tensor.conv_as_large_bmm_single_core(A, B_t, untilize_out)
-    else:
-        out = ttl.tensor.conv_as_large_bmm_single_core_single_block(A, B_t, untilize_out, use_single_bank_reader)
+    out = ttl.tensor.conv_as_large_bmm_single_core(A, B_t, True)
 
     assert(out.shape() == mm_output_shape)
     out_pytorch = torch.tensor(out.to(host).data()).reshape(mm_output_shape)
-    if not untilize_out:
-        out_pytorch = untilize(out_pytorch)
-    OH = H
-    OW = W
+    # remove padding
+    out_pytorch = out_pytorch[:, :, 0 : (OH * OW), :]
+
     # Convert matmul output layout to conv output layout
     out_tr = torch.transpose(out_pytorch, 2, 3)
     assert(list(out_tr.shape) == [1,1,K,(OH*OW)])

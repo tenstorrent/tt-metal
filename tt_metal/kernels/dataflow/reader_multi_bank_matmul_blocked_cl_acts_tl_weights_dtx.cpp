@@ -17,14 +17,15 @@ void kernel_main() {
     // Arguments for in0
     uint32_t src0_addr  = get_arg_val<uint32_t>(9);
     uint32_t in0_block_num_tiles  = get_arg_val<uint32_t>(10);
-    uint32_t in0_block_h = get_arg_val<uint32_t>(11);
+    uint32_t in0_num_rows = get_arg_val<uint32_t>(11); // in0 has whole column in 1 block
     uint32_t in0_num_channel_sticks_per_row = get_arg_val<uint32_t>(12);
     uint32_t in0_channel_stick_size = get_arg_val<uint32_t>(13);
     uint32_t in0_partial_channel_stick_size = get_arg_val<uint32_t>(14);
-    uint32_t num_bytes_of_zeroes_per_transfer = get_arg_val<uint32_t>(15);
-    uint32_t num_transfers_of_zeroes = get_arg_val<uint32_t>(16);
-    uint32_t address_map_l1_addr = get_arg_val<uint32_t>(17);
-    uint32_t address_map_size = get_arg_val<uint32_t>(18);
+    uint32_t num_bytes_of_zeroes_per_read = get_arg_val<uint32_t>(15);
+    uint32_t num_reads_of_zeroes = get_arg_val<uint32_t>(16);
+    uint32_t num_bytes_of_zeroes_remainder = get_arg_val<uint32_t>(17);
+    uint32_t address_map_l1_addr = get_arg_val<uint32_t>(18);
+    uint32_t address_map_size = get_arg_val<uint32_t>(19);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -65,7 +66,7 @@ void kernel_main() {
     uint32_t channel_stick_index = 0;
     uint32_t channel_stick_offset = 0;
     uint32_t channels_address_map_size_per_row = in0_num_channel_sticks_per_row << 2; // 4 entries per channel stick in the address map
-    uint32_t in0_num_channel_sticks_per_block = in0_channel_stick_size / in0_partial_channel_stick_size;
+    uint32_t in0_num_blocks_per_channel_stick = in0_channel_stick_size / in0_partial_channel_stick_size;
     for(uint32_t b = 0; b < num_blocks; b++) {
         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
@@ -91,22 +92,29 @@ void kernel_main() {
         // Read in0 channels last... will have to read partial sticks
         // because the "block" doesn't cover the full stick
 
-        for (uint32_t h = 0; h < in0_block_h; h++) {
-            for (uint32_t i = 0; i < 32; i++) {
-                uint32_t src_addr = src0_addr + channels_address_map[channel_stick_index];
-                // Destination address at address_map[am_index+1] unused. Contiguous writes to L1.
-                // Transfer size at address_map[am_index+2] unused.
-                // Need to do partial transfer because channel stick can be divided between blocks
-                uint32_t channel_stick_bank_id = channels_address_map[channel_stick_index+3];
-                uint64_t in0_row_noc_addr = get_noc_addr(channel_stick_bank_id, s0, channel_stick_offset);
-                noc_async_read(in0_row_noc_addr, l1_write_addr_in0, in0_partial_channel_stick_size);
-                l1_write_addr_in0 += in0_partial_channel_stick_size;
-                channel_stick_index += channels_address_map_size_per_row;
-            }
+        for (uint32_t h = 0; h < in0_num_rows; h++) {
+            uint32_t src_addr = src0_addr + channels_address_map[channel_stick_index];
+            // Destination address at address_map[am_index+1] unused. Contiguous writes to L1.
+            // Transfer size at address_map[am_index+2] unused.
+            // Need to do partial transfer because channel stick can be divided between blocks
+            uint32_t channel_stick_bank_id = channels_address_map[channel_stick_index+3];
+            uint64_t in0_row_noc_addr = get_noc_addr(channel_stick_bank_id, s0, channel_stick_offset);
+            noc_async_read(in0_row_noc_addr, l1_write_addr_in0, in0_partial_channel_stick_size);
+            l1_write_addr_in0 += in0_partial_channel_stick_size;
+            channel_stick_index += channels_address_map_size_per_row;
         }
-        // mbox[0] = b;
+        // Height padding
+        for (uint32_t z = 0; z < num_reads_of_zeroes; z++) {
+            noc_async_read(zeros_base_noc_addr, l1_write_addr_in0, num_bytes_of_zeroes_per_read);
+            l1_write_addr_in0 += num_bytes_of_zeroes_per_read;
+        }
+        if(num_bytes_of_zeroes_remainder > 0) {
+            noc_async_read(zeros_base_noc_addr, l1_write_addr_in0, num_bytes_of_zeroes_remainder);
+            l1_write_addr_in0 += num_bytes_of_zeroes_remainder;
+        }
+
         channel_stick_offset = (channel_stick_offset + in0_partial_channel_stick_size) % in0_channel_stick_size;
-        channel_stick_index = b / in0_num_channel_sticks_per_block;
+        channel_stick_index = b / in0_num_blocks_per_channel_stick;
         noc_async_read_barrier();
 
         cb_push_back(cb_id_in0, in0_block_num_tiles);

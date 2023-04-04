@@ -168,9 +168,16 @@ Tensor bmm_single_core(const Tensor& a, const Tensor& b) {
 }
 
 
-
-
-void create_CBs_for_fused_matmul(tt_metal::Program* program, tt_metal::Device* device, tt_xy_pair core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t num_bytes_for_df) {
+void create_CBs_for_fused_matmul(tt_metal::Program* program,
+                                tt_metal::Device* device,
+                                tt_xy_pair core,
+                                bool activations_rm,
+                                bool output_rm,
+                                uint32_t M,
+                                uint32_t N,
+                                uint32_t in0_block_w,
+                                uint32_t out_subblock_h,
+                                uint32_t num_bytes_for_df) {
 
     uint32_t in0_cb                                   = 0;
     uint32_t in1_cb                                   = 1;
@@ -403,16 +410,93 @@ void create_CBs_for_fused_matmul(tt_metal::Program* program, tt_metal::Device* d
     }
 }
 
+Tensor create_output_dram_buffer(Device * device, DataType data_type, uint32_t M, uint32_t N, bool untilize_out) {
+    std::array<uint32_t, 4> cshape{1, 1, M, N};
+
+    tt::tt_metal::Layout out_layout;
+    if (untilize_out) {
+        out_layout = tt::tt_metal::Layout::ROW_MAJOR;
+    } else {
+        out_layout = tt::tt_metal::Layout::TILE;
+    }
+    tt_metal::Tensor output = tt_metal::Tensor(
+        cshape,
+        data_type,
+        out_layout,
+        device);
+
+    return output;
+}
+
+std::tuple<uint32_t, uint32_t, uint32_t> compute_block_info(uint32_t M, uint32_t K, uint32_t N) {
+    uint32_t single_tile_size_bytes = 2 * 1024;
+
+    // Constraint 1: in0 and in1 should fit in L1. If not, divide into blocks
+    // Max sizes based on hard coded CB addressing
+    uint32_t max_in0_bytes = 75 * 1024;
+    uint32_t max_in1_bytes = 25 * 1024;
+    uint32_t max_in0_tiles = max_in0_bytes / single_tile_size_bytes;
+    uint32_t max_in1_tiles = max_in1_bytes / single_tile_size_bytes;
+    std::cout << "max_in0_tiles=" << max_in0_tiles << std::endl;
+    std::cout << "max_in1_tiles=" << max_in1_tiles << std::endl;
+    uint32_t num_blocks = 1;
+    uint32_t in_block_w = K;
+    assert(M <= max_in0_tiles && N <= max_in1_tiles);
+    uint32_t max_in_block_w = std::min((max_in0_tiles/M), (max_in1_tiles/N));
+    while (in_block_w > max_in_block_w || K % num_blocks != 0) {
+        std::cout << "Need num blocks > 1" << std::endl;
+        num_blocks += 1;
+        assert(num_blocks <= K);
+        in_block_w = K / num_blocks;
+    }
+    std::cout << "Num blocks=" << num_blocks << std::endl;
+    std::cout << "in0_block_w=" << in_block_w << std::endl;
+
+    // Constraint 2: output should fit in L1
+    uint32_t max_out_bytes = 140 * 1024;
+    uint32_t max_out_tiles = max_out_bytes / single_tile_size_bytes;
+    std::cout << "max_out_tiles=" << max_out_tiles << std::endl;
+    assert (M*N <= max_out_tiles);
+
+    // Constraint 3: output should should fit in half DST (8 tiles). If not, divide into output sublocks
+    uint32_t out_subblock_h = M;
+    uint32_t out_subblock_w = N;
+    uint32_t num_out_subblocks_h = 1;
+    uint32_t num_out_subblocks_w = 1;
+    bool divide_h_next = true;
+    while (out_subblock_h*out_subblock_w > 8) {
+        if (divide_h_next) {
+            if(num_out_subblocks_h < M) {
+                num_out_subblocks_h += 1;
+                while(M % num_out_subblocks_h != 0) {
+                    num_out_subblocks_h += 1;
+                }
+            }
+            out_subblock_h = M / num_out_subblocks_h;
+            divide_h_next = false;
+        }
+        else {
+            if(num_out_subblocks_w < N) {
+                num_out_subblocks_w += 1;
+                while(N % num_out_subblocks_w != 0) {
+                    num_out_subblocks_w += 1;
+                }
+            }
+            out_subblock_w = N / num_out_subblocks_w;
+            divide_h_next = true;
+        }
+    }
+    std::cout << "out_subblock_h=" << out_subblock_h << std::endl;
+    std::cout << "out_subblock_w=" << out_subblock_w << std::endl;
+    return std::make_tuple(num_blocks, out_subblock_h, out_subblock_w);
+}
+
 // TODO(whoever gets a chance!): Refactor this so it's a part of matmul_single_core_... keeping it
 // independent for now as it's easier for me to progress
 Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_a, bool untilize_out) {
 
     const auto [Ba, Ca, Ha, Wa] = a.shape();
     const auto [Bb, Cb, Hb, Wb] = b.shape();
-
-    TT_ASSERT(Ha == 512, "For now, assuming practically hard-coded dimensions so that blocking makes sense");
-    TT_ASSERT(Wa == 128, "For now, assuming practically hard-coded dimensions so that blocking makes sense");
-    TT_ASSERT(Hb == Wb, "For now, assuming practically hard-coded dimensions so that blocking makes sense");
 
     // Normal matrix shape checks
     TT_ASSERT(Ba == 1, "So far, large matmul op has only been tested for batch one.");
@@ -441,29 +525,14 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_a, b
     TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0, "Buffer size of tensor a must be divisible by single_tile_size (aka divisible by sizeof(df) * 1024)");
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0, "Buffer size of tensor b must be divisible by single_tile_size (aka divisible by sizeof(df) * 1024)");
 
-    // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    std::array<uint32_t, 4> cshape{Ba, Ca, Ha, Wb};
 
-    tt::tt_metal::Layout out_layout;
-    if (untilize_out) {
-        out_layout = tt::tt_metal::Layout::ROW_MAJOR;
-    } else {
-        out_layout = tt::tt_metal::Layout::TILE;
-    }
-    tt_metal::Tensor output = tt_metal::Tensor(
-        cshape,
-        a.dtype(),
-        out_layout,
-        device);
-
+    Tensor output = create_output_dram_buffer(a.device(), a.dtype(), Ha, Wb, untilize_out);
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // Keep for now, but need to fix when you get to multibank
     uint32_t out_dram_addr = dst_dram_buffer->address();
     auto out_dram_noc_xy = dst_dram_buffer->noc_coordinates();
-
     uint32_t out_dram_noc_x = out_dram_noc_xy.x;
     uint32_t out_dram_noc_y = out_dram_noc_xy.y;
 
@@ -474,14 +543,17 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_a, b
         uint32_t Hat = Ha / TILE_HEIGHT;
         uint32_t Wat = Wa / TILE_WIDTH;
         uint32_t Wbt = Wb / TILE_WIDTH;
+        std::cout << "Hat=" << Hat << std::endl;
+        std::cout << "Wat=" << Wat << std::endl;
+        std::cout << "Wbt=" << Wbt << std::endl;
 
         // out
-        uint32_t out_dram_addr = dst_dram_buffer->address();
         uint32_t out_row_size = Wb * 2;
 
         // out block info
-        uint32_t out_subblock_h = 4;
-        uint32_t out_subblock_w = 2;
+        auto [num_blocks, out_subblock_h, out_subblock_w] = compute_block_info(Hat, Wat, Wbt);
+        //uint32_t out_subblock_h = 4;
+        //uint32_t out_subblock_w = 2;
         uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
         TT_ASSERT(out_subblock_num_tiles <= 8, "Need to ensure that matmul partials fit in dst");
@@ -491,7 +563,7 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_a, b
         uint32_t in0_row_size = Wa * 2; // some row major data needed in case we want to tilize A
 
         // Important, dictates in0 block width, in1 block height
-        uint32_t num_blocks = 2;
+        //uint32_t num_blocks = 2;
 
         // in0 block info
         uint32_t in0_block_w = Wat / num_blocks; // Two blocks in the W dimension
@@ -513,8 +585,8 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_a, b
         uint32_t in1_block_h = in0_block_w;
 
         // For debug, uncomment this
-        /*
-        std::cout << "in0 information" << std::endl;
+
+/*         std::cout << "in0 information" << std::endl;
         std::cout << "\t in0_dram_addr: " << in0_dram_addr << std::endl;
         std::cout << "\t in0_row_size: " << in0_row_size << std::endl;
         std::cout << "\t in0_block_w: " << in0_block_w << std::endl;
@@ -538,8 +610,8 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_a, b
         std::cout << "\t out_row_size: " << out_row_size << std::endl;
         std::cout << "\t out_subblock_h: " << out_subblock_h << std::endl;
         std::cout << "\t out_subblock_w: " << out_subblock_w << std::endl;
-        std::cout << "\t out_subblock_num_tiles: " << out_subblock_num_tiles << std::endl;
-        */
+        std::cout << "\t out_subblock_num_tiles: " << out_subblock_num_tiles << std::endl; */
+
 
         {
             create_CBs_for_fused_matmul(
