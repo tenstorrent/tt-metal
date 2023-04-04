@@ -28,6 +28,7 @@ env ./build/test/llrt/test_silicon_driver
 env python tests/scripts/run_tt_metal.py
 
 ./tests/scripts/run_python_api_unit_tests.sh
+env pytest tests/python_api_testing/models/bert/bert_encoder.py -k bert_encoder
 env pytest tests/python_api_testing/models/bert -k bert_question_and_answering
 
 env pytest tests/python_api_testing/models/t5 -k t5_dense_act_dense
