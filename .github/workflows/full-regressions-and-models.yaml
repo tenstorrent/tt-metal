@@ -15,10 +15,6 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.CHECKOUT_TOKEN }}
-      - name: Build tt-metal
-        run: make build
-      - name: Build tt-metal tests
-        run: make tests
-      - name: Run all reg scripts
+      - name: Run clean + build + all reg tests scripts
         run: |
-          ./tests/scripts/run_reg_scripts.sh
+          env ./tests/scripts/run_reg_scripts.sh
