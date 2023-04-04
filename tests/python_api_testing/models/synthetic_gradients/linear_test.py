@@ -34,7 +34,8 @@ def torchLinear(in_features, out_features, weight, bias):
     return linear_torch
 
 
-def run_linear_test(in_features, out_features):
+def run_linear_test(device, in_features, out_features):
+    host = ttl.device.GetHost()
     # torch
     torch_input_tensor = torch.randn(1, in_features)
     weight = torch.randn(out_features, in_features)
@@ -69,10 +70,9 @@ def run_linear_test(in_features, out_features):
     print('\n\n', test_result, '\n\n')
 
 
-if __name__ == "__main__":
+def test_linear_test():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-    run_linear_test(1024, 256)
+    run_linear_test(device, 1024, 256)
     ttl.device.CloseDevice(device)

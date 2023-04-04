@@ -67,7 +67,8 @@ class PytorchBatchNorm1D(nn.Module):
         return bn1_out
 
 
-def run_block_inference(in_features, out_features):
+def run_block_inference(device, in_features, out_features):
+    host = ttl.device.GetHost()
 
     # set inputs
     inputs_torch = torch.FloatTensor(1, in_features).uniform_(-1., 1.).requires_grad_(True)
@@ -176,10 +177,9 @@ def run_block_inference(in_features, out_features):
     full_test_result = comp_pcc(output_full_torch[0], output_full_tt_untilized)
     print('\n\n', full_test_result, '\n\n')
 
-if __name__ == "__main__":
+def test_run_block_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-    run_block_inference(1024, 256)
+    run_block_inference(device, 1024, 256)
     ttl.device.CloseDevice(device)

@@ -228,7 +228,7 @@ def run_mnist_inference():
     breakpoint()
     #assert tt_out_oom == pytorch_out_oom, "The order of magnitudes of the outputs must be the same"
 
-if __name__ == "__main__":
+def test_run_mnist_inference():
     # Initialize the device
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)

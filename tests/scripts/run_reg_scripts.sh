@@ -36,7 +36,7 @@ env pytest tests/python_api_testing/models/t5 -k t5_layer_ff
 env pytest tests/python_api_testing/models/t5 -k t5_layer_self_attention
 env pytest tests/python_api_testing/models/t5 -k t5_layer_cross_attention
 
-env python tests/python_api_testing/models/synthetic_gradients/batchnorm1d_test.py
-env python tests/python_api_testing/models/synthetic_gradients/linear_test.py
-env python tests/python_api_testing/models/synthetic_gradients/block_test.py
-env python tests/python_api_testing/models/synthetic_gradients/full_inference.py
+env pytest tests/python_api_testing/models/synthetic_gradients -k batchnorm1d_test
+env pytest tests/python_api_testing/models/synthetic_gradients -k linear_test
+env pytest tests/python_api_testing/models/synthetic_gradients -k block_test
+env pytest tests/python_api_testing/models/synthetic_gradients -k full_inference
