@@ -57,7 +57,6 @@ def run_merge_heads_inference(device, num_heads, hidden_size, num_attention_head
 
     pt_out = merge_heads(test_in, num_heads, hidden_size, num_attention_heads)
 
-
     tt_out = tt_merge_heads(test_in, num_heads, hidden_size, num_attention_heads, device)
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
