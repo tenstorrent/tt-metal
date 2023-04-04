@@ -31,7 +31,7 @@ def run_tilize_conv_act_test(C, H, W, R, S):
         ttl.tensor.MemoryConfig(False, 0),
     )
     # Tilize conv activation on device
-    A_t = ttl.tensor.tilize_conv_activation(A, True)
+    A_t = ttl.tensor.tilize_conv_activation(A, True if R == 1 else False)
     OH = H - R + 1
     OW = W - S + 1
     output_shape = [1, 1, _nearest_32(OH * OW), C * R * S]

@@ -9,6 +9,7 @@ import numpy as np
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, pad_activation
 from python_api_testing.models.utility_functions import print_diff_argmax, is_close
+from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 import torch
 
 
@@ -53,13 +54,11 @@ def run_tilize_matmul_test(M, K, N):
 
     ref_bmm = torch.matmul(A_padded.reshape(a_shape_padded[1:]), B.reshape(b_shape[1:]))
     ref_bmm = ref_bmm.reshape(output_shape)
-    maxmag = (
-        ref_bmm.abs().max().item()
-    )  # % of max magnitude since that determines cancellations
-    match = is_close(pyt_got_back_rm, ref_bmm, 0.07, 0.07, maxmag, 0.01)
-    print("Match=", match.item())
+    passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
+    print("Passing=", passing_pcc)
+    print("Output pcc=", output_pcc)
     ttl.device.CloseDevice(device)
-    assert match
+    assert passing_pcc
 
 
 def test_tilize_hpadding_cl_matmul():

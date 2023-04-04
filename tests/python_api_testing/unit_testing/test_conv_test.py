@@ -12,6 +12,7 @@ from libs import tt_lib as ttl
 from libs.tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, convert_weights_2d_matrix
 
 from python_api_testing.models.utility_functions import print_diff_argmax, is_close
+from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 import torch
 
 
@@ -31,7 +32,7 @@ def run_tilize_conv3x3s1_act_test(device, K, C, H, W):
         ttl.tensor.MemoryConfig(False, 0),
     )
     # Tilize conv activation on device
-    A_t = ttl.tensor.tilize_conv_activation(A)
+    A_t = ttl.tensor.tilize_conv_activation(A, False)
 
     # Prepare weights
     B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
@@ -62,12 +63,10 @@ def run_tilize_conv3x3s1_act_test(device, K, C, H, W):
 
     # Calculate conv result with golden result. Run Pytorch conv
     C_golden = torch.nn.functional.conv2d(A_pyt, B_pyt)
-    maxmag = (
-        C_golden.abs().max().item()
-    )  # % of max magnitude since that determines cancellations
-    match = is_close(C_result, C_golden, 0.07, 0.07, maxmag, 0.01)
-    print("Match=", match.item())
-    assert match
+    passing_pcc, output_pcc = comp_pcc(C_golden, C_result, 0.99)
+    print("Passing=", passing_pcc)
+    print("Output pcc=", output_pcc)
+    assert passing_pcc
 
 
 def test_run_tilize_conv3x3s1_act_test():

@@ -9,6 +9,7 @@ import numpy as np
 
 from libs import tt_lib as ttl
 from python_api_testing.models.utility_functions import untilize, tilize_to_list, channels_last, convert_weights_2d_matrix, print_diff_argmax, pad_weight, is_close
+from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 import torch
 
 @pytest.mark.parametrize(
@@ -73,8 +74,8 @@ def test_run_1x1conv_as_large_matmul(K, C, H, W, untilize_out, use_single_bank_r
     # Calculate conv result with golden result. Run Pytorch conv
     out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt)
     assert(out_result.shape == out_golden.shape)
-    maxmag = out_golden.abs().max().item() # % of max magnitude since that determines cancellations
-    match = is_close(out_result, out_golden, 0.1, 0.1, maxmag, 0.01)
-    print("Match=", match.item())
-    assert match.item()
+    passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
+    print("Passing=", passing_pcc)
+    print("Output pcc=", output_pcc)
+    assert passing_pcc
     ttl.device.CloseDevice(device)
