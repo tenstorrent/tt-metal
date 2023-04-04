@@ -88,7 +88,7 @@ class TtT5LayerNorm(nn.Module):
         return result
 
 
-def test_T5LayerNorm_inference(device):
+def run_test_T5LayerNorm_inference(device):
     hf_reference_model = T5Model.from_pretrained("t5-small")
     hf_reference_model.eval()
 
@@ -134,9 +134,9 @@ def test_T5LayerNorm_inference(device):
         logger.warning("test_T5LayerNorm_inference Failed!")
 
 
-if __name__ == "__main__":
+def test_T5LayerNorm_inference():
     # Initialize the device
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
-    test_T5LayerNorm_inference(device)
+    run_test_T5LayerNorm_inference(device)
     ttm.device.CloseDevice(device)
