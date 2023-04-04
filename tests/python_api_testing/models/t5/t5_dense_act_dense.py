@@ -77,7 +77,7 @@ class TtT5DenseActDense(nn.Module):
         return hidden_states
 
 
-def test_T5DenseActDense_inference(device):
+def run_test_T5DenseActDense_inference(device):
     hugging_face_reference_model = T5Model.from_pretrained("t5-small")
     hugging_face_reference_model.eval()
 
@@ -120,10 +120,10 @@ def test_T5DenseActDense_inference(device):
         logger.warning("test_T5DenseActDense_inference Failed!")
 
 
-if __name__ == "__main__":
+def test_T5DenseActDense_inference():
     # Initialize the device
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     host = ttm.device.GetHost()
-    test_T5DenseActDense_inference(device)
+    run_test_T5DenseActDense_inference(device)
     ttm.device.CloseDevice(device)
