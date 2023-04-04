@@ -62,7 +62,8 @@ class TtBertForQuestionAnswering(TtBertShared):
         encoder_output = super().forward(x)
         return self.qa_linear(encoder_output)
 
-def run_bert_question_and_answering_inference():
+def run_bert_question_and_answering_inference(device):
+    host = ttl.device.GetHost()
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained("prajjwal1/bert-tiny", torchscript=False)
     hugging_face_reference_model.eval()
     tt_bert_model = TtBertForQuestionAnswering(2, 2, hugging_face_reference_model, device)
@@ -105,7 +106,7 @@ def run_bert_question_and_answering_inference():
 
     assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
-if __name__ == "__main__":
+def test_bert_question_and_answering_inference():
     # TODO(AP): currently necessary, otherwise get bit discrepancies
     torch.manual_seed(1234)
     # Initialize the device
@@ -113,6 +114,5 @@ if __name__ == "__main__":
     #enable_compile_cache()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-    run_bert_question_and_answering_inference()
+    run_bert_question_and_answering_inference(device)
     ttl.device.CloseDevice(device)
