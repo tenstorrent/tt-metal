@@ -232,11 +232,11 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
         // If we don't need padding, use the default multi_core reuse/reuse_mcast
         if (Mt % per_core_M == 0 and Nt % per_core_N == 0) {
             if (core_range.y > 0)
-                return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING;
+                return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST;
             return BmmOpParallelizationStrategy::MULTI_CORE_REUSE;
         }
         else if (core_range.y > 0)
-            return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING;
+            return BmmOpParallelizationStrategy::MULTI_CORE;
         return BmmOpParallelizationStrategy::MULTI_CORE;
     }
     else if (num_output_tiles > 1) {
