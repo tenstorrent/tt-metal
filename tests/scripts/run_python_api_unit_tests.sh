@@ -9,4 +9,4 @@ fi
 
 export PYTHONPATH=$TT_METAL_HOME
 
-pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -s
+pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -vvvs
