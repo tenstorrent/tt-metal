@@ -210,7 +210,7 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
     }
 
     // If no possible params, matmul_params will be (0, 0, 0, 0)
-    if (use_general_large_matmul_params and per_core_M > 0 and B == 1) {
+    if (use_general_large_matmul_params and per_core_M > 0 and Kt % in0_block_w == 0 and B == 1) {
         tt_xy_pair core_range = get_core_range((Mt / per_core_M), (Nt / per_core_N), num_cores_y, num_cores_x);
         // If matmul params are (16, 16, 4, 2), use the default mcast op
         if (
@@ -227,7 +227,7 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
             return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED;
         return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED;
     }
-    else if (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y) {
+    else if (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y and Kt % in0_block_w == 0) {
         tt_xy_pair core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
         // If we don't need padding, use the default multi_core reuse/reuse_mcast
         if (Mt % per_core_M == 0 and Nt % per_core_N == 0) {
