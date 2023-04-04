@@ -35,3 +35,8 @@ env python tests/python_api_testing/models/t5/t5_layer_norm.py
 env python tests/python_api_testing/models/t5/t5_layer_ff.py
 env python tests/python_api_testing/models/t5/t5_layer_self_attention.py
 env python tests/python_api_testing/models/t5/t5_layer_cross_attention.py
+
+env python tests/python_api_testing/models/synthetic_gradients/batchnorm1d_test.py
+env python tests/python_api_testing/models/synthetic_gradients/linear_test.py
+env python tests/python_api_testing/models/synthetic_gradients/block_test.py
+env python tests/python_api_testing/models/synthetic_gradients/full_inference.py
