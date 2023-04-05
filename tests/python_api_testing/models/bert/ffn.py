@@ -161,3 +161,6 @@ def run_ffn_inference(model_version, batch, seq_len, on_weka, pcc):
 def test_ffn_inference(model_version, batch, seq_len, on_weka, pcc):
 
     run_ffn_inference(model_version, batch, seq_len, on_weka, pcc)
+
+if __name__ == "__main__":
+    run_ffn_inference("phiyodr/bert-large-finetuned-squad2", 1, 128, True, 0.99)

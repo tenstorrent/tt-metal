@@ -36,7 +36,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     # Used to scale down the input to the softmax
     reciprocal_of_sqrt_hidden_dim_tensor = ttl.tensor.Tensor(
-        [1 / math.sqrt(hidden_dim)] + [0 for _ in range(32 * 32 - 1)],
+        [1 / math.sqrt(hidden_dim)] * (32 * 32),
         [1, 1, 32, 32],
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,

@@ -90,7 +90,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
         context = batch * ["Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."]
         question = batch * ["What discipline did Winkelmann create?"]
-        bert_input = tokenizer.batch_encode_plus(question, context, max_length=seq_len, padding="max_length", truncation=True, return_tensors="pt")["input_ids"]
+        bert_input = tokenizer.batch_encode_plus(zip(question, context), max_length=seq_len, padding="max_length", truncation=True, return_tensors="pt")["input_ids"]
     else:
         if 1:
             bert_input = torch.arange(seq_len*batch).reshape(batch, seq_len)
@@ -150,9 +150,9 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka, real_input, pcc",
     (
-        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.95),
-        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, 0.25), # Placeholder PCC until issues are resolved
-        ("phiyodr/bert-large-finetuned-squad2", 1, 128, True, True, -1.0) # Placeholder PCC until issues are resolved
+        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.99),
+        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, 0.35), # Placeholder PCC until issues are resolved
+        ("phiyodr/bert-large-finetuned-squad2", 1, 128, True, True, -0.2) # Placeholder PCC until issues are resolved
     ),
 )
 def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, pcc):
