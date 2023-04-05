@@ -16,7 +16,7 @@ def softmax(x: tensor.Tensor, stable=False):
     RW = tensor.ReduceOpDim.W
     BCW = tensor.BcastOpDim.W
     BCMUL = tensor.BcastOpMath.MUL
-    BCSUB = tensor.BcastOpMath.MUL
+    BCSUB = tensor.BcastOpMath.SUB
 
     if stable:
         sumsW = tensor.reduce(x, RMAX, RW, 1.0)
@@ -53,7 +53,7 @@ if __name__ == "__main__":
     ref_sm = ref_stable_softmax(x)
 
     x_t = tilize_to_list(x)
-    t0 = tensor.Tensor(x_t, [1, 1, H, W], tensor.DataType.BFLOAT16, gpttmensor.Layout.TILE, device)
+    t0 = tensor.Tensor(x_t, [1, 1, H, W], tensor.DataType.BFLOAT16, tensor.Layout.TILE, device)
     func = softmax
     t1 = func(t0)
     t2_data = t1.to(host).data()
