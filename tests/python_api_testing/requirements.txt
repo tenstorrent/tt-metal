@@ -6,3 +6,4 @@ xlsxwriter==3.0.8
 tiktoken==0.3.3
 tqdm==4.65.0
 sentencepiece==0.1.97
+librosa
