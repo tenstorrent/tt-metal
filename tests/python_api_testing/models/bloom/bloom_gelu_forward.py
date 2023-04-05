@@ -27,7 +27,7 @@ def bloom_gelu_forward(x: torch.Tensor) -> torch.Tensor:
     """
     return x * 0.5 * (1.0 + torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x)))
 
-def tt_bloom_gelu_forward(x):
+def tt_bloom_gelu_forward(x, device):
     z = x
 
     k1 = torch.full(x.shape(), 0.5)
@@ -64,7 +64,7 @@ def tt_bloom_gelu_forward(x):
     return output
 
 
-def run_gelu_bloom_inference():
+def run_gelu_bloom_inference(device):
 
     # Prepare input
     torch.manual_seed(0)
@@ -74,7 +74,7 @@ def run_gelu_bloom_inference():
 
     tt_test_in = bloom_utils.torch2tt_tensor(test_in, device)
 
-    tt_out = tt_bloom_gelu_forward(tt_test_in)
+    tt_out = tt_bloom_gelu_forward(tt_test_in, device)
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 
@@ -86,5 +86,5 @@ if __name__ == "__main__":
     # Initialize the device
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
-    run_gelu_bloom_inference()
+    run_gelu_bloom_inference(device)
     ttm.device.CloseDevice(device)

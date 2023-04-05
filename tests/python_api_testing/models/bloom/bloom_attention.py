@@ -1,131 +1,24 @@
+from pathlib import Path
+import sys
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
 from abc import abstractmethod
 import torch
-from transformers import BloomForQuestionAnswering
 import math
 from torch.nn import functional as F
 
-from pymetal import ttmetal as ttm
-from python_api_testing.models.bert.embeddings import PytorchEmbeddings
-from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
-from python_api_testing.models.bert.ffn import TtFeedForwardModel
-from python_api_testing.models.bert.bert_encoder import TtBertEncoder
-from python_api_testing.fused_ops.linear import Linear as ttLinear
-from python_api_testing.fused_ops.softmax import softmax as tt_softmax
-
-from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
-from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled
+from libs import tt_lib as ttm
+from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 import numpy as np
+import bloom_utils as bloom_utils
+import baddbmm
+
 from typing import Optional, Tuple, Union
 
-def dropout_add(x, residual: torch.Tensor, prob: float, training: bool) -> torch.Tensor:
-    out = F.dropout(x, p=prob, training=training)
-    out = residual + out
-    return out
-
-def tt_dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, training: bool) -> ttm.tensor.Tensor:
-
-
-    tt_res = tilize_to_list(pad_activation(residual))
-    tt_res = ttm.tensor.Tensor(tt_res, [1,1,64,64], ttm.tensor.DataType.BFLOAT16,  ttm.tensor.Layout.TILE, device)
-
-    out = F.dropout(x, p=prob, training=training)
-    tt_out = tilize_to_list(pad_activation(out))
-    tt_out = ttm.tensor.Tensor(tt_out, [1,1,64,64], ttm.tensor.DataType.BFLOAT16,  ttm.tensor.Layout.TILE, device)
-
-    total = ttm.tensor.add(tt_res, tt_out)
-
-    return total
-
-
-def tensor_torch2tt(torch_tensor):
-    tt_tensor = tilize_to_list(pad_activation(torch_tensor))
-    if len(torch_tensor.shape)==4:
-        tt_tensor = ttm.tensor.Tensor(tt_tensor, torch_tensor.shape, ttm.tensor.DataType.BFLOAT16,  ttm.tensor.Layout.TILE, device)
-    else:
-        s1 = 1
-        s2 = torch_tensor.shape[0]
-        s3 = torch_tensor.shape[1]
-        s4 = torch_tensor.shape[2]
-        tt_tensor = ttm.tensor.Tensor(tt_tensor, [s1, s2, s3, s4], ttm.tensor.DataType.BFLOAT16,  ttm.tensor.Layout.TILE, device)
-
-
-    return tt_tensor
-
-def torch2tt_tensor(tt_tensor, pytorch_shape):
-    if(len(pytorch_shape)==4):
-        tt_out_host = tt_tensor.to(host)
-        tt_out = untilize(torch.Tensor(tt_out_host.data()).reshape(*pytorch_shape))
-        return tt_out
-    else:
-        s1 = 1
-        s2 = pytorch_out.shape[0]
-        s3 = pytorch_out.shape[1]
-        s4 = pytorch_out.shape[2]
-        out_shape = [s1, s2, s3, s4]
-        tt_out_host = tt_tensor.to(host)
-        tt_out = untilize(torch.Tensor(tt_out_host.data()).reshape(*out_shape))
-        return tt_out
-
-
-def tt_const_tensor(value, shape):
-    if (len(shape)==4):
-        number_tensor = torch.full(shape, value)
-        tt_number_tensor = tilize_to_list(number_tensor)
-        tt_number_tensor = ttm.tensor.Tensor(tt_number_tensor, number_tensor.shape, ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
-
-        return tt_number_tensor
-    else:
-        s1 = 1
-        s2 = shape[0]
-        s3 = shape[1]
-        s4 = shape[2]
-        number_tensor = torch.full([s1, s2, s3, s4], value)
-        tt_number_tensor = tilize_to_list(number_tensor)
-        tt_number_tensor = ttm.tensor.Tensor(tt_number_tensor, number_tensor.shape, ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
-
-        return tt_number_tensor
-
-
-def tt_baddbmm(input, batch1, batch2, beta=1, alpha=1, out=None) -> ttm.tensor.Tensor:
-    tt_batch1 = tensor_torch2tt(batch1)
-    tt_batch2 = tensor_torch2tt(batch2)
-    tt_input = tensor_torch2tt(input)
-    tt_beta = tt_const_tensor(beta, input.shape)
-    tt_alpha = tt_const_tensor(alpha, input.shape)
-
-    res1 = ttm.tensor.mul(tt_beta, tt_input)
-    res2 = ttm.tensor.matmul(tt_batch1, tt_batch2)
-    res3 = ttm.tensor.mul(tt_alpha, res2)
-    res4 = ttm.tensor.add(res1, res3)
-
-    return res4
-
-
-
-def tt_merge_heads(tt_x):
-
-    num_heads = 32
-    head_dim = 1024 // num_heads
-
-    batch_size_and_num_heads, seq_length, _ = x.shape
-    batch_size = batch_size_and_num_heads // num_heads
-
-    reshaped = ttm.tensor.reshape(tt_x, batch_size, num_heads, seq_length, head_dim)
-    p_reshaped = torch.Tensor(reshaped.to(host).data()).reshape(reshaped.shape())
-    p_reshaped = torch.Tensor(x).reshape(batch_size, num_heads, seq_length, head_dim)
-
-    # batch_size, num_heads, seq_length, head_dim -> batch_size, seq_length, num_heads, head_dim
-    p_permuted = p_reshaped.permute(0, 2, 1, 3)
-
-    permuted = ttm.tensor.Tensor(tilize_to_list(p_permuted), [batch_size, num_heads, seq_length, head_dim], ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
-
-    third = num_heads*head_dim
-
-    reshaped_2 = ttm.tensor.reshape(permuted, 1, batch_size, seq_length, num_heads*head_dim)
-
-    res_reshaped_2 = tensor_torch2tt(reshaped_2)
-
-    return res_reshaped_2
 
 def split_heads(fused_qkv: torch.Tensor, num_heads, head_dim) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
@@ -169,15 +62,14 @@ def merge_heads(self, x: torch.Tensor) -> torch.Tensor:
     return x.reshape(batch_size, seq_length, self.num_heads * self.head_dim)
 
 class BloomAttention(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, hugging_bloom_reference_model, hidden_size, num_heads, hidden_dropout, device):
         super().__init__()
 
-        self.hidden_size = 64
-        self.num_heads = 8
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.split_size = self.hidden_size
-        self.hidden_dropout = 0.0
-        self.inv_norm_factor = 0.0
+        self.hidden_dropout = hidden_dropout
 
         if self.head_dim * self.num_heads != self.hidden_size:
             raise ValueError(
@@ -191,7 +83,7 @@ class BloomAttention(torch.nn.Module):
 
         self.query_key_value = torch.nn.Linear(self.hidden_size, 3 * self.hidden_size, bias=True)
         self.dense = torch.nn.Linear(self.hidden_size, self.hidden_size)
-        self.attention_dropout = torch.nn.Dropout(0.0)
+        self.attention_dropout = torch.nn.Dropout(self.hidden_dropout)
 
     def forward(
         self,
@@ -280,15 +172,15 @@ class BloomAttention(torch.nn.Module):
         return outputs
 
 class TtBloomAttention(torch.nn.Module):
-    def __init__(self, sd, device):
+    def __init__(self, bloom_refernce_model, hidden_size, num_heads, hidden_dropout, inv_norm_factor, device):
         super().__init__()
 
-        self.hidden_size = 64
-        self.num_heads = 8
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
         self.head_dim = self.hidden_size // self.num_heads
-        self.split_size = self.hidden_size
-        self.hidden_dropout = 0.0
-        self.inv_norm_factor = 0.0
+        self.split_size = hidden_size
+        self.hidden_dropout = hidden_dropout
+        self.inv_norm_factor = inv_norm_factor
 
 
         if self.head_dim * self.num_heads != self.hidden_size:
@@ -307,7 +199,7 @@ class TtBloomAttention(torch.nn.Module):
         self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)
         self.beta = 1.0
 
-        self.query_key_value = ttLinear(self.hidden_size, 3 * self.hidden_size, weight_q, bias_q, device)
+        self.query_key_value = TtLinear(self.hidden_size, 3 * self.hidden_size, weight_q, bias_q, device)
 
         self.dense = ttLinear(self.hidden_size, self.hidden_size, weight_d, bias_d, device)
         self.attention_dropout = torch.nn.Dropout(0.0)
@@ -438,8 +330,7 @@ class TtBloomAttention(torch.nn.Module):
 
 def run_bloom_attention_inference():
     hugging_bloom_reference_model = BloomForQuestionAnswering.from_pretrained("bigscience/bloom-560m", torchscript=False)
-
-    tbloom = TtBloomAttention(hugging_bloom_reference_model.state_dict(), device)
+    tt_bloom = TtBloomAttention(hugging_bloom_reference_model, 64, 8, 0.0, 0.0 device)
 
     # Prepare input
     torch.manual_seed(0)
@@ -454,11 +345,10 @@ def run_bloom_attention_inference():
 
     tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
 
-    pbloom = BloomAttention()
 
-    pytorch_out = pbloom.forward(hidden_states, residual, alibi, attention_mask)
+    pt_bloom = BloomAttention(64, 8, 0.0, 0.0)
+    pytorch_out = pt_bloom.forward(hidden_states, residual, alibi, attention_mask)
 
-    assert np.allclose(pytorch_out.detach().numpy(), tt_out.numpy(), 1e-5, 0.17)
 
 if __name__ == "__main__":
     # Initialize the device

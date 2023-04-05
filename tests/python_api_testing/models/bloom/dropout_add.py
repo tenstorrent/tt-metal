@@ -21,7 +21,7 @@ def dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, training: 
     out = residual + out
     return out
 
-def tt_dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, training: bool) -> ttm.tensor.Tensor:
+def tt_dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, training: bool, device) -> ttm.tensor.Tensor:
 
     tt_res = bloom_utils.torch2tt_tensor(residual, device)
     out = F.dropout(x, p=prob, training=training)
@@ -30,7 +30,7 @@ def tt_dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, trainin
 
     return total
 
-def run_dropout_add_inference():
+def run_dropout_add_inference(device):
     # Prepare input
     torch.manual_seed(0)
     test_in = torch.rand(1, 1, 64, 64)
@@ -49,5 +49,5 @@ if __name__ == "__main__":
     # Initialize the device
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
-    run_dropout_add_inference()
+    run_dropout_add_inference(device)
     ttm.device.CloseDevice(device)
