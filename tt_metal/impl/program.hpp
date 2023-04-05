@@ -19,6 +19,8 @@ class Program {
    public:
     Program() {}
 
+    ~Program();
+
     std::vector<Kernel *> kernels() const { return kernels_; }
 
     std::vector<L1Buffer *> l1_buffers() const { return l1_buffers_; }
@@ -96,7 +98,10 @@ class Program {
         bool fp32_dest_acc_en,
         bool math_approx_mode);
 
-    friend L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t num_tiles, uint32_t address);
+    friend L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address);
+    friend L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes);
+    friend std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes, uint32_t address);
+    friend std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes);
 
     friend CircularBuffer *CreateCircularBuffer(
         Program *program,
@@ -106,6 +111,34 @@ class Program {
         uint32_t num_tiles,
         uint32_t size_in_bytes,
         uint32_t l1_address,
+        DataFormat data_format);
+
+    friend CircularBuffer *CreateCircularBuffer(
+        Program *program,
+        Device *device,
+        uint32_t buffer_index,
+        const tt_xy_pair &core,
+        uint32_t num_tiles,
+        uint32_t size_in_bytes,
+        DataFormat data_format);
+
+    friend std::vector<CircularBuffer *> CreateCircularBuffers(
+        Program *program,
+        Device *device,
+        uint32_t buffer_index,
+        const CoreRange &core_range,
+        uint32_t num_tiles,
+        uint32_t size_in_bytes,
+        uint32_t l1_address,
+        DataFormat data_format);
+
+    friend std::vector<CircularBuffer *> CreateCircularBuffers(
+        Program *program,
+        Device *device,
+        uint32_t buffer_index,
+        const CoreRange &core_range,
+        uint32_t num_tiles,
+        uint32_t size_in_bytes,
         DataFormat data_format);
 
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }

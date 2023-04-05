@@ -80,7 +80,6 @@ int main(int argc, char **argv) {
          * compute engine will use.
          */
         constexpr uint32_t src0_cb_index = CB::c_in0;
-        constexpr uint32_t src0_cb_addr = 200 * 1024;
         constexpr uint32_t num_input_tiles = 2;
         CircularBuffer *cb_src0 = CreateCircularBuffer(
             program,
@@ -89,12 +88,10 @@ int main(int argc, char **argv) {
             core,
             num_input_tiles,
             num_input_tiles * single_tile_size,
-            src0_cb_addr,
             tt::DataFormat::Float16_b
         );
 
         constexpr uint32_t src1_cb_index = CB::c_in1;
-        constexpr uint32_t src1_cb_addr = 300 * 1024;
         CircularBuffer *cb_src1 = CreateCircularBuffer(
             program,
             device,
@@ -102,12 +99,10 @@ int main(int argc, char **argv) {
             core,
             num_input_tiles,
             num_input_tiles * single_tile_size,
-            src1_cb_addr,
             tt::DataFormat::Float16_b
         );
 
         constexpr uint32_t output_cb_index = CB::c_out0;
-        constexpr uint32_t output_cb_addr = 400 * 1024;
         constexpr uint32_t num_output_tiles = 2;
         CircularBuffer *cb_output = CreateCircularBuffer(
             program,
@@ -116,7 +111,6 @@ int main(int argc, char **argv) {
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
             tt::DataFormat::Float16_b
         );
 
@@ -241,7 +235,6 @@ int main(int argc, char **argv) {
             core,
             num_input_tiles,
             num_input_tiles * single_tile_size,
-            src0_cb_addr,
             tt::DataFormat::Float16_b
         );
 
@@ -252,7 +245,6 @@ int main(int argc, char **argv) {
             core,
             num_input_tiles,
             num_input_tiles * single_tile_size,
-            src1_cb_addr,
             tt::DataFormat::Float16_b
         );
 
@@ -263,7 +255,6 @@ int main(int argc, char **argv) {
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
             tt::DataFormat::Float16_b
         );
 

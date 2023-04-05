@@ -133,6 +133,18 @@ std::vector<tt_xy_pair> Program::logical_cores() const {
     return cores_in_program;
 }
 
+Program::~Program() {
+    for (auto kernel : kernels_) {
+        delete kernel;
+    }
+    for (auto circular_buffer : circular_buffers_) {
+        delete circular_buffer;
+    }
+    for (auto l1_buffer : l1_buffers_) {
+        delete l1_buffer;
+    }
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

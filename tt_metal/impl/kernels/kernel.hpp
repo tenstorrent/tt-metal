@@ -47,6 +47,8 @@ class Kernel {
     Kernel(const std::string &kernel_path_file_name, const tt_xy_pair &core, KernelType kernel_type) :
         kernel_path_file_name_(kernel_path_file_name), start_core_(core), end_core_(core), kernel_type_(kernel_type) {}
 
+    virtual ~Kernel() {}
+
     std::string kernel_path_file_name() const { return kernel_path_file_name_; }
 
     std::string name() const;
@@ -99,6 +101,8 @@ class DataMovementKernel : public Kernel {
         kernel_args_(kernel_args),
         processor_(processor),
         noc_(noc) {}
+
+    ~DataMovementKernel() {}
 
     DataMovementProcessor data_movement_processor() const { return processor_; }
 
@@ -153,6 +157,8 @@ class ComputeKernel : public Kernel {
         math_fidelity_(math_fidelity),
         fp32_dest_acc_en_(fp32_dest_acc_en),
         math_approx_mode_(math_approx_mode) {}
+
+    ~ComputeKernel() {}
 
     std::vector<uint32_t> compile_time_args(const tt_xy_pair &logical_core) const;
     size_t compile_time_args_hash(const tt_xy_pair &logical_core) const;

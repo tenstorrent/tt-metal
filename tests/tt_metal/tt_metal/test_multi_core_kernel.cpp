@@ -308,6 +308,7 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(tt_metal::Device
 
     DeallocateBuffer(src_dram_buffer);
     DeallocateBuffer(dst_dram_buffer);
+    delete program;
 
     return pass;
 }
@@ -385,6 +386,7 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     DeallocateBuffer(dst_dram_buffer_1);
     DeallocateBuffer(dst_dram_buffer_2);
     DeallocateBuffer(dst_dram_buffer_3);
+    delete program;
 
     return pass;
 }
@@ -422,7 +424,6 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     auto dst_dram_buffer_1 = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_1, dram_buffer_dst_addr_1);
     auto dst_dram_buffer_2 = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_2, dram_buffer_dst_addr_2);
     auto dst_dram_buffer_3 = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_3, dram_buffer_dst_addr_3);
-
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
@@ -478,6 +479,7 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     DeallocateBuffer(dst_dram_buffer_1);
     DeallocateBuffer(dst_dram_buffer_2);
     DeallocateBuffer(dst_dram_buffer_3);
+    delete program;
 
     return pass;
 }

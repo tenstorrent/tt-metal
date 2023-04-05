@@ -14,8 +14,12 @@ using CoreBlocks = std::vector<std::variant<tt_xy_pair, CoreRange>>;
 template<class... Ts> struct overloaded_core : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded_core(Ts...) -> overloaded_core<Ts...>;
 
+// Fwd declares
+class CircularBuffer;
 class DramBuffer;
 class InterleavedDramBuffer;
+class L1Buffer;
+class Program;
 
 // A physical PCIexpress Tenstorrent device
 class Device {
@@ -34,6 +38,8 @@ class Device {
 
     int num_dram_banks() const;
 
+    uint32_t l1_size() const;
+
     tt_xy_pair logical_grid_size() const;
 
     tt_xy_pair worker_core_from_logical_core(const tt_xy_pair &logical_core) const;
@@ -50,22 +56,41 @@ class Device {
     friend bool InitializeDevice(Device *device);
     void initialize_cluster();
     void initialize_banked_dram_manager();
+    void initialize_l1_manager();
 
     // Puts device into reset
     bool close();
     friend bool CloseDevice(Device *device);
 
-    uint32_t allocate_buffer(int dram_channel, uint32_t size_in_bytes);
-    uint32_t allocate_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
-    void free_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
+    // Interfaces to memory manager
+    uint32_t allocate_dram_buffer(int dram_channel, uint32_t size_in_bytes);
+    uint32_t reserve_dram_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
+    void free_dram_buffer(int dram_channel, uint32_t address);
+    uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes);
+    uint32_t reserve_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
+    void free_l1_buffer(const tt_xy_pair &logical_core, uint32_t address);
+    uint32_t address_for_interleaved_dram_buffer(const std::map<int, uint32_t> &size_in_bytes_per_bank);
+    uint32_t address_for_l1_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes);
     friend class DramBuffer;
     friend class InterleavedDramBuffer;
+    friend class L1Buffer;
+    friend std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes);
+    friend std::vector<CircularBuffer *> CreateCircularBuffers(
+        Program *program,
+        Device *device,
+        uint32_t buffer_index,
+        const CoreRange &core_range,
+        uint32_t num_tiles,
+        uint32_t size_in_bytes,
+        DataFormat data_format
+    );
 
     static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
     tt::ARCH arch_;
     tt_cluster *cluster_;
     int pcie_slot_;
     std::unordered_map<int, MemoryManager *> banked_dram_manager_;
+    std::unordered_map<tt_xy_pair, MemoryManager *> l1_manager_;
     bool closed_;
 };
 

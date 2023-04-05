@@ -8,6 +8,7 @@ TT_METAL_IMPL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 TT_METAL_IMPL_SRCS = \
 	tt_metal/impl/device/device.cpp \
 	tt_metal/impl/buffers/buffer.cpp \
+	tt_metal/impl/buffers/circular_buffer.cpp \
 	tt_metal/impl/buffers/interleaved_buffer.cpp \
 	tt_metal/impl/kernels/kernel_args.cpp \
 	tt_metal/impl/kernels/kernel.cpp \

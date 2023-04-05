@@ -32,7 +32,6 @@ tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair 
     tt_metal::Program *program = new tt_metal::Program();
 
     uint32_t src0_cb_index = 0;
-    uint32_t src0_cb_addr = 200 * 1024;
     uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
@@ -41,12 +40,10 @@ tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair 
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        src0_cb_addr,
         tt::DataFormat::Float16_b
     );
 
     uint32_t src1_cb_index = 1;
-    uint32_t src1_cb_addr = 300 * 1024;
     auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
         device,
@@ -54,12 +51,10 @@ tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair 
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        src1_cb_addr,
         tt::DataFormat::Float16_b
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t output_cb_addr = 400 * 1024;
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
@@ -68,7 +63,6 @@ tt_metal::Program *setup_program_one(tt_metal::Device *device, const tt_xy_pair 
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        output_cb_addr,
         tt::DataFormat::Float16_b
     );
 
@@ -112,7 +106,6 @@ tt_metal::Program *setup_program_two(tt_metal::Device *device, const tt_xy_pair 
     tt_metal::Program *program = new tt_metal::Program();
 
     uint32_t src0_cb_index = 0;
-    uint32_t src0_cb_addr = 200 * 1024;
     uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
@@ -121,12 +114,10 @@ tt_metal::Program *setup_program_two(tt_metal::Device *device, const tt_xy_pair 
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        src0_cb_addr,
         tt::DataFormat::Float16_b
     );
 
     uint32_t src1_cb_index = 1;
-    uint32_t src1_cb_addr = 300 * 1024;
     auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
         device,
@@ -134,12 +125,10 @@ tt_metal::Program *setup_program_two(tt_metal::Device *device, const tt_xy_pair 
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        src1_cb_addr,
         tt::DataFormat::Float16_b
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t output_cb_addr = 400 * 1024;
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
@@ -148,7 +137,6 @@ tt_metal::Program *setup_program_two(tt_metal::Device *device, const tt_xy_pair 
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        output_cb_addr,
         tt::DataFormat::Float16_b
     );
 

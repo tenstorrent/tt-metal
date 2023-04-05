@@ -189,15 +189,15 @@ ComputeKernel *CreateComputeKernel(
     return kernel;
 }
 
-DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes) {
-    TT_ASSERT(dram_channel >= 0 and dram_channel <= 7, "Valid range for DRAM channel is [0, 7]");
-    DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes);
-    return buffer;
-}
-
 DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address) {
     TT_ASSERT(dram_channel >= 0 and dram_channel <= 7, "Valid range for DRAM channel is [0, 7]");
     DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes, address);
+    return buffer;
+}
+
+DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes) {
+    TT_ASSERT(dram_channel >= 0 and dram_channel <= 7, "Valid range for DRAM channel is [0, 7]");
+    DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes);
     return buffer;
 }
 
@@ -212,8 +212,43 @@ L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &cor
     return l1_buffer;
 }
 
-void DeallocateBuffer(Buffer *buffer) {
-    buffer->free();
+L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes) {
+    L1Buffer *l1_buffer = new L1Buffer(device, core, size_in_bytes);
+    program->add_l1_buffer(l1_buffer);
+    return l1_buffer;
+}
+
+std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes, uint32_t address) {
+    std::vector<L1Buffer *> l1_buffers;
+    auto start_core = core_range.first;
+    auto end_core = core_range.second;
+    for (auto x = start_core.x; x <= end_core.x; x++) {
+        for (auto y = start_core.y; y <= end_core.y; y++) {
+            auto logical_core = tt_xy_pair(x, y);
+            L1Buffer *l1_buffer = new L1Buffer(device, logical_core, size_in_bytes, address);
+            program->add_l1_buffer(l1_buffer);
+            l1_buffers.push_back(l1_buffer);
+        }
+    }
+    return l1_buffers;
+}
+
+std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes) {
+    uint32_t l1_address = device->address_for_l1_buffers_across_core_range(core_range, size_in_bytes);
+    std::vector<L1Buffer *> l1_buffers;
+    auto start_core = core_range.first;
+    auto end_core = core_range.second;
+    for (auto x = start_core.x; x <= end_core.x; x++) {
+        for (auto y = start_core.y; y <= end_core.y; y++) {
+            auto logical_core = tt_xy_pair(x, y);
+            L1Buffer *l1_buffer = new L1Buffer(device, logical_core, size_in_bytes, l1_address);
+            // L1 buffers constructed with address don't invoke the allocator, so we need to manually invoke it by reserving space
+            l1_buffer->reserve();
+            program->add_l1_buffer(l1_buffer);
+            l1_buffers.push_back(l1_buffer);
+        }
+    }
+    return l1_buffers;
 }
 
 CircularBuffer *CreateCircularBuffer(
@@ -221,14 +256,82 @@ CircularBuffer *CreateCircularBuffer(
     Device *device,
     uint32_t buffer_index,
     const tt_xy_pair &core,
-    uint32_t number_of_tiles,
+    uint32_t num_tiles,
     uint32_t size_in_bytes,
     uint32_t l1_address,
     DataFormat data_format) {
     CircularBuffer *circular_buffer =
-        new CircularBuffer(device, core, buffer_index, number_of_tiles, size_in_bytes, l1_address, data_format);
+        new CircularBuffer(device, core, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
     program->add_circular_buffer(circular_buffer);
     return circular_buffer;
+}
+
+CircularBuffer *CreateCircularBuffer(
+    Program *program,
+    Device *device,
+    uint32_t buffer_index,
+    const tt_xy_pair &core,
+    uint32_t num_tiles,
+    uint32_t size_in_bytes,
+    DataFormat data_format) {
+    CircularBuffer *circular_buffer =
+        new CircularBuffer(device, core, buffer_index, num_tiles, size_in_bytes, data_format);
+    program->add_circular_buffer(circular_buffer);
+    return circular_buffer;
+}
+
+std::vector<CircularBuffer *> CreateCircularBuffers(
+    Program *program,
+    Device *device,
+    uint32_t buffer_index,
+    const CoreRange &core_range,
+    uint32_t num_tiles,
+    uint32_t size_in_bytes,
+    uint32_t l1_address,
+    DataFormat data_format) {
+    std::vector<CircularBuffer *> circular_buffers;
+    auto start_core = core_range.first;
+    auto end_core = core_range.second;
+    for (auto x = start_core.x; x <= end_core.x; x++) {
+        for (auto y = start_core.y; y <= end_core.y; y++) {
+            auto core = tt_xy_pair(x, y);
+            CircularBuffer *circular_buffer =
+                new CircularBuffer(device, core, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
+            program->add_circular_buffer(circular_buffer);
+            circular_buffers.push_back(circular_buffer);
+        }
+    }
+    return circular_buffers;
+}
+
+std::vector<CircularBuffer *> CreateCircularBuffers(
+    Program *program,
+    Device *device,
+    uint32_t buffer_index,
+    const CoreRange &core_range,
+    uint32_t num_tiles,
+    uint32_t size_in_bytes,
+    DataFormat data_format) {
+    uint32_t l1_address = device->address_for_l1_buffers_across_core_range(core_range, size_in_bytes);
+    std::vector<CircularBuffer *> circular_buffers;
+    auto start_core = core_range.first;
+    auto end_core = core_range.second;
+    for (auto x = start_core.x; x <= end_core.x; x++) {
+        for (auto y = start_core.y; y <= end_core.y; y++) {
+            auto logical_core = tt_xy_pair(x, y);
+            CircularBuffer *circular_buffer =
+                new CircularBuffer(device, logical_core, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
+            // CBs constructed with address don't invoke the allocator, so we need to manually invoke it by reserving space
+            circular_buffer->reserve();
+            program->add_circular_buffer(circular_buffer);
+            circular_buffers.push_back(circular_buffer);
+        }
+    }
+    return circular_buffers;
+}
+
+void DeallocateBuffer(Buffer *buffer) {
+    buffer->free();
 }
 
 bool GenerateBinaries(
@@ -318,13 +421,28 @@ void SetCircularBufferDataFormat(
 
 void ValidateL1Buffers(Device *device, Program *program, const tt_xy_pair &logical_core) {
     auto l1_buffers_on_core = program->l1_buffers_on_core(logical_core);
+    auto cbs_on_core = program->circular_buffers_on_core(logical_core);
+    std::unordered_set<uint32_t> buffer_addresses;
     uint32_t total_l1_buffer_size_in_bytes = 0;
-    // TODO: Pull this based on device type! - should account for reserved space as well!
-    uint32_t max = 1 * 1024 * 1024;
+    uint32_t max = device->l1_size() - UNRESERVED_BASE;
     for (auto l1_buffer : l1_buffers_on_core) {
+        if (buffer_addresses.find(l1_buffer->address()) != buffer_addresses.end()) {
+            continue;
+        }
+        buffer_addresses.insert(l1_buffer->address());
         total_l1_buffer_size_in_bytes += l1_buffer->size();
         if (total_l1_buffer_size_in_bytes > max) {
-            TT_THROW("Size of L1 buffers on " + logical_core.str() + " exceed maximum size of " + std::to_string(max) + " bytes");
+            TT_THROW("Size of L1 buffers on " + logical_core.str() + "is " + std::to_string(total_l1_buffer_size_in_bytes) + " bytes, which exceeds maximum size of " + std::to_string(max) + " bytes");
+        }
+    }
+    for (auto circular_buffer : cbs_on_core) {
+        if (buffer_addresses.find(circular_buffer->address()) != buffer_addresses.end()) {
+            continue;
+        }
+        buffer_addresses.insert(circular_buffer->address());
+        total_l1_buffer_size_in_bytes += circular_buffer->size();
+        if (total_l1_buffer_size_in_bytes > max) {
+            TT_THROW("Size of L1 buffers on " + logical_core.str() + "is " + std::to_string(total_l1_buffer_size_in_bytes) + " bytes, which exceeds maximum size of " + std::to_string(max) + " bytes");
         }
     }
 }

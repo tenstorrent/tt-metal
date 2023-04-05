@@ -17,6 +17,7 @@ class Buffer {
 
     virtual ~Buffer() {}
 
+    // TODO: Buffer clone should do memcopy
     virtual Buffer *clone() = 0;
 
     Device *device() const { return device_; }
@@ -61,13 +62,17 @@ class DramBuffer : public Buffer {
     int dram_channel_;          // DRAM channel ID
 };
 
+// Fwd declares
+class Program;
+class CircularBuffer;
+
 class L1Buffer : public Buffer {
    public:
-    L1Buffer(Device *device, const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address) : logical_core_(logical_core), Buffer(device, size_in_bytes, address, false) {
-        TT_ASSERT(address_ >= UNRESERVED_BASE, "First " + std::to_string(UNRESERVED_BASE) + " bytes in L1 are reserved");
-    }
+    L1Buffer(Device *device, const tt_xy_pair &logical_core, uint32_t size_in_bytes);
 
-    ~L1Buffer() {}
+    L1Buffer(Device *device, const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
+
+    ~L1Buffer();
 
     Buffer *clone();
 
@@ -75,8 +80,20 @@ class L1Buffer : public Buffer {
 
     tt_xy_pair noc_coordinates() const;
 
-   private:
-    void free() { TT_ASSERT(false && "Freeing L1 is unimplemented"); }
+   protected:
+    void reserve();
+    friend std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes);
+    friend std::vector<CircularBuffer *> CreateCircularBuffers(
+        Program *program,
+        Device *device,
+        uint32_t buffer_index,
+        const CoreRange &core_range,
+        uint32_t num_tiles,
+        uint32_t size_in_bytes,
+        DataFormat data_format
+    );
+
+    void free();
     friend void DeallocateBuffer(Buffer *buffer);
 
     tt_xy_pair logical_core_;          // Logical core

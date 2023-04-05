@@ -1,0 +1,4 @@
+CreateInterleavedDramBuffer()
+==============================
+
+.. doxygenfunction:: CreateInterleavedDramBuffer

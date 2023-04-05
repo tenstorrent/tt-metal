@@ -38,7 +38,7 @@ InterleavedDramBuffer::InterleavedDramBuffer(Device *device, int num_bank_units,
       Buffer(device, num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry, 0, true) {
 
     auto size_per_bank = get_size_per_bank(device, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-    this->set_address(size_per_bank);
+    this->address_ = this->device_->address_for_interleaved_dram_buffer(size_per_bank);
 
     for (auto &[dram_bank, required_size_bytes] : size_per_bank) {
         auto dram_buffer = new DramBuffer(device, dram_bank, required_size_bytes, this->address_);
@@ -54,55 +54,12 @@ InterleavedDramBuffer::InterleavedDramBuffer(
       Buffer(device, num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry, 0, true) {
 
     auto size_per_bank = get_size_per_bank(device, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-    this->set_address(size_per_bank);
+    this->address_ = this->device_->address_for_interleaved_dram_buffer(size_per_bank);
 
     for (auto &[dram_bank, dram_buffer] : bank_to_buffer) {
         auto new_dram_buffer = new DramBuffer(device, dram_buffer->dram_channel(), dram_buffer->size(), this->address_);
         this->bank_to_buffer_.insert({dram_bank, new_dram_buffer});
     }
-}
-
-void InterleavedDramBuffer::set_address(const std::map<int, uint32_t> &size_per_bank) {
-    this->address_ = 0;
-    std::vector<std::pair<uint32_t, uint32_t>> candidate_addr_ranges;
-    for (auto &[dram_bank, required_size_bytes] : size_per_bank) {
-        auto potential_addr_ranges = this->device_->banked_dram_manager_.at(dram_bank)->available_addresses(required_size_bytes);
-        if (candidate_addr_ranges.empty()) {
-            candidate_addr_ranges = potential_addr_ranges;
-            continue;
-        }
-        int i = 0;
-        int j = 0;
-        std::vector<std::pair<uint32_t, uint32_t>> intersecting_addr_ranges;
-        while (i < candidate_addr_ranges.size() and j < potential_addr_ranges.size()) {
-            uint32_t lower_addr = std::max(candidate_addr_ranges[i].first, potential_addr_ranges[j].first);
-            uint32_t upper_addr = std::min(candidate_addr_ranges[i].second, potential_addr_ranges[j].second);
-            if (lower_addr <= upper_addr) {
-                intersecting_addr_ranges.push_back({lower_addr, upper_addr});
-            }
-            if (candidate_addr_ranges[i].second < potential_addr_ranges[j].second) {
-                i++;
-            } else {
-                j++;
-            }
-        }
-        candidate_addr_ranges = intersecting_addr_ranges;
-    }
-
-    if (candidate_addr_ranges.empty()) {
-        TT_THROW("Not enough space to hold interleave " + std::to_string(this->size_in_bytes_) + " bytes across DRAM channels");
-    }
-
-    uint32_t smallest_size = candidate_addr_ranges[0].second - candidate_addr_ranges[0].first;
-    uint32_t address = candidate_addr_ranges[0].first;
-    for (auto candidate_addr_range : candidate_addr_ranges) {
-        uint32_t range_size = candidate_addr_range.second - candidate_addr_range.first;
-        if (range_size < smallest_size) {
-            smallest_size = range_size;
-            address = candidate_addr_range.first;
-        }
-    }
-    this->address_ = address;
 }
 
 Buffer *InterleavedDramBuffer::clone() {

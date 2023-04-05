@@ -37,8 +37,6 @@ class InterleavedDramBuffer : public Buffer {
         const std::map<int, DramBuffer *> &bank_to_buffer
     );
 
-    void set_address(const std::map<int, uint32_t> &size_per_bank);
-
     void free();
     friend void DeallocateBuffer(Buffer *buffer);
 
