@@ -7,13 +7,14 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
+import json
 from libs import tt_lib as ttm
 from loguru import logger
 
 from transformers import T5Model
 from utility_functions import print_diff_argmax
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor, read_model_config
+from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.t5.t5_layer_ff import TtT5LayerFF
 
 
@@ -21,8 +22,8 @@ def run_test_T5LayerFF_inference(device):
     hf_reference_model = T5Model.from_pretrained("t5-small")
     hf_reference_model.eval()
 
-    model_json_config = "tests/python_api_testing/models/t5/t5-small.json"
-    config = read_model_config(model_json_config)
+    config = json.loads(hf_reference_model.config.to_json_string())
+    config["is_decoder"] = False
 
     if config["is_decoder"]:
         hf_reference_module = hf_reference_model.decoder.block[0].layer[2]

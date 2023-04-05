@@ -55,7 +55,7 @@ from transformers.generation_logits_process import (
 )
 
 from utility_functions import print_diff_argmax
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor, read_model_config, print_corr_coef
+from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.t5.t5_stack import TtT5Stack, BaseModelOutputWithPastAndCrossAttentions
 from fused_ops.linear import Linear as TtLinear
 
@@ -1329,10 +1329,7 @@ def test_T5Model_inference(device):
     hf_reference_model = T5ForConditionalGeneration.from_pretrained("t5-small")
     hf_reference_model.eval()
 
-    # T5-small config file: https://huggingface.co/t5-small/resolve/main/config.json
-    model_json_config = "tests/python_api_testing/models/t5/t5-small.json"
-    config = read_model_config(model_json_config)
-
+    config = json.loads(hf_reference_model.config.to_json_string())
     input_sentance = "translate English to German: The house is wonderful."
 
     # inference

@@ -87,7 +87,7 @@ class TtT5Block(nn.Module):
             # the actual query length is unknown for cross attention
             # if using past key value states. Need to inject it here
             if present_key_value_state is not None:
-                query_length = present_key_value_state[0].shape[2]
+                query_length = present_key_value_state[0].shape()[3]
             else:
                 query_length = None
 

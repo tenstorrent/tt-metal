@@ -7,6 +7,7 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
+import json
 from libs import tt_lib as ttm
 
 from transformers import T5Model
@@ -15,7 +16,7 @@ from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_
 
 from loguru import logger
 from python_api_testing.fused_ops.softmax import softmax as tt_softmax
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor, read_model_config
+from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.t5.t5_attention import TtT5Attention, t5_unshape_pt, t5_unshape_tt, t5_shape_tt, t5_shape_pt
 
 
@@ -155,9 +156,9 @@ def run_test_T5Attention_inference(device):
     torch.manual_seed(0)
     test_input = ((torch.rand(32, 128, 512) * 2) - 1) #.to(torch.float16)
 
-    # // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/configuration_t5.py
-    model_json_config = "tests/python_api_testing/models/t5/t5-small.json"
-    config = read_model_config(model_json_config)
+    config = json.loads(hugging_face_reference_model.config.to_json_string())
+    config["is_decoder"] = False
+
     block = 2
     has_relative_attention_bias = bool(block == 0)
 
