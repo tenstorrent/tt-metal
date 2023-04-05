@@ -119,7 +119,8 @@ def run_ffn_inference(model_version, batch, seq_len, on_weka, pcc):
 
     pytorch_out = pytorch_ffn_model(ffn_input)
 
-    tilized_ffn_input = ttl.tensor.Tensor(pad_activation(ffn_input).reshape(-1).tolist(), ffn_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+    pad_ffn_input = pad_activation(ffn_input)
+    tilized_ffn_input = ttl.tensor.Tensor(pad_ffn_input.reshape(-1).tolist(), pad_ffn_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
     tilized_ffn_input = tilized_ffn_input.to(device)
 
     tt_out = tt_ffn_model(tilized_ffn_input).to(host)

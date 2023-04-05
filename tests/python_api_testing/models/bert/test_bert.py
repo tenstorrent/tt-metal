@@ -39,9 +39,9 @@ class TtBertShared(torch.nn.Module):
     def forward(self, x):
         embeddings = self.embeddings(x)
         # Convert to ll buda tensor
-        tt_embeddings = ttl.tensor.Tensor(pad_activation(embeddings).reshape(-1).tolist(), (embeddings.shape[0], 1, embeddings.shape[-2], embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+        pad_embeddings = pad_activation(embeddings)
+        tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
         tt_embeddings = tt_embeddings.to(self.device)
-        print(tt_embeddings.shape())
         encoder_output = self.encoders(tt_embeddings)
         return encoder_output
 
