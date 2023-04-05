@@ -1,0 +1,73 @@
+import torch
+from libs import tt_lib as ttm
+from python_api_testing.models.t5.t5_utils import tt2torch_tensor, torch2tt_tensor
+
+
+# class T5LayerNorm(nn.Module):
+#     def __init__(self, hidden_size, eps=1e-6):
+#         """
+#         Construct a layernorm module in the T5 style. No bias and no subtraction of mean.
+#         """
+#         super().__init__()
+#         self.weight = nn.Parameter(torch.ones(hidden_size))
+#         self.variance_epsilon = eps
+
+#     def forward(self, hidden_states):
+#         # T5 uses a layer_norm which only scales and doesn't shift, which is also known as Root Mean
+#         # Square Layer Normalization https://arxiv.org/abs/1910.07467 thus varience is calculated
+#         # w/o mean and there is no bias. Additionally we want to make sure that the accumulation for
+#         # half-precision inputs is done in fp32
+
+#         variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+
+#         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+#         t = torch.rsqrt(variance + self.variance_epsilon)
+
+#         # convert into half-precision if necessary
+#         if self.weight.dtype in [torch.float16, torch.bfloat16]:
+#             hidden_states = hidden_states.to(self.weight.dtype)
+#         return self.weight * hidden_states
+
+
+class TtT5LayerNorm(torch.nn.Module):
+    def __init__(self, config, state_dict, base_address, device):
+        """
+        Construct a layernorm module in the T5 style. No bias and no subtraction of mean.
+        """
+        super().__init__()
+        self.variance_epsilon = config["layer_norm_epsilon"]
+        self.device = device
+
+        # get weights
+        pytorch_weights = state_dict[f"{base_address}.weight"]
+        pytorch_weights = pytorch_weights.repeat(1, 1, 32, 1)
+
+        self.weight = torch2tt_tensor(pytorch_weights, device)
+
+    def forward(self, hidden_states):
+        # handle variance
+        torch_hidden_states = tt2torch_tensor(hidden_states)
+        variance = torch_hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        variance = variance.repeat(1, 1, 1, 32)
+        tt_variance = torch2tt_tensor(variance, self.device)
+
+        # Pytorch implementation: hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        # hadle constant variance_epsilon
+        tt_variance_epsilon_const = ttm.tensor.Tensor(
+            [self.variance_epsilon] + [0.0 for _ in range(32 * 32 - 1)],
+            [1, 1, 32, 32],
+            ttm.tensor.DataType.BFLOAT16,
+            ttm.tensor.Layout.TILE,
+            self.device
+        )
+
+        # Product 2: torch.rsqrt(variance + self.variance_epsilon)
+        op_add = ttm.tensor.bcast(tt_variance, tt_variance_epsilon_const, ttm.tensor.BcastOpMath.ADD, ttm.tensor.BcastOpDim.H)
+        term_2 = ttm.tensor.recip(ttm.tensor.sqrt(op_add))
+
+        # Product 1 * Product 2: hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        hidden_states = ttm.tensor.bcast(hidden_states, term_2, ttm.tensor.BcastOpMath.MUL, ttm.tensor.BcastOpDim.W)
+
+        # weight * hidden_states
+        result = ttm.tensor.bcast(hidden_states, self.weight, ttm.tensor.BcastOpMath.MUL, ttm.tensor.BcastOpDim.H)
+        return result

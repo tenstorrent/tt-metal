@@ -7,18 +7,12 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
-import numpy as np
 from torch import nn
 from libs import tt_lib as ttm
-from loguru import logger
 
-from transformers import T5Model
-from utility_functions import print_diff_argmax
-from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor, read_model_config, print_corr_coef
+from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.t5.t5_block import TtT5Block
 from python_api_testing.models.t5.t5_layer_norm import TtT5LayerNorm
-
 
 
 class BaseModelOutputWithPastAndCrossAttentions():
@@ -466,59 +460,3 @@ class TtT5Stack(nn.Module):
             attentions=all_attentions, # Optional[Tuple[FloatTensor]]
             cross_attentions=all_cross_attentions, # Optional[Tuple[FloatTensor]]
         )
-
-
-def test_T5Stack_inference(device):
-    hf_reference_model = T5Model.from_pretrained("t5-small")
-    hf_reference_model.eval()
-
-    model_json_config = "tests/python_api_testing/models/t5/t5-small.json"
-    config = read_model_config(model_json_config)
-    # config["is_decoder"] = True
-
-    if config["is_decoder"]:
-        hf_reference_module = hf_reference_model.decoder
-        base_address = f"decoder"
-    else:
-        hf_reference_module = hf_reference_model.encoder
-        base_address = f"encoder"
-
-    # Prepare input
-    torch.manual_seed(0)
-    test_input = (torch.rand(32, 128, 512) * 2) - 1
-
-    # PyTorch output
-    pt_out = hf_reference_module(inputs_embeds=test_input)
-    pt_out = pt_out.last_hidden_state
-    pt_out = pt_out.unsqueeze(0)
-
-    # Move test input to Tt device test_input
-    test_input = test_input.unsqueeze(0)
-    test_input = torch2tt_tensor(test_input, device)
-
-    # T5-small config file: https://huggingface.co/t5-small/resolve/main/config.json
-    tt_model = TtT5Stack(config, hf_reference_model.state_dict(), base_address, device)
-    tt_model_outputs = tt_model(inputs_embeds=test_input)
-    last_hidden_state = tt_model_outputs[0]
-    tt_out = tt2torch_tensor(last_hidden_state)
-
-    print(pt_out[0, 0, 1:10, 1:10])
-    print(tt_out[0, 0, 1:10, 1:10])
-
-    print_diff_argmax(pt_out, tt_out)
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
-
-    print(comp_allclose(pt_out, tt_out))
-    print(pcc_message)
-
-    if does_pass:
-        logger.info("test_T5Stack_inference Passed!")
-    else:
-        logger.warning("test_T5Stack_inference Failed!")
-
-
-if __name__ == "__main__":
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
-    test_T5Stack_inference(device)
-    ttm.device.CloseDevice(device)

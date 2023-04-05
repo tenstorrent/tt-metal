@@ -1,25 +1,11 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import torch
-import numpy as np
 from torch import nn
 from libs import tt_lib as ttm
-from loguru import logger
 
-from transformers import T5Model
-from utility_functions import print_diff_argmax
-from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor, read_model_config, print_corr_coef
+from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.t5.t5_layer_self_attention import TtT5LayerSelfAttention
 from python_api_testing.models.t5.t5_layer_cross_attention import TtT5LayerCrossAttention
 from python_api_testing.models.t5.t5_layer_ff import TtT5LayerFF
-
 
 
 class TtT5Block(nn.Module):
@@ -164,55 +150,3 @@ class TtT5Block(nn.Module):
             outputs = outputs + attention_outputs
 
         return outputs  # hidden-states, present_key_value_states, (self-attention position bias), (self-attention weights), (cross-attention position bias), (cross-attention weights)
-
-
-def test_T5Block_inference(device):
-    hf_reference_model = T5Model.from_pretrained("t5-small")
-    hf_reference_model.eval()
-
-    model_json_config = "tests/python_api_testing/models/t5/t5-small.json"
-    config = read_model_config(model_json_config)
-    block = 1
-    # config["is_decoder"] = True
-    has_relative_attention_bias = block == 0
-
-    if config["is_decoder"]:
-        hf_reference_module = hf_reference_model.decoder.block[block]
-        base_address = f"decoder.block.{block}"
-    else:
-        hf_reference_module = hf_reference_model.encoder.block[block]
-        base_address = f"encoder.block.{block}"
-
-    # Prepare input
-    torch.manual_seed(0)
-    test_input = (torch.rand(32, 128, 512) * 2) - 1
-
-    # PyTorch output
-    pt_out = hf_reference_module(test_input)[0].unsqueeze(0)
-    test_input = test_input.unsqueeze(0)
-
-    # T5-small config file: https://huggingface.co/t5-small/resolve/main/config.json
-    tt_model = TtT5Block(config, hf_reference_model.state_dict(), base_address, device, has_relative_attention_bias)
-    tt_out = tt_model(torch2tt_tensor(test_input, device))[0]
-    tt_out = tt2torch_tensor(tt_out)
-
-    print(pt_out[0, 0, 1:10, 1:10])
-    print(tt_out[0, 0, 1:10, 1:10])
-
-    print_diff_argmax(pt_out, tt_out)
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
-
-    print(comp_allclose(pt_out, tt_out))
-    print(pcc_message)
-
-    if does_pass:
-        logger.info("test_T5Block_inference Passed!")
-    else:
-        logger.warning("test_T5Block_inference Failed!")
-
-
-if __name__ == "__main__":
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
-    test_T5Block_inference(device)
-    ttm.device.CloseDevice(device)

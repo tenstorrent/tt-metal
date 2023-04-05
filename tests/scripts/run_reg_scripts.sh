@@ -36,6 +36,7 @@ env pytest tests/python_api_testing/models/t5 -k t5_layer_norm
 env pytest tests/python_api_testing/models/t5 -k t5_layer_ff
 env pytest tests/python_api_testing/models/t5 -k t5_layer_self_attention
 env pytest tests/python_api_testing/models/t5 -k t5_layer_cross_attention
+env pytest tests/python_api_testing/models/t5 -k t5_block
 
 env pytest tests/python_api_testing/models/synthetic_gradients -k batchnorm1d_test
 env pytest tests/python_api_testing/models/synthetic_gradients -k linear_test
