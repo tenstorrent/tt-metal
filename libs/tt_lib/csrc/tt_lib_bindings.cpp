@@ -243,20 +243,125 @@ void TensorModule(py::module &m_tensor) {
         .def("pad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, uint32_t pad_value) {
             return self.pad(output_tensor_shape, input_tensor_start, pad_value);
         }, R"doc(
-            Pads TT Tensor.
+            Pads TT Tensor with given `pad_value`. The input tensor must be on host and in ROW_MAJOR layout. Returns an output tensor that contains the input tensor at the given `input_tensor_start` indices and the padded value everywhere else.
+
+            +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
+            | Argument            | Description                                          | Data type    | Valid range                                         | Required |
+            +=====================+======================================================+==============+=====================================================+==========+
+            | output_tensor_shape | Shape of output tensor                               | List[int[4]] |                                                     | Yes      |
+            +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
+            | input_tensor_start  | Start indices to place input tensor in output tensor | List[int[4]] | Values along each dim must be                       | Yes      |
+            |                     |                                                      |              |                                                     |          |
+            |                     |                                                      |              | <= (output_tensor_shape[i] - input_tensor_shape[i]) |          |
+            +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
+            | pad_value           | Value to pad input tensor                            | int          |                                                     | Yes      |
+            +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
 
             .. code-block:: python
 
-                tt_tensor = tt_tensor.pad(output_tensor_shape, input_tensor_start, pad_value)
+                input_tensor_shape = [1, 1, 3, 3]
+                output_tensor_shape = [1, 2, 5, 5]
+                input_tensor_start = [0, 1, 1, 1]
+                pad_value = 0
+
+                inp = torch.Tensor(
+                    [ 1, 2, 3,
+                      4, 5, 6,
+                      7, 8, 9 ]
+                )
+                tt_tensor = ttl.tensor.Tensor(
+                    inp.tolist(),
+                    input_tensor_shape,
+                    ttl.tensor.DataType.BFLOAT16,
+                    ttl.tensor.Layout.ROW_MAJOR,
+                )
+                tt_tensor_padded = tt_tensor.pad(output_tensor_shape, input_tensor_start, pad_value)
+
+                print("Input tensor:")
+                tt_tensor.pretty_print()
+                print("\nPadded tensor:")
+                tt_tensor_padded.pretty_print()
+
+            Example output:
+
+            .. code-block::
+
+                Input tensor:
+                [ [[[1, 2, 3],
+                    [4, 5, 6],
+                    [7, 8, 9]]] dtype=bfloat16 ]
+
+                Padded tensor:
+                [ [[[0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0]],
+
+                    [[0, 0, 0, 0, 0],
+                     [0, 1, 2, 3, 0],
+                     [0, 4, 5, 6, 0],
+                     [0, 7, 8, 9, 0],
+                     [0, 0, 0, 0, 0]]] dtype=bfloat16 ]
         )doc")
         .def("unpad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
             return self.unpad(output_tensor_start, output_tensor_end);
         }, R"doc(
-            Unpads TT Tensor.
+            Unpads TT Tensor from given `input_tensor`. The input tensor must be on host and in ROW_MAJOR layout. Returns an output tensor from `output_tensor_start` to `output_tensor_end` (inclusive) of the input tensor.
+
+            +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
+            | Argument            | Description                                  | Data type    | Valid range                                         | Required |
+            +=====================+==============================================+==============+=====================================================+==========+
+            | output_tensor_start | Start indices of input tensor                | List[int[4]] | Values along each dim must be                       | Yes      |
+            |                     |                                              |              |                                                     |          |
+            |                     |                                              |              | < input_tensor_shape[i] and <= output_tensor_end[i] |          |
+            +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
+            | output_tensor_end   | End indices of input tensor in output tensor | List[int[4]] | Values along each dim must be                       | Yes      |
+            |                     |                                              |              |                                                     |          |
+            |                     |                                              |              | < input_tensor_shape[i]                             |          |
+            +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
 
             .. code-block:: python
 
-                tt_tensor = tt_tensor.unpad(output_tensor_start, output_tensor_end)
+                input_tensor_shape = [1, 1, 5, 5]
+                output_tensor_start = [0, 0, 1, 1]
+                output_tensor_end = [0, 0, 3, 3]
+
+                inp = torch.Tensor(
+                    [ 0, 0, 0, 0, 0,
+                      0, 1, 2, 3, 0,
+                      0, 4, 5, 6, 0,
+                      0, 7, 8, 9, 0,
+                      0, 0, 0, 0, 0 ]
+                )
+                tt_tensor = ttl.tensor.Tensor(
+                    inp.tolist(),
+                    input_tensor_shape,
+                    ttl.tensor.DataType.BFLOAT16,
+                    ttl.tensor.Layout.ROW_MAJOR,
+                )
+                tt_tensor_unpadded = tt_tensor.unpad(output_tensor_start, output_tensor_end)
+
+                print("Input tensor:")
+                tt_tensor.pretty_print()
+                print("\nUnpadded tensor:")
+                tt_tensor_unpadded.pretty_print()
+
+            Example output:
+
+            .. code-block::
+
+                Input tensor:
+                [ [[[0, 0, 0, 0, 0],
+                    [0, 1, 2, 3, 0],
+                    [0, 4, 5, 6, 0],
+                    [0, 7, 8, 9, 0],
+                    [0, 0, 0, 0, 0]]] dtype=bfloat16 ]
+
+                Unpadded tensor:
+                [ [[[1, 2, 3],
+                    [4, 5, 6],
+                    [7, 8, 9]]] dtype=bfloat16 ]
         )doc")
         .def("print", [](const Tensor &self, Layout print_layout) {
             return self.print(print_layout);
