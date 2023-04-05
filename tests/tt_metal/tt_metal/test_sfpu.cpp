@@ -65,6 +65,8 @@ bool run_sfpu_test(string sfpu_name) {
             tt::DataFormat::Float16_b
         );
 
+        // no need for c_in2 buffer since scaler=0 in the reader kernel
+
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t output_cb_addr = 300 * 1024;
         uint32_t num_output_tiles = 1;
@@ -148,7 +150,8 @@ bool run_sfpu_test(string sfpu_name) {
                 dram_buffer_src_addr,
                 (std::uint32_t)dram_src_noc_xy.x,
                 (std::uint32_t)dram_src_noc_xy.y,
-                num_tiles
+                num_tiles,
+                0,0,0,0,0 // TODO(AP): [8] is scaler
             }
         );
 

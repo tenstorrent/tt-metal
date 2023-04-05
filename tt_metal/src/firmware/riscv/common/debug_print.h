@@ -42,6 +42,36 @@ struct SETP { char p; SETP(char pa) : p(pa) {} } ATTR_PACK; // Analog of cout <<
 struct FIXP { char tmp; } ATTR_PACK; // Analog of cout << std::fixed
 struct HEX { char tmp; } ATTR_PACK; // Analog of cout << std::hex
 
+//
+// Samples count values of a tile itile at cb with value offset and stride.
+// sampling happens relative to the current CB read or write pointer.
+// This means that for printing a tile read from the front of the CB,
+// the DPRINT << TILESAMPLES(...) call has to occur after cb_wait_front and before cb_pop_front
+// For this case, bool packer=true needs to be passed as an argument
+// For the case of printing a tile from the back of the CB, packer=false needs to passed and
+// the DPRINT << TILESAMPLES(...) call has to occur after cb_reserve_back and before cb_push_back.
+//
+template<int MAXSAMPLES>
+struct TileSamples : TileSamplesHostDev<MAXSAMPLES> {
+    inline int min_(int a, int b) { return a < b ? a : b; } // to avoid inclusion of <algorithm>
+    inline TileSamples(bool packer, int cb, int itile, int count, int offs, int stride) {
+        struct TILE { uint16_t vals[1024] __attribute__((packed)); } __attribute__((aligned(2)));
+        this->count_ = count;
+        volatile TILE* t;
+        if (packer) { // note that front is not valid in packer and back is not valid/initialized in packer
+            this->ptr_ = cb_write_interface[cb].fifo_wr_ptr<<4;
+            t = (reinterpret_cast<volatile TILE*>(this->ptr_) + itile); // front of q is reader/consumer
+        } else {
+            this->ptr_ = cb_read_interface[cb].fifo_rd_ptr<<4;
+            t = (reinterpret_cast<volatile TILE*>(this->ptr_) + itile); // back of q is writer/producer
+        }
+        for (int j = 0; j < min_(MAXSAMPLES, count); j++)
+            this->samples_[j] = t->vals[offs + stride*j];
+    }
+};
+using TILESAMPLES8 = TileSamples<8>; // max 8 values
+using TILESAMPLES32 = TileSamples<32>; // max 32 values
+
 // These primitives are intended for ordering debug prints
 // A possible use here is to synchronize debug print order between cores/harts
 // It could be implemented, for instance as code = linearize({x,y})*5 + hart_id
@@ -85,9 +115,11 @@ template<> uint8_t DebugPrintTypeToId<HEX>() { return DEBUG_PRINT_TYPEID_HEX; }
 template<> uint8_t DebugPrintTypeToId<F32>() { return DEBUG_PRINT_TYPEID_FLOAT32; }
 template<> uint8_t DebugPrintTypeToId<U32>() { return DEBUG_PRINT_TYPEID_UINT32; }
 template<> uint8_t DebugPrintTypeToId<int>() { return DEBUG_PRINT_TYPEID_INT32; }
+template<> uint8_t DebugPrintTypeToId<TILESAMPLES8>() { return DEBUG_PRINT_TYPEID_TILESAMPLES8; }
+template<> uint8_t DebugPrintTypeToId<TILESAMPLES32>() { return DEBUG_PRINT_TYPEID_TILESAMPLES32; }
 static_assert(sizeof(int) == 4);
 
-// Different specializations for const char*
+// Specializations for const char* (string literals), typically you will not need these for other types
 template<> uint32_t DebugPrintTypeToSize<const char*>(const char* val) { return DebugPrintStrLen(val); } // also copy the terminating zero
 template<> const uint8_t* DebugPrintTypeAddr<const char*>(const char** val) { return reinterpret_cast<const uint8_t*>(*val); }
 template<> uint32_t DebugPrintTypeToSize<char*>(char* val) { return DebugPrintStrLen(val); } // also copy the terminating zero
@@ -121,7 +153,7 @@ template<typename T>
 DebugPrinter operator <<(DebugPrinter dp, T val) {
 
     if (*dp.wpos() == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
-        // skip this stall on buffer flush if this hart+core was not specifically enabled on the host
+        // skip all prints if this hart+core was not specifically enabled on the host
         return dp;
     }
 
@@ -133,7 +165,6 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
     uint32_t wpos = *dp.wpos(); // copy wpos into local storage
     auto sum_sz = payload_sz + code_sz + sz_sz;
     if (dp.data() + wpos + sum_sz >= dp.bufend()) {
-
         // buffer is full - wait for the host reader to flush+update rpos
         while (*dp.rpos() < *dp.wpos())
             ; // wait for host to catch up to wpos with it's rpos
@@ -196,3 +227,5 @@ template DebugPrinter operator<< <SETP>(DebugPrinter, SETP val);
 template DebugPrinter operator<< <F16>(DebugPrinter, F16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
+template DebugPrinter operator<< <TILESAMPLES8>(DebugPrinter, TILESAMPLES8 val);
+template DebugPrinter operator<< <TILESAMPLES32>(DebugPrinter, TILESAMPLES32 val);

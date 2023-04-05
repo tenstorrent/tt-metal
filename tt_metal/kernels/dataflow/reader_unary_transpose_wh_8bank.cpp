@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#include "debug_print.h"
+
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
     // skip args 1,2,3 for compat with reader_unary, reader_unary_8bank
@@ -8,12 +10,27 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(5);
     uint32_t Wt = get_arg_val<uint32_t>(6);
     uint32_t HtWt = get_arg_val<uint32_t>(7);
+    uint32_t scaler = get_arg_val<uint32_t>(8);
 
     constexpr uint32_t cb_id_in0 = 0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
+
+    if (scaler != 0) {
+        union { float f; uint32_t u; } u; u.u = scaler;
+        //DPRINT << "Scaler = " << F32(u.f) << ENDL();
+        cb_reserve_back(2, 1);
+        auto ptr = reinterpret_cast<uint16_t*>(400*1024);
+        for (int j = 0; j < 1024; j++)
+            ptr[j] = uint16_t(0);
+
+        for (int k = 0; k < 4; k++)
+        for (int j = 0; j < 16; j++)
+            ptr[k*256 + j] = uint16_t(u.u>>16);
+        cb_push_back(2, 1);
+    }
 
     uint32_t i_tile_N = 0; // first tile in current batch
     uint32_t i_tile = 0;

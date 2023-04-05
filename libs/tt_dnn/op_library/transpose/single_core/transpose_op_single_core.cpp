@@ -62,6 +62,16 @@ Tensor transpose_wh_single_core(const Tensor &a) {
         src0_cb_addr,
         DataFormat::Float16_b
     );
+    auto cb_src1 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        CB::c_in2,
+        core,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        src0_cb_addr+20*1024,
+        DataFormat::Float16_b
+    );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t output_cb_addr = 400 * 1024;
@@ -127,7 +137,8 @@ Tensor transpose_wh_single_core(const Tensor &a) {
                 src0_dram_buffer->address(),
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
-                num_tensor_tiles, NC, Ht, Wt, Ht*Wt
+                num_tensor_tiles, NC, Ht, Wt, Ht*Wt,
+                0 /*scaler*/
             }
         );
 

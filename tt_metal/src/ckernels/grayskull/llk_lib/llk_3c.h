@@ -21,6 +21,8 @@
 
 #define ALWI inline __attribute__((always_inline))
 
+#define TRISC_NUM 3
+
 #ifdef TRISC_MATH
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
@@ -30,6 +32,7 @@
 #include "llk_math_reduce.h"
 #define MATH(x) x
 #define MAIN math_main()
+#define TRISC_ID 1
 #else
 #define MATH(x)
 #endif
@@ -39,6 +42,7 @@
 #include "llk_pack.h"
 #define PACK(x) x
 #define MAIN pack_main()
+#define TRISC_ID 2
 #else
 #define PACK(x)
 #endif
@@ -53,6 +57,7 @@
 #include "llk_unpack_untilize.h"
 #define UNPACK(x) x
 #define MAIN unpack_main()
+#define TRISC_ID 0
 #else
 #define UNPACK(x)
 #endif
@@ -104,12 +109,13 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1)
     UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>() ));
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated<BroadcastType::NONE>(icb0, icb1) ));
 
+    MATH(( llk_math_pack_sync_init<SYNC>() ));
+
+
     PACK(( llk_pack_init() ));
     PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>() ));
-
-    MATH(( llk_math_pack_sync_init<SYNC>() ));
 }
 
 ALWI void mm_init_short() {
@@ -218,13 +224,13 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles)
  *
  * | Argument       | Description                                       | Type     | Valid Range                                         | Required |
  * |----------------|---------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | src_tile_index | The index of the tile in the DST register         | uint32_t | Must be less than the size of the DST register (16) | True     |
- * | out_cb_id      | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
- * | out_tile_index | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
+ * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the DST register (16) | True     |
+ * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
+ * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
  */
-ALWI void pack_tile(uint32_t idst, uint32_t cbid)
+ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t icb_tile=0)
 {
-    PACK(( llk_pack<false, SYNC, false >(idst, cbid)  ));
+    PACK(( llk_pack<false, SYNC, false >(ifrom_dst, icb, icb_tile)  ));
 }
 
 // documented in dataflow_api.h
@@ -591,6 +597,28 @@ ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, float sca
     UNPACK(( llk_unpack_reduce_hw_configure_disaggregated<REDUCE_OP, REDUCE_DIM>(icb, scaler) ));
 }
 
+// TODO(AP): v2 is based on fusion-friendly implementation of reduce, keeping the original version around for now
+template<bool at_start>
+ALWI void reduce_init_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler)
+{
+    UNPACK(( llk_setup_operands() ));
+    UNPACK(( llk_unpack_AB_init() ));
+    UNPACK(( llk_unpack_AB_hw_configure_disaggregated(icb, icb_scaler) ));
+
+    MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
+    MATH(( llk_math_pack_sync_init<SYNC>() ));
+
+    PACK(( llk_pack_init() ));
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(16) ));
+    PACK(( llk_setup_outputs() ));
+    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>() ));
+}
+
+ALWI void reduce_revert_v2(uint32_t icb)
+{
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false, true>(icb) ));
+}
+
 /**
  * Performs a reduction operation *B = reduce(A)* using reduce_func for
  * dimension reduction on a tile in the CB at a given index and writes the
@@ -616,6 +644,13 @@ ALWI void reduce_tile(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t 
 {
     MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(idst) ));
     UNPACK(( llk_unpack_reduce<REDUCE_OP, REDUCE_DIM>(icb, itile) ));
+}
+
+// TODO(AP): v2 is based on fusion-friendly implementation of reduce, keeping the original version around for now
+ALWI void reduce_tile_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
+{
+    MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(idst) ));
+    UNPACK(( llk_unpack_AB(icb0, icb1, itile0, itile1) ));
 }
 #endif
 

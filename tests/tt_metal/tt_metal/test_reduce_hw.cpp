@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
 
         // Also tests that the debug print server terminates cleanly with new tt_metal APIs
         // (it was previously crashing due to different termination sequence)
-        //tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
+        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -52,6 +52,8 @@ int main(int argc, char **argv) {
         tt_xy_pair core = {0, 0};
 
         vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
+        //vector<uint32_t> shape = {1, 1, 1*TILE_HEIGHT, 1*TILE_WIDTH};
+        //std::cout << "REDUCE HW SHAPE=" << shape[0] << " " << shape[1] << " " << shape[2] << " " << shape[3] << std::endl;
         u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
         u32 HW = H*W;
         TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
@@ -101,6 +103,12 @@ int main(int argc, char **argv) {
             num_output_buffer_tiles,
             num_output_buffer_tiles * single_tile_bytes,
             output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        auto cb_scaler_reduce_tile = tt_metal::CreateCircularBuffer(
+            program, device, CB::c_in2 /*ouput_cb_index*/, core, 2 /* one tile*/,
+            2 * single_tile_bytes, /* one tile */ 400*1024, /* buf addr */
             tt::DataFormat::Float16_b
         );
 
@@ -172,7 +180,8 @@ int main(int argc, char **argv) {
                 dram_buffer_src0_addr,
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
-                num_tensor_tiles
+                num_tensor_tiles, 0, 0, 0, 0,
+                *reinterpret_cast<uint32_t*>(&scaler),
             }
         );
 

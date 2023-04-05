@@ -236,6 +236,8 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
             uint8_t sz = l->data[rpos++]; TT_ASSERT(rpos <= bufsize);
             uint8_t* ptr = l->data + rpos;
 
+            TileSamplesHostDev<8>* ts8 = nullptr; // need this decl ouside of switch :(
+            TileSamplesHostDev<32>* ts32 = nullptr; // TODO(AP): unify template params
             // we are sharing the same output file between debug print threads for multiple cores
             switch(code) {
                 // TODO(AP): better code index sync with debug_print.h
@@ -251,6 +253,29 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     unlock_stream();
                     TT_ASSERT(sz == strlen(cptr)+1);
                 break;
+                case DEBUG_PRINT_TYPEID_TILESAMPLES8:
+                    lock_stream();
+                    ts8 = reinterpret_cast< TileSamplesHostDev<8>* >(ptr);
+                    stream << "TILE: (";
+                    for (int j = 0; j < ts8->count_; j++) {
+                        stream << bfloat16_to_float(reinterpret_cast<uint16_t*>(ptr)[j]);
+                        stream << " ";
+                    }
+                    stream << "ptr=" << ts8->ptr_ << ")" << endl;
+                    unlock_stream();
+                break;
+                case DEBUG_PRINT_TYPEID_TILESAMPLES32:
+                    lock_stream();
+                    ts32 = reinterpret_cast< TileSamplesHostDev<32>* >(ptr);
+                    stream << "TILE: (";
+                    for (int j = 0; j < ts32->count_; j++) {
+                        stream << bfloat16_to_float(reinterpret_cast<uint16_t*>(ptr)[j]);
+                        stream << " ";
+                    }
+                    stream << "ptr=" << ts32->ptr_ << ")" << endl;
+                    unlock_stream();
+                break;
+
                 case DEBUG_PRINT_TYPEID_ENDL:
                     lock_stream();
                     stream << endl;

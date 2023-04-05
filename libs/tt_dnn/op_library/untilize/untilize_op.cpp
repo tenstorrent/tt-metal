@@ -144,7 +144,7 @@ Tensor untilize(const Tensor &a) {
         {src0_dram_buffer->address(),
         uint32_t(dram_src0_noc_xy.x),
         uint32_t(dram_src0_noc_xy.y),
-        uint32_t(num_tiles) }
+        uint32_t(num_tiles), 0,0,0,0,0 } // TODO(AP): [8] is scaler
     );
 
     tt_metal::WriteRuntimeArgsToDevice(

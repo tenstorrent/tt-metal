@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
     bool pass = true;
     bool multibank = true;
 
-    for (int do_max = 1; do_max <= 1; do_max++) {
+    for (int do_max = 0; do_max <= 1; do_max++) {
     log_info(LogTest, "Running reduce test for max={}", do_max);
     try {
         ////////////////////////////////////////////////////////////////////////////
@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
         tt_xy_pair core = {0, 0};
 
         vector<uint32_t> shape = {1, 3, 19*TILE_HEIGHT, 17*TILE_WIDTH};
+        //std::cout << "++ A" << std::endl;
         //vector<uint32_t> shape = {1, 1, 1*TILE_HEIGHT, 1*TILE_WIDTH};
         u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
         u32 HW = H*W;
@@ -104,12 +105,19 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
+        auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(
+            program, device, CB::c_in2 /*ouput_cb_index*/, core, 2 /* two tiles */,
+            2 * single_tile_bytes, 400*1024, /* buf addr */
+            tt::DataFormat::Float16_b
+        );
+
         TT_ASSERT(num_tensor_tiles%Ht == 0);
 
+        TT_ASSERT(multibank == true);
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
             multibank ? "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp"
-                      : "tt_metal/kernels/dataflow/reader_unary_transpose_wh.cpp",
+                      : "tt_metal/kernels/dataflow/reader_unary_transpose_wh.cpp", // TODO(AP): not ported for reduce with scaler
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
@@ -121,8 +129,6 @@ int main(int argc, char **argv) {
             core,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
-
-        // void *hlk_args = new reduce_args::hlk_args_t{ .Ht = int(Ht), .Wt = int(Wt), .NC = int(NC), .scaler = scaler };
 
         vector<uint32_t> compute_kernel_args = {
             *reinterpret_cast<uint32_t*>(&scaler),
@@ -173,7 +179,8 @@ int main(int argc, char **argv) {
                 dram_buffer_src0_addr,
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
-                num_tensor_tiles, N, Ht, Wt, Ht*Wt
+                num_tensor_tiles, N, Ht, Wt, Ht*Wt,
+                *reinterpret_cast<uint32_t*>(&scaler),
             }
         );
 

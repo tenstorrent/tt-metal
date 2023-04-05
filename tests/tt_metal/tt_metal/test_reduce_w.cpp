@@ -48,8 +48,8 @@ int main(int argc, char **argv) {
 
         tt_xy_pair core = {0, 0};
 
-        //vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
-        vector<uint32_t> shape = {1, 1, 1*TILE_HEIGHT, 2*TILE_WIDTH};
+        vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
+        //vector<uint32_t> shape = {1, 1, 1*TILE_HEIGHT, 1*TILE_WIDTH};
         u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
         u32 HW = H*W;
         TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
@@ -84,6 +84,12 @@ int main(int argc, char **argv) {
             num_buffer_tiles,
             num_buffer_tiles * single_tile_bytes,
             src0_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(
+            program, device, CB::c_in2 /* ouput_cb_index */, core, 2 /* one tile */,
+            2 * single_tile_bytes, /* one tile */ 400*1024, /* buf addr */
             tt::DataFormat::Float16_b
         );
 
@@ -169,7 +175,8 @@ int main(int argc, char **argv) {
                 dram_buffer_src0_addr,
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
-                num_tensor_tiles, NC, Ht, Wt, Ht*Wt
+                num_tensor_tiles, NC, Ht, Wt, Ht*Wt,
+                *reinterpret_cast<uint32_t*>(&scaler),
             }
         );
 

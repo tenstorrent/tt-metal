@@ -5,6 +5,20 @@ void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(3); // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
     uint32_t start_id = get_arg_val<uint32_t>(4);
+    uint32_t scaler = get_arg_val<uint32_t>(5);
+    if (scaler != 0) {
+        union { float f; uint32_t u; } u; u.u = scaler;
+        //DPRINT << "Scaler = " << F32(u.f) << ENDL();
+        cb_reserve_back(2, 1);
+        auto ptr = reinterpret_cast<uint16_t*>(400*1024);
+        for (int j = 0; j < 1024; j++)
+            ptr[j] = uint16_t(0);
+
+        for (int k = 0; k < 4; k++)
+        for (int j = 0; j < 16; j++)
+            ptr[k*256 + j] = uint16_t(u.u>>16);
+        cb_push_back(2, 1);
+    }
 
     constexpr uint32_t cb_id_in0 = 0;
 

@@ -75,6 +75,7 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
         output_cb_addr,
         DataFormat::Float16_b
     );
+    // no need to create c_in2 buffer since we pass scaler=0 to reader
 
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -129,7 +130,7 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
         {src0_dram_buffer->address(),
         uint32_t(dram_src0_noc_xy.x),
         uint32_t(dram_src0_noc_xy.y),
-        num_tiles }
+        num_tiles, 0,0,0,0,0 } // TODO(AP): [8] is scaler
     );
 
     tt_metal::WriteRuntimeArgsToDevice(

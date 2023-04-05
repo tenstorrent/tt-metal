@@ -149,7 +149,7 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
             uint32_t(dram_src0_noc_xy.x),
             uint32_t(dram_src0_noc_xy.y),
             num_tiles_per_core[i],
-            num_tiles_written }
+            num_tiles_written, 0 /*disable scaler*/ }
         );
 
         tt_metal::WriteRuntimeArgsToDevice(

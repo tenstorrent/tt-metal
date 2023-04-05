@@ -75,6 +75,7 @@ Tensor transpose_wh_multi_core(const Tensor &a) {
             src0_cb_addr,
             DataFormat::Float16_b
         );
+        // no need to create a buffer at CB::c_in2 since we pass scaler=0
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t output_cb_addr = 400 * 1024;
@@ -145,7 +146,8 @@ Tensor transpose_wh_multi_core(const Tensor &a) {
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
                 num_tensor_tiles, NC, Ht, Wt, HtWt,
-                num_tiles_read, num_tiles_per_core[i]
+                num_tiles_read, num_tiles_per_core[i],
+                0 /*disable scaler*/
             }
         );
 

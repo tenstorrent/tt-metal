@@ -60,6 +60,17 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         DataFormat::Float16_b
     );
 
+    auto cb_src1 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        CB::c_in2,
+        core,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        src0_cb_addr+20*1024,
+        DataFormat::Float16_b
+    );
+
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t output_cb_addr = 400 * 1024;
     uint32_t num_output_tiles = 2;
@@ -73,6 +84,7 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         output_cb_addr,
         DataFormat::Float16_b
     );
+    // no need to create c_in2 buffer since we pass scaler=0 to reader
 
     tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -131,7 +143,8 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
             a.buffer()->address(),
             0, // unused by multibank reader
             0, // unused by multibank reader
-            num_tensor_tiles, NC, Ht, Wt, Ht*Wt
+            num_tensor_tiles, NC, Ht, Wt, Ht*Wt,
+            uint32_t(*reinterpret_cast<uint32_t*>(&scaler)),
         }
     );
 

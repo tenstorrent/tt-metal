@@ -98,6 +98,7 @@ int main(int argc, char **argv) {
             output_cb_addr,
             tt::DataFormat::Float16_b
         );
+        // no need to create a buffer at CB::c_in2 since we pass scaler=0 to the reader
 
         auto reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -155,7 +156,8 @@ int main(int argc, char **argv) {
                 dram_buffer_src0_addr,
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
-                num_tensor_tiles, NC, Ht, Wt, Ht*Wt
+                num_tensor_tiles, NC, Ht, Wt, Ht*Wt,
+                0 /* no scaler */
             }
         );
 
