@@ -22,32 +22,31 @@ def run_tilize_conv3x3s1_act_test(device, K, C, H, W):
     host = ttl.device.GetHost()
 
     A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
-    A_cl = channels_last(A_pyt)
-    A = ttl.tensor.Tensor(
-        torch.flatten(A_cl).tolist(),
+    A_ = ttl.tensor.Tensor(
+        torch.flatten(A_pyt).tolist(),
         a_activation_shape,
         ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.CHANNELS_LAST,
-        device,
-        ttl.tensor.MemoryConfig(False, 0),
-    )
+        ttl.tensor.Layout.ROW_MAJOR)
+    A_cl = A_.to(ttl.tensor.Layout.CHANNELS_LAST)
+    A = A_cl.to(device, ttl.tensor.MemoryConfig(False, 0))
+
     # Tilize conv activation on device
-    A_t = ttl.tensor.tilize_conv_activation(A, False)
+    A_tiled = ttl.tensor.tilize_conv_activation(A, False)
 
     # Prepare weights
     B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
-    B_matrix = convert_weights_2d_matrix(B_pyt, b_weights_shape)
 
-    B_t = ttl.tensor.Tensor(
-        tilize_to_list(B_matrix),
-        B_matrix.shape,
+    B_ = ttl.tensor.Tensor(
+        torch.flatten(B_pyt).tolist(),
+        b_weights_shape,
         ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        device,
+        ttl.tensor.Layout.ROW_MAJOR
     )
-    assert A_t.shape()[3] == B_t.shape()[2]
+    B_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(B_)
+    B_tiled = B_tiled_.to(device)
+    assert A_tiled.shape()[3] == B_tiled.shape()[2]
     # Run matmul on device
-    C_t = ttl.tensor.bmm(A_t, B_t)
+    C_t = ttl.tensor.bmm(A_tiled, B_tiled)
     OH = H - 2
     OW = W - 2
     matmul_output_shape_t = [1, 1, _nearest_32(OH * OW), K]

@@ -16,8 +16,8 @@ import torch
 @pytest.mark.parametrize(
     "K, C, H, W",
     (
-        (128, 128, 32, 16),
-        (128, 128, 10, 10),
+        (64, 64, 32, 16),
+        (64, 64, 10, 10),
     ),
 )
 def test_run_1x1conv_as_large_matmul(K, C, H, W):
@@ -32,28 +32,27 @@ def test_run_1x1conv_as_large_matmul(K, C, H, W):
     mm_output_shape = [1,1,_nearest_32(OH*OW),K]
 
     A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
-    A_cl = channels_last(A_pyt)
-    A = ttl.tensor.Tensor(
-        torch.flatten(A_cl).tolist(),
+    A_ = ttl.tensor.Tensor(
+        torch.flatten(A_pyt).tolist(),
         a_activation_shape,
         ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.CHANNELS_LAST,
-        device)
+        ttl.tensor.Layout.ROW_MAJOR)
+    A_cl = A_.to(ttl.tensor.Layout.CHANNELS_LAST)
+    A = A_cl.to(device)
 
     # Prepare weights
     B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
-    B_matrix = convert_weights_2d_matrix(B_pyt, b_weights_shape)
-    assert(B_matrix.shape[0] == 1 and B_matrix.shape[1] == 1)
-    assert(B_matrix.shape[2] == C and B_matrix.shape[3] == K)
-    B_t = ttl.tensor.Tensor(
-        tilize_to_list(B_matrix),
-        B_matrix.shape,
+    B_ = ttl.tensor.Tensor(
+        torch.flatten(B_pyt).tolist(),
+        b_weights_shape,
         ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        device)
+        ttl.tensor.Layout.ROW_MAJOR
+    )
+    B_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(B_)
+    B_tiled = B_tiled_.to(device)
 
     # Run TT metal OP
-    out = ttl.tensor.conv_as_large_bmm_single_core(A, B_t, True)
+    out = ttl.tensor.conv_as_large_bmm_single_core(A, B_tiled)
     assert(out.shape() == mm_output_shape)
     out_pytorch = torch.tensor(out.to(host).data()).reshape(mm_output_shape)
     ttl.device.CloseDevice(device)

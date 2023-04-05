@@ -2,6 +2,7 @@ TENSOR_SRCS = \
 	libs/tensor/tensor_impl_wrapper.cpp \
 	libs/tensor/tensor_impl.cpp \
 	libs/tensor/tensor.cpp \
+	libs/tensor/tensor_utils.cpp \
 
 TENSOR_LIB = $(LIBDIR)/libtensor.a
 TENSOR_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)

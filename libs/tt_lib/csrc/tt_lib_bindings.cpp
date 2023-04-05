@@ -12,6 +12,8 @@
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 
+#include "tensor/tensor_utils.hpp"
+
 #include "tt_lib_bindings.hpp"
 #include "type_caster.hpp"
 
@@ -603,7 +605,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
     m_tensor.def("conv_as_large_bmm_single_core", &conv_as_large_bmm_single_core, R"doc(
         Perform a batched matmul ``A x B`` with two tensors, where batch dims match.
-        This op also supports tilizing tensor A and untilizing the output if you so choose.
+        This op tilizes tensor A and untilizes the output
 
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
         | Argument     | Description                                                                                | Data type | Valid range | Required |
@@ -611,8 +613,6 @@ void TensorModule(py::module &m_tensor) {
         | a            | LHS matmul operand                                                                         | Tensor    |             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
         | b            | RHS matmul operand                                                                         | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | untilize_out | Whether or not to untilize the output (useful if a consuming op requires row major layout) | bool      |             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
     // broadcast math
@@ -737,6 +737,16 @@ void TensorModule(py::module &m_tensor) {
     )doc");
     m_tensor.def("untilize", &untilize, R"doc(
         Untilizes a given tensor tilized across memory on device.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
+    m_tensor.def("convert_conv_weight_tensor_to_tiled_layout", &convert_conv_weight_tensor_to_tiled_layout, R"doc(
+       Converts convolution weights to 2d matrix tiled layout on host
+       Returns a new tensor with the converted layout.
 
         +----------+----------------------+-----------+-------------+----------+
         | Argument | Description          | Data type | Valid range | Required |
