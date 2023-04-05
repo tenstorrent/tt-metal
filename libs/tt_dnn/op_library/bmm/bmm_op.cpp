@@ -311,14 +311,14 @@ Tensor bmm(const Tensor& a, const Tensor& b) {
     }
 }
 
-Tensor large_bmm(const Tensor& a, const Tensor& b, bool tilize_a, bool untilize_out) {
+Tensor large_bmm(const Tensor& a, const Tensor& b) {
     // TT_ASSERT(
     //     bmm_op_utils::get_parallelization_strategy(a, b) == BmmOpParallelizationStrategy::SINGLE_CORE,
     //     "Only single core large_bmm supported so far");
     if (bmm_op_utils::get_parallelization_strategy(a, b) != BmmOpParallelizationStrategy::SINGLE_CORE) {
         std::cout << "WARNING: Only single core mode supported for large_bmm. Falling back to single core." << std::endl;
     }
-    return large_bmm_single_core(a, b, tilize_a, untilize_out);
+    return large_bmm_single_core(a, b);
 }
 
 Tensor large_bmm_single_block(const Tensor& a, const Tensor& b, bool tilize_a, bool untilize_out) {

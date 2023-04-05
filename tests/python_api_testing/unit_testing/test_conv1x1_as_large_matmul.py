@@ -54,9 +54,9 @@ def test_run_1x1conv_as_large_matmul(K, C, H, W):
 
     # Run TT metal OP
     out = ttl.tensor.conv_as_large_bmm_single_core(A, B_t, True)
-
     assert(out.shape() == mm_output_shape)
     out_pytorch = torch.tensor(out.to(host).data()).reshape(mm_output_shape)
+    ttl.device.CloseDevice(device)
     # remove padding
     out_pytorch = out_pytorch[:, :, 0 : (OH * OW), :]
 
@@ -72,4 +72,3 @@ def test_run_1x1conv_as_large_matmul(K, C, H, W):
     print("Passing=", passing_pcc)
     print("Output pcc=", output_pcc)
     assert passing_pcc
-    ttl.device.CloseDevice(device)

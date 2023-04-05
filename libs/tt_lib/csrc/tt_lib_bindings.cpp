@@ -101,7 +101,7 @@ void TensorModule(py::module &m_tensor) {
         .def_readonly("dram_channel", &MemoryConfig::dram_channel, "DRAM channel holding tensor data. Only used when tensor is not interleaved");
 
     auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor", R"doc(
-        
+
 
         Class constructor supports tensors of rank 4 where the size of both last two dimensions is a multiple of 32.
         The constructor takes following arguments:
@@ -121,7 +121,7 @@ void TensorModule(py::module &m_tensor) {
         +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
         | mem_config | Layout of tensor in TT Accelerator device memory banks | tt_lib.tensor.MemoryConfig|                                 | No       |
         +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
-        
+
     )doc");
 
     pyTensor
@@ -221,7 +221,7 @@ void TensorModule(py::module &m_tensor) {
             return self.to(device, mem_config);
         }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
             Moves TT Tensor form host device to TT accelerator device.
-            
+
             .. code-block:: python
 
                 tt_tensor = tt_tensor.to(tt_device)
@@ -436,7 +436,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
     m_tensor.def("large_bmm", &large_bmm, R"doc(
         Perform a batched matmul ``A x B`` with two tensors, where batch dims match.
-        This op also supports tilizing tensor A and untilizing the output if you so choose.
+        This op tilizes tensor A and untilizes the output
 
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
         | Argument     | Description                                                                                | Data type | Valid range | Required |
@@ -444,10 +444,6 @@ void TensorModule(py::module &m_tensor) {
         | a            | LHS matmul operand                                                                         | Tensor    |             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
         | b            | RHS matmul operand                                                                         | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | tilize_a     | Whether or not to tilize a (useful if a is in row major layout)                            | bool      |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | untilize_out | Whether or not to untilize the output (useful if a consuming op requires row major layout) | bool      |             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
     m_tensor.def("large_bmm_single_block", &large_bmm_single_block, R"doc(

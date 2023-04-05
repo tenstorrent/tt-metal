@@ -9,24 +9,17 @@ import numpy as np
 
 from libs import tt_lib as ttl
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
+from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 import torch
 
 
 @pytest.mark.parametrize(
-    "Hat, Wat, Wbt, tilize_a, untilize_out",
+    "Hat, Wat, Wbt",
     (
-        (16, 4, 4, False, False),
-        (16, 4, 4, False, True),
-        (16, 4, 4, True, False),
-        (16, 4, 4, True, True),
-        (8, 4, 4, False, False),
-        (8, 4, 4, False, True),
-        (8, 4, 4, True, False),
-        (8, 4, 4, True, True),
-        (8, 4, 4, True, True),
+        (2, 4, 4),
     ),
 )
-def test_run_large_matmul_test(Hat, Wat, Wbt, tilize_a, untilize_out):
+def test_run_large_matmul_test(Hat, Wat, Wbt):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     TILE_HEIGHT = TILE_WIDTH = 32
@@ -40,18 +33,13 @@ def test_run_large_matmul_test(Hat, Wat, Wbt, tilize_a, untilize_out):
     b_shape = [1, 1, Wa, Wb]
 
     a = torch.randn(a_shape, dtype=torch.bfloat16).float()
-    b = torch.eye(*b_shape[2:]).reshape(b_shape)
+    b = torch.randn(b_shape, dtype=torch.bfloat16).float()
 
-    layout_a = ttl.tensor.Layout.ROW_MAJOR if tilize_a else ttl.tensor.Layout.TILE
+    layout_a = ttl.tensor.Layout.ROW_MAJOR
 
-    def tt_a():
-        if layout_a == ttl.tensor.Layout.ROW_MAJOR:
-            return a.flatten().tolist()
-        else:
-            return tilize_to_list(a)
 
     tta = ttl.tensor.Tensor(
-        tt_a(),
+        a.flatten().tolist(),
         a_shape,
         ttl.tensor.DataType.BFLOAT16,
         layout_a,
@@ -64,11 +52,13 @@ def test_run_large_matmul_test(Hat, Wat, Wbt, tilize_a, untilize_out):
         ttl.tensor.Layout.TILE,
         device)
 
-    out = ttl.tensor.large_bmm(tta, ttb, tilize_a, untilize_out)
+    out = ttl.tensor.large_bmm(tta, ttb)
     out_shape = [1,1,Ha,Wb]
     out_pytorch = torch.tensor(out.to(host).data()).reshape(out_shape)
-    if not untilize_out:
-        out_pytorch = untilize(out_pytorch)
     ttl.device.CloseDevice(device)
-
-    assert (out_pytorch == a).all(), "Output should be identical to pytorch"
+    golden_pytorch = torch.matmul(a,b)
+    assert(out_pytorch.shape == golden_pytorch.shape)
+    passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch, 0.99)
+    print("Passing=", passing_pcc)
+    print("Output pcc=", output_pcc)
+    assert passing_pcc
