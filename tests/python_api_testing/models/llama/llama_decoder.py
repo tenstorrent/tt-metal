@@ -26,15 +26,18 @@ from python_api_testing.models.llama.llama_utils import *
 from python_api_testing.models.llama.llama_mlp import TtLlamaMLP
 from python_api_testing.models.llama.llama_attention import TtLlamaAttention
 from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
+from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 class TtLlamaDecoderLayer(nn.Module):
-    def __init__(self, device, state_dict, decoder_idx, config):
+    def __init__(self, device, state_dict, base_url, decoder_idx, max_position_embeddings, config):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.state_dict = state_dict
-        self.device = device
-        self.decoder_idx = decoder_idx
+        self.base_url=base_url
+        self.device=device
+        self.decoder_idx=decoder_idx
+        self.max_position_embeddings=max_position_embeddings
 
         # PyTorch: self.self_attn = LlamaAttention(
         #     hidden_size=self.hidden_size,
@@ -45,7 +48,8 @@ class TtLlamaDecoderLayer(nn.Module):
             state_dict=self.state_dict,
             layer_num=decoder_idx,
             hidden_size=config.hidden_size,
-            num_heads=config.num_attention_heads
+            num_heads=config.num_attention_heads,
+            max_position_embeddings=self.max_position_embeddings
         )
 
         # PyTorch: self.mlp = LlamaMLP(
@@ -56,6 +60,7 @@ class TtLlamaDecoderLayer(nn.Module):
         self.mlp = TtLlamaMLP(
             self.device,
             state_dict=self.state_dict,
+            base_url=self.base_url,
             layer_num=decoder_idx,
             hidden_size=self.hidden_size,
             intermediate_size=config.intermediate_size,
@@ -66,6 +71,7 @@ class TtLlamaDecoderLayer(nn.Module):
         self.input_layernorm = TtLlamaRMSNorm(
             self.device,
             state_dict=self.state_dict,
+            base_url=self.base_url,
             layer_num = decoder_idx,
             layer_position = 'input_layernorm',
             hidden_size=config.hidden_size,
@@ -76,6 +82,7 @@ class TtLlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = TtLlamaRMSNorm(
             self.device,
             state_dict=self.state_dict,
+            base_url=self.base_url,
             layer_num = decoder_idx,
             layer_position = 'post_attention_layernorm',
             hidden_size=config.hidden_size,
@@ -86,6 +93,8 @@ class TtLlamaDecoderLayer(nn.Module):
         self,
         hidden_states, #: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        ast_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
@@ -119,6 +128,7 @@ class TtLlamaDecoderLayer(nn.Module):
         # )
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
+            position_ids=position_ids,
             past_key_value=past_key_value,
             attention_mask=attention_mask,
             output_attentions=output_attentions,
@@ -160,8 +170,8 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         # Disable dropout
         self.decoder.eval()
 
-    def forward(self, x):
-        result = self.decoder(x)[0]
+    def forward(self, x, y):
+        result = self.decoder(hidden_states=x, position_ids=y)[0]
         return result
 
 
@@ -176,12 +186,24 @@ def run_LlamaDecoder_inference():
     # Prepare input ========================================================================
     torch.manual_seed(0)
     llama_input = (torch.rand(4, 128, 4096) * 2) - 1
-    decoder_id = 31
+    base_url = 'model.layers'
+    decoder_id = 5
+    # max_position_embeddings parameter should be in the config file, but the used pretrained model doesn't consist this parameter
+    max_position_embeddings = 2048
+
+    # get positions_ids values
+    past_key_values_length = 0
+    seq_length = llama_input.shape[1]
+
+    position_ids = torch.arange(
+        past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=None
+    )
+    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
 
     # PyTorch output =======================================================================
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, decoder_id)
     pytorch_LlamaDecoder_model.eval()
-    pytorch_out = pytorch_LlamaDecoder_model(llama_input)
+    pytorch_out = pytorch_LlamaDecoder_model(x=llama_input, y=position_ids)
 
     # TT hardware execution =================================================================
     tt_llama_input = llama_input.unsqueeze(1)
@@ -191,28 +213,23 @@ def run_LlamaDecoder_inference():
     tt_LlamaDecoder_model = TtLlamaDecoderLayer(
         device,
         state_dict,
+        base_url,
         decoder_id,
-        configuration
+        max_position_embeddings,
+        configuration,
     )
-    tt_out = tt_LlamaDecoder_model(tt_llama_input)
+    tt_out = tt_LlamaDecoder_model(hidden_states=tt_llama_input, position_ids=position_ids)
     # transform to PyTorch tensor
     tt_out1 = tt2torch_tensor(tt_out)
     tt_out1= tt_out1.squeeze(1)
 
     # check outputs ----------------------------------------------------------------------
-    print_diff_argmax(pytorch_out, tt_out1)
+    print(comp_allclose(pytorch_out, tt_out1))
+    print(comp_pcc(pytorch_out, tt_out1))
 
-    # check correlation ceofficient
-    print_corr_coef(pytorch_out, tt_out1)
+    passing_pcc, output_pcc = comp_pcc(pytorch_out, tt_out1, 0.98)
 
-    diff = (abs(pytorch_out - tt_out1) < 0.1).all().item()
-
-    if not diff:
-        print("Outputs don't match")
-    else:
-        print("Outputs match")
-
-    assert diff, "At least one of entries don't match to an absolute difference of 0.1"
+    assert passing_pcc, "PCC value is lower than 0.98"
 
 
 if __name__ == "__main__":

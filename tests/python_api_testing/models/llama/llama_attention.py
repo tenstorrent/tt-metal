@@ -121,7 +121,7 @@ class TtLlamaAttention(nn.Module):
         layer_num,
         hidden_size: int,
         num_heads: int,
-        max_position_embeddings: int,
+        max_position_embeddings: int = 2048,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -135,34 +135,27 @@ class TtLlamaAttention(nn.Module):
                 f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
                 f" and `num_heads`: {num_heads})."
             )
-        print('a =====================================')
+
         self.state_dict = state_dict
         self.q_weights = tilize_to_list(pad_weight(self.state_dict[f"model.layers.{layer_num}.self_attn.q_proj.weight"]))
         self.k_weights = tilize_to_list(pad_weight(self.state_dict[f"model.layers.{layer_num}.self_attn.k_proj.weight"]))
         self.v_weights = tilize_to_list(pad_weight(self.state_dict[f"model.layers.{layer_num}.self_attn.v_proj.weight"]))
         self.o_weights = tilize_to_list(pad_weight(self.state_dict[f"model.layers.{layer_num}.self_attn.o_proj.weight"]))
-        print('b =====================================')
+
         # Mesh TensorFlow initialization to avoid scaling before softmax
         self.q_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.q_weights, bias=None, device=self.device)
         self.k_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.k_weights, bias=None, device=self.device)
         self.v_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.v_weights, bias=None, device=self.device)
         self.o_proj = TtLinear(self.num_heads * self.head_dim, self.hidden_size, weight=self.o_weights, bias=None, device=self.device)
-        print('c =====================================')
+
         # self.rotary_emb = LlamaRotaryEmbedding(self.head_dim)
         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
-        print('d =====================================')
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
         # return shape_tt(tensor, bsz, seq_len, self.num_heads, self.head_dim)
 
     def forward(
-        # self,
-        # hidden_states: torch.Tensor,
-        # past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        # attention_mask: Optional[torch.Tensor] = None,
-        # output_attentions: bool = False,
-        # use_cache: bool = False,
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
@@ -180,16 +173,15 @@ class TtLlamaAttention(nn.Module):
         # query_states = self.q_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         query = self.q_proj(hidden_states)
         query_states = shape_tt(query, bsz, q_len, self.num_heads, self.head_dim)
-        print('1 =====================================')
 
         # key_states = self.k_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key = self.k_proj(hidden_states)
         key_states = shape_tt(key, bsz, q_len, self.num_heads, self.head_dim)
-        print('2 =====================================')
+
         # value_states = self.v_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         value = self.v_proj(hidden_states)
         value_states = shape_tt(value, bsz, q_len, self.num_heads, self.head_dim)
-        print('3 =====================================')
+
         # return all states to pytorch =============================
         query_states = tt2torch_tensor(query_states)
         key_states = tt2torch_tensor(key_states)
@@ -197,7 +189,6 @@ class TtLlamaAttention(nn.Module):
         hidden_states = tt2torch_tensor(hidden_states)
         # return all states to pytorch =============================
 
-        print('4 =====================================')
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
             offset = past_key_value[0].shape[-2]
@@ -207,19 +198,18 @@ class TtLlamaAttention(nn.Module):
         # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, offset=offset)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
-        print('5 =====================================')
         if past_key_value is not None:
             # reuse k, v, self_attention
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
         past_key_value = (key_states, value_states) if use_cache else None
-        print('6 =====================================')
+
         # TT implementation for:
         # attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
         key_states_tt = torch2tt_tensor(key_states, self.device)
         query_states_tt = torch2tt_tensor(query_states, self.device)
-        print('7 =====================================')
+
         key_states_tt_trans = ttl.tensor.transpose(key_states_tt)
         mul = ttl.tensor.bmm(query_states_tt, key_states_tt_trans)
         # create constant tensor
@@ -227,10 +217,9 @@ class TtLlamaAttention(nn.Module):
         # divison
         recip = ttl.tensor.recip(const_tensor_tt)
         div = ttl.tensor.mul(mul, recip)
-        print('8 =====================================')
+
         # return to PyTorch
         attn_weights = tt2torch_tensor(div)
-        sys.exit(0)
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -288,33 +277,44 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         # Disable dropout
         self.attention.eval()
 
-    def forward(self, x):
-        result = self.attention(x)[0]
+    def forward(self, x, y):
+        result = self.attention(hidden_states=x, position_ids=y)[0]
         return result
 
 
 def run_LlamaAttention_inference():
 
     tokenizer = AutoTokenizer.from_pretrained("decapoda-research/llama-7b-hf")
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained("decapoda-research/llama-7b-hf") # , torch_dtype=torch.float32
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained("decapoda-research/llama-7b-hf", torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 
-    # Prepare input ========================================================================
+    # Prepare inputs ========================================================================
     torch.manual_seed(0)
-    # batch size is equal to 32
+    # hidden states tensor: batch size is equal to 32, sequence length: 32
     attention_input = (torch.rand(32, 32, 4096) * 2) - 1
     layer_num = 0
-    print("Start pass!")
+    # max_position_embeddings parameter should be in the config file, but the used pretrained model doesn't consist this parameter
+    max_position_embeddings = 2048
+
+    # get positions_ids values
+    seq_length = attention_input.shape[1]
+    past_key_values_length = 0
+
+    position_ids = torch.arange(
+        past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=None
+    )
+    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+
     # PyTorch output =======================================================================
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
-    # pytorch_out = pytorch_LlamaAttention_model(attention_input)
-    # sys.exit(0)
+    pytorch_out = pytorch_LlamaAttention_model(x=attention_input, y=position_ids)
+
     # TT hardware execution =================================================================
     tt_attention_input = attention_input.unsqueeze(1)
     tt_attention_input = torch2tt_tensor(tt_attention_input, device)
-    print("First pass!")
+
     # get TT Attention module
     tt_LlamaAttention_model = TtLlamaAttention(
         device,
@@ -322,21 +322,19 @@ def run_LlamaAttention_inference():
         layer_num,
         configuration.hidden_size,
         configuration.num_attention_heads,
-        2048
-        # configuration.max_position_embeddings
+        max_position_embeddings
     )
-    print("Second pass!")
-    tt_out, attn_weights, past_key_value = tt_LlamaAttention_model(tt_attention_input)
-    print("Third  pass!")
+
+    tt_out, attn_weights, past_key_value = tt_LlamaAttention_model(hidden_states=tt_attention_input, position_ids=position_ids)
     tt_out = tt2torch_tensor(tt_out).squeeze(1)
 
     # check outputs ----------------------------------------------------------------------
     print(comp_allclose(pytorch_out, tt_out))
     print(comp_pcc(pytorch_out, tt_out))
 
-    pcc_test = comp_pcc(pytorch_out, tt_out1, 0.98)
+    passing_pcc, output_pcc = comp_pcc(pytorch_out, tt_out, 0.98)
 
-    assert pcc_test, "PCC value is lower than 0.98"
+    assert passing_pcc, "PCC value is lower than 0.98"
 
 
 if __name__ == "__main__":
@@ -344,6 +342,5 @@ if __name__ == "__main__":
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
-    # test_lamma_shape(device)
     run_LlamaAttention_inference()
     ttl.device.CloseDevice(device)

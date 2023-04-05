@@ -132,15 +132,15 @@ def run_LlamaLayerNorm_inference():
 
     # call model for input
     tt_out = tt_LlamaRMSNorm_model(tt_layer_norm_input).to(host)
-    tt_out1 = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
+    tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
 
     # check outputs ----------------------------------------------------------------------
-    print(comp_allclose(pytorch_out, tt_out1))
-    print(comp_pcc(pytorch_out, tt_out1))
+    print(comp_allclose(pytorch_out, tt_out))
+    print(comp_pcc(pytorch_out, tt_out))
 
-    pcc_test = comp_pcc(pytorch_out, tt_out1, 0.98)
+    passing_pcc, output_pcc = comp_pcc(pytorch_out, tt_out, 0.98)
 
-    assert pcc_test, "PCC value is lower than 0.98"
+    assert passing_pcc, "PCC value is lower than 0.98"
 
 
 if __name__ == "__main__":
