@@ -2,11 +2,6 @@
 
 In order to use HuggingFace Llama model we need a development version of Transformers library (v4.28.0.dev0).
 
-Install Transformers from source with the following command:
-    `pip install git+https://github.com/huggingface/transformers`
-
-Also, sentencepiece library is needed for a tokenizer: `pip install sentencepiece`
-
 # Use pretrained weights
 
 The weights used in the tests are downloaded from: https://huggingface.co/decapoda-research/llama-7b-hf
