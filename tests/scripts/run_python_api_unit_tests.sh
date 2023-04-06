@@ -7,6 +7,7 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
+source build/python_env/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
 
 pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -vvv
