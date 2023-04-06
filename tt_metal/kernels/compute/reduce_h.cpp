@@ -14,7 +14,7 @@ void MAIN {
 
     union { float f; uint32_t u; } u; u.u = scaler;
 
-    if (1 || REDUCE_OP == PoolType::MAX)
+    if (REDUCE_OP == PoolType::MAX)
         reduce_init(REDUCE_OP, REDUCE_DIM, CB::c_in0, u.f);
     else
         reduce_init_v2<true>(REDUCE_OP, REDUCE_DIM, CB::c_in0, CB::c_in2);
@@ -39,7 +39,7 @@ void MAIN {
                 //    UNPACK(( DPRINT << TILESAMPLES32(false, CB::c_in2, 0, 16, offs, 1) << ENDL{} ));
                 //}
                 // TODO(AP): need to fix reduce_max with _v2 API
-                if (1 || REDUCE_OP == PoolType::MAX)
+                if (REDUCE_OP == PoolType::MAX)
                     reduce_tile(REDUCE_OP, REDUCE_DIM, CB::c_in0, 0, reduce_dst_idx, scaler);
                 else
                     reduce_tile_v2(REDUCE_OP, REDUCE_DIM, CB::c_in0, CB::c_in2, 0, 0, reduce_dst_idx);
