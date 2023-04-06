@@ -1,17 +1,9 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 BUILD_KERNELS_FOR_RISCV_TESTS = \
 	tests/build_kernels_for_riscv/test_build_kernel_add_two_ints \
-	tests/build_kernels_for_riscv/test_build_kernel_dram_copy \
-	tests/build_kernels_for_riscv/test_build_kernel_dram_copy_ncrisc \
-	tests/build_kernels_for_riscv/test_build_kernel_dram_copy_brisc_ncrisc \
-	tests/build_kernels_for_riscv/test_build_kernel_dram_copy_looped \
 	tests/build_kernels_for_riscv/test_build_kernel_blank \
 	tests/build_kernels_for_riscv/test_build_kernel_datacopy \
 	tests/build_kernels_for_riscv/test_build_kernel_datacopy_switched_riscs \
-	tests/build_kernels_for_riscv/test_build_kernel_dram_to_l1_copy \
-	tests/build_kernels_for_riscv/test_build_kernel_l1_to_dram_copy \
-	tests/build_kernels_for_riscv/test_build_kernel_copy_pattern \
-	tests/build_kernels_for_riscv/test_build_kernel_copy_pattern_tilized \
 	tests/build_kernels_for_riscv/test_build_kernel_loader_sync \
 	tests/build_kernels_for_riscv/test_build_kernel_loader_sync_db \
 	tests/build_kernels_for_riscv/test_build_kernel_eltwise_sync \

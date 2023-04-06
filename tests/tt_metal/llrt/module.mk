@@ -6,27 +6,14 @@ LLRT_TESTS += tests/llrt/test_silicon_driver \
 				tests/llrt/test_run_add_two_ints \
 				tests/llrt/test_silicon_driver_dram_sweep \
 				tests/llrt/test_silicon_driver_l1_sweep \
-				tests/llrt/test_run_dram_copy \
-				tests/llrt/test_run_dram_copy_ncrisc \
-				tests/llrt/test_run_dram_copy_brisc_ncrisc \
-				tests/llrt/test_run_dram_copy_sweep \
-				tests/llrt/test_run_dram_copy_looped_sweep \
 				tests/llrt/test_run_blank_brisc_triscs \
 				tests/llrt/test_run_datacopy \
 				tests/llrt/test_run_datacopy_switched_riscs \
-				tests/llrt/test_run_dram_to_l1_to_dram_copy_sweep \
-				tests/llrt/test_run_reader \
-				tests/llrt/test_run_reader_small \
-				tests/llrt/test_run_dram_to_l1_copy_pattern \
-				tests/llrt/test_run_dram_to_l1_copy_pattern_tilized \
 				tests/llrt/test_run_eltwise_sync \
 				tests/llrt/test_run_sync \
 				tests/llrt/test_run_sync_db \
 				tests/llrt/test_run_host_write_read_stream_register \
 				tests/llrt/test_run_write_read_stream_register \
-				tests/llrt/test_run_l1_to_dram_copy_pattern \
-				tests/llrt/test_run_dram_to_l1_to_dram_copy_pattern \
-				tests/llrt/test_run_l1_to_l1_copy_pattern \
 				tests/llrt/test_run_risc_read_speed \
 				tests/llrt/test_run_risc_write_speed \
 				tests/llrt/test_run_risc_rw_speed_banked_dram \

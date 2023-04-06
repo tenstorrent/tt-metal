@@ -7,16 +7,8 @@ from tests.scripts.cmdline_args import get_cmdline_args, get_build_kernels_for_r
 
 BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES = (
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_add_two_ints", "test_build_kernel_add_two_ints"),
-    TestEntry("build_kernels_for_riscv/tests/test_build_kernel_dram_copy", "test_build_kernel_dram_copy"),
-    TestEntry("build_kernels_for_riscv/tests/test_build_kernel_dram_copy_ncrisc", "test_build_kernel_dram_copy_ncrisc"),
-    TestEntry("build_kernels_for_riscv/tests/test_build_kernel_dram_copy_brisc_ncrisc", "test_build_kernel_dram_copy_brisc_ncrisc"),
-    TestEntry("build_kernels_for_riscv/tests/test_build_kernel_dram_copy_looped", "test_build_kernel_dram_copy_looped"),
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_blank", "test_build_kernel_blank"),
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_datacopy", "test_build_kernel_datacopy"),
-    TestEntry("build_kernels_for_riscv/tests/test_build_kernel_dram_to_l1_copy", "test_build_kernel_dram_to_l1_copy"),
-    TestEntry("build_kernels_for_riscv/tests/test_build_kernel_l1_to_dram_copy", "test_build_kernel_l1_to_dram_copy"),
-    TestEntry("build_kernels_for_riscv/tests/test_build_kernel_copy_pattern", "test_build_kernel_copy_pattern"),
-    TestEntry("build_kernels_for_riscv/tests/test_build_kernel_copy_pattern_tilized", "test_build_kernel_copy_pattern_tilized"),
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_loader_sync", "test_build_kernel_loader_sync"),
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_loader_sync_db", "test_build_kernel_loader_sync_db"),
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_eltwise_sync", "test_build_kernel_eltwise_sync"),

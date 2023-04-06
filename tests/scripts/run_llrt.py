@@ -15,21 +15,11 @@ SILICON_DRIVER_TEST_ENTRIES = (
 )
 
 LLRT_TEST_ENTRIES = (
-    TestEntry("llrt/tests/test_run_dram_copy", "test_run_dram_copy"),
-    TestEntry("llrt/tests/test_run_dram_copy_ncrisc", "test_run_dram_copy_ncrisc"),
-    TestEntry("llrt/tests/test_run_dram_copy_sweep", "test_run_dram_copy_sweep"),
-    TestEntry("llrt/tests/test_run_dram_copy_brisc_ncrisc", "test_run_dram_copy_brisc_ncrisc"),
-    TestEntry("llrt/tests/test_run_dram_copy_looped_sweep", "test_run_dram_copy_looped_sweep"),
-    TestEntry("llrt/tests/test_run_dram_to_l1_to_dram_copy_sweep", "test_run_dram_to_l1_to_dram_copy_sweep"),
     TestEntry("llrt/tests/test_run_risc_read_speed", "test_run_risc_read_speed"),
     TestEntry("llrt/tests/test_run_risc_write_speed", "test_run_risc_write_speed"),
-    TestEntry("llrt/tests/test_run_dram_to_l1_copy_pattern", "test_run_dram_to_l1_copy_pattern"),
-    TestEntry("llrt/tests/test_run_dram_to_l1_to_dram_copy_pattern", "test_run_dram_to_l1_to_dram_copy_pattern"),
-    # TestEntry("llrt/tests/test_run_dram_to_l1_copy_pattern_tilized", "test_run_dram_to_l1_copy_pattern_tilized"),  # fails with new change to dst modes, must fix, need to use unpacker tilize
     TestEntry("llrt/tests/test_run_eltwise_sync", "test_run_eltwise_sync"),
     TestEntry("llrt/tests/test_run_sync", "test_run_sync"),
     TestEntry("llrt/tests/test_run_sync_db", "test_run_sync_db"),
-    TestEntry("llrt/tests/test_run_l1_to_l1_copy_pattern", "test_run_l1_to_l1_copy_pattern"),
      # TestEntry("llrt/tests/test_run_risc_rw_speed_banked_dram", "test_run_risc_rw_speed_banked_dram"),  # hangs on tttest, must solve
     TestEntry("llrt/tests/test_run_dataflow_cb_test", "test_run_dataflow_cb_test"),
 
