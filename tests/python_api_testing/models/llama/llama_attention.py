@@ -1,29 +1,13 @@
 import math
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
-from loguru import logger
 import torch
-import numpy as np
 from torch import nn
-from torch.nn import CrossEntropyLoss
-from torch.utils.checkpoint import checkpoint
 from libs import tt_lib as ttl
+from python_api_testing.models.t5.t5_utils import tt2torch_tensor, torch2tt_tensor
 from typing import List, Optional, Tuple, Union
-
-from transformers import T5Tokenizer, T5Model, AutoTokenizer, AutoModelForCausalLM
-from collections import OrderedDict
-
-from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 from fused_ops.linear import Linear as TtLinear
 from fused_ops.softmax import softmax as TTsoftmax
 from python_api_testing.models.llama.llama_utils import *
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 
 
 def shape_tt(states, batch_size, seq_len, n_heads, head_dim):
@@ -117,6 +101,7 @@ class TtLlamaAttention(nn.Module):
     def __init__(
         self,
         device,
+        base_url,
         state_dict,
         layer_num,
         hidden_size: int,
@@ -129,6 +114,7 @@ class TtLlamaAttention(nn.Module):
         self.head_dim = hidden_size // num_heads
         self.max_position_embeddings = max_position_embeddings
         self.device = device
+        # self.base_url = base_url
 
         if (self.head_dim * num_heads) != self.hidden_size:
             raise ValueError(
@@ -137,16 +123,16 @@ class TtLlamaAttention(nn.Module):
             )
 
         self.state_dict = state_dict
-        self.q_weights = tilize_to_list(pad_weight(self.state_dict[f"model.layers.{layer_num}.self_attn.q_proj.weight"]))
-        self.k_weights = tilize_to_list(pad_weight(self.state_dict[f"model.layers.{layer_num}.self_attn.k_proj.weight"]))
-        self.v_weights = tilize_to_list(pad_weight(self.state_dict[f"model.layers.{layer_num}.self_attn.v_proj.weight"]))
-        self.o_weights = tilize_to_list(pad_weight(self.state_dict[f"model.layers.{layer_num}.self_attn.o_proj.weight"]))
+        self.q_weights = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.self_attn.q_proj.weight"], ttl.device.GetHost())
+        self.k_weights = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.self_attn.k_proj.weight"], ttl.device.GetHost())
+        self.v_weights = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.self_attn.v_proj.weight"], ttl.device.GetHost())
+        self.o_weights = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.self_attn.o_proj.weight"], ttl.device.GetHost())
 
         # Mesh TensorFlow initialization to avoid scaling before softmax
-        self.q_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.q_weights, bias=None, device=self.device)
-        self.k_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.k_weights, bias=None, device=self.device)
-        self.v_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.v_weights, bias=None, device=self.device)
-        self.o_proj = TtLinear(self.num_heads * self.head_dim, self.hidden_size, weight=self.o_weights, bias=None, device=self.device)
+        self.q_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.q_weights.data(), bias=None, device=self.device)
+        self.k_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.k_weights.data(), bias=None, device=self.device)
+        self.v_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.v_weights.data(), bias=None, device=self.device)
+        self.o_proj = TtLinear(self.num_heads * self.head_dim, self.hidden_size, weight=self.o_weights.data(), bias=None, device=self.device)
 
         # self.rotary_emb = LlamaRotaryEmbedding(self.head_dim)
         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
@@ -267,80 +253,3 @@ class TtLlamaAttention(nn.Module):
             attn_weights = None
 
         return attn_output, attn_weights, past_key_value
-
-
-class PytorchLlamaAttentionModel(torch.nn.Module):
-    def __init__(self, hf_reference_model, layer_num):
-        super().__init__()
-        self.attention = hf_reference_model.model.layers[layer_num].self_attn
-
-        # Disable dropout
-        self.attention.eval()
-
-    def forward(self, x, y):
-        result = self.attention(hidden_states=x, position_ids=y)[0]
-        return result
-
-
-def run_LlamaAttention_inference():
-
-    tokenizer = AutoTokenizer.from_pretrained("decapoda-research/llama-7b-hf")
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained("decapoda-research/llama-7b-hf", torch_dtype=torch.float32)
-    hugging_face_reference_model.eval()
-    configuration = hugging_face_reference_model.config
-    state_dict = hugging_face_reference_model.state_dict()
-
-    # Prepare inputs ========================================================================
-    torch.manual_seed(0)
-    # hidden states tensor: batch size is equal to 32, sequence length: 32
-    attention_input = (torch.rand(32, 32, 4096) * 2) - 1
-    layer_num = 0
-    # max_position_embeddings parameter should be in the config file, but the used pretrained model doesn't consist this parameter
-    max_position_embeddings = 2048
-
-    # get positions_ids values
-    seq_length = attention_input.shape[1]
-    past_key_values_length = 0
-
-    position_ids = torch.arange(
-        past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=None
-    )
-    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
-
-    # PyTorch output =======================================================================
-    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
-    pytorch_out = pytorch_LlamaAttention_model(x=attention_input, y=position_ids)
-
-    # TT hardware execution =================================================================
-    tt_attention_input = attention_input.unsqueeze(1)
-    tt_attention_input = torch2tt_tensor(tt_attention_input, device)
-
-    # get TT Attention module
-    tt_LlamaAttention_model = TtLlamaAttention(
-        device,
-        state_dict,
-        layer_num,
-        configuration.hidden_size,
-        configuration.num_attention_heads,
-        max_position_embeddings
-    )
-
-    tt_out, attn_weights, past_key_value = tt_LlamaAttention_model(hidden_states=tt_attention_input, position_ids=position_ids)
-    tt_out = tt2torch_tensor(tt_out).squeeze(1)
-
-    # check outputs ----------------------------------------------------------------------
-    print(comp_allclose(pytorch_out, tt_out))
-    print(comp_pcc(pytorch_out, tt_out))
-
-    passing_pcc, output_pcc = comp_pcc(pytorch_out, tt_out, 0.98)
-
-    assert passing_pcc, "PCC value is lower than 0.98"
-
-
-if __name__ == "__main__":
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-    run_LlamaAttention_inference()
-    ttl.device.CloseDevice(device)
