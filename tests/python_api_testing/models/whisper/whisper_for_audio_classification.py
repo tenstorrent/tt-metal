@@ -15,18 +15,14 @@ from dataclasses import dataclass
 
 import random
 from typing import Optional, Tuple, Union
-from loguru import logger
 
-from transformers import WhisperProcessor, WhisperForAudioClassification, AutoFeatureExtractor, AutoProcessor, WhisperConfig
-from datasets import load_dataset
+from transformers import  WhisperConfig
 
 from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.whisper.whisper_encoder import TtWhisperEncoder
+from python_api_testing.fused_ops.linear import Linear as TtLinear
 
 from libs import tt_lib as ttm
-
-from utility_functions import pad_weight, tilize_to_list
-from python_api_testing.fused_ops.linear import Linear as TtLinear
 
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
@@ -70,6 +66,7 @@ class TtWhisperForAudioClassification(nn.Module):
         self.classifier = nn.Linear(config.classifier_proj_size, config.num_labels)
         self.classifier.weight.data = state_dict[f"classifier.weight"]
         self.classifier.bias.data = state_dict[f"classifier.bias"]
+
         # Classifier cannot be TTM because its tensor of size [1, config.classifier_proj_size]. Pooling is done just after projection layer...
         # classifier_weight = torch2tt_tensor(state_dict[f"classifier.weight"], ttm.device.GetHost())
         # classifier_bias = torch2tt_tensor(state_dict[f"classifier.bias"], ttm.device.GetHost())
@@ -98,7 +95,7 @@ class TtWhisperForAudioClassification(nn.Module):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.Tensor], WhisperForAudioClassification]:
+    ) -> Union[Tuple[torch.Tensor], TtWhisperForAudioClassificationOutput]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
             Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
@@ -192,76 +189,3 @@ class TtWhisperForAudioClassification(nn.Module):
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
         )
-
-def run_tt_whisper_for_audio_classification():
-    feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
-    model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
-
-    # change config
-    configuration = model.config
-    configuration.max_source_positions = 1024
-    print(configuration)
-
-    model = WhisperForAudioClassification(configuration)
-
-    model.eval()
-    state_dict = model.state_dict()
-
-    ds = load_dataset("google/fleurs", "all", split="validation", streaming=True)
-    sample = next(iter(ds))
-
-    inputs = feature_extractor(
-        sample["audio"]["array"], sampling_rate=sample["audio"]["sampling_rate"], return_tensors="pt"
-    )
-    # Take only 2048 features on last dim. 3000 not supported because of shape and encoder max_source_positions
-    input_features = inputs.input_features
-    input_features = input_features[:,:,:2048]
-
-    with torch.no_grad():
-        logits = model(input_features).logits
-        print(logits.size())
-
-    predicted_class_ids = torch.argmax(logits).item()
-    predicted_label = model.config.id2label[predicted_class_ids]
-    print(f"Torch predicted label: {predicted_label}")
-
-    tt_whisper_model = TtWhisperForAudioClassification(
-        state_dict=state_dict,
-        device=device,
-        config=model.config
-    )
-    tt_whisper_model.eval()
-
-    with torch.no_grad():
-
-        ttm_logits = tt_whisper_model(
-            input_features = input_features,
-        ).logits
-
-        print(ttm_logits.size())
-
-        tt_predicted_class_ids = torch.argmax(ttm_logits).item()
-        tt_predicted_label = model.config.id2label[tt_predicted_class_ids]
-        print(f"TT predicted label: {tt_predicted_label}")
-
-        does_pass, pcc_message = comp_pcc(logits, ttm_logits, 0.98)
-        print(logits.size())
-        print(ttm_logits.size())
-        ttm_logits = torch.squeeze(ttm_logits, 0)
-        print(comp_allclose(logits, ttm_logits))
-        print(pcc_message)
-
-        if does_pass:
-            logger.info("WhisperForAudioClassification output Passed!")
-        else:
-            logger.warning("WhisperForAudioClassification output Failed!")
-
-        print_corr_coef(logits, ttm_output_logits)
-
-if __name__ == "__main__":
-    torch.manual_seed(1234)
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
-    host = ttm.device.GetHost()
-    run_tt_whisper_for_audio_classification()
-    ttm.device.CloseDevice(device)

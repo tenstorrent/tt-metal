@@ -15,17 +15,15 @@ from dataclasses import dataclass
 
 import random
 from typing import Optional, Tuple, Union
-from loguru import logger
 
-from transformers import WhisperModel, WhisperConfig
+from transformers import WhisperConfig
 
 from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.whisper.whisper_decoder_layer import TtWhisperDecoderLayer
-
-from libs import tt_lib as ttm
-from utility_functions import pad_weight, tilize_to_list
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from python_api_testing.fused_ops.layernorm import Layernorm as TtLayernorm
+
+from libs import tt_lib as ttm
 
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
@@ -414,79 +412,3 @@ class TtWhisperDecoder(nn.Module):
             attentions=all_self_attns,
             cross_attentions=all_cross_attentions,
         )
-
-def run_whisper_decoder():
-    model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
-
-    base_address = "decoder"
-    # Accessing the model configuration
-    configuration = model.config
-    pytorch_model = model.decoder
-    pytorch_model.eval()
-    state_dict = model.state_dict()
-
-    # Create model from changed Configuration:
-    # model = WhisperModel(configuration)
-    # state_dict = model.state_dict()
-    # pytorch_model = model.decoder
-    # pytorch_model.eval()
-
-    batch_size = 1
-    seq_len = 32
-
-    # (`torch.LongTensor` of shape `(batch_size, sequence_length)`)
-    # Indices of input sequence tokens in the vocabulary
-    decoder_input_ids = torch.tensor([
-        [1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1]]
-    ) * configuration.decoder_start_token_id
-
-    pytorch_output = pytorch_model(
-        input_ids = decoder_input_ids,
-        output_attentions = True,
-        output_hidden_states = True
-    )
-
-    print("****** TTM WhisperDecoder ******")
-
-    tt_whisper_decoder = TtWhisperDecoder(
-        base_address = base_address,
-        state_dict = state_dict,
-        device = device,
-        config = model.config
-    )
-    tt_whisper_decoder.eval()
-
-    ttm_output = tt_whisper_decoder(
-        input_ids = decoder_input_ids,
-        output_attentions = True,
-        output_hidden_states = True
-    )
-
-    print("TTM Output")
-    print(ttm_output)
-
-    # Check last_hidden_state
-    ttm_output_to_torch = tt2torch_tensor(ttm_output.last_hidden_state)
-    ttm_output_to_torch = torch.squeeze(ttm_output_to_torch, 0)
-
-    does_pass, pcc_message = comp_pcc(pytorch_output.last_hidden_state, ttm_output_to_torch, 0.98)
-
-    print(comp_allclose(pytorch_output.last_hidden_state, ttm_output_to_torch))
-    print(pcc_message)
-
-    if does_pass:
-        logger.info("Decoder Passed!")
-    else:
-        logger.warning("Decoder Failed!")
-
-
-if __name__ == "__main__":
-    torch.manual_seed(1234)
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
-    host = ttm.device.GetHost()
-    run_whisper_decoder()
-    ttm.device.CloseDevice(device)
