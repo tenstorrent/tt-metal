@@ -54,28 +54,20 @@ this:
 
     git config core.commentchar ">"
 
-Run tt-metal programs
----------------------
+Run pre/post commit regressions
+-------------------------------
 
-We can now run an individual tt-metal program, like so
+You must run regressions before you commit something.
 
-::
-
-    make tt_metal/tests
-    export TT_METAL_HOME=<this repo dir>
-    ./build/test/tt_metal/test_sfpu
-
-which will run an example SFPU test that will compile, load, and run the
-necessary kernels.
-
-You can also run all the tt-metal tests as a regression script using a vanilla
-Python installation:
+These regressions will also run after every pushed commit to the GitHub repo.
 
 ::
 
-    make tt_metal/tests
+    make build
+    make tests
     export TT_METAL_HOME=<this repo dir>
-    python -m tests.scripts.run_tt_metal
+    source build/python_env/bin/activate
+    ./tests/scripts/run_pre_post_commit_regressions.sh
 
 .. only:: not html
 
