@@ -14,8 +14,8 @@ void MAIN {
 
     union { float f; uint32_t u; } u; u.u = scaler;
 
-    //reduce_init(REDUCE_OP, REDUCE_DIM, CB::c_in0, u.f);
-    reduce_init_v2<true>(REDUCE_OP, REDUCE_DIM, CB::c_in0, CB::c_in2);
+    reduce_init(REDUCE_OP, REDUCE_DIM, CB::c_in0, u.f);
+    //reduce_init_v2<true>(REDUCE_OP, REDUCE_DIM, CB::c_in0, CB::c_in2);
 
     cb_wait_front(CB::c_in2, 1); // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -29,8 +29,8 @@ void MAIN {
             for(uint32_t wt = 0; wt < Wt; ++wt) {
                 cb_wait_front(CB::c_in0, onetile);
                 // REDUCE_OP/DIM is expected to come from add_define
-                //reduce_tile(REDUCE_OP, REDUCE_DIM, CB::c_in0, 0, reduce_dst_idx, scaler);
-                reduce_tile_v2(REDUCE_OP, REDUCE_DIM, CB::c_in0, CB::c_in2, 0, 0, reduce_dst_idx);
+                reduce_tile(REDUCE_OP, REDUCE_DIM, CB::c_in0, 0, reduce_dst_idx, scaler);
+                //reduce_tile_v2(REDUCE_OP, REDUCE_DIM, CB::c_in0, CB::c_in2, 0, 0, reduce_dst_idx);
                 cb_pop_front(CB::c_in0, onetile);
             }
         }
