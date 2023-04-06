@@ -19,6 +19,8 @@ jobs:
           token: ${{ secrets.CHECKOUT_TOKEN }}
       - name: Build tt-metal and libs
         run: make build
+      - name: Build tt-metal CPP tests
+        run: make tests
       - name: Run pre/post regression tests
         run: |
           source build/python_env/bin/activate
