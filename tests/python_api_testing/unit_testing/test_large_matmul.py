@@ -16,7 +16,7 @@ import torch
 @pytest.mark.parametrize(
     "Hat, Wat, Wbt",
     (
-        (2, 4, 4),
+        (2, 9, 9),
     ),
 )
 def test_run_large_matmul_test(Hat, Wat, Wbt):

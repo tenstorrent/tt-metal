@@ -14,21 +14,22 @@ from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 import torch
 
 @pytest.mark.parametrize(
-    "K, C, H, W",
+    "K, C, H, W, R, S",
     (
-        (64, 64, 32, 16),
-        (64, 64, 10, 10),
+        (288, 32, 10, 10, 3, 3),
+        (64, 64, 32, 16, 1, 1),
+        (64, 64, 10, 10, 1, 1),
     ),
 )
-def test_run_1x1conv_as_large_matmul(K, C, H, W):
+def test_run_conv_as_large_matmul(K, C, H, W, R, S):
     #torch.manual_seed(0)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
     a_activation_shape = [1,C,H,W]
-    b_weights_shape = [K,C,1,1]
-    OH = H
-    OW = W
+    b_weights_shape = [K,C,R,S]
+    OH = H - R + 1
+    OW = W - S + 1
     mm_output_shape = [1,1,_nearest_32(OH*OW),K]
 
     A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
@@ -52,8 +53,9 @@ def test_run_1x1conv_as_large_matmul(K, C, H, W):
     B_tiled = B_tiled_.to(device)
 
     # Run TT metal OP
-    out = ttl.tensor.conv_as_large_bmm_single_core(A, B_tiled)
+    out = ttl.tensor.conv_as_large_bmm_single_core(A, B_tiled, R, S)
     assert(out.shape() == mm_output_shape)
+    # Copy output to host and convert tt tensor to pytorch tensor
     out_pytorch = torch.tensor(out.to(host).data()).reshape(mm_output_shape)
     ttl.device.CloseDevice(device)
     # remove padding

@@ -199,8 +199,9 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_block_info_(uint32_t M, uint32_
 
 // TODO(whoever gets a chance!): Refactor this so it's a part of matmul_single_core_... keeping it
 // independent for now as it's easier for me to progress
-Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b) {
-
+Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, uint32_t R, uint32_t S) {
+    TT_ASSERT(R == S, "Only square kernel window supported.");
+    TT_ASSERT((R == 1 || R == 3), "Only 1x1 and 3x3 kernel window supported.");
     TT_ASSERT(a.layout() == Layout::CHANNELS_LAST, "Conv activation should be in channels last layout");
 
     //vector<int> shape = {5, 4,4};
@@ -213,7 +214,12 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b) {
     node0->groups[0]->shape = shape;
     dtx_right->transformations.push_back(node0);
     bool pass = true;
-    pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv1x1_s1(dtx_right);
+    if (R == 1) {
+        pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv1x1_s1(dtx_right);
+    }
+    else {
+        pass &= convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1(dtx_right);
+    }
     // Get the 2d matrix shape
     auto matrix_shape = dtx_right->transformations.back()->groups[0]->shape;
     assert(matrix_shape.size() == 3);
@@ -320,8 +326,8 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b) {
     Tensor output = create_output_dram_buffer_(a.device(), a.dtype(), cshape);
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    uint32_t address_map_l1_addr = 980 * 1024;
-    assert(address_map.size() * sizeof(uint32_t) <= 19 * 1024);
+    uint32_t address_map_l1_addr = 900 * 1024;
+    assert(address_map.size() * sizeof(uint32_t) <= 100 * 1024);
     auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, address_map.size() * sizeof(uint32_t), address_map_l1_addr);
     // Keep for now, but need to fix when you get to multibank
     uint32_t out_dram_addr = dst_dram_buffer->address();
@@ -359,8 +365,10 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b) {
 
         // in0 block info
         uint32_t in0_block_w = Wat / num_blocks; // Two blocks in the W dimension
-        uint32_t in0_channel_stick_size = Wat * 32 * 2;
+        uint32_t in0_channel_stick_size = activation_C * 2;
         uint32_t in0_partial_channel_stick_size = (in0_block_w * 32) * 2;
+        // TODO (nshanker): fix this code
+        assert(in0_partial_channel_stick_size <= in0_channel_stick_size);
         std::cout << "in0_channel_stick_size=" << in0_channel_stick_size << std::endl;
         std::cout << "in0_partial_channel_stick_size=" << in0_partial_channel_stick_size << std::endl;
         uint32_t in0_num_blocks_w = Wat / in0_block_w;
@@ -447,7 +455,10 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b) {
             uint32_t in1_tensor_stride_w = 1;
             uint32_t in1_tensor_stride_h = Wbt;
             uint32_t in1_tensor_next_block_stride = in0_block_w * Wbt;
-            uint32_t in0_num_channel_sticks_per_row = 1; // For 1x1 conv
+            uint32_t in0_num_channel_sticks_per_row = 1;
+            if (R == 3) {
+                in0_num_channel_sticks_per_row = 9;
+            }
             string reader_kernel;
             vector<uint32_t> reader_rt_args;
             reader_kernel = "tt_metal/kernels/dataflow/reader_multi_bank_matmul_blocked_cl_acts_tl_weights_dtx.cpp";
@@ -550,9 +561,9 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b) {
     return output;
 }
 
-Tensor conv_as_large_bmm_single_core(const Tensor& a, const Tensor &b) {
+Tensor conv_as_large_bmm_single_core(const Tensor& a, const Tensor &b, uint32_t R, uint32_t S) {
 
-    Tensor output = conv_as_large_bmm_single_core_(a, b);
+    Tensor output = conv_as_large_bmm_single_core_(a, b, R, S);
     return output;
 }
 

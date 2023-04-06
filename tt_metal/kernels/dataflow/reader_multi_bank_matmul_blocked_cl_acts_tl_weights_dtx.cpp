@@ -63,11 +63,12 @@ void kernel_main() {
     uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
     uint32_t row_offset = 0;
     int some_var = 0;
-    uint32_t channel_stick_index = 0;
+    uint32_t channels_address_map_index = 0;
     uint32_t channel_stick_offset = 0;
     uint32_t channels_address_map_size_per_row = in0_num_channel_sticks_per_row << 2; // 4 entries per channel stick in the address map
     uint32_t in0_num_blocks_per_channel_stick = in0_channel_stick_size / in0_partial_channel_stick_size;
     for(uint32_t b = 0; b < num_blocks; b++) {
+        channels_address_map_index = (b / in0_num_blocks_per_channel_stick) << 2; // 4 entries per channel stick in the address map
         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
@@ -93,15 +94,15 @@ void kernel_main() {
         // because the "block" doesn't cover the full stick
 
         for (uint32_t h = 0; h < in0_num_rows; h++) {
-            uint32_t src_addr = src0_addr + channels_address_map[channel_stick_index];
+            uint32_t src_addr = src0_addr + channels_address_map[channels_address_map_index];
             // Destination address at address_map[am_index+1] unused. Contiguous writes to L1.
             // Transfer size at address_map[am_index+2] unused.
             // Need to do partial transfer because channel stick can be divided between blocks
-            uint32_t channel_stick_bank_id = channels_address_map[channel_stick_index+3];
+            uint32_t channel_stick_bank_id = channels_address_map[channels_address_map_index+3];
             uint64_t in0_row_noc_addr = get_noc_addr(channel_stick_bank_id, s0, channel_stick_offset);
             noc_async_read(in0_row_noc_addr, l1_write_addr_in0, in0_partial_channel_stick_size);
             l1_write_addr_in0 += in0_partial_channel_stick_size;
-            channel_stick_index += channels_address_map_size_per_row;
+            channels_address_map_index += channels_address_map_size_per_row;
         }
         // Height padding
         for (uint32_t z = 0; z < num_reads_of_zeroes; z++) {
@@ -114,7 +115,6 @@ void kernel_main() {
         }
 
         channel_stick_offset = (channel_stick_offset + in0_partial_channel_stick_size) % in0_channel_stick_size;
-        channel_stick_index = b / in0_num_blocks_per_channel_stick;
         noc_async_read_barrier();
 
         cb_push_back(cb_id_in0, in0_block_num_tiles);
