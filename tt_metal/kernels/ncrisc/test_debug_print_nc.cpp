@@ -49,7 +49,7 @@ void kernel_main() {
         DPRINT << 'N' << 'C' << '{' << x << ',' << y << '}' << ENDL();
         DPRINT << SETP(4) << F32(0.123456f) << ENDL();
         DPRINT << FIXP() << F32(0.12f) << ENDL();
-        DPRINT << F16(0x3dfb) << ENDL(); // 0.12255859375
+        DPRINT << BF16(0x3dfb) << ENDL(); // 0.12255859375
         for (u32 a = 0; a < ARG3; a++)
             DPRINT << '_';
         DPRINT << ENDL();
