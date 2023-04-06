@@ -19,5 +19,5 @@ jobs:
           token: ${{ secrets.CHECKOUT_TOKEN }}
       - name: Build tt-metal and libs
         run: make build
-      - name: Run unit tests
-        run: ./tests/scripts/run_python_api_unit_tests.sh
+      - name: Run pre/post regression tests
+        run: ./tests/scripts/run_pre_post_commit_regressions.sh

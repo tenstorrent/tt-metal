@@ -14,20 +14,17 @@ fi
 
 cd $TT_METAL_HOME
 
-make clean
-make build
+./build_tt_metal.sh
 make tests
 
 source build/python_env/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
 python -m pip install -r tests/python_api_testing/requirements.txt
 
-env python tests/scripts/run_build_kernels_for_riscv.py -j 16
-env python tests/scripts/run_llrt.py --skip-driver-tests
-env ./build/test/llrt/test_silicon_driver
+./tests/scripts/run_pre_post_commit_regressions.sh
+
 env python tests/scripts/run_tt_metal.py
 
-./tests/scripts/run_python_api_unit_tests.sh
 env pytest tests/python_api_testing/models/bert/bert_encoder.py -k bert_encoder
 env pytest tests/python_api_testing/models/bert -k bert_question_and_answering
 
