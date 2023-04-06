@@ -36,25 +36,32 @@ def generate_pytorch_golden(conv_test_params):
     C = torch.nn.functional.conv2d(A, B, stride=(ctp.stride_h, ctp.stride_w), padding=(ctp.pad_h, ctp.pad_w))
     return (A,B,C)
 
-def generate_pytorch_golden_tb():
+def generate_conv_tb():
     # sweep over activation sizes, kernel sizes, stride, padding specified in test bench yaml
-    with open(os.path.join(sys.path[0], 'conv_tb.yaml'), 'r') as file:
+    with open(os.path.join(os.environ['TT_METAL_HOME'], 'tests/python_api_testing/conv/conv_tb.yaml'), 'r') as file:
         conv_tb = yaml.safe_load(file)
-    pytorch_golden_test_bench = {}
+    conv_test_bench = []
     for act_shape in conv_tb["activation_shapes"]:
         for kernel_size in conv_tb["kernel_sizes"]:
             for stride in conv_tb["strides"]:
                 for pad in conv_tb["paddings"]:
                     # check if its a valid test
-                    output_shape_h = ((int) (act_shape[2] - kernel_size[1] + 2 * pad[0] / stride[0])) + 1
-                    output_shape_w = ((int) (act_shape[3] - kernel_size[2] + 2 * pad[1] / stride[1])) + 1
-                    if output_shape_h < 1 or output_shape_w < 1:
+                    if (act_shape[2] - kernel_size[1] + 2 * pad[0]) < 1 or (act_shape[3] - kernel_size[2] + 2 * pad[1]) < 1:
                         # invalid parameters
                         continue
                     # weight shape - [K,C,R,S]
                     weight_shape = [kernel_size[0], act_shape[1], kernel_size[1], kernel_size[2]]
                     conv_test_params = ConvTestParameters(act_shape, weight_shape, stride[0], stride[1], pad[0], pad[1])
-                    # generate_pytorch_golden returns input, weight and golden output tensors
-                    pytorch_golden_test = generate_pytorch_golden(conv_test_params)
-                    pytorch_golden_test_bench[conv_test_params] = pytorch_golden_test
+                    conv_test_bench.append(conv_test_params)
+    return conv_test_bench
+
+def generate_pytorch_golden_tb(conv_test_bench):
+    pytorch_golden_test_bench = {}
+    # Generate pytorch golden result for each test in testbench
+    for conv_test_params in conv_test_bench:
+        print("Test with following parameters - ")
+        conv_test_params.print("   ")
+        # generate_pytorch_golden returns input, weight and golden output tensors
+        pytorch_golden_test = generate_pytorch_golden(conv_test_params)
+        pytorch_golden_test_bench[conv_test_params] = pytorch_golden_test
     return pytorch_golden_test_bench
