@@ -224,8 +224,8 @@ void create_CBs_for_fused_matmul(tt_metal::Program* program,
         device,
         tilize_mode_tilized_in0_cb,
         core,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
         tilized_cb_addr,
         tt::DataFormat::Float16_b
     );

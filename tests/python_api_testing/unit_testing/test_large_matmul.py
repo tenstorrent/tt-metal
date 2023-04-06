@@ -16,6 +16,7 @@ import torch
 @pytest.mark.parametrize(
     "Hat, Wat, Wbt",
     (
+        (1, 9, 1),
         (2, 9, 9),
     ),
 )

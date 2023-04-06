@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug_print.h"
 void kernel_main() {
     uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
@@ -19,13 +18,14 @@ void kernel_main() {
     uint32_t in0_block_num_tiles  = get_arg_val<uint32_t>(10);
     uint32_t in0_num_rows = get_arg_val<uint32_t>(11); // in0 has whole column in 1 block
     uint32_t in0_num_channel_sticks_per_row = get_arg_val<uint32_t>(12);
-    uint32_t in0_channel_stick_size = get_arg_val<uint32_t>(13);
-    uint32_t in0_partial_channel_stick_size = get_arg_val<uint32_t>(14);
-    uint32_t num_bytes_of_zeroes_per_read = get_arg_val<uint32_t>(15);
-    uint32_t num_reads_of_zeroes = get_arg_val<uint32_t>(16);
-    uint32_t num_bytes_of_zeroes_remainder = get_arg_val<uint32_t>(17);
-    uint32_t address_map_l1_addr = get_arg_val<uint32_t>(18);
-    uint32_t address_map_size = get_arg_val<uint32_t>(19);
+    uint32_t in0_num_channel_sticks_block_w = get_arg_val<uint32_t>(13);
+    uint32_t in0_channel_stick_size = get_arg_val<uint32_t>(14);
+    uint32_t in0_partial_channel_stick_size = get_arg_val<uint32_t>(15);
+    uint32_t num_bytes_of_zeroes_per_read = get_arg_val<uint32_t>(16);
+    uint32_t num_reads_of_zeroes = get_arg_val<uint32_t>(17);
+    uint32_t num_bytes_of_zeroes_remainder = get_arg_val<uint32_t>(18);
+    uint32_t address_map_l1_addr = get_arg_val<uint32_t>(19);
+    uint32_t address_map_size = get_arg_val<uint32_t>(20);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -92,17 +92,21 @@ void kernel_main() {
         // Read activations using address map
         // Read in0 channels last... will have to read partial sticks
         // because the "block" doesn't cover the full stick
-
         for (uint32_t h = 0; h < in0_num_rows; h++) {
-            uint32_t src_addr = src0_addr + channels_address_map[channels_address_map_index];
-            // Destination address at address_map[am_index+1] unused. Contiguous writes to L1.
-            // Transfer size at address_map[am_index+2] unused.
-            // Need to do partial transfer because channel stick can be divided between blocks
-            uint32_t channel_stick_bank_id = channels_address_map[channels_address_map_index+3];
-            uint64_t in0_row_noc_addr = get_noc_addr(channel_stick_bank_id, s0, channel_stick_offset);
-            noc_async_read(in0_row_noc_addr, l1_write_addr_in0, in0_partial_channel_stick_size);
-            l1_write_addr_in0 += in0_partial_channel_stick_size;
-            channels_address_map_index += channels_address_map_size_per_row;
+            uint32_t channels_address_map_start_index = channels_address_map_index;
+            //DPRINT << "h= " << h << " channels address map start index= "<< channels_address_map_start_index << ENDL();
+            for(uint32_t w = 0; w < in0_num_channel_sticks_block_w; w++) {
+                uint32_t src_addr = src0_addr + channels_address_map[channels_address_map_index];
+                // Destination address at address_map[am_index+1] unused. Contiguous writes to L1.
+                // Transfer size at address_map[am_index+2] unused.
+                // Need to do partial transfer because channel stick can be divided between blocks
+                uint32_t channel_stick_bank_id = channels_address_map[channels_address_map_index+3];
+                uint64_t in0_row_noc_addr = get_noc_addr(channel_stick_bank_id, s0, channel_stick_offset);
+                noc_async_read(in0_row_noc_addr, l1_write_addr_in0, in0_partial_channel_stick_size);
+                l1_write_addr_in0 += in0_partial_channel_stick_size;
+                channels_address_map_index += 4;
+            }
+            channels_address_map_index = channels_address_map_start_index + channels_address_map_size_per_row;
         }
         // Height padding
         for (uint32_t z = 0; z < num_reads_of_zeroes; z++) {

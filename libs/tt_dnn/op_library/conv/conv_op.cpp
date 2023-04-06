@@ -65,8 +65,8 @@ void create_CBs_for_fused_matmul_c(tt_metal::Program* program,
         device,
         tilize_mode_tilized_in0_cb,
         core,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
         tilized_cb_addr,
         tt::DataFormat::Float16_b
     );
@@ -264,10 +264,19 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, uint32_t
     uint32_t transfer_size = combined->transformations.back()->groups[0]->transfers[0]->size*2; // 2 for bfloat16
     // Channels last layout -> so each transfer size should = activation_C
     assert(transfer_size == activation_C*2); // 2 for bfloat16
+    int prev_l1_address = -1;
     for(auto transfer : combined->transformations.back()->groups[0]->transfers){
         address_map.push_back(transfer->src_address*2); // 2 for bfloat16
         // TODO: remove dst address. It is not used by the reader kernel because it writes to L1 destination contiguously
         address_map.push_back(transfer->dst_address*2);
+        if (prev_l1_address == -1) {
+            prev_l1_address = (int) transfer->dst_address*2;
+            assert(prev_l1_address == 0);
+        }
+        else {
+            assert(prev_l1_address + transfer_size == (int) transfer->dst_address*2);
+            prev_l1_address = (int) transfer->dst_address*2;
+        }
         // transfer size should be the same for each transfer
         assert(transfer->size*2 == transfer_size);
         address_map.push_back(transfer->size*2);
@@ -366,18 +375,33 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, uint32_t
         // in0 block info
         uint32_t in0_block_w = Wat / num_blocks; // Two blocks in the W dimension
         uint32_t in0_channel_stick_size = activation_C * 2;
-        uint32_t in0_partial_channel_stick_size = (in0_block_w * 32) * 2;
+        uint32_t in0_num_channel_sticks_block_w;
+        uint32_t in0_partial_channel_stick_size;
+        if (in0_block_w * 32 >= activation_C) {
+            assert((in0_block_w * 32) % activation_C == 0);
+            in0_num_channel_sticks_block_w = (in0_block_w * 32) / activation_C;
+            in0_partial_channel_stick_size = activation_C * 2;
+        }
+        else {
+            in0_num_channel_sticks_block_w = 1;
+            assert(activation_C % (in0_block_w * 32) == 0);
+            in0_partial_channel_stick_size = in0_block_w * 32 * 2;
+        }
         // TODO (nshanker): fix this code
         assert(in0_partial_channel_stick_size <= in0_channel_stick_size);
         std::cout << "in0_channel_stick_size=" << in0_channel_stick_size << std::endl;
         std::cout << "in0_partial_channel_stick_size=" << in0_partial_channel_stick_size << std::endl;
+        std::cout << "in0_block_w=" << in0_block_w << std::endl;
+        std::cout << "in0_num_channel_sticks_block_w=" << in0_num_channel_sticks_block_w << std::endl;
         uint32_t in0_num_blocks_w = Wat / in0_block_w;
         uint32_t in0_num_rows = num_rows;
         uint32_t in0_num_subblocks = (Hat / out_subblock_h);
         uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
         uint32_t in0_subblock_h = (in0_block_num_tiles / in0_num_subblocks) / in0_block_w;
         uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
-
+        std::cout << "in0_block_num_tiles=" << in0_block_num_tiles << std::endl;
+        std::cout << "in0_subblock_h=" << in0_subblock_h << std::endl;
+        std::cout << "in0_subblock_num_tiles=" << in0_subblock_num_tiles << std::endl;
         // For height padding in reader kernel
         uint32_t total_zeroes_bytes_per_block = (cshape[2] - Ha) * in0_block_w * 32 * 2; // 2 for bfloat16
         std::cout << "num rows to pad = " << (cshape[2] - Ha) << std::endl;
@@ -478,6 +502,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, uint32_t
                 in0_block_num_tiles,
                 in0_num_rows,
                 in0_num_channel_sticks_per_row,
+                in0_num_channel_sticks_block_w,
                 in0_channel_stick_size,
                 in0_partial_channel_stick_size,
                 num_bytes_of_zeroes_per_read,
