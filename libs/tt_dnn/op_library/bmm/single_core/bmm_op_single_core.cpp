@@ -304,25 +304,24 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_block_info(uint32_t M, uint32_t
     uint32_t max_in1_bytes = 50 * 1024;
     uint32_t max_in0_tiles = max_in0_bytes / single_tile_size_bytes;
     uint32_t max_in1_tiles = max_in1_bytes / single_tile_size_bytes;
-    std::cout << "max_in0_tiles=" << max_in0_tiles << std::endl;
-    std::cout << "max_in1_tiles=" << max_in1_tiles << std::endl;
+    std::cout << "max_in0_block_tiles=" << max_in0_tiles << std::endl;
+    std::cout << "max_in1_block_tiles=" << max_in1_tiles << std::endl;
     uint32_t num_blocks = 1;
     uint32_t in_block_w = K;
     assert(M <= max_in0_tiles && N <= max_in1_tiles);
     uint32_t max_in_block_w = std::min((max_in0_tiles/M), (max_in1_tiles/N));
     while (in_block_w > max_in_block_w || K % num_blocks != 0) {
-        std::cout << "Need num blocks > 1" << std::endl;
         num_blocks += 1;
         assert(num_blocks <= K);
         in_block_w = K / num_blocks;
     }
     std::cout << "Num blocks=" << num_blocks << std::endl;
-    std::cout << "in0_block_w=" << in_block_w << std::endl;
+    std::cout << "K block size=" << in_block_w << std::endl;
 
     // Constraint 2: output should fit in L1
     uint32_t max_out_bytes = 120 * 1024;
     uint32_t max_out_tiles = max_out_bytes / single_tile_size_bytes;
-    std::cout << "max_out_tiles=" << max_out_tiles << std::endl;
+    std::cout << "max_out_block_tiles=" << max_out_tiles << std::endl;
     assert (M*N <= max_out_tiles);
 
     // Constraint 3: output should should fit in half DST (8 tiles). If not, divide into output sublocks
@@ -410,9 +409,9 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b) {
         uint32_t Hat = Ha / TILE_HEIGHT;
         uint32_t Wat = Wa / TILE_WIDTH;
         uint32_t Wbt = Wb / TILE_WIDTH;
-        std::cout << "Hat=" << Hat << std::endl;
-        std::cout << "Wat=" << Wat << std::endl;
-        std::cout << "Wbt=" << Wbt << std::endl;
+        std::cout << "Hat (M in tiles)=" << Hat << std::endl;
+        std::cout << "Wat (K in tiles)=" << Wat << std::endl;
+        std::cout << "Wbt (N in tiles)=" << Wbt << std::endl;
 
         // out
         uint32_t out_row_size = Wb * 2;

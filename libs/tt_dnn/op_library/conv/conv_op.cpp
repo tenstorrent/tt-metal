@@ -144,8 +144,8 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_block_info_(uint32_t M, uint32_
     uint32_t max_in1_bytes = 50 * 1024;
     uint32_t max_in0_tiles = max_in0_bytes / single_tile_size_bytes;
     uint32_t max_in1_tiles = max_in1_bytes / single_tile_size_bytes;
-    std::cout << "max_in0_tiles=" << max_in0_tiles << std::endl;
-    std::cout << "max_in1_tiles=" << max_in1_tiles << std::endl;
+    std::cout << "max_in0_block_tiles=" << max_in0_tiles << std::endl;
+    std::cout << "max_in1_block_tiles=" << max_in1_tiles << std::endl;
     uint32_t num_blocks = 1;
     uint32_t in_block_w = K;
     assert(M <= max_in0_tiles && N <= max_in1_tiles);
@@ -156,12 +156,12 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_block_info_(uint32_t M, uint32_
         in_block_w = K / num_blocks;
     }
     std::cout << "Num blocks=" << num_blocks << std::endl;
-    std::cout << "in0_block_w=" << in_block_w << std::endl;
+    std::cout << "K Block size=" << in_block_w << std::endl;
 
     // Constraint 2: output should fit in L1
     uint32_t max_out_bytes = 120 * 1024;
     uint32_t max_out_tiles = max_out_bytes / single_tile_size_bytes;
-    std::cout << "max_out_tiles=" << max_out_tiles << std::endl;
+    std::cout << "max_out_block_tiles=" << max_out_tiles << std::endl;
     assert (M*N <= max_out_tiles);
 
     // Constraint 3: output should should fit in half DST (8 tiles). If not, divide into output sublocks
@@ -350,9 +350,9 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, uint32_t
         uint32_t Hat = (uint32_t) ceil((double) Ha / (double) TILE_HEIGHT );
         uint32_t Wat = Wa / TILE_WIDTH;
         uint32_t Wbt = Wb / TILE_WIDTH;
-        std::cout << "Hat=" << Hat << std::endl;
-        std::cout << "Wat=" << Wat << std::endl;
-        std::cout << "Wbt=" << Wbt << std::endl;
+        std::cout << "Hat(M in tiles)=" << Hat << std::endl;
+        std::cout << "Wat(K in tiles)=" << Wat << std::endl;
+        std::cout << "Wbt(N in tiles)=" << Wbt << std::endl;
         // out
         uint32_t out_dram_addr = dst_dram_buffer->address();
         uint32_t out_row_size = Wb * 2;
@@ -389,23 +389,23 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, uint32_t
         }
         // TODO (nshanker): fix this code
         assert(in0_partial_channel_stick_size <= in0_channel_stick_size);
-        std::cout << "in0_channel_stick_size=" << in0_channel_stick_size << std::endl;
-        std::cout << "in0_partial_channel_stick_size=" << in0_partial_channel_stick_size << std::endl;
-        std::cout << "in0_block_w=" << in0_block_w << std::endl;
-        std::cout << "in0_num_channel_sticks_block_w=" << in0_num_channel_sticks_block_w << std::endl;
+        // std::cout << "in0_channel_stick_size=" << in0_channel_stick_size << std::endl;
+        // std::cout << "in0_partial_channel_stick_size=" << in0_partial_channel_stick_size << std::endl;
+        // std::cout << "in0_block_w=" << in0_block_w << std::endl;
+        // std::cout << "in0_num_channel_sticks_block_w=" << in0_num_channel_sticks_block_w << std::endl;
         uint32_t in0_num_blocks_w = Wat / in0_block_w;
         uint32_t in0_num_rows = num_rows;
         uint32_t in0_num_subblocks = (Hat / out_subblock_h);
         uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
         uint32_t in0_subblock_h = (in0_block_num_tiles / in0_num_subblocks) / in0_block_w;
         uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
-        std::cout << "in0_block_num_tiles=" << in0_block_num_tiles << std::endl;
-        std::cout << "in0_subblock_h=" << in0_subblock_h << std::endl;
-        std::cout << "in0_subblock_num_tiles=" << in0_subblock_num_tiles << std::endl;
+        // std::cout << "in0_block_num_tiles=" << in0_block_num_tiles << std::endl;
+        // std::cout << "in0_subblock_h=" << in0_subblock_h << std::endl;
+        // std::cout << "in0_subblock_num_tiles=" << in0_subblock_num_tiles << std::endl;
         // For height padding in reader kernel
         uint32_t total_zeroes_bytes_per_block = (cshape[2] - Ha) * in0_block_w * 32 * 2; // 2 for bfloat16
         std::cout << "num rows to pad = " << (cshape[2] - Ha) << std::endl;
-        std::cout << "row size per block = " << in0_block_w * 32 << std::endl;
+        // std::cout << "row size per block = " << in0_block_w * 32 << std::endl;
         uint32_t zero_buffer_size = l1_mem::address_map::ZEROS_SIZE;
         uint32_t num_bytes_of_zeroes_per_read = 0;
         uint32_t num_reads_of_zeroes = 0;
@@ -470,10 +470,10 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, uint32_t
                 out_subblock_h,
                 2); // TODO(agrebenisan): fix df num bytes
 
-            std::cout << "Reader kernel args - " << std::endl;
-            std::cout << "Num reads of zeroes - " << num_reads_of_zeroes << std::endl;
-            std::cout << "Num bytes of zeroes per read - " << num_bytes_of_zeroes_per_read << std::endl;
-            std::cout << "Num bytes of zeroes remainder - " << num_bytes_of_zeroes_remainder << std::endl;
+            // std::cout << "Reader kernel args - " << std::endl;
+            // std::cout << "Num reads of zeroes - " << num_reads_of_zeroes << std::endl;
+            // std::cout << "Num bytes of zeroes per read - " << num_bytes_of_zeroes_per_read << std::endl;
+            // std::cout << "Num bytes of zeroes remainder - " << num_bytes_of_zeroes_remainder << std::endl;
 
             uint32_t in1_tensor_start_tile_id = 0;
             uint32_t in1_tensor_stride_w = 1;
