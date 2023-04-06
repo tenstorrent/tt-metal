@@ -106,7 +106,7 @@ int main(int argc, char **argv) {
         );
 
         auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(
-            program, device, CB::c_in2 /*ouput_cb_index*/, core, 2 /* two tiles */,
+            program, device, CB::c_in2 /*scaler*/, core, 2 /* two tiles */,
             2 * single_tile_bytes, 400*1024, /* buf addr */
             tt::DataFormat::Float16_b
         );

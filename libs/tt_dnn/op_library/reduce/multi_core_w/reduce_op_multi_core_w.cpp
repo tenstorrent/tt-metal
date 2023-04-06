@@ -71,14 +71,15 @@ Tensor reduce_multi_core_w(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
             DataFormat::Float16_b
         );
 
-        auto cb_src1 = tt_metal::CreateCircularBuffer(
+        uint32_t scaler_cb_addr = 220 * 1024;
+        auto cb_scaler = tt_metal::CreateCircularBuffer(
             program,
             device,
             CB::c_in2,
             core,
             num_input_tiles,
             num_input_tiles * single_tile_size,
-            src0_cb_addr + 20*1024,
+            scaler_cb_addr,
             DataFormat::Float16_b
         );
 

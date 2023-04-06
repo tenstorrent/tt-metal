@@ -319,7 +319,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     unlock_stream();
                     TT_ASSERT(sz == 4);
                 break;
-                case DEBUG_PRINT_TYPEID_FLOAT16:
+                case DEBUG_PRINT_TYPEID_BFLOAT16:
                     lock_stream();
                     stream << bfloat16_to_float(*reinterpret_cast<uint16_t*>(ptr));
                     unlock_stream();

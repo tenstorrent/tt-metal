@@ -32,7 +32,7 @@
 #define ATTR_ALIGN4 __attribute__((aligned(4)))
 #define ATTR_PACK __attribute__((packed))
 
-struct F16 { uint16_t val; F16(uint16_t val) : val(val) {} } ATTR_PACK;
+struct BF16 { uint16_t val; BF16(uint16_t val) : val(val) {} } ATTR_PACK;
 struct F32 { float val; F32(float val) : val(val) {} } ATTR_PACK;
 struct U32 { uint32_t val; U32(uint32_t val) : val(val) {} } ATTR_PACK;
 
@@ -108,7 +108,7 @@ template<> uint8_t DebugPrintTypeToId<float>() { return DEBUG_PRINT_TYPEID_FLOAT
 template<> uint8_t DebugPrintTypeToId<char>() { return DEBUG_PRINT_TYPEID_CHAR; }
 template<> uint8_t DebugPrintTypeToId<RAISE>() { return DEBUG_PRINT_TYPEID_RAISE; }
 template<> uint8_t DebugPrintTypeToId<WAIT>() { return DEBUG_PRINT_TYPEID_WAIT; }
-template<> uint8_t DebugPrintTypeToId<F16>() { return DEBUG_PRINT_TYPEID_FLOAT16; }
+template<> uint8_t DebugPrintTypeToId<BF16>() { return DEBUG_PRINT_TYPEID_BFLOAT16; }
 template<> uint8_t DebugPrintTypeToId<SETP>() { return DEBUG_PRINT_TYPEID_SETP; }
 template<> uint8_t DebugPrintTypeToId<FIXP>() { return DEBUG_PRINT_TYPEID_FIXP; }
 template<> uint8_t DebugPrintTypeToId<HEX>() { return DEBUG_PRINT_TYPEID_HEX; }
@@ -224,7 +224,7 @@ template DebugPrinter operator<< <WAIT>(DebugPrinter, WAIT val);
 template DebugPrinter operator<< <FIXP>(DebugPrinter, FIXP val);
 template DebugPrinter operator<< <HEX>(DebugPrinter, HEX val);
 template DebugPrinter operator<< <SETP>(DebugPrinter, SETP val);
-template DebugPrinter operator<< <F16>(DebugPrinter, F16 val);
+template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
 template DebugPrinter operator<< <TILESAMPLES8>(DebugPrinter, TILESAMPLES8 val);

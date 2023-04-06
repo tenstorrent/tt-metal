@@ -60,6 +60,7 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         DataFormat::Float16_b
     );
 
+    uint32_t scaler_cb_addr = 220 * 1024;
     auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
         device,
@@ -67,7 +68,7 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        src0_cb_addr+20*1024,
+        scaler_cb_addr,
         DataFormat::Float16_b
     );
 
