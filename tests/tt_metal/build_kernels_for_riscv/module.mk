@@ -32,7 +32,7 @@ tests/build_kernels_for_riscv/all: $(BUILD_KERNELS_FOR_RISCV_TESTS)
 tests/build_kernels_for_riscv/test_%: $(TESTDIR)/build_kernels_for_riscv/test_%;
 
 .PRECIOUS: $(TESTDIR)/build_kernels_for_riscv/test_%
-$(TESTDIR)/build_kernels_for_riscv/test_%: $(OBJDIR)/build_kernels_for_riscv/tests/test_%.o  $(OP_LIB) $(CORE_GRAPH_LIB) $(BUILD_KERNELS_FOR_RISCV_LIB)
+$(TESTDIR)/build_kernels_for_riscv/test_%: $(OBJDIR)/build_kernels_for_riscv/tests/test_%.o $(BUILD_KERNELS_FOR_RISCV_LIB)
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(BUILD_KERNELS_FOR_RISCV_TEST_INCLUDES) -o $@ $^ $(LDFLAGS) $(BUILD_KERNELS_FOR_RISCV_TESTS_LDFLAGS)
 

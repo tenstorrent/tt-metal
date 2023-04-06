@@ -38,7 +38,7 @@ tests/llrt/all: $(LLRT_TESTS)
 tests/llrt/test_%: $(TESTDIR)/llrt/test_% ;
 
 .PRECIOUS: $(TESTDIR)/llrt/test_%
-$(TESTDIR)/llrt/test_%: $(OBJDIR)/llrt/tests/test_%.o $(BACKEND_LIB) $(LLRT_LIB) $(VERIF_LIB)
+$(TESTDIR)/llrt/test_%: $(OBJDIR)/llrt/tests/test_%.o $(LLRT_LIB)
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(LLRT_TEST_INCLUDES) -o $@ $^ $(LDFLAGS) $(LLRT_TESTS_LDFLAGS)
 
