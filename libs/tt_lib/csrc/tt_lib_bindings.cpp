@@ -242,7 +242,7 @@ void TensorModule(py::module &m_tensor) {
 
                 tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE)
         )doc")
-        .def("pad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, uint32_t pad_value) {
+        .def("pad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
             return self.pad(output_tensor_shape, input_tensor_start, pad_value);
         }, R"doc(
             Pads TT Tensor with given `pad_value`. The input tensor must be on host and in ROW_MAJOR layout. Returns an output tensor that contains the input tensor at the given `input_tensor_start` indices and the padded value everywhere else.
@@ -256,7 +256,7 @@ void TensorModule(py::module &m_tensor) {
             |                     |                                                      |              |                                                     |          |
             |                     |                                                      |              | <= (output_tensor_shape[i] - input_tensor_shape[i]) |          |
             +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-            | pad_value           | Value to pad input tensor                            | int          |                                                     | Yes      |
+            | pad_value           | Value to pad input tensor                            | float        |                                                     | Yes      |
             +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
 
             .. code-block:: python

@@ -511,7 +511,8 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
 //                                  .pad() and .unpad()
 // ======================================================================================
 template <typename T>
-inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, uint32_t pad_value) {
+inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+    auto pad_value_ = static_cast<T>(pad_value);
     auto input_tensor = *reinterpret_cast<std::vector<T>*>(tensor.data_ptr());
 
     // Check if input tensor fits in output tensor given the input tensor start indices
@@ -539,38 +540,38 @@ inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_te
 
     std::vector<T> output_tensor;
     for(auto i = 0; i < pad_size[0][0] * output_tensor_strides[0]; i++) {
-        output_tensor.push_back(pad_value);
+        output_tensor.push_back(pad_value_);
     }
     for(auto dim0 = 0; dim0 < input_tensor_shape[0]; dim0++) {
         for(auto i = 0; i < pad_size[1][0] * output_tensor_strides[1]; i++) {
-            output_tensor.push_back(pad_value);
+            output_tensor.push_back(pad_value_);
         }
         for(auto dim1 = 0; dim1 < input_tensor_shape[1]; dim1++) {
             for(auto i = 0; i < pad_size[2][0] * output_tensor_strides[2]; i++) {
-                output_tensor.push_back(pad_value);
+                output_tensor.push_back(pad_value_);
             }
             for(auto dim2 = 0; dim2 < input_tensor_shape[2]; dim2++) {
                 for(auto i = 0; i < pad_size[3][0] * output_tensor_strides[3]; i++) {
-                    output_tensor.push_back(pad_value);
+                    output_tensor.push_back(pad_value_);
                 }
                 for(auto dim3 = 0; dim3 < input_tensor_shape[3]; dim3++) {
                     auto idx = dim3 + input_tensor_strides[2] * dim2 + input_tensor_strides[1] * dim1 + input_tensor_strides[0] * dim0;
                     output_tensor.push_back(input_tensor[idx]);
                 }
                 for(auto i = 0; i < pad_size[3][1] * output_tensor_strides[3]; i++) {
-                    output_tensor.push_back(pad_value);
+                    output_tensor.push_back(pad_value_);
                 }
             }
             for(auto i = 0; i < pad_size[2][1] * output_tensor_strides[2]; i++) {
-                output_tensor.push_back(pad_value);
+                output_tensor.push_back(pad_value_);
             }
         }
         for(auto i = 0; i < pad_size[1][1] * output_tensor_strides[1]; i++) {
-            output_tensor.push_back(pad_value);
+            output_tensor.push_back(pad_value_);
         }
     }
     for(auto i = 0; i < pad_size[0][1] * output_tensor_strides[0]; i++) {
-        output_tensor.push_back(pad_value);
+        output_tensor.push_back(pad_value_);
     }
 
     return Tensor(output_tensor, output_tensor_shape, tensor.dtype(), tensor.layout());
