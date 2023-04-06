@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from libs import tt_lib as ttm
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 import numpy as np
-import bloom_utils as bloom_utils
+import python_api_testing.models.bloom.bloom_utils as bloom_utils
 
 def bloom_gelu_forward(x: torch.Tensor) -> torch.Tensor:
     """

@@ -18,12 +18,13 @@ from utility_functions import pad_activation, pad_weight, tilize_to_list, untili
 from libs import tt_lib as ttm
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 import numpy as np
-import bloom_utils as bloom_utils
+import python_api_testing.models.bloom.bloom_utils as bloom_utils
 
 from fused_ops.linear import Linear as TtLinear
 
-import dropout_add as dropout_add
-import bloom_gelu_forward as bloom_gelu_forward
+import python_api_testing.models.bloom.dropout_add as dropout_add
+import python_api_testing.models.bloom.bloom_gelu_forward as bloom_gelu_forward
+
 
 class TtBloomMLP(torch.nn.Module):
     def __init__(self, hugging_bloom_reference_model, hidden_dropout, hidden_size, training, device):
@@ -34,14 +35,16 @@ class TtBloomMLP(torch.nn.Module):
 
         state_dict = hugging_bloom_reference_model.state_dict()
 
-        tt_weight_mlp_h4h = tilize_to_list(pad_weight(state_dict[f"transformer.h.0.mlp.dense_h_to_4h.weight"]))
-        tt_bias_mlp_h4h = tilize_to_list(pad_weight(state_dict[f"transformer.h.0.mlp.dense_h_to_4h.bias"]))
+
+        tt_weight_mlp_h4h = bloom_utils.tt_load_layer_weights("transformer.h.0.mlp.dense_h_to_4h.weight", state_dict)
+        tt_bias_mlp_h4h =  bloom_utils.tt_load_layer_weights("transformer.h.0.mlp.dense_h_to_4h.bias", state_dict)
+
+        tt_weight_mlp_4hh = bloom_utils.tt_load_layer_weights("transformer.h.0.mlp.dense_4h_to_h.weight", state_dict)
+        tt_bias_mlp_4hh = bloom_utils.tt_load_layer_weights("transformer.h.0.mlp.dense_4h_to_h.bias", state_dict)
+
         self.dense_h_to_4h = TtLinear(hidden_size, 4 * hidden_size, tt_weight_mlp_h4h, tt_bias_mlp_h4h, device)
 
         self.gelu_impl = bloom_gelu_forward.tt_bloom_gelu_forward
-
-        tt_weight_mlp_4hh = tilize_to_list(pad_weight(state_dict[f"transformer.h.0.mlp.dense_4h_to_h.weight"]))
-        tt_bias_mlp_4hh = tilize_to_list(pad_weight(state_dict[f"transformer.h.0.mlp.dense_4h_to_h.bias"]))
 
         self.dense_4h_to_h = TtLinear(4*hidden_size, hidden_size, tt_weight_mlp_4hh, tt_bias_mlp_4hh, device)
 
@@ -55,8 +58,6 @@ class TtBloomMLP(torch.nn.Module):
         tt_hidden_states = self.gelu_impl(tt_h4h, device)
 
         tt_intermediate_output = self.dense_4h_to_h(tt_hidden_states)
-
-        tt_res_temp = tilize_to_list(residual)
 
         tt_res = bloom_utils.torch2tt_tensor(residual, device)
 
@@ -83,10 +84,11 @@ class BloomMLP(torch.nn.Module):
         self.gelu_impl = bloom_gelu_forward.bloom_gelu_forward
         self.dense_4h_to_h = torch.nn.Linear(4 * hidden_size, hidden_size)
 
-        weight_mlp_h_to_4h = torch.nn.Parameter(torch.tensor(state_dict[f"transformer.h.0.mlp.dense_h_to_4h.weight"]))
-        bias_mlp_h_to_4h = torch.nn.Parameter(torch.tensor(state_dict[f"transformer.h.0.mlp.dense_h_to_4h.bias"]))
-        weight_mlp_4hh = torch.nn.Parameter(torch.tensor(state_dict[f"transformer.h.0.mlp.dense_4h_to_h.weight"]))
-        bias_mlp_4hh = torch.nn.Parameter(torch.tensor(state_dict[f"transformer.h.0.mlp.dense_4h_to_h.bias"]))
+        weight_mlp_h_to_4h = bloom_utils.pt_load_layer_weights("transformer.h.0.mlp.dense_h_to_4h.weight", state_dict)
+        bias_mlp_h_to_4h =  bloom_utils.pt_load_layer_weights("transformer.h.0.mlp.dense_h_to_4h.bias", state_dict)
+
+        weight_mlp_4hh = bloom_utils.pt_load_layer_weights("transformer.h.0.mlp.dense_4h_to_h.weight", state_dict)
+        bias_mlp_4hh = bloom_utils.pt_load_layer_weights("transformer.h.0.mlp.dense_4h_to_h.bias", state_dict)
 
         self.dense_4h_to_h.weight = weight_mlp_4hh
         self.dense_4h_to_h.bias = bias_mlp_4hh

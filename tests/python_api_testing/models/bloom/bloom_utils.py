@@ -2,6 +2,7 @@ import torch
 import json
 import numpy as np
 from libs import tt_lib as ttm
+from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
@@ -31,6 +32,16 @@ def tt_const_tensor(value, shape, device):
     tt_const = torch2tt_tensor(pytorch_const, device)
     return tt_const
 
+
+def tt_load_layer_weights(layer_name, state_dict):
+    print(torch.tensor(state_dict[layer_name]).shape)
+    weights = tilize_to_list(pad_weight(state_dict[layer_name]))
+    return weights
+
+def pt_load_layer_weights(layer_name, state_dict):
+    print(torch.tensor(state_dict[layer_name]).shape)
+    weights = torch.nn.Parameter(torch.tensor(state_dict[layer_name]))
+    return weights
 
 def read_model_config(json_file):
     # read file

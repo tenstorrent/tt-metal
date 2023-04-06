@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from libs import tt_lib as ttm
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 import numpy as np
-import bloom_utils as bloom_utils
+import python_api_testing.models.bloom.bloom_utils as bloom_utils
 
 def dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, training: bool) -> torch.Tensor:
     out = F.dropout(x, p=prob, training=training)
@@ -38,7 +38,7 @@ def run_dropout_add_inference(device):
 
     pt_out = dropout_add(test_in, res, 0.3, False)
 
-    tt_out =  tt_dropout_add(test_in, res, 0.3, False)
+    tt_out =  tt_dropout_add(test_in, res, 0.3, False, device)
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 
