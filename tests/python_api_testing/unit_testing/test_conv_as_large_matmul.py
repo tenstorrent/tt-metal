@@ -9,8 +9,7 @@ import numpy as np
 
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, convert_weights_2d_matrix
-from python_api_testing.models.utility_functions import print_diff_argmax, is_close
-from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from python_api_testing.models.utility_functions import print_diff_argmax, is_close, comp_pcc
 import torch
 
 @pytest.mark.parametrize(

@@ -7,9 +7,19 @@ sys.path.append(f"{f}/../..")
 import numpy as np
 
 from libs import tt_lib as ttl
-from libs.tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, pad_activation
-from python_api_testing.models.utility_functions import print_diff_argmax, is_close
-from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from libs.tt_lib.utils import (
+    tilize_to_list,
+    tilize,
+    untilize,
+    channels_last,
+    _nearest_32,
+    pad_activation,
+)
+from python_api_testing.models.utility_functions import (
+    print_diff_argmax,
+    is_close,
+    comp_pcc,
+)
 import torch
 
 

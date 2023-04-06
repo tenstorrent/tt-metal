@@ -13,7 +13,7 @@ from transformers import BertForQuestionAnswering
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from libs.tt_lib.fused_ops.linear import Linear as TtLinear
-from python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_allclose
+from utility_functions import comp_pcc, comp_allclose
 
 def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):
 

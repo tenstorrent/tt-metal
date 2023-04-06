@@ -17,8 +17,8 @@ from python_api_testing.models.utility_functions import (
     print_diff_argmax,
     pad_weight,
     is_close,
+    comp_pcc,
 )
-from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 import torch
 
 

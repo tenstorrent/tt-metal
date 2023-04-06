@@ -10,16 +10,14 @@ sys.path.append(f"{f}/../../..")
 
 
 import torch
-from transformers import BertTokenizer, BertForQuestionAnswering
+from transformers import BertForQuestionAnswering
 import numpy as np
 
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from libs.tt_lib.fused_ops.linear import Linear as TtLinear
 from libs.tt_lib.fused_ops.softmax import softmax
-from utility_functions import get_FR, set_FR
-from utility_functions import enable_compile_cache, enable_binary_cache
-from python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_allclose
+from utility_functions import get_FR, set_FR, enable_compile_cache, enable_binary_cache, comp_pcc, comp_allclose
 
 def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     assert isinstance(num_heads, int) and num_heads > 0

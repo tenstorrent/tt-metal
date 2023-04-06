@@ -1,6 +1,6 @@
 import pytest
 import torch
-from transformers import BertForQuestionAnswering, BertTokenizer
+from transformers import BertForQuestionAnswering
 import numpy as np
 from loguru import logger
 from pathlib import Path
@@ -15,7 +15,7 @@ from python_api_testing.models.bert.ffn import TtFeedForwardModel
 from python_api_testing.fused_ops.add_and_norm import AddAndNorm
 from python_api_testing.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_allclose
+from utility_functions import comp_pcc, comp_allclose
 
 class TtBertEncoder(torch.nn.Module):
     def __init__(self, config, encoder_idx, state_dict, device):

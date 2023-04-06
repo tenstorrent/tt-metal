@@ -12,11 +12,10 @@ import math
 from torch.nn import functional as F
 from transformers import BloomForCausalLM
 
-from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
+from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm, comp_allclose, comp_pcc
 
 
 from libs import tt_lib as ttm
-from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 import numpy as np
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
 
