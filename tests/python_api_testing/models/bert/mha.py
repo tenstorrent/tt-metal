@@ -202,15 +202,14 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc):
     "model_version, batch, seq_len, on_weka,  pcc",
     (
         ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99),
-        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, 0.93), # Placeholder PCC until issues are resolved
-        ("phiyodr/bert-large-finetuned-squad2", 1, 128, True, 0.85) # Placeholder PCC until issues are resolved
+        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, 0.99),
+        ("phiyodr/bert-large-finetuned-squad2", 1, 128, True, 0.89) # Placeholder PCC until issues are resolved
     ),
 )
 def test_mha_inference(model_version, batch, seq_len, on_weka, pcc):
 
-    # Initialize the device
-    #enable_binary_cache()
-    #enable_compile_cache()
+    # enable_binary_cache()
+    # enable_compile_cache()
 
     run_mha_inference(model_version, batch, seq_len, on_weka, pcc)
 

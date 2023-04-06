@@ -3,7 +3,6 @@ import pytest
 from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering, BertTokenizer
-
 import sys
 from pathlib import Path
 f = f"{Path(__file__).parent}"
@@ -151,18 +150,18 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     "model_version, batch, seq_len, on_weka, real_input, pcc",
     (
         ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.99),
-        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, 0.35), # Placeholder PCC until issues are resolved
-        ("phiyodr/bert-large-finetuned-squad2", 1, 128, True, True, -0.2) # Placeholder PCC until issues are resolved
+        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, 0.99),
+        ("phiyodr/bert-large-finetuned-squad2", 1, 128, True, True, 0.89) # Placeholder PCC until issues are resolved
     ),
 )
 def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, pcc):
-    # TODO(AP): currently necessary, otherwise get bit discrepancies
 
-    # Initialize the device
-    #enable_binary_cache()
-    #enable_compile_cache()
+    # enable_binary_cache()
+    # enable_compile_cache()
 
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, pcc)
 
 if __name__ == "__main__":
+    # enable_binary_cache()
+    # enable_compile_cache()
     run_bert_question_and_answering_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.99)
