@@ -1,6 +1,9 @@
 #include "llrt.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 
+#include <unordered_set>
+#include <mutex>
+
 #include "tools/cpuprof/cpuprof.h"
 
 namespace tt {
@@ -9,23 +12,39 @@ namespace tt {
 namespace llrt {
 
 namespace fs = std::filesystem;
+
 using std::endl;
 using std::to_string;
 using std::uint32_t;
+using std::vector;
+using std::unordered_map;
+using std::string;
 
+bool llrt_enable_binary_cache = true;
 
-bool llrt_enable_binary_cache = false; // TODO(AP): temporary
-std::map<string, std::vector<uint32_t>> risc_binary_cache; // TODO(AP): temporary optimization
+struct HexNameToMemVectorCache {
+    // maps from RisckCacheMapKey to hex file path
+    static HexNameToMemVectorCache& inst() {
+        static HexNameToMemVectorCache inst_;
+        return inst_;
+    }
+
+    bool                exists(const string& path) { return cache_.find(path) != cache_.end(); }
+    vector<uint32_t>&   get   (const string& path) { return cache_[path]; }
+    void                add   (const string& path, vector<uint32_t>&& mem) { cache_[path] = std::move(mem); }
+
+    unordered_map<string, vector<uint32_t>> cache_;
+};
 
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
-vector <uint32_t> get_risc_binary(string path, uint32_t id) {
+vector<uint32_t> get_risc_binary(string path, uint32_t id, bool id_is_trisc) {
 
-    if (llrt_enable_binary_cache && risc_binary_cache.find(path) != risc_binary_cache.end()) {
-        //std::cout << "-- RISC CACHE HIT FOR " << path << std::endl;
-        return risc_binary_cache[path];
+    if (llrt_enable_binary_cache && HexNameToMemVectorCache::inst().exists(path)) {
+        //std::cout << "-- HEX2MEM CACHE HIT FOR " << path << std::endl;
+        return HexNameToMemVectorCache::inst().get(path);
     } else {
-        //std::cout << "-- RISC CACHE MISS FOR " << path << std::endl;
+        //std::cout << "-- HEX2MEM CACHE MISS FOR " << path << std::endl;
     }
 
     string path_to_bin = path;
@@ -40,44 +59,16 @@ vector <uint32_t> get_risc_binary(string path, uint32_t id) {
             TT_ASSERT(false);
         }
     }
+
     std::ifstream hex_istream(path_to_bin);
-    ll_api::memory mem = ll_api::memory::from_discontiguous_risc_hex(hex_istream, id==1 ? ll_api::memory::NCRISC: ll_api::memory::BRISC);
+    ll_api::memory mem;
+    if (id_is_trisc)
+        mem = std::move( ll_api::memory::from_discontiguous_risc_hex(hex_istream, (ll_api::memory::risc_type_t)((int)ll_api::memory::TRISC0+id)) );
+    else
+        mem = std::move( ll_api::memory::from_discontiguous_risc_hex(hex_istream, id==1 ? ll_api::memory::NCRISC: ll_api::memory::BRISC) );
 
     if (llrt_enable_binary_cache)
-        risc_binary_cache[path] = mem.get_content(); // TODO(AP): temporary optimization
-
-    return mem.get_content();
-}
-
-vector<uint32_t> get_trisc_binary(string path, uint32_t trisc_id) {
-
-    //string path_to_bin = path + "/tensix_thread" + to_string(id) +
-    //    "/tensix_thread" + to_string(id) + ".hex";
-    if (llrt_enable_binary_cache && risc_binary_cache.find(path) != risc_binary_cache.end()) {
-        //std::cout << "-- TRISC CACHE HIT FOR " << path << std::endl;
-        return risc_binary_cache[path];
-    } else {
-        //std::cout << "-- TRISC CACHE MISS FOR " << path << std::endl;
-    }
-
-    string path_to_bin = path;
-
-    fs::path bin_file(path_to_bin);
-    if (!fs::exists(bin_file)) {
-        string tt_metal_home = string(getenv("TT_METAL_HOME"));
-        // try loading from home in case cwd isn't home
-        path_to_bin = tt_metal_home + "/" + path_to_bin;
-        fs::path bin_file_h(path_to_bin);
-        if (!fs::exists(bin_file_h)) {
-            std::cout << " Error: " << bin_file.c_str() << " doesn't exist" << endl;
-            TT_ASSERT(false);
-        }
-    }
-    std::ifstream hex_istream(path_to_bin);
-    ll_api::memory mem = ll_api::memory::from_discontiguous_risc_hex(hex_istream, (ll_api::memory::risc_type_t)((int)ll_api::memory::TRISC0+trisc_id));
-
-    if (llrt_enable_binary_cache)
-        risc_binary_cache[path] = mem.get_content(); // TODO(AP): temporary optimization
+        HexNameToMemVectorCache::inst().add(path, mem.get_content());
 
     return mem.get_content();
 }
@@ -154,29 +145,6 @@ void write_graph_interpreter_op_info_to_core(tt_cluster *cluster, int chip, cons
     write_hex_vec_to_core(cluster, chip, core, op_info_vec, OP_INFO_BASE_ADDR + offset);
 }
 
-
-struct RiscCacheMapKey {
-    int chip_id;
-    tt_xy_pair core;
-    int riscv_id;
-    RiscCacheMapKey(int ch, tt_xy_pair cr, int risc) : chip_id(ch), core(cr), riscv_id(risc) {}
-    bool operator== (const RiscCacheMapKey& rhs) const {
-        return (chip_id == rhs.chip_id) && (core == rhs.core) && (riscv_id == rhs.riscv_id);
-    }
-};
-struct RiscCacheMapHash
-{
-    std::size_t operator() (const RiscCacheMapKey &k) const
-    {
-        using std::hash;
-        return (hash<int>()(k.chip_id)
-                ^ hash<uint64_t>()(k.core.x)
-                ^ hash<uint64_t>()(k.core.y)
-                ^ hash<uint64_t>()(k.riscv_id));
-    }
-};
-std::unordered_map<RiscCacheMapKey, std::string, RiscCacheMapHash> last_loaded_cache; // cache what was last loaded to a specific risc
-
 // for BRISC and NCRISC
 bool test_load_write_read_risc_binary(tt_cluster *cluster, std::string hex_file_path, int chip_id, const tt_xy_pair& core, int riscv_id) {
 
@@ -185,16 +153,6 @@ bool test_load_write_read_risc_binary(tt_cluster *cluster, std::string hex_file_
 
     assert(is_worker_core(cluster, core, chip_id));
 
-    // TODO(AP): temporary cache, need a proper implementation
-    RiscCacheMapKey cache_key{.chip_id = chip_id, .core = core, .riscv_id = riscv_id};
-    if (llrt_enable_binary_cache && last_loaded_cache.find(cache_key) != last_loaded_cache.end() && last_loaded_cache[cache_key] == hex_file_path) {
-        //std::cout << "Skipping loading of " << hex_file_path << " to core " << core.x << "," << core.y << std::endl;
-        return true;
-    }
-    if (llrt_enable_binary_cache)
-        last_loaded_cache[cache_key] = hex_file_path;
-    //std::cout << "Loading " << hex_file_path << " to core " << core.x << "," << core.y << std::endl;
-
     std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id); // 0 = BRISC, 1 = NCRISC
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
@@ -202,13 +160,10 @@ bool test_load_write_read_risc_binary(tt_cluster *cluster, std::string hex_file_
     // PROF_END("get_risc")
 
     uint64_t addr = 0;
-    if (riscv_id == 0) {
-        addr = l1_mem::address_map::FIRMWARE_BASE; // BRISC binary addr in L1
-    } else if (riscv_id == 1) {
-        addr = l1_mem::address_map::NCRISC_FIRMWARE_BASE; // NCRISC binary addr in L1
-    } else {
-        std::cout << "rsicv_id = " << riscv_id << " not yet implemented" << std::endl;
-        exit(1);
+    switch( riscv_id ) {
+        case 0: addr = l1_mem::address_map::FIRMWARE_BASE;        break; //  BRISC binary addr in L1
+        case 1: addr = l1_mem::address_map::NCRISC_FIRMWARE_BASE; break; // NCRISC binary addr in L1
+        default: std::cout << "Unknown rsicv_id = " << riscv_id << std::endl; exit(1);
     }
 
     write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr); // PROF_BEGIN("write_risc")
@@ -217,7 +172,6 @@ bool test_load_write_read_risc_binary(tt_cluster *cluster, std::string hex_file_
     std::vector<uint32_t> read_hex_vec; // PROF_BEGIN("read_risc")
     read_hex_vec = read_hex_vec_from_core(cluster, chip_id, core, addr, hex_vec.size()*sizeof(uint32_t));  // size to read in Bytes
     log_debug(tt::LogLLRuntime, "read hex back from the core"); // PROF_END("read_risc")
-
     return hex_vec == read_hex_vec;
 }
 
@@ -228,16 +182,6 @@ bool test_load_write_read_trisc_binary(tt_cluster *cluster, std::string hex_file
 
     assert(is_worker_core(cluster, core, chip_id));
 
-    // TODO(AP): temporary cache, need a proper implementation
-    RiscCacheMapKey cache_key{.chip_id = chip_id, .core = core, .riscv_id = triscv_id+2}; // +2 to separate from NC/BR
-    if (llrt_enable_binary_cache && last_loaded_cache.find(cache_key) != last_loaded_cache.end() && last_loaded_cache[cache_key] == hex_file_path) {
-        //std::cout << "Skipping loading of " << hex_file_path << " to core " << core.x << "," << core.y << std::endl;
-        return true;
-    }
-    if (llrt_enable_binary_cache)
-        last_loaded_cache[cache_key] = hex_file_path;
-    //std::cout << "Loading " << hex_file_path << " to core " << core.x << "," << core.y << std::endl;
-
     // PROF_BEGIN("trisc_get")
     std::vector<uint32_t> hex_vec = get_trisc_binary(hex_file_path, triscv_id); // TRISC 0, 1, 2
     // PROF_END("trisc_get")
@@ -246,15 +190,11 @@ bool test_load_write_read_trisc_binary(tt_cluster *cluster, std::string hex_file
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
 
     uint64_t addr = 0;
-    if (triscv_id == 0) {
-        addr = l1_mem::address_map::TRISC0_BASE;
-    } else if (triscv_id == 1) {
-        addr = l1_mem::address_map::TRISC1_BASE;
-    } else if (triscv_id == 2) {
-        addr = l1_mem::address_map::TRISC2_BASE;
-    } else {
-        std::cout << "triscv_id = " << triscv_id << " is not valid" << std::endl;
-        exit(1);
+    switch (triscv_id) {
+        case 0: addr = l1_mem::address_map::TRISC0_BASE; break;
+        case 1: addr = l1_mem::address_map::TRISC1_BASE; break;
+        case 2: addr = l1_mem::address_map::TRISC2_BASE; break;
+        default: std::cout << "Unknown triscv_id = " << triscv_id << std::endl; exit(1);
     }
 
     write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr); // PROF_BEGIN("trisc_write")
@@ -263,7 +203,6 @@ bool test_load_write_read_trisc_binary(tt_cluster *cluster, std::string hex_file
     std::vector<uint32_t> read_hex_vec; // PROF_BEGIN("trisc_read_back")
     read_hex_vec = read_hex_vec_from_core(cluster, chip_id, core, addr, hex_vec.size()*sizeof(uint32_t));  // size to read in Bytes
     log_debug(tt::LogLLRuntime, "read trisc binary hex back from the core"); // PROF_END("trisc_read_back")
-
     return hex_vec == read_hex_vec;
 }
 
