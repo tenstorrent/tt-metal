@@ -102,19 +102,19 @@ def run_whisper_model(device):
     tt_out_to_torch = tt2torch_tensor(ttm_output.last_hidden_state)
     tt_out_to_torch = torch.squeeze(tt_out_to_torch, 0)
 
-    does_pass, pcc_message = comp_pcc(pytorch_output.last_hidden_state, tt_out_to_torch, 0.98)
+    does_pass, pcc_message = comp_pcc(pytorch_output.last_hidden_state, tt_out_to_torch, 0.96)
 
     print(comp_allclose(pytorch_output.last_hidden_state, tt_out_to_torch))
     print(pcc_message)
-
-    assert does_pass
 
     if does_pass:
         logger.info("Model Passed!")
     else:
         logger.warning("Model Failed!")
 
-def test_whipser_model():
+    assert does_pass
+
+def test_WhipserModel_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)

@@ -84,14 +84,14 @@ def run_whisper_encoder(device):
         print(comp_allclose(pytorch_output.last_hidden_state, ttm_output_to_torch))
         print(pcc_message)
 
-        assert does_pass
-
         if does_pass:
             logger.info("Encoder Passed!")
         else:
             logger.warning("Encoder Failed!")
 
-def test_whipser_encoder():
+        assert does_pass
+
+def test_WhipserEncoder_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)

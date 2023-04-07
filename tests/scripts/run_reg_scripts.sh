@@ -46,3 +46,9 @@ env pytest tests/python_api_testing/models/llama -k llama_layer_norm
 env pytest tests/python_api_testing/models/llama -k llama_mlp
 env pytest tests/python_api_testing/models/llama -k llama_attention
 env pytest tests/python_api_testing/models/llama -k llama_decoder
+
+env pytest tests/python_api_testing/models/whisper -k whisper_attention
+env pytest tests/python_api_testing/models/whisper -k whisper_encoder
+env pytest tests/python_api_testing/models/whisper -k whisper_decoder
+env pytest tests/python_api_testing/models/whisper -k whisper_model
+env pytest tests/python_api_testing/models/whisper -k whisper_for_audio_classification

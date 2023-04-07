@@ -166,15 +166,15 @@ def run_whisper_attention(decoder, layer, device):
         print(comp_allclose(past_key_value[1], tt_past_key_value_to_torch))
         print(pcc_message)
 
-        assert does_pass
-
         if does_pass:
             logger.info("Test attention output weights Passed!")
         else:
             logger.warning("Test attention output weights Failed!")
 
+        assert does_pass
 
-def test_whipser_encoder_attention():
+
+def test_WhisperEncoderAttention_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
@@ -182,7 +182,7 @@ def test_whipser_encoder_attention():
     ttm.device.CloseDevice(device)
 
 
-def test_whipser_decoder_attention():
+def test_WhisperDecoderAttention_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
