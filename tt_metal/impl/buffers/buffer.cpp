@@ -43,6 +43,9 @@ L1Buffer::L1Buffer(Device *device, const tt_xy_pair &logical_core, uint32_t size
     // TODO (abhullar): Enable this when we have a spec for overlapping buffers in L1
     //device->reserve_l1_buffer(logical_core, size_in_bytes, address);
     TT_ASSERT(address_ >= UNRESERVED_BASE, "First " + std::to_string(UNRESERVED_BASE) + " bytes in L1 are reserved");
+    // This assertion is only added for L1 buffers because DRAM buffers and Interleaved DRAM buffers invoke mem manager
+    // to reserve specific addresses which checks for aligned addresses.
+    TT_ASSERT(address % 32 == 0, "Requested address " + std::to_string(address) + " should be 32B aligned");
 }
 
 Buffer *L1Buffer::clone() {

@@ -8,10 +8,15 @@ namespace tt {
 namespace tt_metal {
 
 MemoryManager::MemoryManager(uint32_t max_size_bytes) {
-    constexpr static uint32_t min_allocation_size_bytes = 16;
+    constexpr static uint32_t min_allocation_size_bytes = 32;
+    // DRAM -> L1 and L1 -> DRAM transfers need to have 32B alignment, which means:
+    // DRAM_buffer_addr % 32 == L1_buffer_addr % 32, or
+    // DRAM_buffer_addr % 32 == L1_buffer_addr % 32 == 0
+    constexpr static uint32_t alignment = 32;
     this->allocator_ = new allocator::FreeList(
         max_size_bytes,
         min_allocation_size_bytes,
+        alignment,
         allocator::FreeList::SearchPolicy::FIRST);
 }
 

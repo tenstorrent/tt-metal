@@ -9,8 +9,8 @@ namespace tt_metal {
 
 namespace allocator {
 
-FreeList::FreeList(uint32_t max_size_bytes, uint32_t min_allocation_size, FreeList::SearchPolicy search_policy)
-    : search_policy_(search_policy), Allocator(max_size_bytes, min_allocation_size) {
+FreeList::FreeList(uint32_t max_size_bytes, uint32_t min_allocation_size, uint32_t alignment, FreeList::SearchPolicy search_policy)
+    : search_policy_(search_policy), Allocator(max_size_bytes, min_allocation_size, alignment) {
     this->init();
 }
 
@@ -127,6 +127,7 @@ void FreeList::allocate_free_block(Block *to_be_allocated, uint32_t size_bytes) 
 
 uint32_t FreeList::allocate(uint32_t size_bytes) {
     uint32_t alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
+    alloc_size = this->align(alloc_size);
     auto first_fit_block = search_first(alloc_size);
 
     if (first_fit_block == nullptr) {
@@ -177,8 +178,10 @@ void FreeList::segment_free_block(Block *to_be_split, uint32_t start_address, ui
 }
 
 uint32_t FreeList::reserve(uint32_t start_address, uint32_t size_bytes) {
+    TT_ASSERT(start_address % this->alignment_ == 0, "Requested address " + std::to_string(start_address) + " should be " + std::to_string(this->alignment_) + "B aligned");
     FreeList::Block *curr_block = this->free_block_head_;
     uint32_t alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
+    alloc_size = this->align(alloc_size);
     while (curr_block != nullptr) {
         if (curr_block->size >= alloc_size) {
             if (curr_block->address == start_address) {

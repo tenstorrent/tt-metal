@@ -34,30 +34,33 @@ bool test_free_list() {
     memory_manager.deallocate(96); // coalesce with next block
     // After deallocating check that memory between the coalesced blocks
     // is free to be allocated
-    auto addr_5 = memory_manager.reserve(132, 64);
-    pass &= addr_5 == 132;
+    auto addr_5 = memory_manager.reserve(128, 64);
+    pass &= addr_5 == 128;
 
     auto addr_6 = memory_manager.allocate(32);
     pass &= addr_6 == 96;
 
+    memory_manager.deallocate(32);
     memory_manager.deallocate(64); // coalesce with prev block
     // After deallocating check that memory between the coalesced blocks
     // is free to be allocated
-    auto addr_7 = memory_manager.reserve(60, 16);
-    pass &= addr_7 == 60;
+    auto addr_7 = memory_manager.allocate(64);
+    pass &= addr_7 == 32;
 
     auto addr_8 = memory_manager.allocate(316);
-    pass &= addr_8 == 196;
+    pass &= addr_8 == 192;
 
-    memory_manager.deallocate(60); // coalesce with prev and next block
+    memory_manager.deallocate(32);
+    memory_manager.deallocate(128);
+    memory_manager.deallocate(96); // coalesce with prev and next block
     // After deallocating check that memory between the coalesced blocks
     // is free to be allocated
-    auto addr_9 = memory_manager.reserve(54, 42);
-    pass &= addr_9 == 54;
+    auto addr_9 = memory_manager.reserve(64, 96);
+    pass &= addr_9 == 64;
 
-    memory_manager.deallocate(196);
-    auto addr_10 = memory_manager.reserve(200, 128);
-    pass &= addr_10 == 200;
+    memory_manager.deallocate(192);
+    auto addr_10 = memory_manager.reserve(256, 128);
+    pass &= addr_10 == 256;
 
     memory_manager.deallocate(0);
     auto addr_11 = memory_manager.allocate(28);

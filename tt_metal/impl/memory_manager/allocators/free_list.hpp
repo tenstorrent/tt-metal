@@ -15,7 +15,7 @@ class FreeList : public Allocator {
         FIRST = 1
     };
 
-    FreeList(uint32_t max_size_bytes, uint32_t min_allocation_size, SearchPolicy search_policy);
+    FreeList(uint32_t max_size_bytes, uint32_t min_allocation_size, uint32_t alignment, SearchPolicy search_policy);
 
     ~FreeList();
 
