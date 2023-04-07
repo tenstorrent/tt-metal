@@ -1,3 +1,4 @@
+import sys
 import math
 import torch
 from torch import nn
@@ -175,13 +176,24 @@ class TtLlamaAttention(nn.Module):
         hidden_states = tt2torch_tensor(hidden_states)
         # return all states to pytorch =============================
 
+        # get positions_ids values if it is None
+        seq_length = q_len
+        past_key_values_length = 0
+        if position_ids is None:
+            position_ids = torch.arange(
+                past_key_values_length,
+                seq_length + past_key_values_length,
+                dtype=torch.long,
+                device=None,
+            )
+            position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+        else:
+            position_ids = position_ids.view(-1, seq_length).long()
+
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
-            offset = past_key_value[0].shape[-2]
-            kv_seq_len += offset
+            kv_seq_len += past_key_value[0].shape[-2]
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        # offset = 0
-        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, offset=offset)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
@@ -202,31 +214,33 @@ class TtLlamaAttention(nn.Module):
         const_tensor_tt = tt_const_tensor(math.sqrt(self.head_dim), mul.shape(), self.device)
         # divison
         recip = ttl.tensor.recip(const_tensor_tt)
-        div = ttl.tensor.mul(mul, recip)
+        attn_weights = ttl.tensor.mul(mul, recip)
 
-        # return to PyTorch
-        attn_weights = tt2torch_tensor(div)
-
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+        if attn_weights.shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(
                 f"Attention weights should be of size {(bsz * self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
+                f" {attn_weights.shape()}"
             )
 
+        # change attention_mask to TT tensor
         if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+            attention_mask = torch2tt_tensor(attention_mask, self.device)
+            if attention_mask.shape() != [bsz, 1, q_len, kv_seq_len]:
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.shape()}"
                 )
-            # TT implementation not finished!
-            attn_weights = attn_weights + attention_mask
+            attn_weights = ttl.tensor.add(attn_weights, attention_mask)
+            # convert to PyTorch tensor
+            attn_weights = tt2torch_tensor(attn_weights)
             attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
 
         # TT implementation for:
         # PyTorch: upcast attention to fp32
         # attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         # attn_output = torch.matmul(attn_weights, value_states)
-        attn_weights = torch2tt_tensor(attn_weights, self.device)
+
+        if not isinstance(attn_weights, ttl.tensor.Tensor):
+            attn_weights = torch2tt_tensor(attn_weights, self.device)
         value_states = torch2tt_tensor(value_states, self.device)
 
         attn_weights = TTsoftmax(attn_weights)

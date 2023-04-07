@@ -111,7 +111,7 @@ def run_llama_inference():
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
-    num_decoders = 32
+    num_decoders = 2
     tt_llama_model = LlamaForCausalLM(configuration, num_decoders, state_dict, device)
     print("Tenstorrent llama model finished")
 
