@@ -19,21 +19,24 @@ using std::uint32_t;
 using std::vector;
 using std::unordered_map;
 using std::string;
+using std::move;
 
 bool llrt_enable_binary_cache = true;
 
 struct HexNameToMemVectorCache {
+    using lock = std::unique_lock<std::mutex>;
     // maps from RisckCacheMapKey to hex file path
     static HexNameToMemVectorCache& inst() {
         static HexNameToMemVectorCache inst_;
         return inst_;
     }
 
-    bool                exists(const string& path) { return cache_.find(path) != cache_.end(); }
-    vector<uint32_t>&   get   (const string& path) { return cache_[path]; }
-    void                add   (const string& path, vector<uint32_t>&& mem) { cache_[path] = std::move(mem); }
+    bool                exists(const string& path) { lock l(mutex_); return cache_.find(path) != cache_.end(); }
+    vector<uint32_t>&   get   (const string& path) { lock l(mutex_); return cache_[path]; }
+    void                add   (const string& path, vector<uint32_t>&& mem) { lock l(mutex_); cache_[path] = move(mem); }
 
     unordered_map<string, vector<uint32_t>> cache_;
+    std::mutex                              mutex_;
 };
 
 // made these free functions -- they're copy/paste of the member functions
