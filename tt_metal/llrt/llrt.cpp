@@ -172,10 +172,13 @@ bool test_load_write_read_risc_binary(tt_cluster *cluster, std::string hex_file_
     write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr); // PROF_BEGIN("write_risc")
     log_debug(tt::LogLLRuntime, "wrote hex to the core"); // PROF_END("write_risc")
 
-    std::vector<uint32_t> read_hex_vec; // PROF_BEGIN("read_risc")
-    read_hex_vec = read_hex_vec_from_core(cluster, chip_id, core, addr, hex_vec.size()*sizeof(uint32_t));  // size to read in Bytes
-    log_debug(tt::LogLLRuntime, "read hex back from the core"); // PROF_END("read_risc")
-    return hex_vec == read_hex_vec;
+    if (std::getenv("TT_KERNEL_READBACK_DISABLE") == nullptr) {
+        std::vector<uint32_t> read_hex_vec; // PROF_BEGIN("read_risc")
+        read_hex_vec = read_hex_vec_from_core(cluster, chip_id, core, addr, hex_vec.size()*sizeof(uint32_t));  // size to read in Bytes
+        log_debug(tt::LogLLRuntime, "read hex back from the core"); // PROF_END("read_risc")
+        return hex_vec == read_hex_vec;
+    }
+    return true;
 }
 
 // for TRISCs
@@ -203,10 +206,13 @@ bool test_load_write_read_trisc_binary(tt_cluster *cluster, std::string hex_file
     write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr); // PROF_BEGIN("trisc_write")
     log_debug(tt::LogLLRuntime, "wrote trisc binary hex to the core"); // PROF_END("trisc_write")
 
-    std::vector<uint32_t> read_hex_vec; // PROF_BEGIN("trisc_read_back")
-    read_hex_vec = read_hex_vec_from_core(cluster, chip_id, core, addr, hex_vec.size()*sizeof(uint32_t));  // size to read in Bytes
-    log_debug(tt::LogLLRuntime, "read trisc binary hex back from the core"); // PROF_END("trisc_read_back")
-    return hex_vec == read_hex_vec;
+    if (std::getenv("TT_KERNEL_READBACK_DISABLE") == nullptr) {
+        std::vector<uint32_t> read_hex_vec; // PROF_BEGIN("trisc_read_back")
+        read_hex_vec = read_hex_vec_from_core(cluster, chip_id, core, addr, hex_vec.size()*sizeof(uint32_t));  // size to read in Bytes
+        log_debug(tt::LogLLRuntime, "read trisc binary hex back from the core"); // PROF_END("trisc_read_back")
+        return hex_vec == read_hex_vec;
+    }
+    return true;
 }
 
 void disable_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) {
