@@ -1,6 +1,7 @@
 name: Post-commit main build and unit tests
 
 on:
+  workflow_dispatch:
   push:
     branches: ["main"]
 
