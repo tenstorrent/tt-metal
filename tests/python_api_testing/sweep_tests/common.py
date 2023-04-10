@@ -54,17 +54,20 @@ def run_test_and_save_results(
         test_result = "fail"
         test_output = err
 
-    results_csv_writer.writerow(
-        {
-            "test_name": test_name,
-            "input_shapes": input_shapes,
-            "data_seed": data_seed,
-            "env_vars": env_vars,
-            "status": test_status,
-            "test_output": test_output,
-            "pass/fail": test_result,
-        }
-    )
+    finally:
+        results_csv_writer.writerow(
+            {
+                "test_name": test_name,
+                "input_shapes": input_shapes,
+                "data_seed": data_seed,
+                "env_vars": env_vars,
+                "status": test_status,
+                "test_output": test_output,
+                "pass/fail": test_result,
+            }
+        )
+
+        return test_pass
 
 
 def shapes_and_datagen(shape_dict, datagen_dict):

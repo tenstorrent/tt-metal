@@ -125,6 +125,13 @@ def run_pytorch_test(args):
                 )
                 results_csv.flush()
 
+                # Check if test passed
+                if args.run_tests_for_ci and not test_pass:
+                    logger.error(
+                        f"{test_name} test failed with input shape {input_shapes}."
+                    )
+                    sys.exit(1)
+
         # Unset env variables
         for key, value in old_env_dict.items():
             os.environ.pop(key)
@@ -159,6 +166,11 @@ if __name__ == "__main__":
         type=str,
         default="",
         help="Env variables to set",
+    )
+    parser.add_argument(
+        "--run-tests-for-ci",
+        action="store_true",
+        help="If set, assert on test result after every test.",
     )
     args = parser.parse_args()
 
