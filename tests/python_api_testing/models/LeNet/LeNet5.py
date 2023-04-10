@@ -29,11 +29,12 @@ num_epochs = 10
 #Defining the convolutional neural network
 class LeNet5(nn.Module):
     def __init__(self, num_classes):
-#         super(ConvNeuralNet, self).__init__()
         super().__init__()
+        # NOTE: To test convolution, take the first Conv out and replace it
+        # with a TTConv; let everything else be done by torch
         self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=0), # 0
-            nn.BatchNorm2d(6),                                   # 1
+            nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=0),
+            nn.BatchNorm2d(6),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size = 2, stride = 2))
         self.layer2 = nn.Sequential(
@@ -57,6 +58,7 @@ class LeNet5(nn.Module):
         out = self.relu1(out)
         out = self.fc2(out)
         return out
+
 
 class TtLeNet5(nn.Module):
     def __init__(self, num_classes, device, host, state_dict):
@@ -120,15 +122,14 @@ class TtLeNet5(nn.Module):
 
         self.fc2 = TtLinear(84, num_classes, fc2_weights, fc2_bias, self.device)
 
-# def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
-# def tt2torch_tensor(tt_tensor):
+
 
     def forward(self, x):
         print(x.shape())
         x = tt2torch_tensor(x)
         # Layer1
         out = self.conv1(x) # HOST
-        out = self.batch_norm1(out) #HOST
+        out = self.batch_norm1(out) # HOST
         print(out.shape)
         out = torch2tt_tensor(out, self.device)
 
@@ -158,9 +159,9 @@ class TtLeNet5(nn.Module):
 
 def load_torch_LeNet():
 
-    PATH = 'tests/python_api_testing/models/LeNet/model.pt'
+    weka_path = '/mnt/MLPerf/tt_dnn-models/LeNet/model.pt'
     model2 = LeNet5(num_classes).to('cpu')
-    checkpoint = torch.load(PATH, map_location=torch.device('cpu'))
+    checkpoint = torch.load(weka_path, map_location=torch.device('cpu'))
     model2.load_state_dict(checkpoint['model_state_dict'])
     model2.eval()
     return model2, checkpoint['model_state_dict']
@@ -175,7 +176,6 @@ def prep_data():
                                                     transforms.Normalize(mean = (0.1307,), std = (0.3081,))]),
                                             download = True)
 
-
     test_dataset = torchvision.datasets.MNIST(root = './data',
                                             train = False,
                                             transform = transforms.Compose([
@@ -184,11 +184,9 @@ def prep_data():
                                                     transforms.Normalize(mean = (0.1325,), std = (0.3105,))]),
                                             download=True)
 
-
     train_loader = torch.utils.data.DataLoader(dataset = train_dataset,
                                             batch_size = batch_size,
                                             shuffle = True)
-
 
     test_loader = torch.utils.data.DataLoader(dataset = test_dataset,
                                             batch_size = batch_size,
@@ -223,19 +221,14 @@ if __name__ == "__main__":
             _, torch_predicted = torch.max(torch_output.data, 1)
 
             tt_img = torch2tt_tensor(img, device)
-            tt_output = TTLeNet(tt_img)
-            tt_output = tt2torch_tensor(tt_output)
-            _, tt_predicted = torch.max(tt_output.data, 1)
+            # tt_output = TTLeNet(tt_img)
+            # tt_output = tt2torch_tensor(tt_output)
+            # _, tt_predicted = torch.max(tt_output.data, 1)
 
+            print(f"Torch Predicted: {torch_predicted} \n   TT Predicted:  \n        Labels: {labels[0]}")
 
-            print(f"Torch Predicted: {torch_predicted} \n   TT Predicted: {tt_predicted} \n        Labels: {labels}")
+            # print(f"Torch Predicted: {torch_predicted} \n   TT Predicted: {tt_predicted} \n        Labels: {labels}")
             break
-
-
-
-
-
-
 
     ttl.device.CloseDevice(device)
 
