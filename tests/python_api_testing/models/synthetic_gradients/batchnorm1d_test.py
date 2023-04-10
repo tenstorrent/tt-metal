@@ -15,7 +15,7 @@ import libs
 from libs import tt_lib as ttl
 
 from models.utility_functions import tilize_to_list, untilize
-from sweep_tests.comparison_funcs import comp_pcc
+from sweep_tests.comparison_funcs import comp_pcc, comp_allclose
 
 epsilon = 1e-5
 
@@ -114,9 +114,12 @@ def run_btchnorm_inference(device, bn_size):
     print('pytorch_out:', output_bn_torch[0][0:10])
     print('tt_out:', output_bn_tt_untilized[0:10])
 
-    test_result = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
+    pcc_result = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
+    print('\n\n', 'pcc:', pcc_result, '\n\n')
 
-    print('\n\n', test_result, '\n\n')
+    allclose_result = comp_allclose(output_bn_torch[0], output_bn_tt_untilized)
+
+    print('\n\n','atol/rtol:', allclose_result, '\n\n')
 
 def test_batchnorm_inference():
     # Initialize the device

@@ -13,7 +13,7 @@ from torchvision import transforms, datasets
 from libs import tt_lib as ttl
 
 from models.utility_functions import tilize_to_list, untilize
-from sweep_tests.comparison_funcs import comp_pcc
+from sweep_tests.comparison_funcs import comp_pcc, comp_allclose
 
 epsilon = 1e-5
 

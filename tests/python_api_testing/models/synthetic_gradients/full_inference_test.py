@@ -13,7 +13,7 @@ from torchvision import transforms, datasets
 from libs import tt_lib as ttl
 
 from models.utility_functions import tilize_to_list, untilize
-from sweep_tests.comparison_funcs import comp_pcc
+from sweep_tests.comparison_funcs import comp_pcc, comp_allclose
 
 epsilon = 1e-5
 
@@ -162,20 +162,35 @@ def run_full_inference(device, in_features, out_features):
     print('pytorch_linear_out:', output_lin_torch[0][0:10])
     print('tt_linear_out:', output_lin_tt_untilized[0:10])
 
-    liner_test_result = comp_pcc(output_lin_torch[0], output_lin_tt_untilized)
-    print('\n\n', liner_test_result, '\n\n')
+    liner_pcc_test_result = comp_pcc(output_lin_torch[0], output_lin_tt_untilized)
+    print('\n\n', 'liner_pcc:', liner_pcc_test_result, '\n\n')
+    allclose_result = comp_allclose(output_lin_torch[0], output_lin_tt_untilized)
+    print('\n\n','linear_atol/rtol:', allclose_result, '\n\n')
+
 
     print('pytorch_bn_out:', output_bn_torch[0][0:10])
     print('tt_bn_out:', output_bn_tt_untilized[0:10])
 
-    bn_test_result = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
-    print('\n\n', bn_test_result, '\n\n')
+    bn_pcc_test_result = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
+    print('\n\n', bn_pcc_test_result, '\n\n')
 
     print('pytorch_full_out:', output_full_torch[0][0:10])
     print('tt_full_out:', output_full_tt_untilized[0:10])
 
     full_test_result = comp_pcc(output_full_torch[0], output_full_tt_untilized)
     print('\n\n', full_test_result, '\n\n')
+
+
+
+    print('pytorch_out:', output_bn_torch[0][0:10])
+    print('tt_out:', output_bn_tt_untilized[0:10])
+
+    pcc_result = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
+    print('\n\n', 'pcc:', pcc_result, '\n\n')
+
+    allclose_result = comp_allclose(output_bn_torch[0], output_bn_tt_untilized)
+
+    print('\n\n','atol/rtol:', allclose_result, '\n\n')
 
 def test_full_inference():
     # Initialize the device
