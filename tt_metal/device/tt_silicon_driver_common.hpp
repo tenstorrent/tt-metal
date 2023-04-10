@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <optional>
+#include "hostdevcommon/common_runtime_address_map.h"
 
 struct TLB_OFFSETS {
     uint32_t local_offset;
@@ -38,37 +39,4 @@ struct TLB_DATA {
     std::optional<uint64_t> apply_offset(const TLB_OFFSETS offset);
 };
 
-enum class TensixSoftResetOptions: std::uint32_t {
-    NONE = 0,
-    BRISC = ((std::uint32_t) 1 << 11),
-    TRISC0 = ((std::uint32_t) 1 << 12),
-    TRISC1 = ((std::uint32_t) 1 << 13),
-    TRISC2 = ((std::uint32_t) 1 << 14),
-    NCRISC = ((std::uint32_t) 1 << 18),
-    STAGGERED_START = ((std::uint32_t) 1 << 31)
-};
-
 std::string TensixSoftResetOptionsToString(TensixSoftResetOptions value);
-TensixSoftResetOptions operator|(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs);
-TensixSoftResetOptions operator&(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs);
-bool operator!=(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs);
-
-static const TensixSoftResetOptions ALL_TRISC_SOFT_RESET = TensixSoftResetOptions::TRISC0 |
-                                                           TensixSoftResetOptions::TRISC1 |
-                                                           TensixSoftResetOptions::TRISC2;
-
-static const TensixSoftResetOptions ALL_TENSIX_SOFT_RESET = TensixSoftResetOptions::BRISC |
-                                                            TensixSoftResetOptions::NCRISC |
-                                                            TensixSoftResetOptions::STAGGERED_START |
-                                                            ALL_TRISC_SOFT_RESET;
-
-static const TensixSoftResetOptions TENSIX_ASSERT_SOFT_RESET = TensixSoftResetOptions::BRISC |
-                                                               TensixSoftResetOptions::NCRISC |
-                                                               ALL_TRISC_SOFT_RESET;
-
-static const TensixSoftResetOptions TENSIX_DEASSERT_SOFT_RESET = TensixSoftResetOptions::NCRISC |
-                                                                 ALL_TRISC_SOFT_RESET |
-                                                                 TensixSoftResetOptions::STAGGERED_START;
-
-static const TensixSoftResetOptions TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER = TensixSoftResetOptions::NCRISC |
-                                                                 ALL_TRISC_SOFT_RESET;

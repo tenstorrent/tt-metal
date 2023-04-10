@@ -163,6 +163,8 @@ namespace internal_ {
 
     void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const tt_xy_pair &core);
 
+    // In old dispatch, there is no concept of the dispatch core. When brisc (RUNTIME_CONFIG_BASE + 8) = true,
+    // we assume we don't need to send dispatch info to a remote core, and behaviour matches the old dispatch
     void setup_riscs_on_specified_core(tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const tt_xy_pair &core);
 
     void setup_riscs_on_specified_cores(tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const std::vector<tt_xy_pair> &core);

@@ -68,3 +68,68 @@ constexpr static std::uint32_t BRISC_BP_LNUM = BRISC_BP_LNUM_MACRO;
 // Space allocated for op info, used in graph interpreter
 constexpr static std::uint32_t OP_INFO_BASE_ADDR = 109628;
 constexpr static std::uint32_t OP_INFO_SIZE      = 280; // So far, holds up to 10 ops
+
+// Deassert reset from kernel dispatch
+constexpr static std::uint32_t DEASSERT_RESET_SRC_L1_ADDR = 110752;
+constexpr static std::uint32_t ASSERT_RESET_SRC_L1_ADDR   = 110784;
+
+// Dispatch message address
+constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = 110816;
+
+// Beware, this is uint64_t! not uint32_t, so make sure to set next addition
+// to this runtime map accordingly
+constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;
+
+// Information for deassert/assert reset
+enum class TensixSoftResetOptions: std::uint32_t {
+    NONE = 0,
+    BRISC = ((std::uint32_t) 1 << 11),
+    TRISC0 = ((std::uint32_t) 1 << 12),
+    TRISC1 = ((std::uint32_t) 1 << 13),
+    TRISC2 = ((std::uint32_t) 1 << 14),
+    NCRISC = ((std::uint32_t) 1 << 18),
+    STAGGERED_START = ((std::uint32_t) 1 << 31)
+};
+
+constexpr TensixSoftResetOptions operator|(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs) {
+    return static_cast<TensixSoftResetOptions>(
+        static_cast<uint32_t>(lhs) |
+        static_cast<uint32_t>(rhs)
+    );
+}
+
+constexpr TensixSoftResetOptions operator&(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs) {
+    return static_cast<TensixSoftResetOptions>(
+        static_cast<uint32_t>(lhs) &
+        static_cast<uint32_t>(rhs)
+    );
+}
+
+constexpr bool operator!=(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs) {
+    return
+        static_cast<uint32_t>(lhs) !=
+        static_cast<uint32_t>(rhs);
+}
+
+static constexpr TensixSoftResetOptions ALL_TRISC_SOFT_RESET = TensixSoftResetOptions::TRISC0 |
+                                                               TensixSoftResetOptions::TRISC1 |
+                                                               TensixSoftResetOptions::TRISC2;
+
+static constexpr uint32_t TENSIX_SOFT_RESET_ADDR = 0xFFB121B0;
+
+static constexpr TensixSoftResetOptions TENSIX_DEASSERT_SOFT_RESET = TensixSoftResetOptions::NCRISC |
+                                                                     ALL_TRISC_SOFT_RESET |
+                                                                     TensixSoftResetOptions::STAGGERED_START;
+
+static constexpr TensixSoftResetOptions TENSIX_ASSERT_SOFT_RESET = TensixSoftResetOptions::BRISC |
+                                                                   TensixSoftResetOptions::NCRISC |
+                                                                   ALL_TRISC_SOFT_RESET;
+
+
+static constexpr TensixSoftResetOptions ALL_TENSIX_SOFT_RESET = TensixSoftResetOptions::BRISC |
+                                                                TensixSoftResetOptions::NCRISC |
+                                                                TensixSoftResetOptions::STAGGERED_START |
+                                                                ALL_TRISC_SOFT_RESET;
+
+static constexpr TensixSoftResetOptions TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER = TensixSoftResetOptions::NCRISC |
+                                                                                ALL_TRISC_SOFT_RESET;

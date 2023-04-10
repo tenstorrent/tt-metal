@@ -441,7 +441,11 @@ namespace internal_ {
     void run_riscs_on_specified_cores(
         tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<tt_xy_pair> &cores) {
 
-        deassert_brisc_reset_for_all_chips_all_cores(cluster);
+        // deassert_brisc_reset_for_all_chips_all_cores(cluster);
+        for (const tt_xy_pair& core_: cores) {
+            tt_cxy_pair core = tt_cxy_pair(chip_id, core_);
+            cluster->set_remote_tensix_risc_reset(core, TENSIX_DEASSERT_SOFT_RESET);
+        }
 
         bool riscs_are_done = false;
         while (!riscs_are_done) {

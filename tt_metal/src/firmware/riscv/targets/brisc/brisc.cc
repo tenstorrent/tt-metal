@@ -14,6 +14,7 @@
 #include "ckernel_globals.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+
 // TODO: commonize this w/ the runtime -- it's the same configs
 // these consts must be constexprs
 constexpr uint32_t TRISC_BASE = l1_mem::address_map::TRISC_BASE;
@@ -213,9 +214,9 @@ void device_setup() {
 
   volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
 
+
   if (*use_ncrisc) {
     l1_to_ncrisc_iram_copy();
-
     // Bring NCRISC out of reset, keep TRISCs under reset
     WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, 0x7000);
   }
@@ -286,6 +287,7 @@ void local_mem_copy() {
 }
 
 int main() {
+
   kernel_profiler::init_profiler();
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
@@ -293,16 +295,18 @@ int main() {
 #endif
   RISC_POST_STATUS(0x10000000);
 
+
   // note: BRISC uses NOC0, NCRISC uses NOC1
   // "risc_init" currently initialized global variables for both NOCs, but it is just reg reads, and it's probably fine
   // because this is done before we launch NCRISC (in "device_setup")
   // TODO: we could specialize it via "noc_id", in the same manner as "noc_init" (see below)
   risc_init();
+//   uint32_t is_dispatch_core = *reinterpret_cast<volatile uint32_t*>(RUNTIME_CONFIG_BASE + 8);
 
   volatile uint32_t* enable_core_mailbox_ptr = (volatile uint32_t*)(l1_mem::address_map::FIRMWARE_BASE + ENABLE_CORE_MAILBOX);
-  while (enable_core_mailbox_ptr[0] != 0x1) {
-    ;
-  }
+  #if not defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_CORE)
+    while (enable_core_mailbox_ptr[0] != 0x1);
+  #endif
 
   init_sync_registers(); // this init needs to be done before NCRISC / TRISCs are launched, only done by BRISC
   setup_cb_read_write_interfaces(); // done by both BRISC / NCRISC
@@ -313,6 +317,7 @@ int main() {
   noc_init(loading_noc);
 
   volatile uint32_t* use_triscs = (volatile uint32_t*)(RUNTIME_CONFIG_BASE+4);
+
   if (*use_triscs) {
     // FIXME: this is not sufficient to bring Trisc / Tensix out of a bad state
     // do we need do more than just assert_trisc_reset() ?
@@ -346,7 +351,7 @@ int main() {
              )
           ) {}
 
-    // One all 3 have finished, assert reset on all of them
+    // Once all 3 have finished, assert reset on all of them
     assert_trisc_reset();
   }
 
@@ -355,11 +360,20 @@ int main() {
     test_mailbox_ptr[0] = 0x1;
 
   // disable core once we're done
-  enable_core_mailbox_ptr[0] = 0x0;
+  #if not defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_CORE)
+      enable_core_mailbox_ptr[0] = 0x0;
+  #endif
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_MAIN_END);
 #endif
+
+  #if defined(DEVICE_DISPATCH_MODE) and not defined(IS_DISPATCH_CORE)
+    volatile uint64_t* dispatch_addr = reinterpret_cast<volatile uint64_t*>(DISPATCH_MESSAGE_ADDR);
+    // Notify dispatch that it has completed
+    noc_semaphore_inc(*dispatch_addr, 1);
+  #endif
+
   while (true)
   {
     risc_reset_check();

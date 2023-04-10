@@ -69,23 +69,3 @@ std::string TensixSoftResetOptionsToString(TensixSoftResetOptions value) {
 
   return output;
 }
-
-TensixSoftResetOptions operator|(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs) {
-    return static_cast<TensixSoftResetOptions>(
-        static_cast<std::underlying_type<TensixSoftResetOptions>::type>(lhs) |
-        static_cast<std::underlying_type<TensixSoftResetOptions>::type>(rhs)
-    );
-}
-
-TensixSoftResetOptions operator&(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs) {
-    return static_cast<TensixSoftResetOptions>(
-        static_cast<std::underlying_type<TensixSoftResetOptions>::type>(lhs) &
-        static_cast<std::underlying_type<TensixSoftResetOptions>::type>(rhs)
-    );
-}
-
-bool operator!=(TensixSoftResetOptions lhs, TensixSoftResetOptions rhs) {
-    return
-        static_cast<std::underlying_type<TensixSoftResetOptions>::type>(lhs) !=
-        static_cast<std::underlying_type<TensixSoftResetOptions>::type>(rhs);
-}
