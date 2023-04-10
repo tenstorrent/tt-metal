@@ -77,7 +77,7 @@ class LlamaPreTrainedModel(PreTrainedModel):
             module.gradient_checkpointing = value
 
 
-class LlamaModel(torch.nn.Module):
+class TtLlamaModel(torch.nn.Module):
     """
     Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`LlamaDecoderLayer`]
     Args:
@@ -95,7 +95,10 @@ class LlamaModel(torch.nn.Module):
         self.device = device
         self.config = config
 
-        self.embed_tokens = nn.Embedding(self.vocab_size, self.hidden_size, self.padding_idx)
+        # self.embed_tokens = nn.Embedding(self.vocab_size, self.hidden_size, self.padding_idx)
+        self.embed_tokens = torch.nn.Embedding(self.vocab_size, self.hidden_size, self.padding_idx)
+        self.embed_tokens.weight = torch.nn.Parameter(state_dict[f"model.embed_tokens.weight"])
+
         # self.layers = nn.ModuleList([TtLlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.layers = torch.nn.Sequential(*[TtLlamaDecoderLayer(self.device, self.state_dict, self.base_url, decoder_idx, self.max_position_embeddings, config) for decoder_idx in range(num_decoders)])
 
@@ -158,6 +161,7 @@ class LlamaModel(torch.nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
+
         # $$ test
         self.config.output_attentions = None
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -196,6 +200,7 @@ class LlamaModel(torch.nn.Module):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
+
         # embed positions
         if attention_mask is None:
             attention_mask = torch.ones(
@@ -205,10 +210,13 @@ class LlamaModel(torch.nn.Module):
             attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
         )
 
-        hidden_states = inputs_embeds
+        # TTM implementation, Convert to ll buda tensor,
+        pad_embeddings = pad_activation(inputs_embeds)
+        tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+        tt_embeddings = tt_embeddings.to(self.device)
 
-        """TTM implementation"""
-        hidden_states = torch2tt_tensor(hidden_states, self.device)
+        # hidden_states = inputs_embeds
+        hidden_states = tt_embeddings
 
         # if self.gradient_checkpointing and self.training:
         #     if use_cache:
@@ -271,6 +279,7 @@ class LlamaModel(torch.nn.Module):
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
             return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=next_cache,
@@ -296,7 +305,7 @@ def run_llama_inference(device, model_version, tokenizer_version, batch, seq_len
     base_url = "model.layers"
     max_position_embeddings = 2048
     # config, device, base_url, max_position_embeddings, state_dict
-    hf_llama_model = LlamaModel(configuration, device, base_url, max_position_embeddings, state_dict)
+    tt_llama_model = TtLlamaModel(configuration, device, base_url, max_position_embeddings, state_dict)
 
     batch = batch
     seq_len = seq_len
@@ -308,8 +317,9 @@ def run_llama_inference(device, model_version, tokenizer_version, batch, seq_len
         llama_input = torch.stack(oneseq)
         llama_input = llama_input.reshape(batch, seq_len)
 
-    output = hf_llama_model(llama_input)
-    print(f"Output shape: {output.shape()}")
+    print(f"Input shape: {llama_input.shape}")
+    output = tt_llama_model(llama_input)
+    print(f"Output shape: {output.last_hidden_state.shape()}")
 
 
 if __name__ == "__main__":

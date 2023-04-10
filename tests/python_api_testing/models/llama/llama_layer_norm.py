@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from libs import tt_lib as ttl
-from python_api_testing.models.t5.t5_utils import tt2torch_tensor, torch2tt_tensor
+from python_api_testing.models.llama.llama_utils import tt2torch_tensor, torch2tt_tensor
 
 
 class LlamaRMSNorm(nn.Module):

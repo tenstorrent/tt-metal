@@ -13,7 +13,7 @@ from python_api_testing.models.llama.llama_utils import *
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 
 
-class LlamaShared(torch.nn.Module):
+class TtLlamaShared(torch.nn.Module):
     @abstractmethod
     # device, state_dict, base_url, max_position_embeddings, config, num_decoders
     def __init__(self, device, state_dict, base_url, max_position_embeddings, config, num_decoders):
@@ -38,7 +38,7 @@ class LlamaShared(torch.nn.Module):
         self.layer_num = None
         self.layer_position = 'norm'
         self.final_layernorm = TtLlamaRMSNorm(
-            device,
+            self.device,
             state_dict=self.state_dict,
             base_url=self.base_url,
             layer_num=self.layer_num,
@@ -46,8 +46,6 @@ class LlamaShared(torch.nn.Module):
             hidden_size=config.hidden_size,
             eps=config.rms_norm_eps
         )
-
-        self.device = device
 
     @abstractmethod
     def forward(self, x):
@@ -65,7 +63,7 @@ class LlamaShared(torch.nn.Module):
         return encoder_output
 
 
-class TtLlamaModel(LlamaShared):
+class TtLlamaModel(TtLlamaShared):
     def __init__(self, device, state_dict, base_url, max_position_embeddings, config, num_decoders):
         # config, num_decoders, state_dict, device
         super().__init__(device, state_dict, base_url, max_position_embeddings, config, num_decoders)

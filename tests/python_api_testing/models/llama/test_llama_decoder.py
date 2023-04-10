@@ -92,7 +92,8 @@ def run_test_LlamaDecoder_inference(device, model_version, tokenizer_version, ba
     )
     tt_out = tt_LlamaDecoder_model(hidden_states=tt_llama_input, position_ids=position_ids)
     # transform to PyTorch tensor
-    tt_out1 = tt2torch_tensor(tt_out)
+    # take only hidden_states tensor
+    tt_out1 = tt2torch_tensor(tt_out[0])
     tt_out1= tt_out1.squeeze(1)
 
     # check outputs ----------------------------------------------------------------------

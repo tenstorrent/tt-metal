@@ -2,7 +2,6 @@ import math
 import torch
 from torch import nn
 from libs import tt_lib as ttl
-from python_api_testing.models.t5.t5_utils import tt2torch_tensor, torch2tt_tensor
 from typing import List, Optional, Tuple, Union
 from fused_ops.linear import Linear as TtLinear
 from fused_ops.softmax import softmax as TTsoftmax
@@ -144,4 +143,4 @@ class TtLlamaDecoderLayer(nn.Module):
             outputs += (present_key_value,)
 
         # return only hidden_states
-        return outputs[0]
+        return outputs

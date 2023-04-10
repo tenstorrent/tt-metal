@@ -21,10 +21,10 @@ from python_api_testing.fused_ops.linear import Linear
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
 from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from python_api_testing.models.llama.llama_model import TtLlamaShared, TtLlamaModel
+from python_api_testing.models.llama.llama_causallm import TtLlamaForCausalLM
 
 
-def run_test_Llama_inference(device, host, model_version, tokenizer_version, batch, seq_len, num_decoders, max_position_embeddings, on_weka, pcc):
+def run_test_llamaCausallm_inference(device, host, model_version, tokenizer_version, batch, seq_len, num_decoders, max_position_embeddings, on_weka, pcc):
 
     model_name = model_version
     tokenizer_name = tokenizer_version
@@ -34,9 +34,6 @@ def run_test_Llama_inference(device, host, model_version, tokenizer_version, bat
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
-
-    # get only llama model (no linear layer at the end)
-    llama_model = hugging_face_reference_model.get_decoder()
 
     batch = batch
     seq_len = seq_len
@@ -48,19 +45,18 @@ def run_test_Llama_inference(device, host, model_version, tokenizer_version, bat
         llama_input = torch.stack(oneseq)
         llama_input = llama_input.reshape(batch, seq_len)
 
-    pytorch_out = llama_model(llama_input)
-    pytorch_out = pytorch_out.last_hidden_state
+    pytorch_out = hugging_face_reference_model(llama_input)
+    pytorch_out = pytorch_out.logits
     print("PyTorch model finished")
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
-    # device, state_dict, base_url, max_position_embeddings, config, num_decoders
     num_decoders = num_decoders
     base_url = "model.layers"
     max_position_embeddings = max_position_embeddings
 
-    tt_llama_model = TtLlamaModel(device, state_dict, base_url, max_position_embeddings, configuration, num_decoders)
-    print("TT llama model finished")
+    tt_llama_model = TtLlamaForCausalLM(device, state_dict, base_url, max_position_embeddings, configuration, num_decoders)
+    print("Tenstorrent llama model finished")
 
     tt_out = tt_llama_model(llama_input).to(host)
     tt_untilized_output = untilize(torch.Tensor(tt_out.data()).reshape(batch, 1, seq_len, -1)).squeeze(1)
@@ -80,12 +76,12 @@ def run_test_Llama_inference(device, host, model_version, tokenizer_version, bat
         ("decapoda-research/llama-7b-hf", "hf-internal-testing/llama-tokenizer", 4, 128, 32, 2048, False, 0.98),
     ),
 )
-def test_Llama_inference(model_version, tokenizer_version, batch, seq_len, num_decoders, max_position_embeddings, on_weka, pcc):
+def test_llamaCausallm_inference(model_version, tokenizer_version, batch, seq_len, num_decoders, max_position_embeddings, on_weka, pcc):
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
-    run_test_Llama_inference(
+    run_test_llamaCausallm_inference(
         device,
         host,
         model_version,

@@ -3,7 +3,7 @@ import math
 import torch
 from torch import nn
 from libs import tt_lib as ttl
-from python_api_testing.models.t5.t5_utils import tt2torch_tensor, torch2tt_tensor
+from python_api_testing.models.llama.llama_utils import tt2torch_tensor, torch2tt_tensor
 from typing import List, Optional, Tuple, Union
 from fused_ops.linear import Linear as TtLinear
 from fused_ops.softmax import softmax as TTsoftmax
@@ -224,11 +224,13 @@ class TtLlamaAttention(nn.Module):
 
         # change attention_mask to TT tensor
         if attention_mask is not None:
-            attention_mask = torch2tt_tensor(attention_mask, self.device)
-            if attention_mask.shape() != [bsz, 1, q_len, kv_seq_len]:
+            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.shape()}"
                 )
+            # TT eltwise add operation, expand attention_mask shape
+            attention_mask = attention_mask.repeat(1, self.num_heads, 1, 1)
+            attention_mask = torch2tt_tensor(attention_mask, self.device)
             attn_weights = ttl.tensor.add(attn_weights, attention_mask)
             # convert to PyTorch tensor
             attn_weights = tt2torch_tensor(attn_weights)
