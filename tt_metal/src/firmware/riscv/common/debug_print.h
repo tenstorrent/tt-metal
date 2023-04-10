@@ -117,6 +117,7 @@ template<> uint8_t DebugPrintTypeToId<U32>() { return DEBUG_PRINT_TYPEID_UINT32;
 template<> uint8_t DebugPrintTypeToId<int>() { return DEBUG_PRINT_TYPEID_INT32; }
 template<> uint8_t DebugPrintTypeToId<TILESAMPLES8>() { return DEBUG_PRINT_TYPEID_TILESAMPLES8; }
 template<> uint8_t DebugPrintTypeToId<TILESAMPLES32>() { return DEBUG_PRINT_TYPEID_TILESAMPLES32; }
+template<> uint8_t DebugPrintTypeToId<uint64_t>() { return DEBUG_PRINT_TYPEID_UINT64; }
 static_assert(sizeof(int) == 4);
 
 // Specializations for const char* (string literals), typically you will not need these for other types

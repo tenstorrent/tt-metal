@@ -23,6 +23,7 @@ constexpr int DEBUG_PRINT_TYPEID_HEX            = 11; // std::hex
 constexpr int DEBUG_PRINT_TYPEID_INT32          = 12;
 constexpr int DEBUG_PRINT_TYPEID_TILESAMPLES8   = 13;
 constexpr int DEBUG_PRINT_TYPEID_TILESAMPLES32  = 14;
+constexpr int DEBUG_PRINT_TYPEID_UINT64         = 15;
 
 // Because there's no mechanism (known to me) to initialize values at fixed mem locations in kernel code,
 // in order to initialize the pointers in the buffers we use a trick with print server writing

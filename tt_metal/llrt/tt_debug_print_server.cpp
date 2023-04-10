@@ -361,6 +361,12 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     unlock_stream();
                     TT_ASSERT(sz == 4);
                 break;
+                case DEBUG_PRINT_TYPEID_UINT64:
+                    lock_stream();
+                    stream << *reinterpret_cast<uint64_t*>(ptr);
+                    unlock_stream();
+                    TT_ASSERT(sz == 8);
+                break;
                 default:
                     TT_ASSERT("Unexpected debug print type code" && false);
             }
