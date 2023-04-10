@@ -217,3 +217,28 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
         output += f", {output_pcc}"
 
     return passing, output
+
+def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
+    size = list(py_tensor.size())
+
+    while len(size) < 4:
+        size.insert(0, 1)
+
+    tt_tensor = ttl.tensor.Tensor(
+        py_tensor.reshape(-1).tolist(),
+        size,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+    ).to(ttl.tensor.Layout.TILE).to(tt_device)
+
+    return tt_tensor
+
+
+def tt2torch_tensor(tt_tensor, tt_host=None):
+    if tt_host == None:
+        host = ttl.device.GetHost()
+    else:
+        host = tt_host
+    tt_output = tt_tensor.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
+    return py_output

@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
-from utils import tt2torch_tensor, torch2tt_tensor
+from utility_functions import tt2torch_tensor, torch2tt_tensor
 
 from libs import tt_lib as ttl
 from python_api_testing.fused_ops.linear import Linear as TtLinear
