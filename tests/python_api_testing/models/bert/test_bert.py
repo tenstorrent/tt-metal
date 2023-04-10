@@ -2,7 +2,7 @@ from abc import abstractmethod
 import pytest
 from loguru import logger
 import torch
-from transformers import BertForQuestionAnswering, BertTokenizer
+from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 import sys
 from pathlib import Path
 f = f"{Path(__file__).parent}"
@@ -29,19 +29,30 @@ class TtBertShared(torch.nn.Module):
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
+        self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
 
-        self.encoders = torch.nn.Sequential(*[TtBertEncoder(config, encoder_idx, state_dict, device) for encoder_idx in range(config.num_hidden_layers)])
+        self.encoders = torch.nn.ModuleList([TtBertEncoder(config, encoder_idx, state_dict, device) for encoder_idx in range(config.num_hidden_layers)])
         self.device = device
 
     @abstractmethod
-    def forward(self, x):
-        embeddings = self.embeddings(x)
+    def forward(self, input_ids, attention_mask=None, token_type_ids=None):
+        embeddings = self.embeddings(input_ids, token_type_ids)
+        if attention_mask is not None:
+            extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
+            extended_attention_mask[extended_attention_mask<-100000] = -100000 # Limit neg value that goes into exp
+            extended_attention_mask = pad_activation(extended_attention_mask)
+            tt_attention_mask = ttl.tensor.Tensor(extended_attention_mask.reshape(-1).tolist(), extended_attention_mask.shape, ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+            tt_attention_mask = tt_attention_mask.to(self.device)
+        else:
+            tt_attention_mask = attention_mask
         # Convert to ll buda tensor
         pad_embeddings = pad_activation(embeddings)
         tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
         tt_embeddings = tt_embeddings.to(self.device)
-        encoder_output = self.encoders(tt_embeddings)
-        return encoder_output
+        hidden_states = tt_embeddings
+        for encoder in self.encoders:
+            hidden_states = encoder(hidden_states, tt_attention_mask)
+        return hidden_states
 
 class TtBertForQuestionAnswering(TtBertShared):
     def __init__(self, config, hugging_face_reference_model, device):
@@ -61,11 +72,11 @@ class TtBertForQuestionAnswering(TtBertShared):
         # QA linear
         self.qa_linear = Linear(hidden_size, 32, weight, bias, device)
 
-    def forward(self, x):
-        encoder_output = super().forward(x)
+    def forward(self, input_ids, attention_mask=None, token_type_ids=None):
+        encoder_output = super().forward(input_ids, attention_mask, token_type_ids)
         return self.qa_linear(encoder_output)
 
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, pcc):
+def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc):
 
     torch.manual_seed(1234)
 
@@ -88,7 +99,27 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
         context = batch * ["Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."]
         question = batch * ["What discipline did Winkelmann create?"]
-        bert_input = tokenizer.batch_encode_plus(zip(question, context), max_length=seq_len, padding="max_length", truncation=True, return_tensors="pt")["input_ids"]
+        bert_input = tokenizer.batch_encode_plus(zip(question, context), max_length=seq_len, padding="max_length", truncation=True, return_tensors="pt")
+        nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+        pl_answer = nlp(question = question[0], context=context[0])
+        preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
+        preprocess_params["max_seq_len"] = seq_len
+        input_q = {"context": context[0], "question": question[0]}
+        examples = nlp._args_parser(input_q)
+        model_input = next(nlp.preprocess(examples[0], **preprocess_params))
+        single_input = {
+            "data": (
+                model_input["input_ids"],
+                model_input["attention_mask"] if attention_mask else None,
+                model_input["token_type_ids"] if token_type_ids else None
+            ),
+            "example": model_input["example"],
+            "inputs": model_input,
+        }
+        bert_input = {}
+        bert_input["input_ids"] = single_input["data"][0]
+        bert_input["attention_mask"] = single_input["data"][1]
+        bert_input["token_type_ids"] = single_input["data"][2]
     else:
         if 1:
             bert_input = torch.arange(seq_len*batch).reshape(batch, seq_len)
@@ -99,11 +130,10 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
             bert_input = bert_input.reshape(batch, seq_len)
 
     # tt_bert_input = ttl.tensor.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
-
-    pytorch_out = hugging_face_reference_model(bert_input)
+    pytorch_out = hugging_face_reference_model(**bert_input)
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
-    tt_out = tt_bert_model(bert_input).to(host)
+    tt_out = tt_bert_model(**bert_input).to(host)
     tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
 
     ttl.device.CloseDevice(device)
@@ -111,23 +141,44 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
 
-    pytorch_start_logits = pytorch_out.start_logits
-    pytorch_end_logits = pytorch_out.end_logits
+    pt_start_logits = pytorch_out.start_logits.detach()
+    pt_end_logits = pytorch_out.end_logits.detach()
 
-    passing_start, output = comp_pcc(pytorch_start_logits, tt_start_logits, pcc)
+    passing_start, output = comp_pcc(pt_start_logits, tt_start_logits, pcc)
     logger.info(f"Start Logits {output}")
-    _, output = comp_allclose(pytorch_start_logits, tt_start_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
+    _, output = comp_allclose(pt_start_logits, tt_start_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
     logger.info(f"Start Logits {output}")
     if not passing_start:
         logger.error(f"Start Logits PCC < {pcc}")
 
-    passing_end, output = comp_pcc(pytorch_end_logits, tt_end_logits, pcc)
+    passing_end, output = comp_pcc(pt_end_logits, tt_end_logits, pcc)
     logger.info(f"End Logits {output}")
-    _, output = comp_allclose(pytorch_end_logits, tt_end_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
+    _, output = comp_allclose(pt_end_logits, tt_end_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
     logger.info(f"End Logits {output}")
     if not passing_end:
         logger.error(f"End Logits PCC < {pcc}")
 
+    if real_input:
+        tt_res = {
+            "start": tt_start_logits,
+            "end": tt_end_logits,
+            "example": single_input["example"],
+            **single_input["inputs"],
+        }
+
+        tt_answer = nlp.postprocess([tt_res], **postprocess_params)
+        logger.info(f"TT: {tt_answer}")
+
+        pt_res = {
+            "start": pt_start_logits,
+            "end": pt_end_logits,
+            "example": single_input["example"],
+            **single_input["inputs"],
+        }
+
+        pt_answer = nlp.postprocess([pt_res], **postprocess_params)
+        logger.info(f"PT: {pt_answer}")
+        logger.info(f"PL: {pl_answer}")
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
     # start_logit_match = (abs(tt_start_logits - pytorch_start_logits) < 0.1).all().item()
     # if not start_logit_match:
@@ -146,21 +197,21 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     # assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, real_input, pcc",
+    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
     (
-        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.99),
-        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, True, 0.84) # Placeholder PCC until issues are resolved
+        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, True, True, 0.99),
+        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, True, True, 0.99),
+        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, True, True, True, 0.98) # Placeholder PCC until issues are resolved
     ),
 )
-def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, pcc):
+def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc):
 
     # enable_binary_cache()
     # enable_compile_cache()
 
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, pcc)
+    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc)
 
 if __name__ == "__main__":
     # enable_binary_cache()
     # enable_compile_cache()
-    run_bert_question_and_answering_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.99)
+    run_bert_question_and_answering_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, True, True, 0.99)

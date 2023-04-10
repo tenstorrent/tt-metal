@@ -86,8 +86,8 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             ttl.tensor.BcastOpMath.MUL,
             ttl.tensor.BcastOpDim.HW
         )
-
-    def mha_(activation):
+    host = ttl.device.GetHost()
+    def mha_(activation, attention_mask):
         Q = QProjection(activation)
         K = KProjection(activation)
         V = VProjection(activation)
@@ -104,6 +104,8 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         new_shape = [N, 1, C*H, W]
         ttl.tensor.reshape(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
+        if (attention_mask is not None):
+            attention_score_input = ttl.tensor.bcast(attention_score_input, attention_mask, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
         attention_scores = softmax(attention_score_input)
         ttl.tensor.reshape(attention_scores, N, C, H, W) # Reshape back to original shape
 
@@ -138,8 +140,8 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
 
         self.mha = mha(*parameters, hidden_dim, config.num_attention_heads, device)
 
-    def forward(self, activation):
-        result = self.mha(activation)
+    def forward(self, activation, attention_mask=None):
+        result = self.mha(activation, attention_mask)
         return result
 
 class PytorchMultiHeadAttentionModel(torch.nn.Module):
@@ -201,7 +203,7 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc):
     (
         ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99),
         ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, 0.89) # Placeholder PCC until issues are resolved
+        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, 0.99)
     ),
 )
 def test_mha_inference(model_version, batch, seq_len, on_weka, pcc):

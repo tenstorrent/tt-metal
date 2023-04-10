@@ -34,9 +34,9 @@ class TtBertEncoder(torch.nn.Module):
         gamma0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.weight"]
         beta0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.bias"]
         mha_gamma = pad_weight(gamma0)
-        mha_gamma = ttl.tensor.Tensor(pad_activation(mha_gamma).reshape(-1).tolist(), mha_gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
+        mha_gamma = ttl.tensor.Tensor(mha_gamma.reshape(-1).tolist(), mha_gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         mha_beta = pad_weight(beta0)
-        mha_beta = ttl.tensor.Tensor(pad_activation(mha_beta).reshape(-1).tolist(), mha_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
+        mha_beta = ttl.tensor.Tensor(mha_beta.reshape(-1).tolist(), mha_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         self.mha_add_and_norm = AddAndNorm(mha_gamma, mha_beta, config.layer_norm_eps, config.hidden_size, config.hidden_size, device)
 
         # FFN part
@@ -51,8 +51,8 @@ class TtBertEncoder(torch.nn.Module):
         ffn_beta = ttl.tensor.Tensor(ffn_beta.reshape(-1).tolist(), ffn_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         self.ffn_add_and_norm = AddAndNorm(ffn_gamma, ffn_beta, config.layer_norm_eps, config.hidden_size, config.hidden_size, device)
 
-    def forward(self, activation):
-        mha_out = self.attention_output(self.mha(activation))
+    def forward(self, activation, attention_mask=None):
+        mha_out = self.attention_output(self.mha(activation, attention_mask))
         mha_out_add_and_norm = self.mha_add_and_norm(activation, mha_out)
         ffn_out = self.ffn(mha_out_add_and_norm)
         ffn_out_add_and_norm = self.ffn_add_and_norm(mha_out_add_and_norm, ffn_out)
