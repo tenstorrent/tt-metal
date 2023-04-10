@@ -17,6 +17,7 @@
           - git-lfs=2.9.2-1
           - clang-6.0=1:6.0.1-14
           - libboost-all-dev=1.71.0.0ubuntu2
+          - libsndfile1=1.0.28-7ubuntu0.1
 
 - name: Install doxygen
   hosts: all
