@@ -12,8 +12,8 @@ sys.path.append(f"{f}/../../..")
 from libs import tt_lib as ttl
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
-from python_api_testing.fused_ops.add_and_norm import AddAndNorm
-from python_api_testing.fused_ops.linear import Linear
+from python_api_testing.models.bert.fused_ops.add_and_norm import AddAndNorm
+from python_api_testing.models.bert.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import comp_pcc, comp_allclose
 
@@ -25,18 +25,18 @@ class TtBertEncoder(torch.nn.Module):
         # MHA part
         self.mha = TtMultiHeadAttentionModel(config, encoder_idx, state_dict, device)
         attention_output_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.dense.weight"])
-        attention_output_weight = ttl.tensor.Tensor(attention_output_weight.reshape(-1).tolist(), attention_output_weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        attention_output_weight = ttl.tensor.Tensor(attention_output_weight.reshape(-1).tolist(), attention_output_weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         attention_output_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.dense.bias"])
-        attention_output_bias = ttl.tensor.Tensor(attention_output_bias.reshape(-1).tolist(), attention_output_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        attention_output_bias = ttl.tensor.Tensor(attention_output_bias.reshape(-1).tolist(), attention_output_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         self.attention_output = Linear(hidden_dim, hidden_dim, attention_output_weight, attention_output_bias, device)
 
         # MHA layernorm part
         gamma0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.weight"]
         beta0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.bias"]
         mha_gamma = pad_weight(gamma0)
-        mha_gamma = ttl.tensor.Tensor(pad_activation(mha_gamma).reshape(-1).tolist(), mha_gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        mha_gamma = ttl.tensor.Tensor(pad_activation(mha_gamma).reshape(-1).tolist(), mha_gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         mha_beta = pad_weight(beta0)
-        mha_beta = ttl.tensor.Tensor(pad_activation(mha_beta).reshape(-1).tolist(), mha_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        mha_beta = ttl.tensor.Tensor(pad_activation(mha_beta).reshape(-1).tolist(), mha_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         self.mha_add_and_norm = AddAndNorm(mha_gamma, mha_beta, config.layer_norm_eps, config.hidden_size, config.hidden_size, device)
 
         # FFN part
@@ -46,9 +46,9 @@ class TtBertEncoder(torch.nn.Module):
         gamma1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.weight"]
         beta1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.bias"]
         ffn_gamma = pad_weight(gamma1)
-        ffn_gamma = ttl.tensor.Tensor(ffn_gamma.reshape(-1).tolist(), ffn_gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        ffn_gamma = ttl.tensor.Tensor(ffn_gamma.reshape(-1).tolist(), ffn_gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         ffn_beta = pad_weight(beta1)
-        ffn_beta = ttl.tensor.Tensor(ffn_beta.reshape(-1).tolist(), ffn_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        ffn_beta = ttl.tensor.Tensor(ffn_beta.reshape(-1).tolist(), ffn_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         self.ffn_add_and_norm = AddAndNorm(ffn_gamma, ffn_beta, config.layer_norm_eps, config.hidden_size, config.hidden_size, device)
 
     def forward(self, activation):

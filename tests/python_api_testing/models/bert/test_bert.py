@@ -14,7 +14,7 @@ from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
 from python_api_testing.models.bert.bert_encoder import TtBertEncoder
-from libs.tt_lib.fused_ops.linear import Linear
+from python_api_testing.models.bert.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled, comp_allclose_and_pcc, comp_pcc, comp_allclose
 
@@ -54,9 +54,9 @@ class TtBertForQuestionAnswering(TtBertShared):
         num_classes, hidden_size = state_dict["qa_outputs.weight"].shape
 
         weight = pad_weight(state_dict["qa_outputs.weight"])
-        weight = ttl.tensor.Tensor(weight.reshape(-1).tolist(), weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        weight = ttl.tensor.Tensor(weight.reshape(-1).tolist(), weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         bias   = pad_weight(state_dict["qa_outputs.bias"])
-        bias = ttl.tensor.Tensor(bias.reshape(-1).tolist(), bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        bias = ttl.tensor.Tensor(bias.reshape(-1).tolist(), bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
 
         # QA linear
         self.qa_linear = Linear(hidden_size, 32, weight, bias, device)

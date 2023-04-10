@@ -15,7 +15,7 @@ import numpy as np
 
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from libs.tt_lib.fused_ops.linear import Linear as TtLinear
+from python_api_testing.models.bert.fused_ops.linear import Linear as TtLinear
 from libs.tt_lib.fused_ops.softmax import softmax
 from utility_functions import get_FR, set_FR, enable_compile_cache, enable_binary_cache, comp_pcc, comp_allclose
 
@@ -128,12 +128,12 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
 
         # Tilized
         parameters = [
-            ttl.tensor.Tensor(qw.reshape(-1).tolist(), qw.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
-            ttl.tensor.Tensor(qb.reshape(-1).tolist(), qb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
-            ttl.tensor.Tensor(kw.reshape(-1).tolist(), kw.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
-            ttl.tensor.Tensor(kb.reshape(-1).tolist(), kb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
-            ttl.tensor.Tensor(vw.reshape(-1).tolist(), vw.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data(),
-            ttl.tensor.Tensor(vb.reshape(-1).tolist(), vb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+            ttl.tensor.Tensor(qw.reshape(-1).tolist(), qw.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device),
+            ttl.tensor.Tensor(qb.reshape(-1).tolist(), qb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device),
+            ttl.tensor.Tensor(kw.reshape(-1).tolist(), kw.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device),
+            ttl.tensor.Tensor(kb.reshape(-1).tolist(), kb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device),
+            ttl.tensor.Tensor(vw.reshape(-1).tolist(), vw.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device),
+            ttl.tensor.Tensor(vb.reshape(-1).tolist(), vb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         ]
 
         self.mha = mha(*parameters, hidden_dim, config.num_attention_heads, device)

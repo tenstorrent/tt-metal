@@ -12,7 +12,7 @@ from transformers import BertForQuestionAnswering
 
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from libs.tt_lib.fused_ops.linear import Linear as TtLinear
+from python_api_testing.models.bert.fused_ops.linear import Linear as TtLinear
 from utility_functions import comp_pcc, comp_allclose
 
 def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):
@@ -51,8 +51,8 @@ class TtFeedForwardModel(torch.nn.Module):
         encoder0_ff1_weight_shape = encoder0_ff1_weight.shape
         encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
 
-        encoder0_ff1_weight = ttl.tensor.Tensor(encoder0_ff1_weight.reshape(-1).tolist(), encoder0_ff1_weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
-        encoder0_ff1_bias = ttl.tensor.Tensor(encoder0_ff1_bias.reshape(-1).tolist(), encoder0_ff1_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        encoder0_ff1_weight = ttl.tensor.Tensor(encoder0_ff1_weight.reshape(-1).tolist(), encoder0_ff1_weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
+        encoder0_ff1_bias = ttl.tensor.Tensor(encoder0_ff1_bias.reshape(-1).tolist(), encoder0_ff1_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
 
         # FF2 params
         encoder0_ff2_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.weight"])
@@ -61,8 +61,8 @@ class TtFeedForwardModel(torch.nn.Module):
         encoder0_ff2_weight_shape = encoder0_ff2_weight.shape
         encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
 
-        encoder0_ff2_weight = ttl.tensor.Tensor(encoder0_ff2_weight.reshape(-1).tolist(), encoder0_ff2_weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
-        encoder0_ff2_bias = ttl.tensor.Tensor(encoder0_ff2_bias.reshape(-1).tolist(), encoder0_ff2_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        encoder0_ff2_weight = ttl.tensor.Tensor(encoder0_ff2_weight.reshape(-1).tolist(), encoder0_ff2_weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
+        encoder0_ff2_bias = ttl.tensor.Tensor(encoder0_ff2_bias.reshape(-1).tolist(), encoder0_ff2_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
 
         self.ffn = feed_forward(
             *encoder0_ff1_weight_shape[-2:],
@@ -163,4 +163,4 @@ def test_ffn_inference(model_version, batch, seq_len, on_weka, pcc):
     run_ffn_inference(model_version, batch, seq_len, on_weka, pcc)
 
 if __name__ == "__main__":
-    run_ffn_inference("phiyodr/bert-large-finetuned-squad2", 1, 128, True, 0.99)
+    run_ffn_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99)

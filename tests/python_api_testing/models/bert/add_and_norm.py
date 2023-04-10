@@ -12,7 +12,7 @@ from transformers import BertForQuestionAnswering
 import numpy as np
 
 from libs import tt_lib as ttl
-from python_api_testing.fused_ops.add_and_norm import AddAndNorm
+from python_api_testing.models.bert.fused_ops.add_and_norm import AddAndNorm
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import enable_compile_cache, enable_binary_cache, comp_pcc, comp_allclose
 
@@ -22,14 +22,14 @@ class TtAddAndNormModel(torch.nn.Module):
 
         if lnorm_type == "attention":
             gamma = pad_weight(state_dict["bert.encoder.layer.0.attention.output.LayerNorm.weight"])
-            gamma = ttl.tensor.Tensor(gamma.reshape(-1).tolist(), gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+            gamma = ttl.tensor.Tensor(gamma.reshape(-1).tolist(), gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
             beta = pad_weight(state_dict["bert.encoder.layer.0.attention.output.LayerNorm.bias"])
-            beta = ttl.tensor.Tensor(beta.reshape(-1).tolist(), beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+            beta = ttl.tensor.Tensor(beta.reshape(-1).tolist(), beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         elif lnorm_type == "ffn":
             gamma = pad_weight(state_dict["bert.encoder.layer.0.output.LayerNorm.weight"])
-            gamma = ttl.tensor.Tensor(gamma.reshape(-1).tolist(), gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+            gamma = ttl.tensor.Tensor(gamma.reshape(-1).tolist(), gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
             beta = pad_weight(state_dict["bert.encoder.layer.0.output.LayerNorm.bias"])
-            beta = ttl.tensor.Tensor(beta.reshape(-1).tolist(), beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+            beta = ttl.tensor.Tensor(beta.reshape(-1).tolist(), beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         else:
             assert False, "Invalid lnorm_type"
 
