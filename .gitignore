@@ -57,7 +57,7 @@ tags
 
 # Release assets and machine setup assets
 release_build/
-release/machine_setup/assets/
+infra/machine_setup/assets/
 
 # PyBind extensions and wheel setup
 *.egg-info/
