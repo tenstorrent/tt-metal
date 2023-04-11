@@ -43,9 +43,44 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
 
+    uint32_t num_old_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
+    uint32_t old_stick_size = a.shape()[3] * 2; // Assuming bfloat16 data format
+
+    uint32_t num_new_sticks = N*C*H;
+    uint32_t new_stick_size = W * 2; // Assuming bfloat16 data format
+
     uint32_t single_tile_size = 2 * TILE_HW; // Assuming bfloat16 dataformat
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = (a.shape()[1] * a.shape()[2] * a.shape()[3] / TILE_HW);
+    uint32_t num_output_tiles = (C * H * W / TILE_HW);
+
+    // Currently added to support Bert large, TODO: Make op more generic, parallelize
+    uint32_t available_l1 = 1024*1024 - UNRESERVED_BASE;
+    if (num_input_tiles * single_tile_size + num_output_tiles * single_tile_size > available_l1) {
+        if (old_stick_size >= new_stick_size) {
+            if (old_stick_size % new_stick_size == 0) {
+                // Maximize L1 usage. Is this needed or do we just need to double buffer 32 sticks (64)
+                // Evenly divide L1 between input/output
+                uint32_t w_tiles = a.shape()[3] / 32;
+                num_input_tiles = ((available_l1 / 2) / single_tile_size) / w_tiles * w_tiles;
+                num_output_tiles = num_input_tiles;
+            } else {
+                // Not needed for Bert large at the moment so will trigger L1 OOM assert
+            }
+        } else {
+            if (new_stick_size % old_stick_size == 0) {
+                // Maximize L1 usage. Is this needed or do we just need to double buffer 32 sticks (64)
+                // Evenly divide L1 between input/output
+                uint32_t w_tiles = (W / 32);
+                num_output_tiles = ((available_l1 / 2) / single_tile_size) / w_tiles * w_tiles;
+                num_input_tiles = num_output_tiles;
+            } else {
+                // Not needed for Bert large at the moment so will trigger L1 OOM assert
+            }
+        }
+        TT_ASSERT(num_input_tiles > 0 && num_output_tiles > 0, "Cannot fit input/output rows into L1");
+    }
+
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
         device,
@@ -57,7 +92,6 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t num_output_tiles = (C * H * W / TILE_HW);
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
         device,
@@ -67,13 +101,6 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
         num_output_tiles * single_tile_size,
         DataFormat::Float16_b
     );
-
-    uint32_t num_old_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
-    uint32_t old_stick_size = a.shape()[3] * 2; // Assuming bfloat16 data format
-
-    uint32_t num_new_sticks = N*C*H;
-    uint32_t new_stick_size = W * 2; // Assuming bfloat16 data format
-
 
     // Reader compile-time args
     bool old_stick_size_is_power_of_two = (ceil(log2(old_stick_size)) == floor(log2(old_stick_size)));
