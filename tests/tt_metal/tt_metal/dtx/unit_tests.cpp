@@ -19,6 +19,7 @@
 #include "dtx/util_vector_of_ints.hpp"
 #include "dtx/util.hpp"
 #include "dtx/dtx_passes.hpp"
+#include "dtx/dtx_evaluate.hpp"
 
 using namespace std;
 
@@ -542,6 +543,15 @@ bool test_channels_last_to_2D_matrix_conv1x1() {
     return pass;
 }
 
+bool test_high_level_pass_and_evaluate() {
+    vector<int> shape = {2, 2, 2};
+    auto dtx = simple_high_level_pass(shape);
+    vector<uint32_t> data = {1, 2, 3, 4, 5, 6, 7, 8};
+    vector<uint32_t> data_transformed = evaluate<uint32_t>(data, dtx);
+    vector<uint32_t> golden_data = {1, 2, 5, 6, 3, 4, 7, 8};
+    return data_transformed == golden_data;
+}
+
 void run_dtx_tests() {
     bool pass = true;
 
@@ -588,6 +598,9 @@ void run_dtx_tests() {
 
     pass &= test_channels_last_to_2D_matrix_conv1x1();
     printf("test_channels_last_to_2D_matrix_conv1x1 - %d\n\n", pass);
+
+    pass &= test_high_level_pass_and_evaluate();
+    printf("test_high_level_pass_and_evaluate - %d\n\n", pass);
 
     if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
     else cout << "TESTS FAILED\n\n\n" << endl;

@@ -21,19 +21,21 @@ bool row_major_memory_store(DataTransformations * dtx) {
 
     // Generate tensor pairs
     int consumer_x = 0;
-    for (int y=0; y<producer_shape[Y(rank)]; y++) {
-        vector<int> producer_str = {0, y, 0};
-        vector<int> producer_end = {0, y, producer_shape[X(rank)]-1};
-        vector<int> consumer_str = {0, 0, consumer_x};
-        vector<int> consumer_end = {0, 0, consumer_x + producer_shape[X(rank)]-1};
+    for (int z=0; z<producer_shape[Z(rank)]; z++) {
+        for (int y=0; y<producer_shape[Y(rank)]; y++) {
+            vector<int> producer_str = {z, y, 0};
+            vector<int> producer_end = {z, y, producer_shape[X(rank)]-1};
+            vector<int> consumer_str = {0, 0, consumer_x};
+            vector<int> consumer_end = {0, 0, consumer_x + producer_shape[X(rank)]-1};
 
-        TensorPair * tp = new TensorPair(new Tensor({producer_str}, {producer_end}),
-                                         0,
-                                         new Tensor({consumer_str}, {consumer_end}));
+            TensorPair * tp = new TensorPair(new Tensor({producer_str}, {producer_end}),
+                                            0,
+                                            new Tensor({consumer_str}, {consumer_end}));
 
-        consumer->groups[0]->tensor_pairs.push_back(tp);
+            consumer->groups[0]->tensor_pairs.push_back(tp);
 
-        consumer_x += producer_shape[X(rank)];
+            consumer_x += producer_shape[X(rank)];
+        }
     }
 
 

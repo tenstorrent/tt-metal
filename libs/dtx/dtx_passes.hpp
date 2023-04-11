@@ -118,7 +118,9 @@ bool convert_tensor_layout_rowmajor_2_channelslast(DataTransformations * dtx);
 
 
 // ========================================================
-//             PART 6: EVALUATE
+//             PART 6: HIGH LEVEL PASSES
 // ========================================================
+template <typename T>
+vector<T> evaluate(vector<T> data, DataTransformations * dtx);
 
-void evaluate(vector<uint32_t> data, DataTransformations * dtx);
+DataTransformations * simple_high_level_pass(vector<int> shape);
