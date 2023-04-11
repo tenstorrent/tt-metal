@@ -6,6 +6,9 @@ from python_api_testing.sweep_tests import (
 )
 
 op_map = {
+    ################################################
+    #################### TT-DNN ####################
+    ################################################
     # Sanity
     "datacopy": {
         "ttlib_op": ttlib_ops.datacopy,
@@ -136,5 +139,16 @@ op_map = {
     "transpose-hc": {
         "ttlib_op": ttlib_ops.transpose_hc,
         "pytorch_op": partial(pytorch_ops.transpose, dim0=-3, dim1=-2),
+    },
+    ################################################
+    #################### Tensor ####################
+    ################################################
+    "pad": {
+        "ttlib_op": ttlib_ops.pad,
+        "pytorch_op": pytorch_ops.pad,
+    },
+    "unpad": {
+        "ttlib_op": ttlib_ops.unpad,
+        "pytorch_op": pytorch_ops.unpad,
     },
 }

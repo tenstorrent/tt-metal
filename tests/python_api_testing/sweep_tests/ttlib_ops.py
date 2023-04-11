@@ -3,6 +3,9 @@ import tt_lib as ttl
 from tt_lib.utils import pad_weight
 
 
+################################################
+#################### TT-DNN ####################
+################################################
 def datacopy(x, pcie_slot, *args, **kwargs):
     # TODO: Add actual datacopy once tensor op implementation is added
 
@@ -1073,5 +1076,52 @@ def transpose_hc(x, pcie_slot, *args, **kwargs):
         ).reshape(t1.shape())
     finally:
         ttl.device.CloseDevice(device)
+
+    return output
+
+
+################################################
+#################### Tensor ####################
+################################################
+def pad(x, pcie_slot, *args, **kwargs):
+    assert "output_tensor_shape" in kwargs
+    assert "input_tensor_start" in kwargs
+    assert "pad_value" in kwargs
+
+    output_tensor_shape = kwargs["output_tensor_shape"]
+    input_tensor_start = kwargs["input_tensor_start"]
+    pad_value = kwargs["pad_value"]
+
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t0.pad(output_tensor_shape, input_tensor_start, pad_value)
+
+    output = torch.Tensor(t1.data()).reshape(t1.shape())
+
+    return output
+
+
+def unpad(x, pcie_slot, *args, **kwargs):
+    assert "output_tensor_start" in kwargs
+    assert "output_tensor_end" in kwargs
+
+    output_tensor_start = kwargs["output_tensor_start"]
+    output_tensor_end = kwargs["output_tensor_end"]
+
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t0.unpad(output_tensor_start, output_tensor_end)
+
+    output = torch.Tensor(t1.data()).reshape(t1.shape())
 
     return output
