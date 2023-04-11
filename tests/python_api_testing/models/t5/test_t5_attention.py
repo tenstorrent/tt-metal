@@ -147,18 +147,21 @@ def run_test_softmax(device):
         logger.warning("Test softmax Failed!")
 
 
-def run_test_T5Attention_inference(device):
+def run_test_T5Attention_inference(device, block, use_mask):
     hugging_face_reference_model = T5Model.from_pretrained("t5-small") #, torch_dtype=torch.float16)
     hugging_face_reference_model.eval()
 
     # Input is (batch_size, seq_length, dim)
     torch.manual_seed(0)
-    test_input = ((torch.rand(32, 128, 512) * 2) - 1) #.to(torch.float16)
+    test_input = ((torch.rand(1, 32, 512) * 2) - 1) / 512
+
+    # "/ 2" is added beacuse of Tt device precision. Not to hit limits of float16
+    mask = -65504.0 * torch.cat([torch.zeros(7), torch.ones(25)]) / 2
+    mask = mask.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+    mask = mask if use_mask else None
 
     config = json.loads(hugging_face_reference_model.config.to_json_string())
     config["is_decoder"] = False
-
-    block = 2
     has_relative_attention_bias = bool(block == 0)
 
     # Module to test
@@ -171,13 +174,13 @@ def run_test_T5Attention_inference(device):
 
     pytorch_model = hf_reference_module
     # pytorch_model = T5Attention(config, hf_reference_module)
-    pt_out = pytorch_model(test_input)[0].unsqueeze(0)
+    pt_out = pytorch_model(hidden_states=test_input, mask=mask)[0].unsqueeze(0)
 
     test_input = test_input.unsqueeze(0)
     tt_test_input = torch2tt_tensor(test_input, device)
 
     tt_model = TtT5Attention(config, hugging_face_reference_model.state_dict(), base_address, device, has_relative_attention_bias)
-    tt_out = tt_model(tt_test_input)[0]
+    tt_out = tt_model(hidden_states=tt_test_input, mask=mask)[0]
     tt_out = tt2torch_tensor(tt_out)
 
     print(pt_out[0, 0, 1:10, 1:10])
@@ -232,8 +235,26 @@ def test_t5_unshape():
     ttm.device.CloseDevice(device)
 
 
-def test_T5Attention_inference():
+def test_T5Attention_block_0_no_mask():
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
-    run_test_T5Attention_inference(device)
+    run_test_T5Attention_inference(device, block=0, use_mask=False)
     ttm.device.CloseDevice(device)
+
+
+def test_T5Attention_block_2_no_mask():
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    ttm.device.InitializeDevice(device)
+    run_test_T5Attention_inference(device, block=2, use_mask=False)
+    ttm.device.CloseDevice(device)
+
+
+def test_T5Attention_block_0_with_mask():
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    ttm.device.InitializeDevice(device)
+    run_test_T5Attention_inference(device, block=0, use_mask=True)
+    ttm.device.CloseDevice(device)
+
+
+if __name__ == "__main__":
+    test_T5Attention_block_0_with_mask()

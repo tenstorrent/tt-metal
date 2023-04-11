@@ -431,7 +431,7 @@ class TtT5Attention(nn.Module):
             assert (
                 len(past_key_value) == 2
             ), f"past_key_value should have 2 past states: keys and values. Got { len(past_key_value)} past states"
-            real_seq_length += past_key_value[0].shape()[3] if query_length is None else query_length
+            real_seq_length += past_key_value[0].shape[2] if query_length is None else query_length
 
         key_length = real_seq_length if key_value_states is None else key_value_states.shape()[2]
 
@@ -460,8 +460,10 @@ class TtT5Attention(nn.Module):
                 if key_value_states is None:
                     # self-attn
                     # (batch_size, n_heads, key_length, dim_per_head)
+                    hidden_states = tt2torch_tensor(hidden_states)
                     hidden_states = torch.cat([past_key_value, hidden_states], dim=2)
-                elif past_key_value.shape()[3] != key_value_states.shape()[2]:
+                    hidden_states = torch2tt_tensor(hidden_states, self.device)
+                elif past_key_value.shape[2] != key_value_states.shape()[2]:
                     # checking that the `sequence_length` of the `past_key_value` is the same as
                     # the provided `key_value_states` to support prefix tuning
                     # cross-attn
@@ -507,13 +509,13 @@ class TtT5Attention(nn.Module):
             # if key and values are already calculated
             # we want only the last query position bias
             if past_key_value is not None:
-                position_bias = position_bias[:, :, -hidden_states.size(1) :, :]
+                position_bias = position_bias[:, :, -hidden_states.shape()[2] :, :]
 
             # "Broadcast" position bias so it can be used in + operation
             position_bias = position_bias.repeat(batch_size, 1, 1, 1)
 
             if mask is not None:
-                position_bias = position_bias + tt2torch_tensor(mask)  # (batch_size, n_heads, seq_length, key_length)
+                position_bias = position_bias + mask  # (batch_size, n_heads, seq_length, key_length)
 
         # Prunned heads!
         if self.pruned_heads:

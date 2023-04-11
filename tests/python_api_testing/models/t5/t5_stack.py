@@ -92,11 +92,9 @@ class TtT5Stack(nn.Module):
         self.embed_tokens = new_embeddings
 
     def create_extended_attention_mask_for_decoder(self, input_shape, attention_mask):
-
         batch_size, seq_length = input_shape
         seq_ids = torch.arange(seq_length)
         causal_mask = seq_ids[None, None, :].repeat(batch_size, seq_length, 1) <= seq_ids[None, :, None]
-
         # in case past_key_values are used we need to add a prefix ones mask to the causal mask
         # causal and attention masks must have same type with pytorch version < 1.3
         causal_mask = causal_mask.to(attention_mask.dtype)
@@ -139,8 +137,9 @@ class TtT5Stack(nn.Module):
             else:
                 extended_attention_mask = attention_mask[:, None, None, :]
 
+                # Do not repeat for now -> will do it later
                 # Repeat tensor so it can be used as Tt tensor
-                extended_attention_mask = extended_attention_mask.repeat(1, 1, input_shape[1], 1)
+                # extended_attention_mask = extended_attention_mask.repeat(1, 1, input_shape[1], 1)
         else:
             raise ValueError(
                 f"Wrong shape for input_ids (shape {input_shape}) or attention_mask (shape {attention_mask.shape})"
@@ -152,9 +151,10 @@ class TtT5Stack(nn.Module):
         # Since we are adding it to the raw scores before the softmax, this is
         # effectively the same as removing these entirely.
 
-        # Check what dtype is self.dtype, attention_mask.dtype ??
+        # Check what dtype is self.dtype, attention_mask.dtype?
+        # Added "/ 2" bec of Tt device preccision
         extended_attention_mask = extended_attention_mask.to(dtype=torch.float16)  # fp16 compatibility
-        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(torch.float16).min
+        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(torch.float16).min / 2
 
         return extended_attention_mask
 
@@ -215,11 +215,12 @@ class TtT5Stack(nn.Module):
         # encoder_extended_attention_mask.transpose(-1, -2))
 
         # dtype fixed to torch.float16 (instead of self.dtype)
+        # Added "/ 2" bec of Tt device preccision
         encoder_extended_attention_mask = encoder_extended_attention_mask.to(dtype=torch.float16)  # fp16 compatibility
-        encoder_extended_attention_mask = (1.0 - encoder_extended_attention_mask) * torch.finfo(torch.float16).min
+        encoder_extended_attention_mask = (1.0 - encoder_extended_attention_mask) * torch.finfo(torch.float16).min / 2
 
-        # Must repeat dim 3 so it can be used as Tt Tenosor
-        encoder_extended_attention_mask = encoder_extended_attention_mask.repeat(1, 1, encoder_extended_attention_mask.shape[3], 1)
+        # Must repeat dim 3 so it can be used as Tt Tensor -> Don't repeat for now -> add on host
+        # encoder_extended_attention_mask = encoder_extended_attention_mask.repeat(1, 1, encoder_extended_attention_mask.shape[3], 1)
 
         return encoder_extended_attention_mask
 
@@ -293,8 +294,9 @@ class TtT5Stack(nn.Module):
         # ourselves in which case we just need to make it broadcastable to all heads.
         extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape)
 
+        # Do not copy for now. Copy later.
         # Copy data to Tt device
-        extended_attention_mask = torch2tt_tensor(extended_attention_mask, self.device)
+        # extended_attention_mask = torch2tt_tensor(extended_attention_mask, self.device)
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
@@ -309,8 +311,8 @@ class TtT5Stack(nn.Module):
 
             encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
 
-            # Copy data to Tt device
-            encoder_extended_attention_mask = torch2tt_tensor(encoder_extended_attention_mask, self.device)
+            # Copy data to Tt device --- copy it later
+            # encoder_extended_attention_mask = torch2tt_tensor(encoder_extended_attention_mask, self.device)
         else:
             encoder_extended_attention_mask = None
 

@@ -1,0 +1,275 @@
+from pathlib import Path
+import sys
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
+import json
+import torch
+import warnings
+from torch import nn
+from libs import tt_lib as ttm
+from loguru import logger
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+from transformers import AutoTokenizer, T5Tokenizer, T5ForConditionalGeneration
+from transformers.generation.configuration_utils import GenerationConfig
+
+from utility_functions import print_diff_argmax, comp_allclose, comp_pcc
+from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.t5.t5_for_conditional_generation import TtT5ForConditionalGeneration as TtT5Model
+
+from transformers.generation.logits_process import (
+    EncoderNoRepeatNGramLogitsProcessor,
+    EncoderRepetitionPenaltyLogitsProcessor,
+    EpsilonLogitsWarper,
+    EtaLogitsWarper,
+    ExponentialDecayLengthPenalty,
+    ForcedBOSTokenLogitsProcessor,
+    ForcedEOSTokenLogitsProcessor,
+    ForceTokensLogitsProcessor,
+    HammingDiversityLogitsProcessor,
+    InfNanRemoveLogitsProcessor,
+    LogitNormalization,
+    LogitsProcessorList,
+    MinLengthLogitsProcessor,
+    MinNewTokensLengthLogitsProcessor,
+    NoBadWordsLogitsProcessor,
+    NoRepeatNGramLogitsProcessor,
+    PrefixConstrainedLogitsProcessor,
+    RepetitionPenaltyLogitsProcessor,
+    SuppressTokensAtBeginLogitsProcessor,
+    SuppressTokensLogitsProcessor,
+    TemperatureLogitsWarper,
+    TopKLogitsWarper,
+    TopPLogitsWarper,
+    TypicalLogitsWarper,
+)
+
+
+def _merge_criteria_processor_list(
+    default_list, # Union[LogitsProcessorList, StoppingCriteriaList],
+    custom_list, # Union[LogitsProcessorList, StoppingCriteriaList],
+): # -> Union[LogitsProcessorList, StoppingCriteriaList]:
+    if len(custom_list) == 0:
+        return default_list
+
+    for default in default_list:
+        for custom in custom_list:
+            if type(custom) is type(default):
+                object_type = "stopping criteria" if isinstance(custom, StoppingCriteria) else "logits processor"
+                raise ValueError(
+                    f"A custom {object_type} of type {type(custom)} with values {custom} has been passed to"
+                    f" `generate`, but it has already been created with the values {default}. {default} has been"
+                    " created by passing the corresponding arguments to generate or by the model's config default"
+                    f" values. If you just want to change the default values of {object_type} consider passing"
+                    f" them as arguments to `generate` instead of using a custom {object_type}."
+                )
+    default_list.extend(custom_list)
+    return default_list
+
+
+def _get_logits_processor(
+    generation_config: GenerationConfig,
+    input_ids_seq_length: int,
+    encoder_input_ids, # torch.LongTensor
+    prefix_allowed_tokens_fn, # Callable[[int, torch.Tensor], List[int]],
+    logits_processor, # Optional[LogitsProcessorList]
+): # -> LogitsProcessorList:
+    """
+    This class returns a [`LogitsProcessorList`] list object that contains all relevant [`LogitsProcessor`]
+    instances used to modify the scores of the language model head.
+    """
+    # instantiate processors list
+    processors = LogitsProcessorList()
+
+    # the following idea is largely copied from this PR: https://github.com/huggingface/transformers/pull/5420/files
+    # all samplers can be found in `generation_utils_samplers.py`
+    if generation_config.diversity_penalty is not None and generation_config.diversity_penalty > 0.0:
+        processors.append(
+            HammingDiversityLogitsProcessor(
+                diversity_penalty=generation_config.diversity_penalty,
+                num_beams=generation_config.num_beams,
+                num_beam_groups=generation_config.num_beam_groups,
+            )
+        )
+    if (
+        generation_config.encoder_repetition_penalty is not None
+        and generation_config.encoder_repetition_penalty != 1.0
+    ):
+        processors.append(
+            EncoderRepetitionPenaltyLogitsProcessor(
+                penalty=generation_config.encoder_repetition_penalty, encoder_input_ids=encoder_input_ids
+            )
+        )
+    if generation_config.repetition_penalty is not None and generation_config.repetition_penalty != 1.0:
+        processors.append(RepetitionPenaltyLogitsProcessor(penalty=generation_config.repetition_penalty))
+    if generation_config.no_repeat_ngram_size is not None and generation_config.no_repeat_ngram_size > 0:
+        processors.append(NoRepeatNGramLogitsProcessor(generation_config.no_repeat_ngram_size))
+    if (
+        generation_config.encoder_no_repeat_ngram_size is not None
+        and generation_config.encoder_no_repeat_ngram_size > 0
+    ):
+        if self.config.is_encoder_decoder:
+            processors.append(
+                EncoderNoRepeatNGramLogitsProcessor(
+                    generation_config.encoder_no_repeat_ngram_size, encoder_input_ids
+                )
+            )
+        else:
+            raise ValueError(
+                "It's impossible to use `encoder_no_repeat_ngram_size` with decoder-only architecture"
+            )
+    if generation_config.bad_words_ids is not None:
+        processors.append(
+            NoBadWordsLogitsProcessor(generation_config.bad_words_ids, generation_config.eos_token_id)
+        )
+    if (
+        generation_config.min_length is not None
+        and generation_config.eos_token_id is not None
+        and generation_config.min_length > 0
+    ):
+        processors.append(MinLengthLogitsProcessor(generation_config.min_length, generation_config.eos_token_id))
+    if (
+        generation_config.min_new_tokens is not None
+        and generation_config.eos_token_id is not None
+        and generation_config.min_new_tokens > 0
+    ):
+        processors.append(
+            MinNewTokensLengthLogitsProcessor(
+                input_ids_seq_length, generation_config.min_new_tokens, generation_config.eos_token_id
+            )
+        )
+    if prefix_allowed_tokens_fn is not None:
+        processors.append(
+            PrefixConstrainedLogitsProcessor(
+                prefix_allowed_tokens_fn, generation_config.num_beams // generation_config.num_beam_groups
+            )
+        )
+    if generation_config.forced_bos_token_id is not None:
+        processors.append(ForcedBOSTokenLogitsProcessor(generation_config.forced_bos_token_id))
+    if generation_config.forced_eos_token_id is not None:
+        processors.append(
+            ForcedEOSTokenLogitsProcessor(generation_config.max_length, generation_config.forced_eos_token_id)
+        )
+    if generation_config.remove_invalid_values is True:
+        processors.append(InfNanRemoveLogitsProcessor())
+    if generation_config.exponential_decay_length_penalty is not None:
+        processors.append(
+            ExponentialDecayLengthPenalty(
+                generation_config.exponential_decay_length_penalty,
+                generation_config.eos_token_id,
+                input_ids_seq_length,
+            )
+        )
+    if generation_config.suppress_tokens is not None:
+        processors.append(SuppressTokensLogitsProcessor(generation_config.suppress_tokens))
+    if generation_config.begin_suppress_tokens is not None:
+        begin_index = input_ids_seq_length
+        begin_index = (
+            begin_index
+            if (input_ids_seq_length > 1 or generation_config.forced_bos_token_id is None)
+            else begin_index + 1
+        )
+        if generation_config.forced_decoder_ids is not None:
+            # generation starts after the last token that is forced
+            begin_index += generation_config.forced_decoder_ids[-1][0]
+        processors.append(
+            SuppressTokensAtBeginLogitsProcessor(generation_config.begin_suppress_tokens, begin_index)
+        )
+    if generation_config.forced_decoder_ids is not None:
+        processors.append(ForceTokensLogitsProcessor(generation_config.forced_decoder_ids))
+    processors = _merge_criteria_processor_list(processors, logits_processor)
+    # `LogitNormalization` should always be the last logit processor, when present
+    if generation_config.renormalize_logits is True:
+        processors.append(LogitNormalization())
+    return processors
+
+
+def get_logits_processor(input_ids, config):
+
+    generation_config = GenerationConfig.from_model_config(config)
+    input_ids_seq_length = input_ids.shape[-1]
+
+    logits_processor = _get_logits_processor(
+        generation_config=generation_config,
+        input_ids_seq_length=input_ids_seq_length,
+        encoder_input_ids=input_ids,
+        prefix_allowed_tokens_fn=None,
+        logits_processor=LogitsProcessorList(),
+    )
+
+    return logits_processor
+
+
+def run_generate(device):
+
+    #tokenizer = T5Tokenizer.from_pretrained("t5-small")
+    tokenizer = AutoTokenizer.from_pretrained("t5-small", model_max_length=32)
+    hf_reference_model = T5ForConditionalGeneration.from_pretrained("t5-small")
+    hf_reference_model.eval()
+
+    # Prepare input
+    input_sentance = "translate English to German: The house is wonderful."
+    tokenized = tokenizer(input_sentance, padding="max_length", max_length=32, return_tensors="pt")  # Batch size 1
+
+    input_ids = tokenized.input_ids
+    attention_mask = tokenized.attention_mask
+
+    print(f"input_ids {input_ids}")
+    print(f"attention_mask {attention_mask}")
+
+    generation_config = hf_reference_model.generation_config
+    config = json.loads(hf_reference_model.config.to_json_string())
+    config['tie_word_embeddings'] = hf_reference_model.config.tie_word_embeddings
+
+    logits_processor = get_logits_processor(input_ids, hf_reference_model.config)
+
+    print(config)
+    print(generation_config)
+
+    decoder_input_ids = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
+    print(f"decoder_input_ids {decoder_input_ids}")
+
+    tt_model = TtT5Model(config, hf_reference_model.state_dict(), device)
+
+    for i in range(16):
+        # PyTorch forward pass
+        pt_out = hf_reference_model(input_ids=input_ids, decoder_input_ids=decoder_input_ids, attention_mask=attention_mask)
+        tt_out = tt_model(input_ids=input_ids, decoder_input_ids=decoder_input_ids, attention_mask=attention_mask, return_dict=True)
+
+        does_pass, pcc_message = comp_pcc(pt_out.logits, tt_out.logits, 0.98)
+        print(pcc_message)
+
+        next_token_logits = tt_out.logits
+        print(f"next_token_logits shape {next_token_logits.shape}")
+
+        # pre-process distribution
+        next_tokens_scores = logits_processor(input_ids, next_token_logits)
+        print(f"next_tokens_scores shape {next_tokens_scores.shape}")
+
+        # argmax
+        next_tokens = torch.argmax(next_tokens_scores, dim=-1)
+        print(f"next_tokens {next_tokens}")
+
+        if next_tokens[0][i] == generation_config.eos_token_id:
+            break
+
+        decoder_input_ids[0][i+1] = next_tokens[0][i]
+        print(f"decoder_input_ids {decoder_input_ids[0]}")
+
+    print("Decoded output:")
+    print(tokenizer.decode(decoder_input_ids[0], skip_special_tokens=True))
+
+
+def test_T5ForConditionalGeneration():
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    ttm.device.InitializeDevice(device)
+    run_generate(device)
+    ttm.device.CloseDevice(device)
+
+
+if __name__ == "__main__":
+    test_T5ForConditionalGeneration()
