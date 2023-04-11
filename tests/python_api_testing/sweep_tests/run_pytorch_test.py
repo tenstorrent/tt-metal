@@ -16,7 +16,7 @@ sys.path.append(f"{f}/../..")
 from python_api_testing.sweep_tests import comparison_funcs
 
 from python_api_testing.sweep_tests.common import (
-    fieldnames,
+    get_test_fieldnames,
     run_test_and_save_results,
     shapes_and_datagen,
 )
@@ -98,7 +98,9 @@ def run_pytorch_test(args):
 
         ################# RUN TEST SWEEP #################
         with open(results_csv_path, "a", newline="") as results_csv:
-            results_csv_writer = csv.DictWriter(results_csv, fieldnames=fieldnames)
+            results_csv_writer = csv.DictWriter(
+                results_csv, fieldnames=get_test_fieldnames(test_name)
+            )
             if not skip_header:
                 results_csv_writer.writeheader()
                 results_csv.flush()

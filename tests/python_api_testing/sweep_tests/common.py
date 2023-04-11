@@ -5,15 +5,33 @@ from functools import partial
 
 from python_api_testing.sweep_tests import generation_funcs
 
-fieldnames = [
-    "test_name",
-    "input_shapes",
-    "data_seed",
-    "env_vars",
-    "status",
-    "test_output",
-    "pass/fail",
-]
+
+TEST_FIELDNAMES = {
+    "pad": [
+        "test_name",
+        "input_shapes",
+        "output_tensor_shape",
+        "input_tensor_start",
+        "pad_value",
+        "data_seed",
+        "env_vars",
+        "status",
+        "test_output",
+        "pass/fail",
+    ],
+    "unpad": [
+        "test_name",
+        "input_shapes",
+        "output_tensor_start",
+        "output_tensor_end",
+        "data_seed",
+        "env_vars",
+        "status",
+        "test_output",
+        "pass/fail",
+    ],
+}
+
 
 TT_DNN_TESTS = [
     # Sanity
@@ -58,6 +76,21 @@ TT_DNN_TESTS = [
 
 
 TT_TENSOR_TESTS = ["pad", "unpad"]
+
+
+def get_test_fieldnames(test_name):
+    return TEST_FIELDNAMES.get(
+        test_name,
+        [
+            "test_name",
+            "input_shapes",
+            "data_seed",
+            "env_vars",
+            "status",
+            "test_output",
+            "pass/fail",
+        ],
+    )
 
 
 def run_tt_dnn_test(
@@ -106,69 +139,30 @@ def run_tt_tensor_test(
 def run_test_and_save_results(
     results_csv_writer, test_name, input_shapes, data_seed, env_vars, *run_test_args
 ):
-    try:
-        if test_name in TT_DNN_TESTS:
-            test_pass, test_output = run_tt_dnn_test(*run_test_args)
-        elif test_name in TT_TENSOR_TESTS:
-            if test_name == "pad":
-                assert len(input_shapes) == 1
-                assert len(input_shapes[0]) == 4
-
-                pad_sizes = (64, 64, 64, 64)
-                output_tensor_shape = [
-                    random.randint(
-                        input_shapes[0][i], input_shapes[0][i] + pad_sizes[i]
-                    )
-                    for i in range(4)
-                ]
-                input_tensor_start = [
-                    random.randint(0, output_tensor_shape[i] - input_shapes[0][i])
-                    for i in range(4)
-                ]
-                pad_value = random.uniform(-100, 100)
-                # Cast to bfloat16 then back to float for exact match
-                pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float)
-
-                test_args = {
-                    "output_tensor_shape": output_tensor_shape,
-                    "input_tensor_start": input_tensor_start,
-                    "pad_value": pad_value,
-                }
-                test_pass, test_output = run_tt_tensor_test(*run_test_args, **test_args)
-            elif test_name == "unpad":
-                assert len(input_shapes) == 1
-                assert len(input_shapes[0]) == 4
-
-                output_tensor_start = [
-                    random.randint(0, input_shapes[0][i] - 1) for i in range(4)
-                ]
-                output_tensor_end = [
-                    random.randint(output_tensor_start[i], input_shapes[0][i] - 1)
-                    for i in range(4)
-                ]
-
-                test_args = {
-                    "output_tensor_start": output_tensor_start,
-                    "output_tensor_end": output_tensor_end,
-                }
-                test_pass, test_output = run_tt_tensor_test(*run_test_args, **test_args)
+    def _try_except_wrapper(func, *args, **kwargs):
+        try:
+            test_pass, test_output = func(*args, **kwargs)
+            if test_pass:
+                test_result = "pass"
             else:
-                test_pass, test_output = run_tt_tensor_test(*run_test_args)
+                test_result = "fail"
+            test_status = "completed"
 
-        if test_pass:
-            test_result = "pass"
-        else:
+        except Exception as err:
+            test_pass = False
+            test_status = "error"
+            test_output = err
             test_result = "fail"
 
-        test_status = "completed"
+        # test_pass and test_output comes from actual test
+        # test_status is completed/error (ie. runtime)
+        # test_result is pass/fail depending on test_pass bool
+        return test_pass, test_status, test_output, test_result
 
-    except Exception as err:
-        test_pass = False
-        test_status = "error"
-        test_result = "fail"
-        test_output = err
-
-    finally:
+    if test_name in TT_DNN_TESTS:
+        test_pass, test_status, test_output, test_result = _try_except_wrapper(
+            run_tt_dnn_test, *run_test_args
+        )
         results_csv_writer.writerow(
             {
                 "test_name": test_name,
@@ -181,7 +175,99 @@ def run_test_and_save_results(
             }
         )
 
-        return test_pass
+    elif test_name in TT_TENSOR_TESTS:
+        if test_name == "pad":
+            assert len(input_shapes) == 1
+            assert len(input_shapes[0]) == 4
+
+            pad_sizes = (64, 64, 64, 64)
+            output_tensor_shape = [
+                random.randint(input_shapes[0][i], input_shapes[0][i] + pad_sizes[i])
+                for i in range(4)
+            ]
+            input_tensor_start = [
+                random.randint(0, output_tensor_shape[i] - input_shapes[0][i])
+                for i in range(4)
+            ]
+            pad_value = random.uniform(-100, 100)
+            # Cast to bfloat16 then back to float for exact match
+            pad_value = (
+                torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
+            )
+
+            test_args = {
+                "output_tensor_shape": output_tensor_shape,
+                "input_tensor_start": input_tensor_start,
+                "pad_value": pad_value,
+            }
+            test_pass, test_status, test_output, test_result = _try_except_wrapper(
+                run_tt_tensor_test, *run_test_args, **test_args
+            )
+            results_csv_writer.writerow(
+                {
+                    "test_name": test_name,
+                    "input_shapes": input_shapes,
+                    "output_tensor_shape": output_tensor_shape,
+                    "input_tensor_start": input_tensor_start,
+                    "pad_value": pad_value,
+                    "data_seed": data_seed,
+                    "env_vars": env_vars,
+                    "status": test_status,
+                    "test_output": test_output,
+                    "pass/fail": test_result,
+                }
+            )
+
+        elif test_name == "unpad":
+            assert len(input_shapes) == 1
+            assert len(input_shapes[0]) == 4
+
+            output_tensor_start = [
+                random.randint(0, input_shapes[0][i] - 1) for i in range(4)
+            ]
+            output_tensor_end = [
+                random.randint(output_tensor_start[i], input_shapes[0][i] - 1)
+                for i in range(4)
+            ]
+
+            test_args = {
+                "output_tensor_start": output_tensor_start,
+                "output_tensor_end": output_tensor_end,
+            }
+            test_pass, test_status, test_output, test_result = _try_except_wrapper(
+                run_tt_tensor_test, *run_test_args, **test_args
+            )
+            results_csv_writer.writerow(
+                {
+                    "test_name": test_name,
+                    "input_shapes": input_shapes,
+                    "output_tensor_start": output_tensor_start,
+                    "output_tensor_end": output_tensor_end,
+                    "data_seed": data_seed,
+                    "env_vars": env_vars,
+                    "status": test_status,
+                    "test_output": test_output,
+                    "pass/fail": test_result,
+                }
+            )
+
+        else:
+            test_pass, test_status, test_output, test_result = _try_except_wrapper(
+                run_tt_tensor_test, *run_test_args
+            )
+            results_csv_writer.writerow(
+                {
+                    "test_name": test_name,
+                    "input_shapes": input_shapes,
+                    "data_seed": data_seed,
+                    "env_vars": env_vars,
+                    "status": test_status,
+                    "test_output": test_output,
+                    "pass/fail": test_result,
+                }
+            )
+
+    return test_pass
 
 
 def shapes_and_datagen(shape_dict, datagen_dict):
