@@ -6,6 +6,7 @@
 template <typename T>
 vector<T> evaluate(vector<T> data, DataTransformations * dtx) {
     assert(dtx->transformations.size() == 2);
+    assert(dtx->transformations.back()->groups[0]->transfers.size() > 0)
     // copy transfer addresses into a vector
     std::vector<uint32_t> address_map;
 
