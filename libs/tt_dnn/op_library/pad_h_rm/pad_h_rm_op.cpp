@@ -45,7 +45,6 @@ Tensor pad_h_rm(const Tensor &a, int paddedH) {
         0, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
-        200*1024, // cb addr
         DataFormat::Float16_b);
     auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
@@ -53,7 +52,6 @@ Tensor pad_h_rm(const Tensor &a, int paddedH) {
         1, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
-        300*1024,
         DataFormat::Float16_b);
 
     tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(

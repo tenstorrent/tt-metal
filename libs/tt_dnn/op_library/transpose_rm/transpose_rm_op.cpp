@@ -42,8 +42,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
     tt_metal::Tensor output = tt_metal::Tensor(bshape, a.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    uint32_t l1_buffer_addr = 400 * 1024;
-    auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, src0_dram_buffer->size(), l1_buffer_addr);
+    auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, src0_dram_buffer->size());
 
     uint32_t num_cb_tiles = 16;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
@@ -52,7 +51,6 @@ Tensor transpose_hc_rm(const Tensor &a) {
         0, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
-        200*1024, // cb addr
         DataFormat::Float16_b);
     auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
@@ -60,7 +58,6 @@ Tensor transpose_hc_rm(const Tensor &a) {
         1, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
-        300*1024,
         DataFormat::Float16_b);
 
     tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
@@ -78,7 +75,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
         core,
         {src0_dram_buffer->address(),
         dst_dram_buffer->address(),
-        l1_buffer_addr,
+        l1_b0->address(),
         uint32_t(N),
         uint32_t(C),
         uint32_t(H),

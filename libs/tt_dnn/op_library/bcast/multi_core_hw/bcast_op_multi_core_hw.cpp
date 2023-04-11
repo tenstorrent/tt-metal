@@ -61,7 +61,6 @@ Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum b
 		tt_xy_pair core = {i / num_cores_y, i % num_cores_y};
 
 		uint32_t src0_cb_index = 0;
-		uint32_t src0_cb_addr = 200 * 1024;
 		uint32_t num_input_tiles = 2;
 		auto cb_src0 = tt_metal::CreateCircularBuffer(
 			program,
@@ -70,12 +69,10 @@ Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum b
 			core,
 			num_input_tiles,
 			num_input_tiles * single_tile_size,
-			src0_cb_addr,
 			DataFormat::Float16_b
 		);
 
 		uint32_t src1_cb_index = 1;
-		uint32_t src1_cb_addr = 300 * 1024;
 		auto cb_src1 = tt_metal::CreateCircularBuffer(
 			program,
 			device,
@@ -83,12 +80,10 @@ Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum b
 			core,
 			num_input_tiles,
 			num_input_tiles * single_tile_size,
-			src1_cb_addr,
 			DataFormat::Float16_b
 		);
 
 		uint32_t ouput_cb_index = 16; // output operands start at index 16
-		uint32_t output_cb_addr = 400 * 1024;
 		uint32_t num_output_tiles = 2;
 		auto cb_output = tt_metal::CreateCircularBuffer(
 			program,
@@ -97,7 +92,6 @@ Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum b
 			core,
 			num_output_tiles,
 			num_output_tiles * single_tile_size,
-			output_cb_addr,
 			DataFormat::Float16_b
 		);
 

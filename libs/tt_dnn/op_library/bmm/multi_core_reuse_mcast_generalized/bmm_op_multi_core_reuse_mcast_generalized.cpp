@@ -20,9 +20,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
-    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr,
-    uint32_t in0_mcast_sender_semaphore_addr, uint32_t in1_mcast_sender_semaphore_addr,
-    uint32_t in0_mcast_receiver_semaphore_addr, uint32_t in1_mcast_receiver_semaphore_addr
+    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
 ) {
 
     tt_metal::Program *program = new tt_metal::Program();
@@ -157,11 +155,13 @@ tt_metal::Program * create_program_mcast_in0_in1(
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             tt_xy_pair core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-            uint32_t l1_valid_address = 200 * 1024;
+
+            auto in0_mcast_sender_semaphore = tt_metal::CreateL1Buffer(program, device, core, sizeof(uint32_t));
+            auto in0_mcast_receiver_semaphore = tt_metal::CreateL1Buffer(program, device, core, sizeof(uint32_t));
+            auto in1_mcast_sender_semaphore = tt_metal::CreateL1Buffer(program, device, core, sizeof(uint32_t));
+            auto in1_mcast_receiver_semaphore = tt_metal::CreateL1Buffer(program, device, core, sizeof(uint32_t));
 
             uint32_t src0_cb_index = 0;
-            uint32_t src0_cb_addr = l1_valid_address;
-            l1_valid_address += in0_CB_size;
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src0 = tt_metal::CreateCircularBuffer(
                 program,
@@ -170,13 +170,10 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                src0_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
             uint32_t src1_cb_index = 1;
-            uint32_t src1_cb_addr = l1_valid_address;
-            l1_valid_address += in1_CB_size;
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             auto cb_src1 = tt_metal::CreateCircularBuffer(
                 program,
@@ -185,13 +182,10 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                src1_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
-            uint32_t output_cb_addr = l1_valid_address;
-            l1_valid_address += out_CB_size;
             auto cb_output = tt_metal::CreateCircularBuffer(
                 program,
                 device,
@@ -199,7 +193,6 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
@@ -211,15 +204,13 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
+                cb_output->address(),
                 tt::DataFormat::Float16_b
             );
 
-            TT_ASSERT(l1_valid_address < 1024 * 1024);
-
-             std::vector<uint32_t> invalid = {INVALID};
-            tt_metal::WriteToDeviceL1(device, core, invalid, in0_mcast_sender_semaphore_addr);
-            tt_metal::WriteToDeviceL1(device, core, invalid, in1_mcast_sender_semaphore_addr);
+            std::vector<uint32_t> invalid = {INVALID};
+            tt_metal::WriteToDeviceL1(device, core, invalid, in0_mcast_sender_semaphore->address());
+            tt_metal::WriteToDeviceL1(device, core, invalid, in1_mcast_sender_semaphore->address());
 
             tt_xy_pair left_core    = {(std::size_t) start_core_x, (std::size_t) core.y};
             tt_xy_pair left_core_plus_one    = {(std::size_t) start_core_x + 1, (std::size_t) core.y};
@@ -235,7 +226,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
             auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
             auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t) in0_dram_addr, // in0_tensor_addr
+                (std::uint32_t)  in0_dram_addr, // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                 (std::uint32_t)  1, // in0_tensor_stride_w
                 (std::uint32_t)  K, // in0_tensor_stride_h
@@ -264,8 +255,8 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
                 (std::uint32_t)  left_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  left_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in0_mcast_sender_semaphore_addr,
-                (std::uint32_t)  in0_mcast_receiver_semaphore_addr,
+                (std::uint32_t)  in0_mcast_sender_semaphore->address(),
+                (std::uint32_t)  in0_mcast_receiver_semaphore->address(),
 
                 (std::uint32_t)  bottom_core_physical.x, // in0_mcast_dest_noc_start_x
                 (std::uint32_t)  bottom_core_physical.y, // in0_mcast_dest_noc_start_y
@@ -274,8 +265,8 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 (std::uint32_t)  (num_cores_r - 1), // in0_mcast_num_dests
                 (std::uint32_t)  top_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  top_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in1_mcast_sender_semaphore_addr,
-                (std::uint32_t)  in1_mcast_receiver_semaphore_addr
+                (std::uint32_t)  in1_mcast_sender_semaphore->address(),
+                (std::uint32_t)  in1_mcast_receiver_semaphore->address()
             };
             std::vector<uint32_t> writer_args = {
                 (std::uint32_t) out_dram_addr, // out_tensor_addr
@@ -320,9 +311,7 @@ tt_metal::Program * create_program_mcast_in0(
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
-    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr,
-    uint32_t in0_mcast_sender_semaphore_addr,
-    uint32_t in0_mcast_receiver_semaphore_addr
+    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
 ) {
 
     tt_metal::Program *program = new tt_metal::Program();
@@ -418,11 +407,11 @@ tt_metal::Program * create_program_mcast_in0(
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             tt_xy_pair core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-            uint32_t l1_valid_address = 200 * 1024;
+
+            auto in0_mcast_sender_semaphore = tt_metal::CreateL1Buffer(program, device, core, sizeof(uint32_t));
+            auto in0_mcast_receiver_semaphore = tt_metal::CreateL1Buffer(program, device, core, sizeof(uint32_t));
 
             uint32_t src0_cb_index = 0;
-            uint32_t src0_cb_addr = l1_valid_address;
-            l1_valid_address += in0_CB_size;
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src0 = tt_metal::CreateCircularBuffer(
                 program,
@@ -431,13 +420,10 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                src0_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
             uint32_t src1_cb_index = 1;
-            uint32_t src1_cb_addr = l1_valid_address;
-            l1_valid_address += in1_CB_size;
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             auto cb_src1 = tt_metal::CreateCircularBuffer(
                 program,
@@ -446,13 +432,10 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                src1_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
-            uint32_t output_cb_addr = l1_valid_address;
-            l1_valid_address += out_CB_size;
             auto cb_output = tt_metal::CreateCircularBuffer(
                 program,
                 device,
@@ -460,7 +443,6 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
@@ -472,14 +454,12 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
+                cb_output->address(),
                 tt::DataFormat::Float16_b
             );
 
-            TT_ASSERT(l1_valid_address < 1024 * 1024);
-
             std::vector<uint32_t> invalid = {INVALID};
-            tt_metal::WriteToDeviceL1(device, core, invalid, in0_mcast_sender_semaphore_addr);
+            tt_metal::WriteToDeviceL1(device, core, invalid, in0_mcast_sender_semaphore->address());
 
             tt_xy_pair mcast_sender = {(std::size_t) start_core_x, core.y};
             tt_xy_pair core_start = {(std::size_t) start_core_x + 1, core.y};
@@ -489,7 +469,7 @@ tt_metal::Program * create_program_mcast_in0(
             auto core_end_physical = device->worker_core_from_logical_core(core_end);
 
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t) in0_dram_addr, // in0_tensor_addr
+                (std::uint32_t)  in0_dram_addr, // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                 (std::uint32_t)  1, // in0_tensor_stride_w
                 (std::uint32_t)  K, // in0_tensor_stride_h
@@ -518,8 +498,8 @@ tt_metal::Program * create_program_mcast_in0(
                 (std::uint32_t)  num_cores_c - 1, // in0_mcast_num_dests
                 (std::uint32_t)  mcast_sender_phyiscal.x, //in0_mcast_sender_noc_x
                 (std::uint32_t)  mcast_sender_phyiscal.y, //in0_mcast_sender_noc_y
-                in0_mcast_sender_semaphore_addr,
-                in0_mcast_receiver_semaphore_addr
+                (std::uint32_t)  in0_mcast_sender_semaphore->address(),
+                (std::uint32_t)  in0_mcast_receiver_semaphore->address()
             };
 
             std::vector<uint32_t> writer_args = {
@@ -558,9 +538,7 @@ tt_metal::Program * create_program_mcast_in1(
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
-    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr,
-    uint32_t in1_mcast_sender_semaphore_addr,
-    uint32_t in1_mcast_receiver_semaphore_addr
+    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
 ) {
 
     tt_metal::Program *program = new tt_metal::Program();
@@ -657,11 +635,11 @@ tt_metal::Program * create_program_mcast_in1(
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             tt_xy_pair core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-            uint32_t l1_valid_address = 200 * 1024;
+
+            auto in1_mcast_sender_semaphore = tt_metal::CreateL1Buffer(program, device, core, sizeof(uint32_t));
+            auto in1_mcast_receiver_semaphore = tt_metal::CreateL1Buffer(program, device, core, sizeof(uint32_t));
 
             uint32_t src0_cb_index = 0;
-            uint32_t src0_cb_addr = l1_valid_address;
-            l1_valid_address += in0_CB_size;
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src0 = tt_metal::CreateCircularBuffer(
                 program,
@@ -670,13 +648,10 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                src0_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
             uint32_t src1_cb_index = 1;
-            uint32_t src1_cb_addr = l1_valid_address;
-            l1_valid_address += in1_CB_size;
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             auto cb_src1 = tt_metal::CreateCircularBuffer(
                 program,
@@ -685,13 +660,10 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                src1_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
-            uint32_t output_cb_addr = l1_valid_address;
-            l1_valid_address += out_CB_size;
             auto cb_output = tt_metal::CreateCircularBuffer(
                 program,
                 device,
@@ -699,7 +671,6 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
@@ -711,14 +682,12 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
+                cb_output->address(),
                 tt::DataFormat::Float16_b
             );
 
-            TT_ASSERT(l1_valid_address < 1024 * 1024);
-
             std::vector<uint32_t> invalid = {INVALID};
-            tt_metal::WriteToDeviceL1(device, core, invalid, in1_mcast_sender_semaphore_addr);
+            tt_metal::WriteToDeviceL1(device, core, invalid, in1_mcast_sender_semaphore->address());
 
             tt_xy_pair mcast_sender = {core.x, (std::size_t) start_core_y};
             tt_xy_pair core_start = {core.x, (std::size_t) start_core_y + 1};
@@ -728,7 +697,7 @@ tt_metal::Program * create_program_mcast_in1(
             auto core_end_physical = device->worker_core_from_logical_core(core_end);
 
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t) in0_dram_addr, // in0_tensor_addr
+                (std::uint32_t)  in0_dram_addr, // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                 (std::uint32_t)  1, // in0_tensor_stride_w
                 (std::uint32_t)  K, // in0_tensor_stride_h
@@ -757,8 +726,8 @@ tt_metal::Program * create_program_mcast_in1(
                 (std::uint32_t)  num_cores_r - 1, // in1_mcast_num_dests
                 (std::uint32_t)  mcast_sender_physical.x, //in1_mcast_sender_noc_x
                 (std::uint32_t)  mcast_sender_physical.y, //in1_mcast_sender_noc_y
-                (std::uint32_t)  in1_mcast_sender_semaphore_addr,
-                (std::uint32_t)  in1_mcast_receiver_semaphore_addr
+                (std::uint32_t)  in1_mcast_sender_semaphore->address(),
+                (std::uint32_t)  in1_mcast_receiver_semaphore->address()
             };
             std::vector<uint32_t> writer_args = {
                 (std::uint32_t) out_dram_addr, // out_tensor_addr
@@ -869,11 +838,6 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
     uint32_t in1_dram_addr = src1_dram_buffer->address();
     uint32_t out_dram_addr = dst_dram_buffer->address();
 
-    uint32_t in0_mcast_sender_semaphore_noc_addr = 109600;
-    uint32_t in0_mcast_receiver_semaphore_noc_addr = 109632;
-    uint32_t in1_mcast_sender_semaphore_noc_addr = 109664;
-    uint32_t in1_mcast_receiver_semaphore_noc_addr = 109696;
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -887,9 +851,7 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
             in0_block_w,
             out_subblock_h, out_subblock_w,
             per_core_M, per_core_N,
-            in0_dram_addr, in1_dram_addr, out_dram_addr,
-            in0_mcast_sender_semaphore_noc_addr, in1_mcast_sender_semaphore_noc_addr,
-            in0_mcast_receiver_semaphore_noc_addr, in1_mcast_receiver_semaphore_noc_addr
+            in0_dram_addr, in1_dram_addr, out_dram_addr
         );
     } else if (core_range.x > 1) {
         program = mcast_reuse_generalized_helpers::create_program_mcast_in0(
@@ -900,9 +862,7 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
             in0_block_w,
             out_subblock_h, out_subblock_w,
             per_core_M, per_core_N,
-            in0_dram_addr, in1_dram_addr, out_dram_addr,
-            in0_mcast_sender_semaphore_noc_addr,
-            in0_mcast_receiver_semaphore_noc_addr
+            in0_dram_addr, in1_dram_addr, out_dram_addr
         );
     } else {
         program = mcast_reuse_generalized_helpers::create_program_mcast_in1(
@@ -913,9 +873,7 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
             in0_block_w,
             out_subblock_h, out_subblock_w,
             per_core_M, per_core_N,
-            in0_dram_addr, in1_dram_addr, out_dram_addr,
-            in1_mcast_sender_semaphore_noc_addr,
-            in1_mcast_receiver_semaphore_noc_addr
+            in0_dram_addr, in1_dram_addr, out_dram_addr
         );
     }
 

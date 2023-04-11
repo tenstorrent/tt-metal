@@ -87,11 +87,8 @@ tt_metal::Program * create_program(
             int core_idx_x = num_blocks_read % num_cores_x;
             int core_idx_y = num_blocks_read / num_cores_x;
             tt_xy_pair core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
-            uint32_t l1_valid_address = 200 * 1024;
 
             uint32_t src0_cb_index = 0;
-            uint32_t src0_cb_addr = l1_valid_address;
-            l1_valid_address += in0_CB_size;
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src0 = tt_metal::CreateCircularBuffer(
                 program,
@@ -100,13 +97,10 @@ tt_metal::Program * create_program(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                src0_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
             uint32_t src1_cb_index = 1;
-            uint32_t src1_cb_addr = l1_valid_address;
-            l1_valid_address += in1_CB_size;
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             auto cb_src1 = tt_metal::CreateCircularBuffer(
                 program,
@@ -115,13 +109,10 @@ tt_metal::Program * create_program(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                src1_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
-            uint32_t output_cb_addr = l1_valid_address;
-            l1_valid_address += out_CB_size;
             auto cb_output = tt_metal::CreateCircularBuffer(
                 program,
                 device,
@@ -129,7 +120,6 @@ tt_metal::Program * create_program(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
                 tt::DataFormat::Float16_b
             );
 
@@ -141,11 +131,9 @@ tt_metal::Program * create_program(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
+                cb_output->address(),
                 tt::DataFormat::Float16_b
             );
-
-            TT_ASSERT(l1_valid_address < 1024 * 1024);
 
             // Create reader and writer kernels per core
             auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
@@ -178,7 +166,7 @@ tt_metal::Program * create_program(
 
             // Write runtime args to device
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t) in0_dram_addr, // in0_tensor_addr
+                (std::uint32_t)  in0_dram_addr, // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * output_idx_y, // in0_tensor_start_tile_id
                 (std::uint32_t)  1, // in0_tensor_stride_w
                 (std::uint32_t)  K, // in0_tensor_stride_h

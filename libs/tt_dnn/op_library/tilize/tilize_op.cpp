@@ -55,7 +55,6 @@ Tensor tilize(const Tensor &a) {
     auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
-    uint32_t src0_cb_addr = 200 * 1024;
     uint32_t num_input_tiles = stick_s / 32;
 
     auto cb_src0 = tt_metal::CreateCircularBuffer(
@@ -65,12 +64,10 @@ Tensor tilize(const Tensor &a) {
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        src0_cb_addr,
         DataFormat::Float16_b
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t output_cb_addr = 400 * 1024;
     uint32_t num_output_tiles = stick_s / 32;
 
     auto cb_output = tt_metal::CreateCircularBuffer(
@@ -80,7 +77,6 @@ Tensor tilize(const Tensor &a) {
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        output_cb_addr,
         DataFormat::Float16_b
     );
 

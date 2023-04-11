@@ -35,7 +35,6 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
         0, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
-        200*1024, // cb addr
         DataFormat::Float16_b);
     auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
@@ -43,7 +42,6 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
         1, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
-        300*1024,
         DataFormat::Float16_b);
 
     tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(

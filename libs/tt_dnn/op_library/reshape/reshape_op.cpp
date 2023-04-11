@@ -1,6 +1,6 @@
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "common/test_tiles.hpp"
-
+#include <algorithm>
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
 
@@ -45,7 +45,6 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
 
     uint32_t single_tile_size = 2 * TILE_HW; // Assuming bfloat16 dataformat
     uint32_t src0_cb_index = 0;
-    uint32_t src0_cb_addr = 200 * 1024;
     uint32_t num_input_tiles = (a.shape()[1] * a.shape()[2] * a.shape()[3] / TILE_HW);
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
@@ -54,12 +53,10 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        src0_cb_addr,
         DataFormat::Float16_b
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t output_cb_addr = 400 * 1024;
     uint32_t num_output_tiles = (C * H * W / TILE_HW);
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
@@ -68,7 +65,6 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        output_cb_addr,
         DataFormat::Float16_b
     );
 
