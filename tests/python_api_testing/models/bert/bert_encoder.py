@@ -112,7 +112,7 @@ def run_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc):
     (
         ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99),
         ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 1, 128, True, 0.99)
+        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, 0.99)
     ),
 )
 def test_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc):

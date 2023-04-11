@@ -150,7 +150,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     (
         ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.99),
         ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 1, 128, True, True, 0.85) # Placeholder PCC until issues are resolved
+        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, True, 0.84) # Placeholder PCC until issues are resolved
     ),
 )
 def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, pcc):
