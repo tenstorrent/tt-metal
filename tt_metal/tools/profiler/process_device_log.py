@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 
 import plotly.graph_objects as go
-from dash import Dash, dcc, html, Input, Output
+from dash import Dash, dcc, html, Input, Output, State
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -30,16 +30,33 @@ def generate_analysis_table(analysisData, setup):
     stats = setup.displayStats
     return html.Div(
         [
-            html.H6("Stats Table"),
+            html.H6("Duration Stats Table"),
+            html.P("Duration is the period between two recorded events"),
+            html.P(
+                "T0 is the the 0 refrence point, corresponding to the earliest core that reports a BRISC FW start marker"
+            ),
             html.Table(
                 # Header
-                [html.Tr([html.Th("Type")] + [html.Th(f"{stat} [cycles]") for stat in stats])]
+                [
+                    html.Tr(
+                        [html.Th("Duration Name")]
+                        +
+                        # TODO(MO): Issue 799
+                        # [html.Th("Analysis Type")] +\
+                        # [html.Th("Across")] +\
+                        [html.Th(f"{stat} [cycles]") if stat not in ["Count"] else html.Th(f"{stat}") for stat in stats]
+                    )
+                ]
                 +
                 # Body
                 [
                     html.Tr(
                         [html.Td(f"{analysis}")]
-                        + [
+                        +
+                        # TODO(MO): Issue 799
+                        # [html.Td(f"{setup.timerAnalysis[analysis]['type']}")] +\
+                        # [html.Td(f"{setup.timerAnalysis[analysis]['across']}")] +\
+                        [
                             html.Td(f"{analysisData[analysis]['stats'][stat]:,.0f}")
                             if stat in analysisData[analysis]["stats"].keys()
                             else html.Td("-")
@@ -108,7 +125,7 @@ class TupleEncoder(json.JSONEncoder):
 
 def print_json(devicesData, setup):
     with open(f"{setup.outputFolder}/{setup.deviceAnalysisData}", "w") as devicesDataJson:
-        json.dump({"data": devicesData, "setup": setup}, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys = True)
+        json.dump({"data": devicesData, "setup": setup}, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys=True)
 
 
 def print_rearranged_csv(devicesData, setup, freqText=None):
@@ -297,6 +314,13 @@ def import_device_profile_log(logPath):
     return devicesData
 
 
+def is_new_launch(tsRisc):
+    timerID, tsValue, risc = tsRisc
+    if risc == "BRISC" and timerID == 1:
+        return True
+    return False
+
+
 def risc_to_core_timeseries(devicesData):
     for chipID, deviceData in devicesData["devices"].items():
         for core, coreData in deviceData["cores"].items():
@@ -306,7 +330,17 @@ def risc_to_core_timeseries(devicesData):
                     tmpTimeseries.append(ts + (risc,))
 
             tmpTimeseries.sort(key=lambda x: x[1])
-            coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries}
+
+            launches = []
+            for ts in tmpTimeseries:
+                timerID, tsValue, risc = ts
+                if is_new_launch(ts):
+                    launches.append([ts])
+                else:
+                    if len(launches) > 0:
+                        launches[-1].append(ts)
+
+            coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries, "launches": launches}
 
 
 def core_to_device_timeseries(devicesData):
@@ -355,7 +389,7 @@ def timeseries_to_durations(deviceData):
 
 
 def plotData_to_timelineXVals(deviceData, plotCores, setup):
-    plotRiscs = setup.riscsData.keys()
+    plotRiscs = setup.riscs
     xValsDict = {risc: [] for risc in plotRiscs}
     traces = {risc: [] for risc in plotRiscs}
 
@@ -560,38 +594,71 @@ def determine_conditions(timerID, metaData, analysis):
     return currStart, currEnd, desStart, desEnd
 
 
-def timeseries_analysis(riscData, name, analysis):
+def first_last_analysis(timeseries, analysis):
+    durations = []
+    startFound = None
+    for index, (timerID, timestamp, *metaData) in enumerate(timeseries):
+        currStart, currEnd, desStart, desEnd = determine_conditions(timerID, metaData, analysis)
+        if not startFound:
+            if currStart == desStart:
+                startFound = (index, timerID, timestamp)
+                break
+
+    if startFound:
+        startIndex, startID, startTS = startFound
+        for i in range(len(timeseries) - 1, startIndex, -1):
+            timerID, timestamp, *metaData = timeseries[i]
+            currStart, currEnd, desStart, desEnd = determine_conditions(timerID, metaData, analysis)
+            if currEnd == desEnd:
+                durations.append(
+                    dict(start=startTS, end=timestamp, durationType=(startID, timerID), diff=timestamp - startTS)
+                )
+                break
+
+    return durations
+
+
+def session_first_last_analysis(riscData, analysis):
+    return first_last_analysis(riscData["timeseries"], analysis)
+
+
+def launch_first_last_analysis(riscData, analysis):
+    durations = []
+    for launch in riscData["launches"]:
+        durations += first_last_analysis(launch, analysis)
+    return durations
+
+
+def adjacent_LF_analysis(riscData, analysis):
     timeseries = riscData["timeseries"]
-    tmpList = []
+    durations = []
     startFound = None
     for timerID, timestamp, *metaData in timeseries:
         currStart, currEnd, desStart, desEnd = determine_conditions(timerID, metaData, analysis)
         if not startFound:
             if currStart == desStart:
                 startFound = (timerID, timestamp)
-                if analysis["type"] == "first_last":
-                    break
         else:
             if currEnd == desEnd:
                 startID, startTS = startFound
-                tmpList.append(
+                durations.append(
                     dict(start=startTS, end=timestamp, durationType=(startID, timerID), diff=timestamp - startTS)
                 )
                 startFound = None
             elif currStart == desStart:
                 startFound = (timerID, timestamp)
 
-    if startFound and analysis["type"] == "first_last":
-        for i in range(len(timeseries) - 1, 0, -1):
-            timerID, timestamp, *metaData = timeseries[i]
-            currStart, currEnd, desStart, desEnd = determine_conditions(timerID, metaData, analysis)
-            if currEnd == desEnd:
-                startID, startTS = startFound
-                tmpList.append(
-                    dict(start=startTS, end=timestamp, durationType=(startID, timerID), diff=timestamp - startTS)
-                )
-                startFound = None
-                break
+    return durations
+
+
+def timeseries_analysis(riscData, name, analysis):
+    tmpList = []
+    if analysis["type"] == "adjacent":
+        tmpList = adjacent_LF_analysis(riscData, analysis)
+    elif analysis["type"] == "session_first_last":
+        tmpList = session_first_last_analysis(riscData, analysis)
+    elif analysis["type"] == "launch_first_last":
+        tmpList = launch_first_last_analysis(riscData, analysis)
 
     tmpDF = pd.DataFrame(tmpList)
     tmpDict = {}
@@ -614,15 +681,6 @@ def timeseries_analysis(riscData, name, analysis):
             riscData["analysis"] = {name: tmpDict}
         else:
             riscData["analysis"][name] = tmpDict
-
-
-def risc_analysis(name, analysis, devicesData):
-    for chipID, deviceData in devicesData["devices"].items():
-        for core, coreData in deviceData["cores"].items():
-            if core != "DEVICE":
-                for risc, riscData in coreData["riscs"].items():
-                    if risc == analysis["start"]["risc"]:
-                        timeseries_analysis(riscData, name, analysis)
 
 
 def core_analysis(name, analysis, devicesData):
@@ -694,15 +752,60 @@ def import_log_run_stats(setup=plot_setup.default_setup()):
     core_to_device_timeseries(devicesData)
 
     for name, analysis in sorted(setup.timerAnalysis.items()):
-        if analysis["across"] == "risc":
-            risc_analysis(name, analysis, devicesData)
-        elif analysis["across"] == "core":
+        if analysis["across"] == "core":
             core_analysis(name, analysis, devicesData)
         elif analysis["across"] == "device":
             device_analysis(name, analysis, devicesData)
 
     generate_device_level_summary(devicesData)
     return devicesData
+
+
+def timeline_annotations(yVals, deviceData, fig, setup):
+    annotateLaunches = False
+    for core in yVals:
+        assert core in deviceData["cores"].keys(), "Cores is and y axis labels mismatch"
+        if "launches" in deviceData["cores"][core]["riscs"]["TENSIX"].keys():
+            launches = deviceData["cores"][core]["riscs"]["TENSIX"]["launches"]
+            if len(launches) > 1:
+                annotateLaunches = True
+
+    if annotateLaunches:
+        for core in yVals:
+            assert core in deviceData["cores"].keys(), "Cores is and y axis labels mismatch"
+            if "launches" in deviceData["cores"][core]["riscs"]["TENSIX"].keys():
+                launches = deviceData["cores"][core]["riscs"]["TENSIX"]["launches"]
+                for i, launch in enumerate(launches):
+                    timerID, tsValueStart, risc = launch[0]
+                    timerID, tsValueEnd, risc = launch[-1]
+                    width = tsValueEnd - tsValueStart
+                    fig.add_annotation(
+                        x=tsValueStart - deviceData["metadata"]["global_min"]["ts"],
+                        y=[core, "BRISC"],
+                        text=f"Launch {i+1}",
+                        xanchor="left",
+                        xshift=-2,
+                        ax=0,
+                        ay=30,
+                    )
+                    # TODO: Annotations are actually pretty slow
+                    # fig.add_annotation(x=tsValueEnd - deviceData["metadata"]["global_min"]["ts"], y=[core, "BRISC"],
+                    # text=f"",
+                    # xanchor="left",
+                    # xshift=2,
+                    # ax=0,
+                    # ay=30)
+
+    fig.add_annotation(
+        x=0,
+        y=[deviceData["metadata"]["global_min"]["core"], "BRISC"],
+        text=f"T0",
+        xanchor="left",
+        bgcolor="rgba(255,255,0,1)",
+        ax=0,
+        ay=0,
+    )
+    return fig
 
 
 def generate_plots(devicesData, setup):
@@ -714,7 +817,8 @@ def generate_plots(devicesData, setup):
 
         xValsDict = plotData_to_timelineXVals(deviceData, yVals, setup)
         key = f"Chip {chipID} Cores"
-        timelineFigs[key] = timeline_plot(yVals, xValsDict, setup)
+        fig = timeline_plot(yVals, xValsDict, setup)
+        timelineFigs[key] = timeline_annotations(yVals, deviceData, fig, setup)
 
         # TODO: Very inefficient in large datasets. Will need to draw manually if deemed useful
         # xValsDict = plotData_to_timelineXVals(deviceData, ['DEVICE'], setup)
@@ -739,6 +843,35 @@ def run_dashbaord_webapp(devicesData, timelineFigs, setup):
             statTables[key] = generate_analysis_table(deviceData["cores"]["DEVICE"]["analysis"], setup)
     external_stylesheets = ["https://codepen.io/chriddyp/pen/bWLwgP.css"]
     app = Dash(__name__, external_stylesheets=external_stylesheets)
+
+    plotsDiv = []
+    for num, item in enumerate(sorted(set(timelineFigs.keys()) | set(statTables.keys()))):
+
+        plotRiscs = set()
+        for marker in timelineFigs[item]["data"]:
+            if marker["y"][-1][0] in setup.riscs:
+                plotRiscs.add(marker["y"][-1][0])
+
+        plotsDiv += [
+            html.Div(
+                [
+                    html.H5(f"{item}:"),
+                    statTables[item] if item in statTables.keys() else html.Div([]),
+                    dcc.Graph(id=f"figure-{num}", figure=timelineFigs[item])
+                    if item in timelineFigs.keys()
+                    else html.Div([]),
+                    dcc.Store(
+                        id=f"figure-height-{num}",
+                        data=dict(
+                            height=timelineFigs[item]["layout"]["height"],
+                            perRiscHeight=(setup.plotPerCoreHeight) / len(plotRiscs),
+                            baseHeight=setup.plotBaseHeight,
+                        ),
+                    ),
+                ]
+            )
+        ]
+
     app.layout = html.Div(
         [html.H1("Device Profiler Dashboard", id="main-header")]
         + [
@@ -749,17 +882,32 @@ def run_dashbaord_webapp(devicesData, timelineFigs, setup):
             html.Br(),
             html.Br(),
         ]
-        + [
-            html.Div(
-                [
-                    html.H5(f"{item}:"),
-                    statTables[item] if item in statTables.keys() else html.Div([]),
-                    dcc.Graph(figure=timelineFigs[item]) if item in timelineFigs.keys() else html.Div([]),
-                ]
-            )
-            for item in sorted(set(timelineFigs.keys()) | set(statTables.keys()))
-        ]
+        + plotsDiv
     )
+
+    for num, item in enumerate(sorted(set(timelineFigs.keys()) | set(statTables.keys()))):
+        app.clientside_callback(
+            """
+            function (layoutData, fig, layoutDefaults) {
+                newFig = JSON.parse(JSON.stringify(fig))
+                if (layoutData['yaxis.autorange'] !== 'undefined' && layoutData['yaxis.autorange'] === true)
+                {
+                    newFig['layout']['height'] = layoutDefaults['height']
+                }
+                else if (layoutData['yaxis.range[0]'] !== 'undefined')
+                {
+                    newFig['layout']['height'] = layoutDefaults['perRiscHeight']*
+                        (layoutData['yaxis.range[1]'] - layoutData['yaxis.range[0]'])
+                        + layoutDefaults['baseHeight']
+                }
+                return newFig
+            }
+            """,
+            Output(f"figure-{num}", "figure"),
+            [Input(f"figure-{num}", "relayoutData")],  # this triggers the event
+            [State(f"figure-{num}", "figure"), State(f"figure-height-{num}", "data")],
+            prevent_initial_call=True,
+        )
 
     @app.callback(Output("btn-refresh", "children"), Input("btn-refresh", "n_clicks"), prevent_initial_call=True)
     def refresh_callback(n_clicks):

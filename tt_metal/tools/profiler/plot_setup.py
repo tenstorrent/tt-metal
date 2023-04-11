@@ -3,63 +3,69 @@ from merge_meta_class import MergeMetaclass
 
 class default_setup(metaclass=MergeMetaclass):
     timerAnalysis = {
-        "FW start": {
-            "across": "risc",
+        "T0 -> BRISC FW start": {
+            "across": "core",
             "type": "adjacent",
             "start": {"risc": "BRISC", "timerID": 0},
             "end": {"risc": "BRISC", "timerID": 1},
         },
         "TRISC0 kernel start -> TRISC0 kernel end": {
-            "across": "risc",
+            "across": "core",
             "type": "adjacent",
             "start": {"risc": "TRISC_0", "timerID": 2},
             "end": {"risc": "TRISC_0", "timerID": 3},
         },
         "TRISC1 kernel start -> TRISC1 kernel end": {
-            "across": "risc",
+            "across": "core",
             "type": "adjacent",
             "start": {"risc": "TRISC_1", "timerID": 2},
             "end": {"risc": "TRISC_1", "timerID": 3},
         },
         "TRISC2 kernel start -> TRISC2 kernel end": {
-            "across": "risc",
+            "across": "core",
             "type": "adjacent",
             "start": {"risc": "TRISC_2", "timerID": 2},
             "end": {"risc": "TRISC_2", "timerID": 3},
         },
         "BRISC kernel start -> BRISC kernel end": {
-            "across": "risc",
+            "across": "core",
             "type": "adjacent",
             "start": {"risc": "BRISC", "timerID": 2},
             "end": {"risc": "BRISC", "timerID": 3},
         },
         "NCRISC kernel start -> NCRISC kernel end": {
-            "across": "risc",
+            "across": "core",
             "type": "adjacent",
             "start": {"risc": "NCRISC", "timerID": 2},
             "end": {"risc": "NCRISC", "timerID": 3},
         },
-        "Launch delta": {
+        "ANY RISC FW start -> ANY RISC FW end": {
+            "across": "core",
+            "type": "launch_first_last",
+            "start": {"risc": "ANY", "timerID": 1},
+            "end": {"risc": "ANY", "timerID": 4},
+        },
+        "ANY RISC FW end -> BRISC FW start": {
             "across": "core",
             "type": "adjacent",
             "start": {"risc": "ANY", "timerID": 4},
             "end": {"risc": "BRISC", "timerID": 1},
         },
-        "Core end": {
+        "T0 -> ANY RISC FW end": {
             "across": "core",
-            "type": "first_last",
+            "type": "session_first_last",
             "start": {"risc": "BRISC", "timerID": 0},
             "end": {"risc": "ANY", "timerID": 4},
         },
-        "Core start -> Core end": {
+        "BRISC FW start -> ANY RISC FW end": {
             "across": "core",
-            "type": "first_last",
+            "type": "session_first_last",
             "start": {"risc": "ANY", "timerID": 1},
             "end": {"risc": "ANY", "timerID": 4},
         },
-        "Device start -> Device end": {
+        "T0 -> ANY CORE ANY RISC FW end": {
             "across": "device",
-            "type": "first_last",
+            "type": "session_first_last",
             "start": {"core": "ANY", "risc": "ANY", "timerID": 1},
             "end": {"core": "ANY", "risc": "ANY", "timerID": 4},
         },
@@ -90,7 +96,7 @@ class default_setup(metaclass=MergeMetaclass):
     displayStats = ["Count", "Average", "Max", "Median", "Min"]
 
     plotBaseHeight = 200
-    plotPerCoreHeight = 120
+    plotPerCoreHeight = 100
 
     webappPort = 8050
 
@@ -175,6 +181,7 @@ class test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast(default_setup):
             "end": {"risc": "BRISC", "timerID": 3},
         },
     }
+
 
 class test_full_buffer(default_setup):
     timerAnalysis = {
