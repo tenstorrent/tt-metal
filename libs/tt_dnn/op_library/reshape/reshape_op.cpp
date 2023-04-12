@@ -36,17 +36,20 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
     TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device");
     TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
     TT_ASSERT(a.volume() == N*C*H*W, "New shape volume must match old shape volume");
+    TT_ASSERT(a.shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0, "Operand/target width must be a multiple of 32");
+
+    uint32_t num_old_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
+    uint32_t num_new_sticks = N*C*H;
+    TT_ASSERT(num_old_sticks % TILE_HEIGHT == 0 && num_new_sticks % TILE_HEIGHT == 0, "Operand/target number of rows must be a multiple of 32");
 
      // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
+    std::array<uint32_t, 4> output_shape = {uint32_t(N), uint32_t(C), uint32_t(H), uint32_t(W)};
+    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
 
-    uint32_t num_old_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
     uint32_t old_stick_size = a.shape()[3] * 2; // Assuming bfloat16 data format
-
-    uint32_t num_new_sticks = N*C*H;
     uint32_t new_stick_size = W * 2; // Assuming bfloat16 data format
 
     uint32_t single_tile_size = 2 * TILE_HW; // Assuming bfloat16 dataformat
@@ -178,7 +181,6 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
 
     tt_metal::LaunchKernels(device, program);
 
-    output.reshape(N, C, H, W);
     delete program;
     return output;
 }
