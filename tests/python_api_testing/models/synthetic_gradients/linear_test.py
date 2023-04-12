@@ -13,8 +13,8 @@ from torchvision import transforms, datasets
 import libs
 from libs import tt_lib as ttl
 
-from models.utility_functions import tilize_to_list, untilize
-from sweep_tests.comparison_funcs import comp_pcc, comp_allclose
+from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
+
 
 def ttLinear(weight, bias):
 
@@ -65,9 +65,9 @@ def run_linear_test(device, in_features, out_features):
     output_tt = untilize(torch.Tensor(output_tt.to(host).data()).reshape(output_tt.shape()))
     output_tt = output_tt[0, 0, 0, :]
 
-    test_result = comp_pcc(output_torch, output_tt)
+    test_results, output = comp_allclose_and_pcc(output_torch, output_tt)
 
-    print('\n\n', test_result, '\n\n')
+    print('\n\n', 'atol/rtol:', test_results, '| output:', output, '\n\n')
 
 
 def test_linear_test():

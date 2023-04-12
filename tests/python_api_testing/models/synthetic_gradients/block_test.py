@@ -12,8 +12,7 @@ from torchvision import transforms, datasets
 
 from libs import tt_lib as ttl
 
-from models.utility_functions import tilize_to_list, untilize
-from sweep_tests.comparison_funcs import comp_pcc, comp_allclose
+from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
 epsilon = 1e-5
 
@@ -38,11 +37,8 @@ def torchLinear(in_features, out_features, weight, bias):
 
 def ttBatchnorm1d_inference(gamma, beta, running_mean, running_var, epsilon):
 
-    BCHW = ttl.tensor.BcastOpDim.HW
-    BCADD = ttl.tensor.BcastOpMath.ADD
-
     def batchnorm1d_inference_(X):
-        var_plus_eps = ttl.tensor.bcast(running_var, epsilon, BCADD, BCHW)
+        var_plus_eps = ttl.tensor.add(epsilon, running_var)
         sqrt_var = ttl.tensor.sqrt(var_plus_eps)
         sqrt_inv = ttl.tensor.recip(sqrt_var)
         x_minus_mean = ttl.tensor.sub(X, running_mean)
@@ -134,7 +130,12 @@ def run_block_inference(device, in_features, out_features):
     tilized_running_var_tt = tilize_to_list(running_var_bn_tt)
     running_var_tt = ttl.tensor.Tensor(tilized_running_var_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
-    epsilon_tt = ttl.tensor.Tensor([epsilon] + [0 for _ in range(32 * 32 - 1)], [1, 1, 32, 32], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    epsilon_torch = torch.tensor([[[out_features*[epsilon]]]])
+    epsilon_tor = torch.zeros(1, 1, 32, out_features)
+    epsilon_tor[:, :, :1, :] = epsilon_torch
+    tilized_eps_tt= tilize_to_list(epsilon_tor)
+    eps_tt = ttl.tensor.Tensor(tilized_eps_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
+
 
     # run through the models
     # torch
@@ -145,7 +146,7 @@ def run_block_inference(device, in_features, out_features):
     # tt
     linear_tt = ttLinear(weight_lin_tt, bias_lin_tt)
     output_lin_tt = linear_tt(inputs_tt)
-    bn_tt =  ttBatchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, epsilon_tt)
+    bn_tt =  ttBatchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, eps_tt)
     output_bn_tt = bn_tt(output_lin_tt)
     output_full_tt = ttl.tensor.relu(output_bn_tt)
 
@@ -162,20 +163,20 @@ def run_block_inference(device, in_features, out_features):
     print('pytorch_linear_out:', output_lin_torch[0][0:10])
     print('tt_linear_out:', output_lin_tt_untilized[0:10])
 
-    liner_test_result = comp_pcc(output_lin_torch[0], output_lin_tt_untilized)
-    print('\n\n', liner_test_result, '\n\n')
+    liner_test_result, output = comp_allclose_and_pcc(output_lin_torch[0], output_lin_tt_untilized)
+    print('\n\n', 'atol/rtol:', liner_test_result, '| output:', output, '\n\n')
 
     print('pytorch_bn_out:', output_bn_torch[0][0:10])
     print('tt_bn_out:', output_bn_tt_untilized[0:10])
 
-    bn_test_result = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
-    print('\n\n', bn_test_result, '\n\n')
+    bn_test_result, output = comp_allclose_and_pcc(output_bn_torch[0], output_bn_tt_untilized)
+    print('\n\n', 'atol/rtol:', bn_test_result, '| output:', output, '\n\n')
 
     print('pytorch_full_out:', output_full_torch[0][0:10])
     print('tt_full_out:', output_full_tt_untilized[0:10])
 
-    full_test_result = comp_pcc(output_full_torch[0], output_full_tt_untilized)
-    print('\n\n', full_test_result, '\n\n')
+    full_test_result, output = comp_allclose_and_pcc(output_full_torch[0], output_full_tt_untilized)
+    print('\n\n', 'atol/rtol:', full_test_result, '| output:', output, '\n\n')
 
 def test_run_block_inference():
     # Initialize the device

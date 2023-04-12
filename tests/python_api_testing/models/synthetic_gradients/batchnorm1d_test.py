@@ -10,22 +10,17 @@ sys.path.append(f"{f}/../../../..")
 import torch
 from torch import nn
 from torchvision import transforms, datasets
-
 import libs
-from libs import tt_lib as ttl
 
-from utility_functions import tilize_to_list, untilize, comp_pcc, comp_allclose
-#from sweep_tests.comparison_funcs import comp_pcc, comp_allclose
+from libs import tt_lib as ttl
+from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
 epsilon = 1e-5
 
 def batchnorm1d_inference(gamma, beta, running_mean, running_var, epsilon):
 
-    BCHW = ttl.tensor.BcastOpDim.HW
-    BCADD = ttl.tensor.BcastOpMath.ADD
-
     def batchnorm1d_inference_(X):
-        var_plus_eps = ttl.tensor.bcast(running_var, epsilon, BCADD, BCHW)
+        var_plus_eps = ttl.tensor.add(epsilon, running_var)
         sqrt_var = ttl.tensor.sqrt(var_plus_eps)
         sqrt_inv = ttl.tensor.recip(sqrt_var)
         x_minus_mean = ttl.tensor.sub(X, running_mean)
@@ -54,7 +49,6 @@ def run_btchnorm_inference(device, bn_size):
     host = ttl.device.GetHost()
 
     inputs = torch.FloatTensor(1, bn_size).uniform_(-1., 1.).requires_grad_(True)
-
     # torch
     bn_torch = PytorchBatchNorm1D(bn_size)
     bn_torch.eval()
@@ -94,7 +88,11 @@ def run_btchnorm_inference(device, bn_size):
     tilized_running_var_tt= tilize_to_list(running_var_bn_tt)
     running_var_tt = ttl.tensor.Tensor(tilized_running_var_tt, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
-    epsilon_tt = ttl.tensor.Tensor([epsilon] + [0 for _ in range(32 * 32 - 1)], [1, 1, 32, 32], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    epsilon_torch = torch.tensor([[[bn_size*[epsilon]]]])
+    epsilon_tor = torch.zeros(1, 1, 32, bn_size)
+    epsilon_tor[:, :, :1, :] = epsilon_torch
+    tilized_eps_tt= tilize_to_list(epsilon_tor)
+    eps_tt = ttl.tensor.Tensor(tilized_eps_tt, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
     inputs_bn_src = inputs.view(1, 1, 1, bn_size)
     inputs_bn_tt = torch.zeros(1, 1, 32, bn_size)
@@ -102,10 +100,9 @@ def run_btchnorm_inference(device, bn_size):
     tilized_inputs_tt = tilize_to_list(inputs_bn_tt)
     X_tt = ttl.tensor.Tensor(tilized_inputs_tt, [1, 1,  32, bn_size], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
-
     # run through models
     output_bn_torch = bn_torch(inputs)
-    bn_tt =  batchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, epsilon_tt)
+    bn_tt =  batchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, eps_tt)
     output_bn_tt = bn_tt(X_tt)
 
     output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.to(host).data()).reshape(output_bn_tt.shape()))
@@ -114,12 +111,10 @@ def run_btchnorm_inference(device, bn_size):
     print('pytorch_out:', output_bn_torch[0][0:10])
     print('tt_out:', output_bn_tt_untilized[0:10])
 
-    pcc_result = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
-    print('\n\n', 'pcc:', pcc_result, '\n\n')
+    test_results, output = comp_allclose_and_pcc(output_bn_torch[0], output_bn_tt_untilized)
 
-    allclose_result = comp_allclose(output_bn_torch[0], output_bn_tt_untilized)
+    print('\n\n', 'atol/rtol:', test_results, '| pcc:', output, '\n\n')
 
-    print('\n\n','atol/rtol:', allclose_result, '\n\n')
 
 def test_batchnorm_inference():
     # Initialize the device
