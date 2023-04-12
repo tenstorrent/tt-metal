@@ -45,12 +45,44 @@ CopyDescriptor
     // to write this copy descriptor
     uint32_t l1_addr;
 
+    /*
+        How many reads the dispatch core performs to bring
+        things into local L1. Useful for reading in kernel
+        hexes, runtime args, cb configs, etc.
+    */
     uint32_t num_reads;
+
+    /*
+        Vector of tuples containing src (noc addr),
+        dst (local l1 addr), and num bytes in transfer.
+    */
     const vector<tuple<uint64_t, uint32_t, uint32_t>> reads;
+
+    /*
+        How many many writes the dispatch core performs. Useful
+        for writing hexes, runtime args, etc. to a remote core.
+    */
     uint32_t num_writes;
     vector<tuple<uint32_t, uint64_t, uint32_t>> writes;
+
+    /*
+        How many cores to deassert/assert.
+    */
     uint32_t num_resets;
+
+    /*
+        In here we write the address of the dispatch core.
+        To expand on this, think of this as letting
+        the worker cores know who sent them data so that
+        the worker cores can let the dispatcher know when
+        they've finished.
+    */
     vector<uint64_t> notifies;
+
+    /*
+        The registers in which we write deassert/assert reset masks
+        to launch the worker cores.
+    */
     vector<uint64_t> resets;
 };
 
