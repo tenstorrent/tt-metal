@@ -57,11 +57,18 @@
       file:
         path: infra_testing/scripts
         state: directory
-    - name: Copy script to host
+    - name: Copy hugepages script to host
       ansible.builtin.copy:
         src: ../scripts/setup_hugepages.py
         dest: "infra_testing/scripts/setup_hugepages.py"
-
+    - name: Copy driver install script to host
+      ansible.builtin.copy:
+        src: ../assets/tt_driver/install_ttkmd.bash
+        dest: "infra_testing/scripts/install_ttkmd.bash"
+    - name: Copy flash scripts to host
+      ansible.builtin.copy:
+        src: ../assets/tt_flash/
+        dest: "infra_testing/scripts/tt_flash"
 
 - name: Install SMI (GRAYSKULL ONLY)
   hosts: all

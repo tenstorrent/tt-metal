@@ -1,0 +1,13 @@
+---
+- name: Install drivers
+  hosts: all
+  tasks:
+    - name: Make TT driver installer executable
+      become: yes
+      file:
+        path: "infra_testing/scripts/install_ttkmd.bash"
+        mode: u+x
+    - name: Install TT driver
+      become: yes
+      command:
+        cmd: infra_testing/scripts/install_ttkmd.bash

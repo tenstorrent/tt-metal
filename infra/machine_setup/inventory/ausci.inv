@@ -1,0 +1,4 @@
+# 172.27.44.124 ansible_user=ubuntu
+172.27.44.10 ansible_user=ubuntu
+172.27.44.244 ansible_user=ubuntu
+172.27.44.174 ansible_user=ubuntu
