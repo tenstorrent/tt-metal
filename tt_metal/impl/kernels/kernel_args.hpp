@@ -58,8 +58,8 @@ struct ComputeKernelArgsHash {
     tt_xy_pair logical_core;
 };
 
-struct ComputeKernelDefinesHash {
-    ComputeKernelDefinesHash(const tt_xy_pair &core) : logical_core{core} { }
+struct KernelDefinesHash {
+    KernelDefinesHash(const tt_xy_pair &core) : logical_core{core} { }
 
     size_t operator()(const std::map<std::string, std::string> &c_defines) const;
 

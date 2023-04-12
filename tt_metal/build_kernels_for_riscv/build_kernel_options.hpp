@@ -27,6 +27,8 @@ class build_kernel_for_riscv_options_t
     std::string ncrisc_kernel_file_name;
 
     std::map<std::string, std::string> hlk_defines; // preprocessor defines for HLK
+    std::map<std::string, std::string> ncrisc_defines;
+    std::map<std::string, std::string> brisc_defines;
 
     build_kernel_for_riscv_options_t(std::string type, std::string name);
 

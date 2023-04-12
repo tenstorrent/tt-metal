@@ -110,7 +110,7 @@ size_t ComputeKernelArgsHash::operator()(const ComputeKernelArgs &ck_args) const
         return tt::utils::vector_hash<uint32_t>{}(ck_args.compile_time_args(logical_core));
 }
 
-size_t ComputeKernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {
+size_t KernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {
     size_t hash_value = 0;
     for (auto it = c_defines.begin(); it != c_defines.end(); ++it)
         boost::hash_combine(hash_value, std::hash<std::string>{}(it->first + it->second));

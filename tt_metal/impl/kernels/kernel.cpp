@@ -75,11 +75,11 @@ size_t ComputeKernel::compile_time_args_hash(const tt_xy_pair &logical_core) con
     return ComputeKernelArgsHash{logical_core}(*kernel_args_);
 }
 
-size_t ComputeKernel::define_args_hash(const tt_xy_pair& logical_core) const {
+size_t Kernel::define_args_hash(const tt_xy_pair& logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
-    return ComputeKernelDefinesHash{logical_core}(defines_);
+    return KernelDefinesHash{logical_core}(defines_);
 }
 
 
@@ -93,10 +93,13 @@ void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t *b
 void DataMovementKernel::configure_for_compilation(build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
     if (processor_ == DataMovementProcessor::RISCV_0) {
         build_kernel_for_riscv_options->brisc_kernel_file_name = kernel_path_file_name_;
+        build_kernel_for_riscv_options->brisc_defines = defines_;
     }
     if (processor_ == DataMovementProcessor::RISCV_1) {
         build_kernel_for_riscv_options->ncrisc_kernel_file_name = kernel_path_file_name_;
+        build_kernel_for_riscv_options->ncrisc_defines = defines_;
     }
+
     set_binary_path(logical_core, out_dir_path);
 }
 

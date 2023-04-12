@@ -34,6 +34,7 @@ struct CompileDefines {
     bool             profile_kernel         { false };
     vector<uint32_t> compile_time_args;
     string           kernel_inc;
+    map<std::string, std::string> kernel_defines;
 
     bool is_trisc() const { return (hwthread >= RISCID::TR0) && (hwthread <= RISCID::TR2); }
     bool is_brisc() const { return hwthread == RISCID::BR; }
@@ -220,6 +221,11 @@ struct CompileContext {
             default: break;
         }
 
+        if (defs.is_ncrisc() or defs.is_brisc()) {
+            for (const auto &[def, val]: defs.kernel_defines)
+                result += " -D" + def + "=" + val + " ";
+        }
+
         if (defs.mailbox_addr != 0)
             result += " -DMAILBOX_ADDR=" + to_string(defs.mailbox_addr);
         if (defs.perf_dump_level != 0 || defs.is_trisc()) // TODO(AP): double check
@@ -373,6 +379,15 @@ void generate_binary_for_risc(
 
     CompileDefines defs;
     defs.hwthread = risc_id;
+
+    // Only modifying dataflow paths, we can make a separate
+    // isuue for the compute paths
+    if (defs.is_brisc()) {
+        defs.kernel_defines = build_kernel_for_riscv_options->brisc_defines;
+    } else if (defs.is_ncrisc()) {
+        defs.kernel_defines = build_kernel_for_riscv_options->ncrisc_defines;
+    }
+
     defs.noc_index = noc_index;
     defs.profile_kernel = profile_kernel;
     defs.compile_time_args = kernel_compile_time_args;

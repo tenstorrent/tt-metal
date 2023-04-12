@@ -63,6 +63,13 @@ class Kernel {
 
     virtual bool configure(Device *device, const tt_xy_pair &logical_core) const = 0;
 
+    // Will cause CompileProgram to emit a file hlk_defines_generated.h
+    // Each unique combination of defines will produce a unique compiled instantiation
+    // This file is then automatically included in the generated compiled kernel files
+    void add_define(const std::string& name, const std::string& value) { defines_[name] = value; }
+    void add_define(const std::string& name, int value) { defines_[name] = std::to_string(value); }
+    size_t define_args_hash(const tt_xy_pair& logical_core) const;
+
    protected:
     std::string kernel_path_file_name_;                 // Full kernel path and file name
     tt_xy_pair start_core_;                             // First logical Tensix coordinates within core grid
@@ -75,6 +82,7 @@ class Kernel {
     virtual void configure_for_compilation(build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) = 0;
 
     friend void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const tt_xy_pair &logical_core, const std::string &out_dir_path);
+    std::map<std::string, std::string> defines_; // preprocessor defines. this is to be able to generate generic instances.
 };
 
 // TODO: Validate that the kernel_args are on the same cores as the core range
@@ -162,22 +170,14 @@ class ComputeKernel : public Kernel {
 
     std::vector<uint32_t> compile_time_args(const tt_xy_pair &logical_core) const;
     size_t compile_time_args_hash(const tt_xy_pair &logical_core) const;
-    size_t define_args_hash(const tt_xy_pair& logical_core) const;
 
     bool configure(Device *device, const tt_xy_pair &logical_core) const;
-
-    // Will cause CompileProgram to emit a file hlk_defines_generated.h
-    // Each unique combination of defines will produce a unique compiled instantiation
-    // This file is then automatically included in the generated compiled kernel files
-    void add_define(const std::string& name, const std::string& value) { defines_[name] = value; }
-    void add_define(const std::string& name, int value) { defines_[name] = std::to_string(value); }
 
    private:
     void configure_for_compilation(build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const tt_xy_pair &logical_core, const std::string &out_dir_path);
 
     ComputeKernelArgs *kernel_args_;
     MathFidelity math_fidelity_;  // Math fidelity
-    std::map<std::string, std::string> defines_; // preprocessor defines. this is to be able to generate generic instances.
     bool fp32_dest_acc_en_;       //
     bool math_approx_mode_;       // Run math in approx mode
 };
