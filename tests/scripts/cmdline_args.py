@@ -23,6 +23,8 @@ def add_test_type_specific_args_(argparser, test_suite_type=TestSuiteType.UNKNOW
         argparser.add_argument("--num_processes", help="Use specified number of processes", dest="num_processes", type=int, default=1)
     elif test_suite_type == TestSuiteType.LLRT:
         argparser.add_argument("--skip-driver-tests", action="store_true", default=False, help="Skip long-running silicon driver tests")
+        # Set to 20 minutes for long silicon driver tests
+        argparser.add_argument("--timeout", default=1200, type=int, help="Timeout in seconds for each test")
     elif test_suite_type == TestSuiteType.TT_METAL:
         pass
     else:
@@ -44,10 +46,11 @@ def get_cmdline_args(test_suite_type=TestSuiteType.UNKNOWN):
     parser = argparse.ArgumentParser(
         prog="RegressionTests",
         description="Run process-based regression tests",
+        conflict_handler='resolve',
     )
 
-    parser = add_test_type_specific_args_(parser, test_suite_type)
     parser = add_common_args_(parser)
+    parser = add_test_type_specific_args_(parser, test_suite_type)
 
     CmdlineArgs.argparser = parser
 
