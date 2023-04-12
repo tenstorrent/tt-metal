@@ -151,6 +151,9 @@ def get_binary_cache_enabled():
 
 
 def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
     rtol_delta = torch.max(
         torch.abs(golden - calculated) / torch.abs(calculated)
@@ -162,6 +165,9 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
 
 
 def comp_pcc(golden, calculated, pcc=0.99):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
     if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
         logger.warning("Both tensors are 'nan'")
         return True, f"PCC: {1.0}"
@@ -201,8 +207,8 @@ def comp_pcc(golden, calculated, pcc=0.99):
         return True, f"PCC: {1.0}"
 
     if golden.dtype == torch.bfloat16:
-        golden = golden.type(torch.float16)
-        calculated = calculated.type(torch.float16)
+        golden = golden.type(torch.float32)
+        calculated = calculated.type(torch.float32)
     cal_pcc = np.min(
         np.ma.corrcoef(
             np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
@@ -217,6 +223,9 @@ def comp_pcc(golden, calculated, pcc=0.99):
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
     passing = True
     output = ""
     passing_allclose, output_allclose = comp_allclose(golden, calculated, rtol, atol)

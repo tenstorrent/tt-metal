@@ -50,8 +50,8 @@ def get_atol_rtol_pcc(golden, calculated):
         cal_pcc = 1.0
 
     if golden.dtype == torch.bfloat16:
-        golden = golden.type(torch.float16)
-        calculated = calculated.type(torch.float16)
+        golden = golden.type(torch.float32)
+        calculated = calculated.type(torch.float32)
     cal_pcc = np.min(
         np.ma.corrcoef(
             np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
@@ -71,21 +71,33 @@ def get_atol_rtol_pcc(golden, calculated):
 
 
 def comp_equal(golden, calculated):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
     _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
     return torch.equal(golden, calculated), output_str
 
 
 def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
     _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
     return torch.allclose(golden, calculated, rtol, atol, True), output_str
 
 
 def comp_pcc(golden, calculated, pcc=0.99):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
     _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated)
     return cal_pcc >= pcc, output_str
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
     _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated)
     passing = True
     passing &= torch.allclose(golden, calculated, rtol, atol, True)
