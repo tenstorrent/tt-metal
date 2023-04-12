@@ -548,7 +548,7 @@ int main(int argc, char** argv)
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
-        test_dispatch_v1(cluster, 0, "datacopy_op");
+        test_dispatch_v1(cluster, 0, "datacopy_op_dispatch");
 
     } catch (const std::exception& e) {
         pass = false;
