@@ -204,7 +204,21 @@ def get_logits_processor(input_ids, config):
     return logits_processor
 
 
-def run_generate(device):
+def pad_input_32(tensor, value):
+    len = tensor.shape[1]
+
+    if len % 32 == 0:
+        return tensor
+
+    padded_len = ((len // 32) + 1) * 32
+
+    pad_tensor = (value * torch.ones(tensor.shape[0], padded_len-len)).to(torch.long)
+    tensor = torch.cat([tensor, pad_tensor], dim=1)
+
+    return tensor
+
+
+def run_generate(input_sentance, run_tt_model, device):
 
     #tokenizer = T5Tokenizer.from_pretrained("t5-small")
     tokenizer = AutoTokenizer.from_pretrained("t5-small", model_max_length=32)
@@ -212,36 +226,43 @@ def run_generate(device):
     hf_reference_model.eval()
 
     # Prepare input
-    input_sentance = "translate English to German: The house is wonderful."
-    tokenized = tokenizer(input_sentance, padding="max_length", max_length=32, return_tensors="pt")  # Batch size 1
-
-    input_ids = tokenized.input_ids
-    attention_mask = tokenized.attention_mask
-
-    print(f"input_ids {input_ids}")
-    print(f"attention_mask {attention_mask}")
+    tokenized = tokenizer(input_sentance, return_tensors="pt")  # Batch size 1
 
     generation_config = hf_reference_model.generation_config
     config = json.loads(hf_reference_model.config.to_json_string())
     config['tie_word_embeddings'] = hf_reference_model.config.tie_word_embeddings
+
+    input_ids = pad_input_32(tokenized.input_ids, generation_config.pad_token_id)
+    attention_mask = pad_input_32(tokenized.attention_mask, 0)
+
+    print(f"input_ids {input_ids.shape} {input_ids}")
+    print(f"attention_mask {attention_mask.shape} {attention_mask}")
 
     logits_processor = get_logits_processor(input_ids, hf_reference_model.config)
 
     print(config)
     print(generation_config)
 
+    decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
     decoder_input_ids = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
     print(f"decoder_input_ids {decoder_input_ids}")
 
     tt_model = TtT5Model(config, hf_reference_model.state_dict(), device)
+    encoder_outputs = None
+    use_cache = False
 
-    for i in range(16):
+    for i in range(2048):
         # PyTorch forward pass
         pt_out = hf_reference_model(input_ids=input_ids, decoder_input_ids=decoder_input_ids, attention_mask=attention_mask)
-        tt_out = tt_model(input_ids=input_ids, decoder_input_ids=decoder_input_ids, attention_mask=attention_mask, return_dict=True)
 
-        does_pass, pcc_message = comp_pcc(pt_out.logits, tt_out.logits, 0.98)
-        print(pcc_message)
+        if run_tt_model:
+            tt_out = tt_model(input_ids=input_ids, decoder_input_ids=decoder_input_ids, attention_mask=attention_mask, encoder_outputs=encoder_outputs, return_dict=True, use_cache=use_cache)
+            encoder_outputs = tt_out.encoder_outputs
+
+            does_pass, pcc_message = comp_pcc(pt_out.logits, tt_out.logits, 0.98)
+            print(pcc_message)
+        else:
+            tt_out = pt_out
 
         next_token_logits = tt_out.logits
         print(f"next_token_logits shape {next_token_logits.shape}")
@@ -257,18 +278,30 @@ def run_generate(device):
         if next_tokens[0][i] == generation_config.eos_token_id:
             break
 
+        # We need to expand decoder_input_ids
+        if (i + 1) % 32 == 0:
+            decoder_input_ids = torch.cat([decoder_input_ids, decoder_start_values], dim=1)
+
         decoder_input_ids[0][i+1] = next_tokens[0][i]
         print(f"decoder_input_ids {decoder_input_ids[0]}")
 
-    print("Decoded output:")
-    print(tokenizer.decode(decoder_input_ids[0], skip_special_tokens=True))
+    return tokenizer.decode(decoder_input_ids[0], skip_special_tokens=True)
 
 
 def test_T5ForConditionalGeneration():
+    input_sentance = "translate English to German: The house is wonderful."
+    #input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
+    #input_sentance = "translate English to French: Welcome to NYC"
+    #input_sentance = "The <extra_id_0> walks in <extra_id_1> park"
+
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
-    run_generate(device)
+
+    output_sentance = run_generate(input_sentance, run_tt_model=True, device=device)
+    print(f"Decoded output: {output_sentance}")
+
     ttm.device.CloseDevice(device)
+    assert output_sentance == "Das Haus ist wunderbar."
 
 
 if __name__ == "__main__":

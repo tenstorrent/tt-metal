@@ -17,9 +17,7 @@ class Seq2SeqLMOutput():
         decoder_hidden_states= None,
         decoder_attentions = None,
         cross_attentions = None,
-        encoder_last_hidden_state = None,
-        encoder_hidden_states = None,
-        encoder_attentions = None):
+        encoder_outputs = None):
 
         self.loss = loss
         self.logits = logits
@@ -27,9 +25,7 @@ class Seq2SeqLMOutput():
         self.decoder_hidden_states = decoder_hidden_states
         self.decoder_attentions = decoder_attentions
         self.cross_attentions = cross_attentions
-        self.encoder_last_hidden_state  = encoder_last_hidden_state
-        self.encoder_hidden_states = encoder_hidden_states
-        self.encoder_attentions = encoder_attentions
+        self.encoder_outputs = encoder_outputs
 
 
 def tuple_to_torch(tt_tuple):
@@ -70,7 +66,7 @@ class TtT5ForConditionalGeneration(nn.Module):
         super().__init__()
 
         self.config = config
-        self.tt_device = device
+        self.device = device
         self.model_dim = config["d_model"]
         self.config_use_cache = config["use_cache"] if "use_cache" in config else False
         self.config_use_return_dict = config["use_return_dict"] if "use_return_dict" in config else False
@@ -95,12 +91,11 @@ class TtT5ForConditionalGeneration(nn.Module):
         decoder_config["num_layers"] = config["num_decoder_layers"]
         self.decoder = TtT5Stack(decoder_config, state_dict, "decoder", device, self.shared)
 
-        #self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
-        #self.lm_head_weights = torch2tt_tensor(state_dict[f"lm_head.weight"], ttm.device.GetHost())
-        #self.lm_head = TtLinear(in_features=config["d_model"], out_features=config["vocab_size"], weight=self.lm_head_weights.data(), bias=None, device=device)
+        self.lm_head_weights = torch2tt_tensor(state_dict[f"lm_head.weight"], ttm.device.GetHost())
+        self.lm_head = TtLinear(in_features=config["d_model"], out_features=config["vocab_size"], weight=self.lm_head_weights.data(), bias=None, device=device)
 
-        self.lm_head = nn.Linear(config["d_model"], config["vocab_size"], bias=False)
-        self.lm_head.weight = nn.Parameter(state_dict[f"lm_head.weight"])
+        # self.lm_head = nn.Linear(config["d_model"], config["vocab_size"], bias=False)
+        # self.lm_head.weight = nn.Parameter(state_dict[f"lm_head.weight"])
 
         # Initialize weights and apply final processing
         #self.post_init()
@@ -194,12 +189,12 @@ class TtT5ForConditionalGeneration(nn.Module):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
-        elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
-            encoder_outputs = BaseModelOutput(
-                last_hidden_state=encoder_outputs[0],
-                hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
-                attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
-            )
+        # elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
+        #     encoder_outputs = BaseModelOutput(
+        #         last_hidden_state=encoder_outputs[0],
+        #         hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
+        #         attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
+        #     )
 
         if return_dict:
             hidden_states = encoder_outputs.last_hidden_state
@@ -246,12 +241,6 @@ class TtT5ForConditionalGeneration(nn.Module):
         else:
             sequence_output = decoder_outputs[0]
 
-        # Back to torch
-        sequence_output = tt2torch_tensor(sequence_output)
-        sequence_output = sequence_output[:, 0, :, :]
-
-        print(f"sequence_output shape {sequence_output.shape}")
-
         # Set device for model parallelism
         # if self.model_parallel:
         #     torch.cuda.set_device(self.encoder.first_device)
@@ -261,10 +250,17 @@ class TtT5ForConditionalGeneration(nn.Module):
         if self.config["tie_word_embeddings"]:
             # Rescale output before projecting on vocab
             # See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
+            sequence_output = tt2torch_tensor(sequence_output)
             sequence_output = sequence_output * (self.model_dim**-0.5)
+            sequence_output = torch2tt_tensor(sequence_output, self.device)
 
         lm_logits = self.lm_head(sequence_output)
         loss = None
+
+        # Back to torch
+        lm_logits = tt2torch_tensor(lm_logits)
+        lm_logits = lm_logits[:, 0, :, :]
+        print(f"lm_logits shape {lm_logits.shape}")
 
         if labels is not None:
             loss_fct = CrossEntropyLoss(ignore_index=-100)
@@ -284,7 +280,5 @@ class TtT5ForConditionalGeneration(nn.Module):
             decoder_hidden_states=decoder_outputs.hidden_states,
             decoder_attentions=decoder_outputs.attentions,
             cross_attentions=decoder_outputs.cross_attentions,
-            encoder_last_hidden_state=encoder_outputs.last_hidden_state,
-            encoder_hidden_states=encoder_outputs.hidden_states,
-            encoder_attentions=encoder_outputs.attentions,
+            encoder_outputs=encoder_outputs,
         )
