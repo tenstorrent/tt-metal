@@ -3,35 +3,26 @@ import numpy as np
 from loguru import logger
 
 
-def comp_equal(golden, calculated):
-    max_diff = torch.max(torch.abs(golden - calculated)).item()
-    return torch.equal(golden, calculated), f"Max Absolute Delta: {max_diff}"
+def get_atol_rtol_pcc(golden, calculated):
+    # Calculate atol and rtol
+    cal_atol = torch.max(torch.abs(golden - calculated)).item()
+    cal_rtol = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
 
-
-def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
-    atol_delta = torch.max(torch.abs(golden - calculated)).item()
-    rtol_delta = torch.max(
-        torch.abs(golden - calculated) / torch.abs(calculated)
-    ).item()
-    return (
-        torch.allclose(golden, calculated, rtol, atol, True),
-        f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}",
-    )
-
-
-def comp_pcc(golden, calculated, pcc=0.99):
+    # Calculate PCC
+    # Both tensors are nan
     if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
         logger.warning("Both tensors are 'nan'")
-        return True, f"PCC: {1.0}"
+        cal_pcc = 1.0
 
+    # One tensor is all nan, the other is not
     if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
         logger.error("One tensor is all nan, the other is not.")
-        return False, f"PCC: {0.0}"
+        cal_pcc = 0.0
 
-    # Test if either is completely zero
+    # One (or both) tensor is all zero
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
         logger.error("One tensor is all zero")
-        return False, f"PCC: {0.0}"
+        cal_pcc = 0.0
 
     # if torch.any(torch.isinf(golden)) or torch.any(torch.isinf(calculated)):
     #    raise RuntimeError(f"Tensor overflow to infinity: \n{golden}\n{calculated}")
@@ -56,7 +47,7 @@ def comp_pcc(golden, calculated, pcc=0.99):
     ] = 0
 
     if torch.equal(golden, calculated):
-        return True, f"PCC: {1.0}"
+        cal_pcc = 1.0
 
     if golden.dtype == torch.bfloat16:
         golden = golden.type(torch.float16)
@@ -68,21 +59,35 @@ def comp_pcc(golden, calculated, pcc=0.99):
         )
     )
 
-    if isinstance(pcc, np.ma.core.MaskedConstant):
-        return True, f"PCC: {1.0}"
+    if isinstance(cal_pcc, np.ma.core.MaskedConstant):
+        cal_pcc = 1.0
 
-    return cal_pcc >= pcc, f"PCC: {cal_pcc}"
+    return (
+        cal_atol,
+        cal_rtol,
+        cal_pcc,
+        f"Max ATOL Delta: {cal_atol}, Max RTOL Delta: {cal_rtol}, PCC: {cal_pcc}",
+    )
+
+
+def comp_equal(golden, calculated):
+    _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
+    return torch.equal(golden, calculated), output_str
+
+
+def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
+    _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
+    return torch.allclose(golden, calculated, rtol, atol, True), output_str
+
+
+def comp_pcc(golden, calculated, pcc=0.99):
+    _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated)
+    return cal_pcc >= pcc, output_str
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
+    _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated)
     passing = True
-    output = ""
-    passing_allclose, output_allclose = comp_allclose(golden, calculated, rtol, atol)
-    passing &= passing_allclose
-    output += output_allclose
-    if torch.numel(golden) != 1:
-        passing_pcc, output_pcc = comp_pcc(golden, calculated, pcc)
-        passing &= passing_pcc
-        output += f", {output_pcc}"
-
-    return passing, output
+    passing &= torch.allclose(golden, calculated, rtol, atol, True)
+    passing &= cal_pcc >= pcc
+    return passing, output_str
