@@ -76,13 +76,10 @@ vector<uint32_t> get_risc_binary(string path, uint32_t id, bool id_is_trisc) {
     return mem.get_content();
 }
 
-// TODO: de-asserting reset properly
-//  this deasserts reset for all BRISCs (on all devices, all cores), but not other RISC processors (NCRISC, TRISC)
-// even though it deasserts reset for all the BRISCs, we are only loading  BRISC for a single core ("core")
-// this is unsafe, since BRISCs for which we haven't loaded FW are now running garbage out of their L1
-// proper solution:
-// a) load dummy BRISC FW to unused cores, and keep using the function that de-asserts all BRISCs (easier, we can load blank kernel and disable NCRISC loading)
-// b) de-assert reset only for used BRISCs (needs a new deassert function w/ a list of core to de-assert) (harder)
+// This deasserts reset for all BRISCs (on all devices, all cores), but not other RISC processors (NCRISC, TRISC)
+// Every core gets valid FW (blank kernel if nothing is running on the core) before being taken out ot reset
+// This avoids the issue of cores running garbahe out of their L1
+// TODO: deassert reset only for used BRISCs (needs a new deassert function w/ a list of core to de-assert)
 void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stagger_start) {
     cluster->deassert_risc_reset(stagger_start);
     log_debug(tt::LogLLRuntime, "deasserted reset for all BRISCs");

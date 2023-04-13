@@ -651,8 +651,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program) {
         llrt::write_circular_buffer_config_vector_to_core(cluster, pcie_slot, worker_core, circular_buffer_config_vec); // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
     }
 
-
-    // Take device out of reset
+    // Load blank kernel to all riscs of all cores excluding those in worker_cores
     const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS; // PROF_BEGIN("LOAD_BLANK")
     llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(
         cluster, pcie_slot, riscs_options, worker_cores);                               // PROF_END("LOAD_BLANK")
