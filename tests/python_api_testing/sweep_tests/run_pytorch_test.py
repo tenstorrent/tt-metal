@@ -72,7 +72,7 @@ def run_pytorch_test(args):
         if yaml_env_dict:
             env_dict = yaml_env_dict
         elif args_env_dict:
-            env_dict = yaml_env_dict
+            env_dict = args_env_dict
         else:
             env_dict = default_env_dict
 
