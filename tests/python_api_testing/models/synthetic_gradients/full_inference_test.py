@@ -22,7 +22,7 @@ def ttLinear(weight, bias):
     def linear_(activation):
         weight_T = ttl.tensor.transpose(weight)
         output = ttl.tensor.matmul(activation, weight_T)
-        output_plus_bias = ttl.tensor.bcast(output, bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+        output_plus_bias = ttl.tensor.add(output, bias)
         return output_plus_bias
 
     return linear_
@@ -64,7 +64,7 @@ class PytorchBatchNorm1D(nn.Module):
         return bn1_out
 
 
-def run_block_inference(device, in_features, hidden_features, out_features):
+def run_full_inference(in_features, hidden_features, out_features, device):
     host = ttl.device.GetHost()
 
     # set inputs
@@ -94,50 +94,50 @@ def run_block_inference(device, in_features, hidden_features, out_features):
     bias1_lin_tt = ttl.tensor.Tensor(tilized_bias1_lin_tt, bias1_lin.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
     # batch norm torch layer1
-    bn_torch = PytorchBatchNorm1D(hidden_features)
-    bn_torch.eval()
-    weight_bn_torch = torch.nn.Parameter(torch.FloatTensor(hidden_features).uniform_(-1., 1.).requires_grad_(True))
-    bias_bn_torch =  torch.nn.Parameter(torch.FloatTensor(hidden_features).uniform_(-1., 1.).requires_grad_(True))
-    running_mean_bn_torch = torch.FloatTensor(hidden_features).uniform_(-1., 1.).requires_grad_(False)
-    running_var_bn_torch = torch.FloatTensor(hidden_features).uniform_(0., 1.).requires_grad_(False)  #must be positive
+    bn1_torch = PytorchBatchNorm1D(hidden_features)
+    bn1_torch.eval()
+    weight1_bn_torch = torch.nn.Parameter(torch.FloatTensor(hidden_features).uniform_(-1., 1.).requires_grad_(True))
+    bias1_bn_torch =  torch.nn.Parameter(torch.FloatTensor(hidden_features).uniform_(-1., 1.).requires_grad_(True))
+    running_mean1_bn_torch = torch.FloatTensor(hidden_features).uniform_(-1., 1.).requires_grad_(False)
+    running_var1_bn_torch = torch.FloatTensor(hidden_features).uniform_(0., 1.).requires_grad_(False)  #must be positive
 
-    bn_torch.batchnorm1d_1.weight = weight_bn_torch
-    bn_torch.batchnorm1d_1.bias = bias_bn_torch
-    bn_torch.batchnorm1d_1.running_mean = running_mean_bn_torch
-    bn_torch.batchnorm1d_1.running_var = running_var_bn_torch
-    bn_torch.batchnorm1d_1.eps = epsilon1
+    bn1_torch.batchnorm1d_1.weight = weight1_bn_torch
+    bn1_torch.batchnorm1d_1.bias = bias1_bn_torch
+    bn1_torch.batchnorm1d_1.running_mean = running_mean1_bn_torch
+    bn1_torch.batchnorm1d_1.running_var = running_var1_bn_torch
+    bn1_torch.batchnorm1d_1.eps = epsilon1
 
 
     # batch norm tt layer 1
-    weight_bn_src = weight_bn_torch.view(1, 1, 1, hidden_features)
-    weight_bn_tt = torch.zeros(1, 1, 32, hidden_features)
-    weight_bn_tt[:, :, :1, :] = weight_bn_src
-    tilized_weight_bn_tt= tilize_to_list(weight_bn_tt)
-    gamma = ttl.tensor.Tensor(tilized_weight_bn_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    weight1_bn_src = weight1_bn_torch.view(1, 1, 1, hidden_features)
+    weight1_bn_tt = torch.zeros(1, 1, 32, hidden_features)
+    weight1_bn_tt[:, :, :1, :] = weight1_bn_src
+    tilized_weight1_bn_tt= tilize_to_list(weight1_bn_tt)
+    gamma1 = ttl.tensor.Tensor(tilized_weight1_bn_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
-    bias_bn_src = bias_bn_torch.view(1, 1, 1, hidden_features)
-    bias_bn_tt = torch.zeros(1, 1, 32, hidden_features)
-    bias_bn_tt[:, :, :1, :] = bias_bn_src
-    tilized_bias_bn_tt= tilize_to_list(bias_bn_tt)
-    beta = ttl.tensor.Tensor(tilized_bias_bn_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    bias1_bn_src = bias1_bn_torch.view(1, 1, 1, hidden_features)
+    bias1_bn_tt = torch.zeros(1, 1, 32, hidden_features)
+    bias1_bn_tt[:, :, :1, :] = bias1_bn_src
+    tilized_bias1_bn_tt= tilize_to_list(bias1_bn_tt)
+    beta1 = ttl.tensor.Tensor(tilized_bias1_bn_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
-    running_mean_bn_src = running_mean_bn_torch.view(1, 1, 1, hidden_features)
-    running_mean_bn_tt = torch.zeros(1, 1, 32, hidden_features)
-    running_mean_bn_tt[:, :, :1, :] = running_mean_bn_src
-    tilized_running_mean_tt= tilize_to_list(running_mean_bn_tt)
-    running_mean_tt = ttl.tensor.Tensor(tilized_running_mean_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
+    running_mean1_bn_src = running_mean1_bn_torch.view(1, 1, 1, hidden_features)
+    running_mean1_bn_tt = torch.zeros(1, 1, 32, hidden_features)
+    running_mean1_bn_tt[:, :, :1, :] = running_mean1_bn_src
+    tilized_running_mean1_tt= tilize_to_list(running_mean1_bn_tt)
+    running_mean1_tt = ttl.tensor.Tensor(tilized_running_mean1_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
-    running_var_bn_src = running_var_bn_torch.view(1, 1, 1, hidden_features)
-    running_var_bn_tt = torch.zeros(1, 1, 32, hidden_features)
-    running_var_bn_tt[:, :, :1, :] = running_var_bn_src
-    tilized_running_var_tt = tilize_to_list(running_var_bn_tt)
-    running_var_tt = ttl.tensor.Tensor(tilized_running_var_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
+    running_var1_bn_src = running_var1_bn_torch.view(1, 1, 1, hidden_features)
+    running_var1_bn_tt = torch.zeros(1, 1, 32, hidden_features)
+    running_var1_bn_tt[:, :, :1, :] = running_var1_bn_src
+    tilized_running_var1_tt = tilize_to_list(running_var1_bn_tt)
+    running_var1_tt = ttl.tensor.Tensor(tilized_running_var1_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
-    epsilon_torch = torch.tensor([[[hidden_features*[epsilon]]]])
-    epsilon_tor = torch.zeros(1, 1, 32, hidden_features)
-    epsilon_tor[:, :, :1, :] = epsilon_torch
-    tilized_eps_tt= tilize_to_list(epsilon_tor)
-    eps_tt = ttl.tensor.Tensor(tilized_eps_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
+    epsilon1_torch = torch.tensor([[[hidden_features*[epsilon1]]]])
+    epsilon1_tor = torch.zeros(1, 1, 32, hidden_features)
+    epsilon1_tor[:, :, :1, :] = epsilon1_torch
+    tilized_eps1_tt= tilize_to_list(epsilon1_tor)
+    eps1_tt = ttl.tensor.Tensor(tilized_eps1_tt, [1, 1, 32, hidden_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
 ### Layer 2
     # torch linear params layer2
@@ -146,9 +146,9 @@ def run_block_inference(device, in_features, hidden_features, out_features):
     linear2_torch = torchLinear(hidden_features, out_features, weight2_lin_torch, bias2_lin_torch)
 
     # tt linear params layer2
-    weight2_lin = weight1_lin_torch.view(1, 1,out_features, hidden_features)
+    weight2_lin = weight2_lin_torch.view(1, 1,out_features, hidden_features)
     tilized_weight2_lin_tt = tilize_to_list(weight2_lin)
-    weight2_lin_tt = ttl.tensor.Tensor(tilized_weight2_lin_tt, weight1_lin.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    weight2_lin_tt = ttl.tensor.Tensor(tilized_weight2_lin_tt, weight2_lin.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
     bias2_lin_src = bias2_lin_torch.view(1, 1, 1, out_features)
     bias2_lin = torch.zeros(1, 1, 32, out_features)
@@ -164,88 +164,90 @@ def run_block_inference(device, in_features, hidden_features, out_features):
     running_mean2_bn_torch = torch.FloatTensor(out_features).uniform_(-1., 1.).requires_grad_(False)
     running_var2_bn_torch = torch.FloatTensor(out_features).uniform_(0., 1.).requires_grad_(False)  #must be positive
 
-    bn_torch.batchnorm1d_1.weight = weight2_bn_torch
-    bn_torch.batchnorm1d_1.bias = bias2_bn_torch
-    bn_torch.batchnorm1d_1.running_mean = running_mean2_bn_torch
-    bn_torch.batchnorm1d_1.running_var = running_var2_bn_torch
-    bn_torch.batchnorm1d_1.eps = epsilon2
+    bn2_torch.batchnorm1d_1.weight = weight2_bn_torch
+    bn2_torch.batchnorm1d_1.bias = bias2_bn_torch
+    bn2_torch.batchnorm1d_1.running_mean = running_mean2_bn_torch
+    bn2_torch.batchnorm1d_1.running_var = running_var2_bn_torch
+    bn2_torch.batchnorm1d_1.eps = epsilon2
 
     # batch norm tt layer 2
-    weight_bn_src = weight_bn_torch.view(1, 1, 1, out_features)
-    weight_bn_tt = torch.zeros(1, 1, 32, out_features)
-    weight_bn_tt[:, :, :1, :] = weight_bn_src
-    tilized_weight_bn_tt= tilize_to_list(weight_bn_tt)
-    gamma = ttl.tensor.Tensor(tilized_weight_bn_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    weight2_bn_src = weight2_bn_torch.view(1, 1, 1, out_features)
+    weight2_bn_tt = torch.zeros(1, 1, 32, out_features)
+    weight2_bn_tt[:, :, :1, :] = weight2_bn_src
+    tilized_weight2_bn_tt= tilize_to_list(weight2_bn_tt)
+    gamma2 = ttl.tensor.Tensor(tilized_weight2_bn_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
-    bias_bn_src = bias_bn_torch.view(1, 1, 1, out_features)
-    bias_bn_tt = torch.zeros(1, 1, 32, out_features)
-    bias_bn_tt[:, :, :1, :] = bias_bn_src
-    tilized_bias_bn_tt= tilize_to_list(bias_bn_tt)
-    beta = ttl.tensor.Tensor(tilized_bias_bn_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    bias2_bn_src = bias2_bn_torch.view(1, 1, 1, out_features)
+    bias2_bn_tt = torch.zeros(1, 1, 32, out_features)
+    bias2_bn_tt[:, :, :1, :] = bias2_bn_src
+    tilized_bias2_bn_tt= tilize_to_list(bias2_bn_tt)
+    beta2 = ttl.tensor.Tensor(tilized_bias2_bn_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
-    running_mean_bn_src = running_mean_bn_torch.view(1, 1, 1, out_features)
-    running_mean_bn_tt = torch.zeros(1, 1, 32, out_features)
-    running_mean_bn_tt[:, :, :1, :] = running_mean_bn_src
-    tilized_running_mean_tt= tilize_to_list(running_mean_bn_tt)
-    running_mean_tt = ttl.tensor.Tensor(tilized_running_mean_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
+    running_mean2_bn_src = running_mean2_bn_torch.view(1, 1, 1, out_features)
+    running_mean2_bn_tt = torch.zeros(1, 1, 32, out_features)
+    running_mean2_bn_tt[:, :, :1, :] = running_mean2_bn_src
+    tilized_running_mean2_tt= tilize_to_list(running_mean2_bn_tt)
+    running_mean2_tt = ttl.tensor.Tensor(tilized_running_mean2_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
-    running_var_bn_src = running_var_bn_torch.view(1, 1, 1, out_features)
-    running_var_bn_tt = torch.zeros(1, 1, 32, out_features)
-    running_var_bn_tt[:, :, :1, :] = running_var_bn_src
-    tilized_running_var_tt = tilize_to_list(running_var_bn_tt)
-    running_var_tt = ttl.tensor.Tensor(tilized_running_var_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
+    running_var2_bn_src = running_var2_bn_torch.view(1, 1, 1, out_features)
+    running_var2_bn_tt = torch.zeros(1, 1, 32, out_features)
+    running_var2_bn_tt[:, :, :1, :] = running_var2_bn_src
+    tilized_running_var2_tt = tilize_to_list(running_var2_bn_tt)
+    running_var2_tt = ttl.tensor.Tensor(tilized_running_var2_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
-    epsilon_torch = torch.tensor([[[out_features*[epsilon]]]])
-    epsilon_tor = torch.zeros(1, 1, 32, out_features)
-    epsilon_tor[:, :, :1, :] = epsilon_torch
-    tilized_eps_tt= tilize_to_list(epsilon_tor)
-    eps_tt = ttl.tensor.Tensor(tilized_eps_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
+    epsilon2_torch = torch.tensor([[[out_features*[epsilon2]]]])
+    epsilon2_tor = torch.zeros(1, 1, 32, out_features)
+    epsilon2_tor[:, :, :1, :] = epsilon2_torch
+    tilized_eps2_tt= tilize_to_list(epsilon2_tor)
+    eps2_tt = ttl.tensor.Tensor(tilized_eps2_tt, [1, 1, 32, out_features], ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.TILE, device)
 
 
     # run through the models
-    # torch
-    output_lin_torch = linear_torch(inputs_torch)
-    output_bn_torch = bn_torch(output_lin_torch)
-    output_full_torch = torch.nn.functional.relu(output_bn_torch)
+    # torch layer 1
+    output_lin1_torch = linear1_torch(inputs_torch)
+    output_bn1_torch = bn1_torch(output_lin1_torch)
+    output_layer1_torch = torch.nn.functional.relu(output_bn1_torch)
+    # torch layer 2
+    output_lin2_torch = linear2_torch(output_layer1_torch)
+    output_bn2_torch = bn2_torch(output_lin2_torch)
+    output_layer2_torch = torch.nn.functional.relu(output_bn2_torch)
 
-    # tt
-    linear_tt = ttLinear(weight_lin_tt, bias_lin_tt)
-    output_lin_tt = linear_tt(inputs_tt)
-    bn_tt =  ttBatchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, eps_tt)
-    output_bn_tt = bn_tt(output_lin_tt)
-    output_full_tt = ttl.tensor.relu(output_bn_tt)
+    # tt layer 1
+    linear1_tt = ttLinear(weight1_lin_tt, bias1_lin_tt)
+    output_lin1_tt = linear1_tt(inputs_tt)
+    bn1_tt =  ttBatchnorm1d_inference(gamma1, beta1, running_mean1_tt, running_var1_tt, eps1_tt)
+    output_bn1_tt = bn1_tt(output_lin1_tt)
+    output_layer1_tt = ttl.tensor.relu(output_bn1_tt)
+    # tt layer 2
+    linear2_tt = ttLinear(weight2_lin_tt, bias2_lin_tt)
+    output_lin2_tt = linear2_tt(output_layer1_tt)
+    bn2_tt =  ttBatchnorm1d_inference(gamma2, beta2, running_mean2_tt, running_var2_tt, eps2_tt)
+    output_bn2_tt = bn2_tt(output_lin2_tt)
+    output_layer2_tt = ttl.tensor.relu(output_bn2_tt)
 
     # compare
-    output_lin_tt_untilized = untilize(torch.Tensor(output_lin_tt.to(host).data()).reshape(output_lin_tt.shape()))
-    output_lin_tt_untilized = output_lin_tt_untilized[0, 0, 0, :]
+    output_layer1_tt_untilized = untilize(torch.Tensor(output_layer1_tt.to(host).data()).reshape(output_layer1_tt.shape()))
+    output_layer1_tt_untilized = output_layer1_tt_untilized[0, 0, 0, :]
 
-    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.to(host).data()).reshape(output_bn_tt.shape()))
-    output_bn_tt_untilized = output_bn_tt_untilized[0, 0, 0, :]
+    output_layer2_tt_untilized = untilize(torch.Tensor(output_layer2_tt.to(host).data()).reshape(output_layer2_tt.shape()))
+    output_layer2_tt_untilized = output_layer2_tt_untilized[0, 0, 0, :]
 
-    output_full_tt_untilized = untilize(torch.Tensor(output_full_tt.to(host).data()).reshape(output_full_tt.shape()))
-    output_full_tt_untilized = output_full_tt_untilized[0, 0, 0, :]
+    print('pytorch_layer1_out:', output_layer1_torch[0][0:10])
+    print('tt_layer1_out:', output_layer1_tt_untilized[0:10])
 
-    print('pytorch_linear_out:', output_lin_torch[0][0:10])
-    print('tt_linear_out:', output_lin_tt_untilized[0:10])
+    layer1_test_result, output = comp_allclose_and_pcc(output_layer1_torch[0], output_layer1_tt_untilized)
+    print('\n\n', 'atol/rtol 1:',  layer1_test_result, '| output:', output, '\n\n')
 
-    liner_test_result, output = comp_allclose_and_pcc(output_lin_torch[0], output_lin_tt_untilized)
-    print('\n\n', 'atol/rtol:', liner_test_result, '| output:', output, '\n\n')
+    print('pytorch_layer2_out:', output_layer2_torch[0][0:10])
+    print('tt_layer2_out:', output_layer2_tt_untilized[0:10])
 
-    print('pytorch_bn_out:', output_bn_torch[0][0:10])
-    print('tt_bn_out:', output_bn_tt_untilized[0:10])
+    layer2_test_result, output = comp_allclose_and_pcc(output_layer2_torch[0], output_layer2_tt_untilized)
+    print('\n\n', 'atol/rtol 2:',  layer2_test_result, '| output:', output, '\n\n')
 
-    bn_test_result, output = comp_allclose_and_pcc(output_bn_torch[0], output_bn_tt_untilized)
-    print('\n\n', 'atol/rtol:', bn_test_result, '| output:', output, '\n\n')
 
-    print('pytorch_full_out:', output_full_torch[0][0:10])
-    print('tt_full_out:', output_full_tt_untilized[0:10])
-
-    full_test_result, output = comp_allclose_and_pcc(output_full_torch[0], output_full_tt_untilized)
-    print('\n\n', 'atol/rtol:', full_test_result, '| output:', output, '\n\n')
-
-def test_run_block_inference():
+def test_run_full_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    run_block_inference(device, 1024, 256, 32)
+    run_full_inference(1024, 256, 32, device)
     ttl.device.CloseDevice(device)
