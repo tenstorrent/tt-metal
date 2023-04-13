@@ -21,11 +21,10 @@ def ttLinear(weight, bias):
     def linear_(activation):
         weight_T = ttl.tensor.transpose(weight)
         output = ttl.tensor.matmul(activation, weight_T)
-        output_plus_bias = ttl.tensor.bcast(output, bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+        output_plus_bias = ttl.tensor.add(output, bias)
         return output_plus_bias
 
     return linear_
-
 
 def torchLinear(in_features, out_features, weight, bias):
     linear_torch = torch.nn.Linear(out_features, in_features)
@@ -63,7 +62,7 @@ class PytorchBatchNorm1D(nn.Module):
         return bn1_out
 
 
-def run_block_inference(device, in_features, out_features):
+def run_block_inference(in_features, out_features, device):
     host = ttl.device.GetHost()
 
     # set inputs
@@ -182,5 +181,5 @@ def test_run_block_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    run_block_inference(device, 1024, 256)
+    run_block_inference(1024, 256, device)
     ttl.device.CloseDevice(device)

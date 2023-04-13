@@ -45,7 +45,7 @@ class PytorchBatchNorm1D(nn.Module):
         return bn1_out
 
 
-def run_btchnorm_inference(device, bn_size):
+def run_btchnorm_inference(bn_size, device):
     host = ttl.device.GetHost()
 
     inputs = torch.FloatTensor(1, bn_size).uniform_(-1., 1.).requires_grad_(True)
@@ -120,5 +120,5 @@ def test_batchnorm_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    run_btchnorm_inference(device, 1024)
+    run_btchnorm_inference(1024, device)
     ttl.device.CloseDevice(device)
