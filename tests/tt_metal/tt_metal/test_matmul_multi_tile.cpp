@@ -119,7 +119,7 @@ bool run_matmul(const bool with_bias) {
         auto src0_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
         auto src1_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
 
-        tt_metal::DramBuffer* src2_dram_buffer;
+        tt_metal::DramBuffer* src2_dram_buffer = nullptr;
         uint32_t dram_buffer_src2_addr = 0;
         if (with_bias) {
             int dram_src2_channel_id = 2;

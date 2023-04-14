@@ -177,12 +177,12 @@ int main(int argc, char **argv) {
         }
 
         /// used only if IO data in DRAM
-        tt_metal::DramBuffer* src_dram_buffer;
-        tt_metal::DramBuffer* dst_dram_buffer;
+        tt_metal::DramBuffer* src_dram_buffer = nullptr;
+        tt_metal::DramBuffer* dst_dram_buffer = nullptr;
 
         // used only if IO data in L1
-        tt_metal::L1Buffer* src_l1_buffer;
-        tt_metal::L1Buffer* dst_l1_buffer;
+        tt_metal::L1Buffer* src_l1_buffer = nullptr;
+        tt_metal::L1Buffer* dst_l1_buffer = nullptr;
 
         uint32_t src_address;
         tt_xy_pair src_noc_xy;

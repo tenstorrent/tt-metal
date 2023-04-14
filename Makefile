@@ -81,7 +81,7 @@ WARNINGS ?= -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wn
 CC ?= gcc
 CXX ?= g++
 CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\"
-CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden
+CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden -Werror
 LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) -ldl
 SHARED_LIB_FLAGS = -shared -fPIC
 STATIC_LIB_FLAGS = -fPIC
