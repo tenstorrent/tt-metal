@@ -59,19 +59,6 @@ Run pre/post commit regressions
 
 You must run regressions before you commit something.
 
-Run these pre-commit tests before pushing commits to the GitHub repo.
-
-::
-
-    ./tests/scripts/run_reg_scripts.sh
-
-If changes affect implementations of ops, run this short sweep test which contains a list of tests that trigger all different parallelizations of ops currently available. By default, this test dumps artifacts to `pytorch_test_folder` and will error out if this folder already exists. You can remove this folder or dump to a different folder by passing `-o <different-folder-name>`.
-
-::
-
-    source build/python_env/bin/activate
-    python tests/python_api_testing/sweep_tests/run_pytorch_test.py -i tests/python_api_testing/sweep_tests/test_configs/multi_op_tests/pytorch_all_op_parallelization_sweep_test.yaml --run-tests-for-ci
-
 These regressions will also run after every pushed commit to the GitHub repo.
 
 ::
@@ -81,6 +68,13 @@ These regressions will also run after every pushed commit to the GitHub repo.
     export TT_METAL_HOME=<this repo dir>
     source build/python_env/bin/activate
     ./tests/scripts/run_pre_post_commit_regressions.sh
+
+If changes affect implementations of ops, run this short sweep test which contains a list of tests that trigger all different parallelizations of ops currently available. By default, this test dumps artifacts to `pytorch_test_folder` and will error out if this folder already exists. You can remove this folder or dump to a different folder by passing `-o <different-folder-name>`.
+
+::
+
+    source build/python_env/bin/activate
+    python tests/python_api_testing/sweep_tests/run_pytorch_test.py -i tests/python_api_testing/sweep_tests/test_configs/multi_op_tests/pytorch_all_op_parallelization_sweep_test.yaml --run-tests-for-ci
 
 .. only:: not html
 
