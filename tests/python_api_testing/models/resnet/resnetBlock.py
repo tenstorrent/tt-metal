@@ -67,15 +67,14 @@ class ResNet(nn.Module):
         self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.running_mean"])
         self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.running_var"])
         self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.num_batches_tracked"], requires_grad=False)
+        self.bn1.eval()
 
-
-        # self.relu = nn.ReLU(inplace=True)
         self.relu = ttl.tensor.relu
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0], name="layer1")
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2")
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3")
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], name="layer4")
+        self.layer1 = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict)
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], name="layer4", state_dict=state_dict)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
 
@@ -114,6 +113,7 @@ class ResNet(nn.Module):
         stride: int = 1,
         dilate: bool = False,
         name: str = None,
+        state_dict = None
     ) -> nn.Sequential:
         norm_layer = self._norm_layer
         downsample = None
@@ -122,11 +122,18 @@ class ResNet(nn.Module):
             self.dilation *= stride
             stride = 1
         if stride != 1 or self.inplanes != planes * block.expansion:
+            nl = norm_layer(planes * block.expansion)
             downsample = nn.Sequential(
                 conv1x1(self.inplanes, planes * block.expansion, stride, state_dict=self.state_dict, base_address=f"{self.base_address_with_dot}{name}.0.downsample.0"),
-                norm_layer(planes * block.expansion),
+                nl,
 
             )
+            nl.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.weight"])
+            nl.bias = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.bias"])
+            nl.running_mean = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.running_mean"])
+            nl.running_var = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.running_var"])
+            nl.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.num_batches_tracked"], requires_grad=False)
+            nl.eval()
 
         layers = []
         layers.append(

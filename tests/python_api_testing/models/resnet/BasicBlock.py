@@ -73,6 +73,7 @@ class BasicBlock(nn.Module):
         self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_mean"])
         self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
         self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
+        self.bn1.eval()
 
         self.relu = ttl.tensor.relu
         self.conv2 = conv3x3(planes, planes, state_dict=state_dict, base_address=f"{base_address}.conv2")
@@ -83,6 +84,7 @@ class BasicBlock(nn.Module):
         self.bn2.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_mean"])
         self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
         self.bn2.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False)
+        self.bn2.eval()
 
         self.downsample = downsample
         self.stride = stride
