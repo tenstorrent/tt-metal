@@ -51,10 +51,7 @@ def run_single_pytorch_test(
         os.environ[key] = value
 
     ################# RUN TEST #################
-    data_seed = int(time.time())
-    torch.manual_seed(data_seed)
-
-    logger.info(f"Running with shape: {input_shapes} and seed: {data_seed}")
+    logger.info(f"Running with shape: {input_shapes} on device: {pcie_slot}")
     test_pass, _, _ = run_tt_lib_test(
         op_map[test_name]["ttlib_op"],
         op_map[test_name]["pytorch_op"],

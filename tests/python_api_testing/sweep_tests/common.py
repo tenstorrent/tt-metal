@@ -2,6 +2,7 @@ import random
 import torch
 from itertools import product
 from functools import partial
+from loguru import logger
 
 from python_api_testing.sweep_tests import generation_funcs, ttlib_ops
 
@@ -146,6 +147,8 @@ def run_tt_lib_test(
             "output_tensor_start": output_tensor_start,
             "output_tensor_end": output_tensor_end,
         }
+
+    logger.info(f"Running with args: {test_args}")
 
     tensor_inputs = []
 
