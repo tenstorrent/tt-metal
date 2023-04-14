@@ -4,7 +4,7 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 from common import ImageNet
 
-def prep_ImageNet(batch_size=64):
+def prep_ImageNet(batch_size=1):
     root = "/mnt/MLPerf/pytorch_weka_data/imagenet/dataset/ILSVRC/Data/CLS-LOC"
     imagenet = ImageNet(root)
 

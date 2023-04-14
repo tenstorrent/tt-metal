@@ -29,9 +29,9 @@ class CustomDatasetFolder(DatasetFolder):
             target_transform=target_transform,
             is_valid_file=is_valid_file,
         )
-        self.resize = transforms.Resize((256, 256))
+        self.resize = transforms.Resize((224, 224))
         self.to_tensor = transforms.ToTensor()
-        self.dummy_sample = torch.zeros(3, 256, 256)
+        self.dummy_sample = torch.zeros(3, 224, 224)
         self.dummy_target = 0
 
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
@@ -119,7 +119,7 @@ class ImageNet:
         )
         self.val_transform = transforms.Compose(
             [
-                transforms.Resize(256),
+                transforms.Resize(224),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
                 transforms.Normalize(

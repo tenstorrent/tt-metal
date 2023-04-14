@@ -22,14 +22,14 @@ from libs import tt_lib as ttl
 from common import ImageNet
 
 from typing import Type, Union, Optional, Callable
+from imagenet import prep_ImageNet
+from tqdm import tqdm
 
 from utility_functions import comp_allclose_and_pcc, comp_pcc
+
 batch_size=1
 
 def test_resnet50_module1():
-    # inputs
-    layer2_input = (1, 64, 64, 64)
-    input_shape = layer2_input
 
     with torch.no_grad():
         # torch.manual_seed(1234)
@@ -45,8 +45,16 @@ def test_resnet50_module1():
 
         layer2 = _make_layer(Bottleneck, 128, 4, name="layer2", stride=2, dilate=False, state_dict=state_dict)
 
+        dataloader = prep_ImageNet(batch_size=batch_size)
+        for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
+            image = images
+            break
 
-        input = torch.randn(input_shape)
+        transformed_input = torch_resnet.conv1(image)
+        transformed_input = torch_resnet.bn1(transformed_input)
+        transformed_input = torch_resnet.relu(transformed_input)
+        transformed_input = torch_resnet.maxpool(transformed_input)
+        input = torch_resnet.layer1(transformed_input)
 
         torch_output = torch_module(input)
         tt_output = layer2(input)
