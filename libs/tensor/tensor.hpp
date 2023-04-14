@@ -108,6 +108,10 @@ class Tensor {
 
         Tensor unpad(const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) const;
 
+        Tensor pad_to_tile(float pad_value) const;
+
+        Tensor unpad_from_tile(const std::array<uint32_t, 4> &output_tensor_shape) const;
+
         void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
 
         // Prints like numpy print function to make it more readable. Only supports row major layout.

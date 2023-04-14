@@ -213,6 +213,24 @@ Tensor Tensor::unpad(const std::array<uint32_t, 4> &output_tensor_start, const s
     return tensor_impl::unpad_wrapper(*this, output_tensor_start, output_tensor_end);
 }
 
+Tensor Tensor::pad_to_tile(float pad_value) const {
+    uint32_t padded_h = roundup(this->shape()[2], TILE_HEIGHT);
+    uint32_t padded_w = roundup(this->shape()[3], TILE_WIDTH);
+    std::array<uint32_t, 4> output_tensor_shape = {this->shape()[0], this->shape()[1], padded_h, padded_w};
+    std::array<uint32_t, 4> input_tensor_start = {0, 0, 0, 0};
+
+    return this->pad(output_tensor_shape, input_tensor_start, pad_value);
+}
+
+Tensor Tensor::unpad_from_tile(const std::array<uint32_t, 4> &output_tensor_shape) const {
+    TT_ASSERT(this->shape()[0] == output_tensor_shape[0] && this->shape()[1] == output_tensor_shape[1], "Input shape must match output shape apart from last 2 dims");
+    TT_ASSERT(this->shape()[2] % TILE_HEIGHT == 0 && this->shape()[3] % TILE_WIDTH==0, "Last 2 dims of input shape must be multiples of 32");
+    TT_ASSERT(this->shape()[2] - TILE_HEIGHT < output_tensor_shape[2] && this->shape()[3] - TILE_WIDTH < output_tensor_shape[3], "Last 2 dims of output must be within range to have been padded to input");
+    std::array<uint32_t, 4> output_tensor_start = {0, 0, 0, 0};
+    std::array<uint32_t, 4> output_tensor_end = {output_tensor_shape[0] - 1, output_tensor_shape[1] - 1, output_tensor_shape[2] - 1, output_tensor_shape[3] - 1};
+    return this->unpad(output_tensor_start, output_tensor_end);
+}
+
 // Prints like numpy print function to make it more readable. Only supports row major layout.
 void Tensor::pretty_print() const {
     print(Layout::ROW_MAJOR, /*pretty_print=*/true);
@@ -233,7 +251,7 @@ const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
     auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
 
     if (this->layout() == Layout::TILE) {
-        TT_ASSERT(new_shape[2] % 32 == 0 && new_shape[3] % 32 == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
+        TT_ASSERT(H % TILE_HEIGHT == 0 && W % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
 
     shape_ = new_shape;
