@@ -69,12 +69,12 @@ These regressions will also run after every pushed commit to the GitHub repo.
     source build/python_env/bin/activate
     ./tests/scripts/run_pre_post_commit_regressions.sh
 
-If changes affect implementations of ops, run this short sweep test which contains a list of tests that trigger all different parallelizations of ops currently available. By default, this test dumps artifacts to `pytorch_test_folder` and will error out if this folder already exists. You can remove this folder or dump to a different folder by passing `-o <different-folder-name>`.
+If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests which tests `tensor` APIs and `tt_dnn` ops. For `tt_dnn` ops, the tests aim to hit all different parallelizations of ops currently available.
 
 ::
 
-    source build/python_env/bin/activate
-    python tests/python_api_testing/sweep_tests/run_pytorch_test.py -i tests/python_api_testing/sweep_tests/test_configs/multi_op_tests/pytorch_all_op_parallelization_sweep_test.yaml --run-tests-for-ci
+    ./tests/scripts/run_tt_lib_regressions.sh
+
 
 .. only:: not html
 
