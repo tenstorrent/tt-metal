@@ -3,7 +3,7 @@
 #include "util_vector_of_ints.hpp"
 
 DataTransformations * reverse_transformations(DataTransformations * fw_dtx) {
-    bool DEBUG = true;
+    bool DEBUG = false;
     //if (DEBUG) fw_dtx->print();
     if (DEBUG) cout << "\n\n ----- Start Reverse Transformations ------" << endl;
 
@@ -18,12 +18,12 @@ DataTransformations * reverse_transformations(DataTransformations * fw_dtx) {
     for (int g=0; g<bck_first_node->groups.size(); g++){
         vector<int> new_shape(fw_last_node->groups[g]->shape);
         bck_first_node->groups[g]->shape = new_shape;
-        cout << s(2) << v2s(new_shape) << endl;
+        if (DEBUG) cout << s(2) << v2s(new_shape) << endl;
     }
 
     // Step 2: For every pair of nodes in the forward dtx, create a new node in the backward dtx
     for (int t = fw_dtx->transformations.size()-1; t>0; t--) {
-        cout << "transofmration index: " << t << endl;
+        if (DEBUG) cout << "transofmration index: " << t << endl;
 
         // Setup:  1) identify all the relevant nodes, 2) create new node to be populated
         TransformationNode * fwd_producer = fw_dtx->transformations[t-1];
@@ -108,7 +108,7 @@ DataTransformations * reverse_and_combine_transformations(DataTransformations * 
     for (int g=0; g<bck_first_node->groups.size(); g++){
         vector<int> new_shape(fw_last_node->groups[g]->shape);
         bck_first_node->groups[g]->shape = new_shape;
-        cout << s(2) << v2s(new_shape) << endl;
+        if (DEBUG) cout << s(2) << v2s(new_shape) << endl;
     }
 
     // Step 2: For every pair of nodes in the forward dtx, create a new node in the backward dtx

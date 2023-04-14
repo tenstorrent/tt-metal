@@ -18,9 +18,11 @@ bool row_major_memory_store(DataTransformations * dtx) {
     int rank = producer_shape.size();
     vector<int> consumer_shape = {1, 1, vector_product(producer_shape)};
     consumer->groups[0]->shape = consumer_shape;
-
+    if(DEBUG) cout << "Producer shape - " << v2s(producer_shape) << endl;
+    if(DEBUG) cout << "Consumer shape - " << v2s(consumer_shape) << endl;
     // Generate tensor pairs
     int consumer_x = 0;
+    int i = 0;
     for (int z=0; z<producer_shape[Z(rank)]; z++) {
         for (int y=0; y<producer_shape[Y(rank)]; y++) {
             vector<int> producer_str = {z, y, 0};
@@ -31,10 +33,12 @@ bool row_major_memory_store(DataTransformations * dtx) {
             TensorPair * tp = new TensorPair(new Tensor({producer_str}, {producer_end}),
                                             0,
                                             new Tensor({consumer_str}, {consumer_end}));
+            if (DEBUG) cout << s(6) << i << ".  " << tp->get_string() << endl;
 
             consumer->groups[0]->tensor_pairs.push_back(tp);
 
             consumer_x += producer_shape[X(rank)];
+            i++;
         }
     }
 

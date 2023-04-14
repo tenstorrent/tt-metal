@@ -552,6 +552,89 @@ bool test_high_level_pass_and_evaluate() {
     return data_transformed == golden_data;
 }
 
+bool test_block_2d_matrix_pass_(vector<int> shape, vector<int> block_shape, vector<int> dim_order,
+                            vector<uint32_t> input_data, vector<uint32_t> golden_data) {
+    DataTransformations * dtx_left = new DataTransformations();
+    TransformationNode * node1 = new TransformationNode("producer", 1);
+    node1->groups[0]->shape = shape;
+    dtx_left->transformations.push_back(node1);
+    bool pass = row_major_memory_store(dtx_left);
+    //dtx_left->print();
+    DataTransformations * dtx_right = new DataTransformations();
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = shape;
+    dtx_right->transformations.push_back(node0);
+    pass &= block_2d_matrix(dtx_right, dim_order, block_shape);
+    pass &= row_major_memory_store(dtx_right);
+    //dtx_right->print();
+    DataTransformations * combined = reverse_and_combine_transformations(dtx_left, dtx_right);
+    //cout << "\n\nDTX_COMBINED" << endl;
+    //combined->print();
+    pass &= collapse_transformations(combined);
+    //cout << "\n\nDTX_COLLAPSED" << endl;
+    //combined->print();
+    pass &= generate_transfer_addresses(combined);
+    vector<uint32_t> data_transformed = evaluate<uint32_t>(input_data, combined);
+    return data_transformed == golden_data;
+}
+
+bool test_block_2d_matrix_pass() {
+    bool pass = true;
+    vector<int> shape = {1, 4, 4};
+    vector<uint32_t> input_data_4_4 = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    // list of tests - block shape, dim order, golden data
+    vector<tuple<vector<int>, vector<int>, vector<uint32_t>>> tests_4_4 = {
+        { {4,4}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} },
+        { {2,4}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} },
+        { {1,4}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} },
+        { {4,1}, {0,1,2}, {1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15, 4, 8, 12, 16} },
+        { {4,2}, {0,1,2}, {1, 2, 5, 6, 9, 10, 13, 14, 3, 4, 7, 8, 11, 12, 15, 16} },
+        { {2,2}, {0,1,2}, {1, 2, 5, 6, 3, 4, 7, 8, 9, 10, 13, 14, 11, 12, 15, 16} },
+        { {2,2}, {0,2,1}, {1, 2, 5, 6, 9, 10, 13, 14, 3, 4, 7, 8, 11, 12, 15, 16} },
+
+    };
+    for (auto & t : tests_4_4) {
+        auto block_shape = std::get<0>(t);
+        auto dim_order = std::get<1>(t);
+        auto golden_data = std::get<2>(t);
+        pass &= test_block_2d_matrix_pass_(shape, block_shape, dim_order, input_data_4_4, golden_data);
+        if(pass) {
+            std::cout << "Passed test with shape = ";
+        }
+        else {
+            std::cout << "Failed test with shape = ";
+        }
+        std::cout << v2s(shape) << " , block shape = " << v2s(block_shape) << " , dim order = " << v2s(dim_order) << std::endl;
+    }
+    // Testing shape with x != y
+    shape = {1, 2, 6};
+    vector<uint32_t> input_data_2_6 = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    // list of tests - block shape, dim order, golden data
+    vector<tuple<vector<int>, vector<int>, vector<uint32_t>>> tests_2_6 = {
+        { {2,6}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} },
+        { {1,6}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} },
+        { {2,2}, {0,1,2}, {1, 2, 7, 8, 3, 4, 9, 10, 5, 6, 11, 12} },
+        { {2,3}, {0,1,2}, {1, 2, 3, 7, 8, 9, 4, 5, 6, 10, 11, 12} },
+        { {1,3}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} },
+        { {1,3}, {0,2,1}, {1, 2, 3, 7, 8, 9, 4, 5, 6, 10, 11, 12} },
+
+    };
+    for (auto & t : tests_2_6) {
+        auto block_shape = std::get<0>(t);
+        auto dim_order = std::get<1>(t);
+        auto golden_data = std::get<2>(t);
+        pass &= test_block_2d_matrix_pass_(shape, block_shape, dim_order, input_data_2_6, golden_data);
+        if(pass) {
+            std::cout << "Passed test with shape = ";
+        }
+        else {
+            std::cout << "Failed test with shape = ";
+        }
+        std::cout << v2s(shape) << " , block shape = " << v2s(block_shape) << " , dim order = " << v2s(dim_order) << std::endl;
+    }
+    return pass;
+
+}
 void run_dtx_tests() {
     bool pass = true;
 
@@ -601,6 +684,9 @@ void run_dtx_tests() {
 
     pass &= test_high_level_pass_and_evaluate();
     printf("test_high_level_pass_and_evaluate - %d\n\n", pass);
+
+    pass &= test_block_2d_matrix_pass();
+    printf("test_block_2d_matrix_pass - %d\n\n", pass);
 
     if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
     else cout << "TESTS FAILED\n\n\n" << endl;

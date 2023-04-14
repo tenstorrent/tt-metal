@@ -56,6 +56,8 @@ bool row_major_memory_store(DataTransformations * dtx);
 // Slice into tiles (32x32) - WORKS?
 bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order);
 
+bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<int> block_shape_yx);
+
 // Slice into tiles and store into row-major, col-major, or any other dim order - IS THIS NOW OBSOLETE?
 bool slice_into_tiles_and_store(DataTransformations * dtx, vector<int> dim_order);
 

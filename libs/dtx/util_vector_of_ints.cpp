@@ -47,6 +47,7 @@ vector<int> vector_subtraction(vector<int> a, vector<int> b) {
 vector<int> vector_division(vector<int> a, vector<int> b) {
     vector<int> result;
     for (int d=0; d<a.size(); d++) {
+        assert(a[d] % b[d] == 0);
         result.push_back(a[d] / b[d]);
     }
     return result;
@@ -100,7 +101,7 @@ vector<int> vector_pad_on_left(vector<int> input, int pad_size, int pad_value){
     for (int d=0; d<pad_size; d++){
         output.push_back(pad_value);
     }
-    for (int d=input.size()-1; d>-1; d--){
+    for (int d=0; d<input.size(); d++){
         output.push_back(input[d]);
     }
     return output;

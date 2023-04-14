@@ -26,5 +26,6 @@ DataTransformations * simple_high_level_pass(vector<int> shape) {
     //cout << "\n\nDTX_COLLAPSED" << endl;
     //combined->print();
     pass &= generate_transfer_addresses(combined);
+    //combined->print();
     return combined;
 }
