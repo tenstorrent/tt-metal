@@ -25,10 +25,11 @@ void kernel_main() {
     // padding args
     uint32_t out_num_nonzero_subblocks_h        = get_arg_val<uint32_t>(13);
     uint32_t out_last_subblock_h                = get_arg_val<uint32_t>(14);
-    uint32_t out_num_nonzero_subblocks_w        = get_arg_val<uint32_t>(15);
-    uint32_t out_last_subblock_w                = get_arg_val<uint32_t>(16);
-    uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(17);
-    uint32_t padded_block_tiles_skip            = get_arg_val<uint32_t>(18);
+    uint32_t padded_block_tiles_h_skip          = get_arg_val<uint32_t>(15);
+    uint32_t out_num_nonzero_subblocks_w        = get_arg_val<uint32_t>(16);
+    uint32_t out_last_subblock_w                = get_arg_val<uint32_t>(17);
+    uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(18);
+    uint32_t padded_block_tiles_w_skip          = get_arg_val<uint32_t>(19);
 
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different
@@ -92,10 +93,13 @@ void kernel_main() {
                 out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
             }
             // Pop fully padded subblocks along the row
-            cb_wait_front(cb_id_out0, padded_block_tiles_skip);
-            cb_pop_front(cb_id_out0, padded_block_tiles_skip);
+            cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
+            cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
             out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
         }
+        // Pop row(s) of fully padded subblocks
+        cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
+        cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
         out_tensor_start_tile_id += MtNt;
     }
 }
