@@ -70,22 +70,22 @@
         src: ../assets/tt_flash/
         dest: "infra_testing/scripts/tt_flash"
 
-- name: Install SMI (GRAYSKULL ONLY)
+- name: Install SMI
   hosts: all
   tasks:
     - name: Make infra_testing workspace for tt-smi
       file:
-        path: infra_testing/tt_smi/gs
+        path: "infra_testing/tt_smi/{{ arch }}"
         state: directory
     - name: Copy SMI to workspace (assuming assets downloaded)
       ansible.builtin.copy:
-        src: ../assets/tt_smi/gs/tt-smi
-        dest: "infra_testing/tt_smi/gs/tt-smi"
+        src: "../assets/tt_smi/{{ arch }}/tt-smi"
+        dest: "infra_testing/tt_smi/{{ arch }}/tt-smi"
     - name: Install SMI to local bin
       become: yes
       ansible.builtin.copy:
         remote_src: true
-        src: "infra_testing/tt_smi/gs/tt-smi"
+        src: "infra_testing/tt_smi/{{ arch }}/tt-smi"
         dest: "/usr/local/bin/tt-smi"
     - name: Make tt-smi executable
       become: yes

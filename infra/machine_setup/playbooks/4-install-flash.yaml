@@ -1,13 +1,13 @@
 ---
-- name: Flash GS board
+- name: Flash board
   hosts: all
   tasks:
     - name: Make TT flash rom script executable
       become: yes
       file:
-        path: "infra_testing/scripts/tt_flash/gs/tt-flash"
+        path: "infra_testing/scripts/tt_flash/{{ arch }}/tt-flash"
         mode: u+x
     - name: Flash ROM on board to install new firmware and params
       become: yes
       command:
-        cmd: infra_testing/scripts/tt_flash/gs/tt-flash
+        cmd: "infra_testing/scripts/tt_flash/{{ arch }}/tt-flash"
