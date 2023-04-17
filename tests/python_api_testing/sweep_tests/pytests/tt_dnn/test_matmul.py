@@ -32,12 +32,16 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
         ([[1, 2, 5120, 1024], [1, 1, 1024, 512]], 0),
         # Multi core reuse with padding (?% math util)
         ([[1, 2, 480, 1024], [1, 1, 1024, 480]], 0),
+
         # Multi core reuse multicast in0/in1 with padding (?% math util)
         ([[1, 2, 5088, 1024], [1, 1, 1024, 6112]], 0),
+        ([[1, 2, 4928, 1024], [1, 1, 1024, 6048]], 0),
         # Multi core reuse multicast in0 with padding (?% math util)
         ([[1, 2, 480, 1024], [1, 1, 1024, 6112]], 0),
+        ([[1, 2, 320, 1024], [1, 1, 1024, 6048]], 0),
         # Multi core reuse multicast in1 with padding (?% math util)
         ([[1, 2, 5088, 1024], [1, 1, 1024, 480]], 0),
+        ([[1, 2, 4928, 1024], [1, 1, 1024, 416]], 0),
     ),
 )
 def test_run_matmul_test(input_shapes, pcie_slot, function_level_defaults):
@@ -73,12 +77,16 @@ def test_run_matmul_test(input_shapes, pcie_slot, function_level_defaults):
         ([[1, 2, 5120, 1024], [1, 2, 1024, 512]], 0),
         # Multi core reuse with padding (?% math util)
         ([[1, 2, 480, 1024], [1, 2, 1024, 480]], 0),
+
         # Multi core reuse multicast in0/in1 with padding (?% math util)
         ([[1, 2, 5088, 1024], [1, 2, 1024, 6112]], 0),
+        ([[1, 2, 4928, 1024], [1, 2, 1024, 6048]], 0),
         # Multi core reuse multicast in0 with padding (?% math util)
         ([[1, 2, 480, 1024], [1, 2, 1024, 6112]], 0),
+        ([[1, 2, 320, 1024], [1, 2, 1024, 6048]], 0),
         # Multi core reuse multicast in1 with padding (?% math util)
         ([[1, 2, 5088, 1024], [1, 2, 1024, 480]], 0),
+        ([[1, 2, 4928, 1024], [1, 2, 1024, 416]], 0),
     ),
 )
 def test_run_bmm_test(input_shapes, pcie_slot, function_level_defaults):
