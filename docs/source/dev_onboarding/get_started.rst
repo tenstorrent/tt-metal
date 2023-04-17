@@ -54,6 +54,18 @@ this:
 
     git config core.commentchar ">"
 
+Setting Logger level
+--------------------
+
+In order to get debug level log messages, set env ``LOGGER_LEVEL=Debug``.
+
+e.g.
+
+::
+
+    LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
+
+
 Run pre/post commit regressions
 -------------------------------
 

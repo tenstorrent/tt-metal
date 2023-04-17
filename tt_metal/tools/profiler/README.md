@@ -9,8 +9,8 @@ Profiling is provided through the `profiler.hpp` module. The idea is that portio
 all of it can be wrapped between a start and end timer marks. After the execution of the function,
 the delta between the two markers can be calculated as the period of the portion you wanted to
 profile. For each tt_metal function such as `LaunchKernels` the entire function is wrapped in timers
-and using `DumpHostProfileResults` the result will be dumped into `profiler_log.json` in the current
-directory.
+and using `tt_metal::DumpHostProfileResults` the result will be dumped into `profile_log_host.csv` in the directory
+assigned by `tt_metal::SetProfilerDir` or the default location `tt_metal/tools/profiler/logs/`.
 
 With respect to how the host side api of `tt_metal` is designed, it is assumed that a subset of
 methods from this module will execute __only once__ during each section of running an entire
