@@ -21,7 +21,7 @@ TT_METAL_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal -I$(TT_METAL_
 TT_METAL_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal_impl
 TT_METAL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
-include tt_metal/impl/module.mk
+include $(TT_METAL_HOME)/tt_metal/impl/module.mk
 
 TT_METAL_SRCS = \
 	tt_metal/tt_metal.cpp
