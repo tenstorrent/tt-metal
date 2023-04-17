@@ -86,7 +86,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             ttl.tensor.BcastOpMath.MUL,
             ttl.tensor.BcastOpDim.HW
         )
-    host = ttl.device.GetHost()
+
     def mha_(activation, attention_mask):
         Q = QProjection(activation)
         K = KProjection(activation)

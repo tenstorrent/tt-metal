@@ -39,7 +39,7 @@ class TtBertShared(torch.nn.Module):
         embeddings = self.embeddings(input_ids, token_type_ids)
         if attention_mask is not None:
             extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
-            extended_attention_mask[extended_attention_mask<-100000] = -100000 # Limit neg value that goes into exp
+            extended_attention_mask = torch.clamp(extended_attention_mask, -100000) # Limit neg value that goes into exp
             extended_attention_mask = pad_activation(extended_attention_mask)
             tt_attention_mask = ttl.tensor.Tensor(extended_attention_mask.reshape(-1).tolist(), extended_attention_mask.shape, ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
             tt_attention_mask = tt_attention_mask.to(self.device)
