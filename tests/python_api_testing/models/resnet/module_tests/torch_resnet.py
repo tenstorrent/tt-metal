@@ -57,6 +57,8 @@ class Bottleneck(nn.Module):
         self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
         self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
         self.bn1.eval()
+        self.relu1 = nn.ReLU(inplace=True)
+
 
         self.conv2 = conv3x3(width, width, stride, groups, dilation, state_dict=state_dict, base_address=f"{self.base_address}.conv2")
         self.bn2 = norm_layer(width)
@@ -66,6 +68,8 @@ class Bottleneck(nn.Module):
         self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
         self.bn2.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False)
         self.bn2.eval()
+        self.relu2 = nn.ReLU(inplace=True)
+
 
         self.conv3 = conv1x1(width, planes * self.expansion, state_dict=state_dict, base_address=f"{base_address}.conv3")
         self.bn3 = norm_layer(planes * self.expansion)
@@ -80,16 +84,17 @@ class Bottleneck(nn.Module):
         self.downsample = downsample
         self.stride = stride
 
+
     def forward(self, x: Tensor) -> Tensor:
         identity = x
 
         out = self.conv1(x)
         out = self.bn1(out)
-        out = self.relu(out)
+        out = self.relu1(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
-        out = self.relu(out)
+        out = self.relu2(out)
 
         out = self.conv3(out)
         out = self.bn3(out)
@@ -99,8 +104,8 @@ class Bottleneck(nn.Module):
 
         out += identity
         out = self.relu(out)
-
         return out
+
 
 class BasicBlock(nn.Module):
     expansion: int = 1
@@ -151,6 +156,7 @@ class BasicBlock(nn.Module):
 
         self.downsample = downsample
         self.stride = stride
+
 
     def forward(self, x: Tensor) -> Tensor:
         identity = x
