@@ -652,9 +652,10 @@ def generate_plots (devicesData, setup):
         key = f"Chip {chipID} Cores"
         timelineFigs[key] = timeline_plot(yVals, xValsDict, setup)
 
-        xValsDict = plotData_to_timelineXVals(deviceData, ['DEVICE'], setup)
-        key = f"Chip {chipID} Device"
-        timelineFigs[key] = timeline_plot(['DEVICE'], xValsDict, setup)
+        # TODO: Very inefficient in large datasets. Will need to draw manually if deemed useful
+        # xValsDict = plotData_to_timelineXVals(deviceData, ['DEVICE'], setup)
+        # key = f"Chip {chipID} Device"
+        # timelineFigs[key] = timeline_plot(['DEVICE'], xValsDict, setup)
 
         figHtmls = {f"{setup.outputFolder}/{fig.replace(' ','_')}_{setup.devicePerfHTML}":fig for fig in sorted(timelineFigs.keys())}
         for filename, figHtml in figHtmls.items():

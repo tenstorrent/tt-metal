@@ -300,7 +300,7 @@ void local_mem_copy() {
 }
 
 int main() {
-    kernel_profiler::init_profiler();
+    kernel_profiler::init_BR_profiler();
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
     kernel_profiler::mark_time(CC_MAIN_START);

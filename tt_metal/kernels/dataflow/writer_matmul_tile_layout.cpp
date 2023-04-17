@@ -46,7 +46,6 @@ void kernel_main() {
             uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
             cb_wait_front(cb_id_out0, out_subblock_tile_count);
-            kernel_profiler::mark_time_once(5, &one_time_profile);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
             for(uint32_t h = 0; h < out_subblock_h; h++) {
@@ -54,6 +53,7 @@ void kernel_main() {
                 for(uint32_t w = 0; w < out_subblock_w; w++) {
                     uint64_t out_tensor_tile_noc_addr = get_noc_addr(out_tensor_tile_id, s);
 
+                    kernel_profiler::mark_time(9);
                     noc_async_write(l1_read_addr, out_tensor_tile_noc_addr, single_tile_size_bytes);
                     l1_read_addr+=single_tile_size_bytes;
 

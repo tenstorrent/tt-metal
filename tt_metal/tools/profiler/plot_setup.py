@@ -53,19 +53,34 @@ class default_setup(metaclass=MergeMetaclass):
         'NCRISC': {
             "color":"light:r"
         },
-        'TENSIX': {
+        'TRISC_0': {
             "color":"light:gray"
-        }
-
+        },
+        'TRISC_1': {
+            "color":"light:gray"
+        },
+        'TRISC_2': {
+            "color":"light:gray"
+        },
+        'TENSIX': {
+            "color":"light:b"
+        },
     }
 
-    riscs = ["BRISC","NCRISC","TENSIX"]
+    riscs = [
+        "BRISC",
+        "NCRISC",
+        "TRISC_0",
+        "TRISC_1",
+        "TRISC_2",
+        # "TENSIX",
+    ]
 
     timerIDLabels = [
         (0, "Start"),
         (1, "Firmware Start"),
-        (2, "Data Movement Kernel start"),
-        (3, "Data Movement Kernel End"),
+        (2, "Kernel start"),
+        (3, "Kernel End"),
         (4, "Firmware End"),
     ]
 
@@ -74,7 +89,7 @@ class default_setup(metaclass=MergeMetaclass):
     displayStats = ["Count","Average","Max","Median","Min"]
 
     plotBaseHeight = 200
-    plotPerCoreHeight = 90
+    plotPerCoreHeight = 120
 
     webappPort = 8050
 

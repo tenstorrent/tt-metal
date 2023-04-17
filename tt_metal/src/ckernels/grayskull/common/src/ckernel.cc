@@ -1,4 +1,3 @@
-
 #include "ckernel.h"
 #include "fw_debug.h"
 #include "ckernel_main.h"
@@ -9,6 +8,8 @@
 #include "ckernel_perf_unpack_pack.h"
 #include "ckernel_perf_math.h"
 #endif
+
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace ckernel
 {
@@ -149,6 +150,11 @@ using namespace ckernel;
 
 int main(int argc, char *argv[])
 {
+    kernel_profiler::init_profiler();
+
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+  kernel_profiler::mark_time(CC_MAIN_START);
+#endif
     FWEVENT("Launching proudction env kernels");
 
     // Initialize GPRs to all 0s
@@ -186,7 +192,13 @@ int main(int argc, char *argv[])
 
     //while (ready_for_next_epoch())
     {
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+  kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
+#endif
         run_kernel();
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+  kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+#endif
     }
 
     // Signal completion
@@ -199,4 +211,7 @@ int main(int argc, char *argv[])
 #endif
     trisc_l1_mailbox_write(KERNEL_COMPLETE);
 
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+  kernel_profiler::mark_time(CC_MAIN_END);
+#endif
 }

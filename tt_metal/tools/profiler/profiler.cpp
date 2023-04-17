@@ -111,6 +111,21 @@ void Profiler::dumpDeviceResults (
             logical_core,
             "BRISC",
             PRINT_BUFFER_BR);
+        readRiscProfilerResults(
+            device,
+            logical_core,
+            "TRISC_0",
+            PRINT_BUFFER_T0);
+        readRiscProfilerResults(
+            device,
+            logical_core,
+            "TRISC_1",
+            PRINT_BUFFER_T1);
+        readRiscProfilerResults(
+            device,
+            logical_core,
+            "TRISC_2",
+            PRINT_BUFFER_T2);
     }
 }
 
@@ -132,20 +147,22 @@ void Profiler::readRiscProfilerResults(
             device->pcie_slot(),
             worker_core,
             risc_print_buffer_addr,
-            PRINT_BUFFER_SIZE*sizeof(std::uint32_t));
+            PRINT_BUFFER_SIZE);
 
     end_index = profile_buffer[kernel_profiler::BUFFER_END_INDEX];
+    TT_ASSERT (end_index < (PRINT_BUFFER_SIZE/sizeof(uint32_t)));
     dropped_marker_counter = profile_buffer[kernel_profiler::DROPPED_MARKER_COUNTER];
 
     if(dropped_marker_counter > 0){
         log_debug(
                 tt::LogDevice,
-                "{} device markers on device {} core {},{} risc {} were dropped",
+                "{} device markers on device {} core {},{} risc {} were dropped. End index {}",
                 dropped_marker_counter,
                 pcie_slot,
                 logical_core.x,
                 logical_core.y,
-                risc_name);
+                risc_name,
+                end_index);
     }
 
     for (int i = kernel_profiler::MARKER_DATA_START; i < end_index; i+=kernel_profiler::TIMER_DATA_UINT32_SIZE) {
