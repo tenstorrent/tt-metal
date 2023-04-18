@@ -16,7 +16,6 @@ from torchvision import models, transforms
 import pytest
 from tqdm import tqdm
 
-from common import ImageNet
 from imagenet import prep_ImageNet
 from libs import tt_lib as ttl
 from torch_resnet import _make_layer, Bottleneck
@@ -29,7 +28,6 @@ batch_size=1
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
 def test_resnet18_module1(fuse_ops):
     with torch.no_grad():
-        # torch.manual_seed(1234)
         # Initialize the device
         device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
         ttl.device.InitializeDevice(device)

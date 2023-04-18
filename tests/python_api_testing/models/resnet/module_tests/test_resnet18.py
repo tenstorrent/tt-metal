@@ -16,7 +16,6 @@ from torchvision import models, transforms
 import pytest
 from tqdm import tqdm
 
-from common import ImageNet
 from imagenet import prep_ImageNet
 from libs import tt_lib as ttl
 from torch_resnet import _make_layer, BasicBlock, ResNet

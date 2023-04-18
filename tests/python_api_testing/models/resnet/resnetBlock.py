@@ -11,15 +11,218 @@ from typing import Type, Union, Optional, List, Callable
 import torch
 import torch.nn as nn
 
-from utils import conv3x3, conv1x1
-from BasicBlock import BasicBlock
-from Bottleneck import Bottleneck
+from utils import conv3x3, conv1x1, fold_bn_to_conv
 from utility_functions import tt2torch_tensor, torch2tt_tensor
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from libs import tt_lib as ttl
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from python_api_testing.fused_ops.softmax import softmax as TtSoftmax
 from utils import pad_by_zero, unpad_from_zero
+
+
+class Bottleneck(nn.Module):
+    # Bottleneck in torchvision places the stride for downsampling at 3x3 convolution(self.conv2)
+    # while original implementation places the stride at the first 1x1 convolution(self.conv1)
+    # according to "Deep residual learning for image recognition" https://arxiv.org/abs/1512.03385.
+    # This variant is also known as ResNet V1.5 and improves accuracy according to
+    # https://ngc.nvidia.com/catalog/model-scripts/nvidia:resnet_50_v1_5_for_pytorch.
+
+    expansion: int = 4
+
+    def __init__(
+        self,
+        inplanes: int,
+        planes: int,
+        stride: int = 1,
+        downsample: Optional[nn.Module] = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: Optional[Callable[..., nn.Module]] = None,
+        device = None,
+        host = None,
+        state_dict = None,
+        base_address = None,
+        fold_batchnorm = False,
+    ) -> None:
+        super().__init__()
+        self.host = host
+        self.device = device
+        self.state_dict = state_dict
+        self.base_address = base_address
+        self.fold_batchnorm = fold_batchnorm
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        width = int(planes * (base_width / 64.0)) * groups
+        # Both self.conv2 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = conv1x1(inplanes, width, state_dict=state_dict, base_address=f"{base_address}.conv1")
+
+        self.bn1 = norm_layer(width)
+        self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
+        self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address}.bn1.bias"])
+        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_mean"])
+        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
+        self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
+        self.bn1.eval()
+
+        self.conv2 = conv3x3(width, width, stride, groups, dilation, state_dict=state_dict, base_address=f"{base_address}.conv2")
+
+        self.bn2 = norm_layer(width)
+        self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
+        self.bn2.bias = nn.Parameter(state_dict[f"{self.base_address}.bn2.bias"])
+        self.bn2.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_mean"])
+        self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
+        self.bn2.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False)
+        self.bn2.eval()
+
+        self.conv3 = conv1x1(width, planes * self.expansion, state_dict=state_dict, base_address=f"{base_address}.conv3")
+
+        self.bn3 = norm_layer(planes * self.expansion)
+        self.bn3.weight = nn.Parameter(state_dict[f"{self.base_address}.bn3.weight"])
+        self.bn3.bias = nn.Parameter(state_dict[f"{self.base_address}.bn3.bias"])
+        self.bn3.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn3.running_mean"])
+        self.bn3.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn3.running_var"])
+        self.bn3.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn3.num_batches_tracked"], requires_grad=False)
+        self.bn3.eval()
+
+        self.relu = ttl.tensor.relu
+        self.downsample = downsample
+        self.stride = stride
+
+        if not self.fold_batchnorm:
+            self.conv1.weight, self.conv1.bias = fold_bn_to_conv(self.conv1, self.bn1)
+            self.conv2.weight, self.conv2.bias = fold_bn_to_conv(self.conv2, self.bn2)
+            self.conv3.weight, self.conv3.bias = fold_bn_to_conv(self.conv3, self.bn3)
+            self.bn1 = nn.Identity()
+            self.bn2 = nn.Identity()
+            self.bn3 = nn.Identity()
+
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+
+        out, initial_shape = pad_by_zero(out, self.device)
+
+        out = self.relu(out)
+        out = unpad_from_zero(out, initial_shape, self.host)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        out, initial_shape = pad_by_zero(out, self.device)
+        out = self.relu(out)
+        out = unpad_from_zero(out, initial_shape, self.host)
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+        out, out_initial_shape = pad_by_zero(out, self.device)
+        identity, identity_initial_shape = pad_by_zero(identity, self.device)
+
+        out = ttl.tensor.add(out, identity)
+
+        out = self.relu(out)
+
+        out = unpad_from_zero(out, out_initial_shape, self.host)
+        return out
+
+
+class BasicBlock(nn.Module):
+    expansion: int = 1
+
+    def __init__(
+        self,
+        inplanes: int,
+        planes: int,
+        stride: int = 1,
+        downsample: Optional[nn.Module] = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: Optional[Callable[..., nn.Module]] = None,
+        device = None,
+        host = None,
+        state_dict = None,
+        base_address = None,
+        fold_batchnorm = False,
+    ) -> None:
+        super().__init__()
+        self.device = device
+        self.host = host
+        self.base_address = base_address
+        self.fold_batchnorm = fold_batchnorm
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        if groups != 1 or base_width != 64:
+            raise ValueError("BasicBlock only supports groups=1 and base_width=64")
+        if dilation > 1:
+            raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
+        # Both self.conv1 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = conv3x3(inplanes, planes, stride, state_dict=state_dict, base_address=f"{base_address}.conv1")
+        self.bn1 = norm_layer(planes)
+        self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
+        self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address}.bn1.bias"])
+        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_mean"])
+        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
+        self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
+        self.bn1.eval()
+
+        self.relu = ttl.tensor.relu
+        self.conv2 = conv3x3(planes, planes, state_dict=state_dict, base_address=f"{base_address}.conv2")
+        self.bn2 = norm_layer(planes)
+
+        self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
+        self.bn2.bias = nn.Parameter(state_dict[f"{self.base_address}.bn2.bias"])
+        self.bn2.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_mean"])
+        self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
+        self.bn2.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False)
+        self.bn2.eval()
+
+        if self.fold_batchnorm:
+            self.conv1.weight, self.conv1.bias = fold_bn_to_conv(self.conv1, self.bn1)
+            self.conv2.weight, self.conv2.bias = fold_bn_to_conv(self.conv2, self.bn2)
+            self.bn1 = nn.Identity()
+            self.bn2 = nn.Identity()
+
+
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+
+        out = self.conv1(x)
+        if not self.fold_batchnorm:
+            out = self.bn1(out)
+        # pad
+        out, initial_shape = pad_by_zero(out, self.device)
+
+        out = self.relu(out)
+        # unpad
+        out = unpad_from_zero(out, initial_shape, self.host)
+
+        out = self.conv2(out)
+        if not self.fold_batchnorm:
+            out = self.bn2(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        identity, identity_initial_shape = pad_by_zero(identity, self.device)
+        out, out_initial_shape = pad_by_zero(out, self.device)
+
+        out = ttl.tensor.add(out, identity)
+
+        out = self.relu(out)
+        out = unpad_from_zero(out, out_initial_shape, self.host)
+
+        return out
+
 
 class ResNet(nn.Module):
     def __init__(
@@ -35,13 +238,15 @@ class ResNet(nn.Module):
         device = None,
         host = None,
         state_dict = None,
-        base_address = None
+        base_address = None,
+        fold_batchnorm = False
     ) -> None:
         super().__init__()
         self.device = device
         self.host = host
         self.base_address_with_dot = base_address # this is root layer, no dot is needed
         self.state_dict = state_dict
+        self.fold_batchnorm = fold_batchnorm
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -69,6 +274,10 @@ class ResNet(nn.Module):
         self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.num_batches_tracked"], requires_grad=False)
         self.bn1.eval()
 
+        if self.fold_batchnorm:
+            self.conv1.weight, self.conv1.bias = fold_bn_to_conv(self.conv1, self.bn1)
+            self.bn1 = nn.Identity()
+
         self.relu = ttl.tensor.relu
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict)
@@ -86,24 +295,6 @@ class ResNet(nn.Module):
         self.fc = TtLinear(512 * block.expansion, 1024, fc_weight, fc_bias, self.device) # num_classes = 1000
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
 
-        # for m in self.modules(): #Note: Commented out since we are loading weights
-
-        #     if isinstance(m, nn.Conv2d):
-        #         nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-        #     elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
-        #         nn.init.constant_(m.weight, 1)
-        #         nn.init.constant_(m.bias, 0)
-
-        # Zero-initialize the last BN in each residual branch,
-        # so that the residual branch starts with zeros, and each residual block behaves like an identity.
-        # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
-        if zero_init_residual:
-            assert False, "we should never get here!"
-            # for m in self.modules():
-            #     if isinstance(m, Bottleneck) and m.bn3.weight is not None:
-            #         nn.init.constant_(m.bn3.weight, 0)  # type: ignore[arg-type]
-            #     elif isinstance(m, BasicBlock) and m.bn2.weight is not None:
-            #         nn.init.constant_(m.bn2.weight, 0)  # type: ignore[arg-type]
 
     def _make_layer(
         self,
@@ -123,17 +314,21 @@ class ResNet(nn.Module):
             stride = 1
         if stride != 1 or self.inplanes != planes * block.expansion:
             nl = norm_layer(planes * block.expansion)
-            downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, stride, state_dict=self.state_dict, base_address=f"{self.base_address_with_dot}{name}.0.downsample.0"),
-                nl,
-
-            )
             nl.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.weight"])
             nl.bias = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.bias"])
             nl.running_mean = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.running_mean"])
             nl.running_var = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.running_var"])
             nl.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.num_batches_tracked"], requires_grad=False)
             nl.eval()
+            downsample_conv = conv1x1(self.inplanes, planes * block.expansion, stride, state_dict=self.state_dict, base_address=f"{self.base_address_with_dot}{name}.0.downsample.0")
+            if self.fold_batchnorm:
+                downsample_conv.weight, downsample_conv.bias = fold_bn_to_conv(downsample_conv, nl)
+                nl = nn.Identity()
+            downsample = nn.Sequential(
+                downsample_conv,
+                nl,
+            )
+
 
         layers = []
         layers.append(
@@ -149,7 +344,8 @@ class ResNet(nn.Module):
                 device=self.device,
                 host=self.host,
                 state_dict=self.state_dict,
-                base_address=f"{self.base_address_with_dot}{name}.0"
+                base_address=f"{self.base_address_with_dot}{name}.0",
+                fold_batchnorm=self.fold_batchnorm,
             )
         )
         self.inplanes = planes * block.expansion
@@ -166,6 +362,7 @@ class ResNet(nn.Module):
                     host=self.host,
                     state_dict=self.state_dict,
                     base_address=f"{self.base_address_with_dot}{name}.{_}",
+                    fold_batchnorm=self.fold_batchnorm,
                 )
             )
 
@@ -173,11 +370,12 @@ class ResNet(nn.Module):
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv1(x)
-        x = self.bn1(x)
+        if not self.fold_batchnorm:
+            x = self.bn1(x)
 
-        x = torch2tt_tensor(x, self.device)
+        x, initial_shape = pad_by_zero(x, self.device)
         x = self.relu(x)
-        x = tt2torch_tensor(x, self.host)
+        x = unpad_from_zero(x, initial_shape, self.host)
 
         x = self.maxpool(x)
 

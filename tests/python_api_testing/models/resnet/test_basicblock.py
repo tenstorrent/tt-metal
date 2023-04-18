@@ -19,9 +19,8 @@ import torchvision
 from torchvision import models
 from torchvision import transforms
 
-from BasicBlock import BasicBlock
 from libs import tt_lib as ttl
-from common import ImageNet
+
 from resnet import _resnet
 
 from utility_functions import comp_allclose_and_pcc, comp_pcc
@@ -85,13 +84,7 @@ def test_run_basicblock_inference():
         print(torch_output.shape, tt_output.shape)
         print(comp_allclose_and_pcc(torch_output, tt_output), "outputs")
 
-        # print(comp_allclose_and_pcc(torch_model2.weight, tt_model2.weight))
-        # print(comp_allclose_and_pcc(torch_model2.bias, tt_model2.bias))
-        # print(comp_allclose_and_pcc(torch_model2.running_mean, tt_model2.running_mean))
-        # print(comp_allclose_and_pcc(torch_model2.running_var, tt_model2.running_var))
-        # print(comp_allclose_and_pcc(torch_model2.num_batches_tracked, tt_model2.num_batches_tracked))
-        # print(tt_model2)
-        # print(torch_model2)
+
 
 
 test_run_basicblock_inference()

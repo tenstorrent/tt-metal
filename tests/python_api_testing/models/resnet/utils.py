@@ -1,3 +1,4 @@
+from typing import Tuple
 import torch
 import torch.nn as nn
 import torchvision
@@ -74,3 +75,22 @@ def unpad_from_zero(x, desired_shape, host):
         x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
         x = torch.Tensor(x.data()).reshape(x.shape())
     return x
+
+def fold_bn_to_conv(conv: torch.nn.Conv2d, bn: torch.nn.BatchNorm2d) -> Tuple[nn.Parameter]:
+    # Note: this function is not used, however I am keeping it for reference
+    epsilon = bn.eps # Crucially important to use batchnorm's eps
+
+    bn_weight = bn.weight.unsqueeze(1).unsqueeze(1).unsqueeze(1)
+    bn_running_var = bn.running_var.unsqueeze(1).unsqueeze(1).unsqueeze(1)
+
+    weight = conv.weight
+    weight = (conv.weight / torch.sqrt(bn_running_var + epsilon)) * bn_weight
+
+    bn_running_mean = bn.running_mean.unsqueeze(1).unsqueeze(1).unsqueeze(1)
+    bn_bias = bn.bias.unsqueeze(1).unsqueeze(1).unsqueeze(1)
+
+    bias = -(bn_weight) * (bn_running_mean / torch.sqrt(bn_running_var + epsilon)) + bn_bias
+
+    bias = bias.squeeze(-1).squeeze(-1).squeeze(-1)
+
+    return (nn.Parameter(weight), nn.Parameter(bias))
