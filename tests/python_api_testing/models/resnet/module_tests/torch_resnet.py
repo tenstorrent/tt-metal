@@ -7,23 +7,14 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-from tqdm import tqdm
-
-import torch
-# torch.backends.cudnn.enabled = False
-# torch.backends.cudnn.deterministic = True
-torch.use_deterministic_algorithms(True)
 
 import torch
 import torch.nn as nn
 from torch import Tensor
-import torchvision
-from torchvision import models
-from torchvision import transforms
+from typing import Type, Union, Optional, Callable, List
+from tqdm import tqdm
 
 from libs import tt_lib as ttl
-
-from typing import Type, Union, Optional, Callable
 
 batch_size=1
 
@@ -142,7 +133,7 @@ class BasicBlock(nn.Module):
         self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
         self.bn1.eval()
 
-        self.relu = nn.ReLU(inplace=True)
+        self.relu1 = nn.ReLU(inplace=True)
 
         self.conv2 = conv3x3(planes, planes, state_dict=state_dict, base_address=f"{base_address}.conv2")
 
@@ -153,7 +144,7 @@ class BasicBlock(nn.Module):
         self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
         self.bn2.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False)
         self.bn2.eval()
-
+        self.relu2 = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
 
@@ -163,7 +154,7 @@ class BasicBlock(nn.Module):
 
         out = self.conv1(x)
         out = self.bn1(out)
-        out = self.relu(out)
+        out = self.relu1(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
@@ -172,7 +163,7 @@ class BasicBlock(nn.Module):
             identity = self.downsample(x)
 
         out += identity
-        out = self.relu(out)
+        out = self.relu2(out)
 
         return out
 
@@ -264,3 +255,80 @@ def _make_layer(
         )
 
     return nn.Sequential(*layers)
+
+class ResNet(nn.Module):
+    def __init__(
+        self,
+        block: Type[Union[BasicBlock, Bottleneck]],
+        layers: List[int],
+        num_classes: int = 1000,
+        zero_init_residual: bool = False,
+        groups: int = 1,
+        width_per_group: int = 64,
+        replace_stride_with_dilation: Optional[List[bool]] = None,
+        norm_layer: Optional[Callable[..., nn.Module]] = None,
+        state_dict=None,
+        base_address=""
+    ) -> None:
+        super().__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        self._norm_layer = norm_layer
+
+        self.inplanes = 64
+        self.dilation = 1
+        if replace_stride_with_dilation is None:
+            # each element in the tuple indicates if we should replace
+            # the 2x2 stride with a dilated convolution instead
+            replace_stride_with_dilation = [False, False, False]
+        if len(replace_stride_with_dilation) != 3:
+            raise ValueError(
+                "replace_stride_with_dilation should be None "
+                f"or a 3-element tuple, got {replace_stride_with_dilation}"
+            )
+        self.groups = groups
+        self.base_width = width_per_group
+
+        self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
+        self.conv1.weight = nn.Parameter(state_dict["conv1.weight"])
+
+        self.bn1 = norm_layer(self.inplanes)
+        self.bn1.weight = nn.Parameter(state_dict[f"bn1.weight"])
+        self.bn1.bias = nn.Parameter(state_dict[f"bn1.bias"])
+        self.bn1.running_mean = nn.Parameter(state_dict[f"bn1.running_mean"])
+        self.bn1.running_var = nn.Parameter(state_dict[f"bn1.running_var"])
+        self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"bn1.num_batches_tracked"], requires_grad=False)
+        self.bn1.eval()
+
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = _make_layer(block, 64, layers[0], state_dict=state_dict, name="layer1")
+        self.layer2 = _make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], state_dict=state_dict, name="layer2")
+        self.layer3 = _make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], state_dict=state_dict, name="layer3")
+        self.layer4 = _make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], state_dict=state_dict, name="layer4")
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.fc.weight = nn.Parameter(state_dict["fc.weight"])
+        self.fc.bias = nn.Parameter(state_dict["fc.bias"])
+
+
+    def _forward_impl(self, x: Tensor) -> Tensor:
+        # See note [TorchScript super()]
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+
+        return x
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self._forward_impl(x)

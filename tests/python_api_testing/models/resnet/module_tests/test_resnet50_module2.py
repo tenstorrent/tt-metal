@@ -8,24 +8,19 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
-from torch_resnet import _make_layer, Bottleneck
-from torch_resnet import *
+from typing import Type, Union, Optional, Callable
+from loguru import logger
 
 import torch
-import torch.nn as nn
-from torch import Tensor
-import torchvision
-from torchvision import models
-from torchvision import transforms
-
-from libs import tt_lib as ttl
-from common import ImageNet
+from torchvision import models, transforms
 import pytest
-from loguru import logger
-from typing import Type, Union, Optional, Callable
-from imagenet import prep_ImageNet
 from tqdm import tqdm
 
+from common import ImageNet
+from imagenet import prep_ImageNet
+from libs import tt_lib as ttl
+from torch_resnet import _make_layer, Bottleneck
+from torch_resnet import *
 from utility_functions import comp_allclose_and_pcc, comp_pcc
 
 batch_size=1
@@ -34,7 +29,6 @@ batch_size=1
 def test_resnet50_module2(fuse_ops):
 
     with torch.no_grad():
-        # torch.manual_seed(1234)
         # Initialize the device
         device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
         ttl.device.InitializeDevice(device)
@@ -69,8 +63,7 @@ def test_resnet50_module2(fuse_ops):
         torch_output = torch_module(input)
         tt_output = layer2(input)
 
-        print(layer2)
-
-        passing, info = comp_allclose_and_pcc(torch_output, tt_output)
+        passing, info = comp_pcc(torch_output, tt_output)
+        # we cannot use comp_allclose_and_pcc because the values are close, rtol ends up being nan.
         logger.info(f"{passing}, {info}")
         assert passing

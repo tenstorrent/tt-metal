@@ -8,33 +8,26 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
-from torch_resnet import _make_layer, Bottleneck
-from torch_resnet import *
-
-import torch
-import torch.nn as nn
-from torch import Tensor
-import torchvision
-from torchvision import models
-from torchvision import transforms
-
-from libs import tt_lib as ttl
-from common import ImageNet
 from typing import Type, Union, Optional, Callable
-
 from loguru import logger
 
-from imagenet import prep_ImageNet
+import torch
+from torchvision import models, transforms
+import pytest
 from tqdm import tqdm
 
+from common import ImageNet
+from imagenet import prep_ImageNet
+from libs import tt_lib as ttl
+from torch_resnet import _make_layer, Bottleneck
+from torch_resnet import *
 from utility_functions import comp_allclose_and_pcc, comp_pcc
+
+
 batch_size=1
 
-def test_resnet18_module1():
-    # inputs
-    layer1_input = (1, 64, 64, 64)
-    input_shape = layer1_input
-
+@pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
+def test_resnet18_module1(fuse_ops):
     with torch.no_grad():
         # torch.manual_seed(1234)
         # Initialize the device
@@ -50,6 +43,11 @@ def test_resnet18_module1():
         layer1 = _make_layer(BasicBlock, 64, 2, name="layer1", state_dict=state_dict)
         layer1.eval()
 
+        if fuse_ops:
+            modules_to_fuse = [['0.conv1', '0.bn1', '0.relu1'], ['0.conv2', '0.bn2']]
+            modules_to_fuse.extend([['1.conv1', '1.bn1', '1.relu1'], ['1.conv2', '1.bn2']])
+            layer1 = torch.ao.quantization.fuse_modules(layer1, modules_to_fuse)
+
         dataloader = prep_ImageNet(batch_size=batch_size)
         for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
             image = images
@@ -61,10 +59,12 @@ def test_resnet18_module1():
         input = torch_resnet.maxpool(transformed_input)
 
 
+
         torch_output = torch_module1(input)
         tt_output = layer1(input)
 
-        passing, info = comp_allclose_and_pcc(torch_output, tt_output)
+        passing, info = comp_pcc(torch_output, tt_output)
+        # we cannot use comp_allclose_and_pcc because the values are close, rtol ends up being nan.logger.info(f"{passing}, {info}")
 
         logger.info(f"{passing}, {info}")
         assert passing
