@@ -6,8 +6,8 @@
  * non_blocking APIs shouldn't be mixed with slow noc.h APIs
  * explicit flushes need to be used since the calls are non-blocking
  * */
-constexpr static std::uint32_t VALID = 0x1234;
-constexpr static std::uint32_t INVALID = 0x4321;
+constexpr static std::uint32_t VALID_VAL = 0x1234;
+constexpr static std::uint32_t INVALID_VAL = 0x4321;
 
 inline std::uint32_t ping_pong_address(std::uint32_t addr1, std::uint32_t addr2, std::uint32_t index) {
     if((index & 0x1) == 0) {
@@ -32,7 +32,7 @@ void kernel_main() {
 
     // Scratch address in L1, two write register value before we copy it to into local/remote registers
     volatile uint32_t* constant_ptr = reinterpret_cast<volatile uint32_t*>(CONSTANT_REGISTER_VALUE);
-    *(constant_ptr) = VALID;
+    *(constant_ptr) = VALID_VAL;
 
     // keeps track of how many tiles we moved so far
     std::uint32_t counter = 0;
@@ -46,8 +46,8 @@ void kernel_main() {
 
         // DRAM NOC src address
         dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
-        // Wait until sync register is INVALID (means its safe to corrupt destination buffer)
-        wait_for_sync_register_value(reg_addr, INVALID);
+        // Wait until sync register is INVALID_VAL (means its safe to corrupt destination buffer)
+        wait_for_sync_register_value(reg_addr, INVALID_VAL);
         // Copy data from dram into destination buffer
         noc_async_read(dram_buffer_src_noc_addr, local_buffer_address, transient_buffer_size_bytes);
         dram_buffer_src_addr += transient_buffer_size_bytes;
@@ -56,7 +56,7 @@ void kernel_main() {
 
         noc_async_write(CONSTANT_REGISTER_VALUE, local, 4);
         noc_async_write_barrier();
-        // Write VALID into remote register
+        // Write VALID_VAL into remote register
         noc_async_write(CONSTANT_REGISTER_VALUE, remote, 4);
         noc_async_write_barrier();
 

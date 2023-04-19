@@ -1,6 +1,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug_print.h"
+// #include "debug_print.h"
 
 void kernel_main() {
     volatile uint32_t* copy_desc_info_addr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(0));

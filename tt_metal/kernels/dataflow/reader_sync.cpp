@@ -6,8 +6,8 @@
  * non_blocking APIs shouldn't be mixed with slow noc.h APIs
  * explicit flushes need to be used since the calls are non-blocking
  * */
-constexpr static std::uint32_t VALID = 0x1234;
-constexpr static std::uint32_t INVALID = 0x4321;
+constexpr static std::uint32_t VALID_VAL = 0x1234;
+constexpr static std::uint32_t INVALID_VAL = 0x4321;
 void kernel_main() {
     std::uint32_t buffer_src_addr            = get_arg_val<uint32_t>(0);
     std::uint32_t src_noc_x                  = get_arg_val<uint32_t>(1);
@@ -22,7 +22,7 @@ void kernel_main() {
 
     // Scratch address in L1, two write register value before we copy it to into local/remote registers
     volatile uint32_t* constant_ptr = reinterpret_cast<volatile uint32_t*>(CONSTANT_REGISTER_VALUE);
-    *(constant_ptr) = INVALID;
+    *(constant_ptr) = INVALID_VAL;
 
     std::uint32_t counter = 0;
     // src noc address
@@ -31,8 +31,8 @@ void kernel_main() {
     std::uint64_t local = get_noc_addr(stream_register_address);
     std::uint64_t remote = get_noc_addr(src_noc_x, src_noc_y, stream_register_address);
     while(counter < num_tiles) {
-        // Wait until sync register is VALID (means its safe to read data from source buffer into operand buffer)
-        wait_for_sync_register_value(stream_register_address, VALID);
+        // Wait until sync register is VALID_VAL (means its safe to read data from source buffer into operand buffer)
+        wait_for_sync_register_value(stream_register_address, VALID_VAL);
         cb_reserve_back(0, transient_buffer_size_tiles);
 
         noc_async_read(src_noc_addr, l1_address, transient_buffer_size_bytes);
@@ -40,11 +40,11 @@ void kernel_main() {
 
         // push single tile
         cb_push_back(0, transient_buffer_size_tiles);
-        // Write INVALID into local register
+        // Write INVALID_VAL into local register
         noc_async_write(CONSTANT_REGISTER_VALUE, local, 4);
         noc_async_write_barrier();
 
-        // Write INVALID into remote register
+        // Write INVALID_VAL into remote register
         noc_async_write(CONSTANT_REGISTER_VALUE, remote, 4);
         noc_async_write_barrier();
 

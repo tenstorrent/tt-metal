@@ -51,7 +51,7 @@ void compile_dispatch_kernel(std::string root_dir) {
     // NCRISC / BRISC config
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/dispatch/dispatch.cpp";
 
-    std::map<string, string> brisc_defines = {{"IS_DISPATCH_CORE", ""}};
+    std::map<string, string> brisc_defines = {{"IS_DISPATCH_KERNEL", ""}, {"DEVICE_DISPATCH_MODE", ""}};
     build_kernel_for_riscv_options.brisc_defines = brisc_defines;
 
     // generate binaries

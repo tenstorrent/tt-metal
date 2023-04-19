@@ -20,7 +20,7 @@ class bfloat16 {
     // create from float: no rounding, just truncate
     bfloat16(float float_num) {
         uint32_t uint32_data;
-        assert (sizeof float_num == sizeof uint32_data);
+        TT_ASSERT (sizeof float_num == sizeof uint32_data);
 
         uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
         // just move upper 16 to lower 16 (truncate)
@@ -271,7 +271,7 @@ inline void print_vec(std::vector<uint32_t> vec, int num_tiles, string name = ""
 
 inline std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector<bfloat16>& data) {
     std::vector<uint32_t> result;
-    assert(data.size() % 2 == 0);
+    TT_ASSERT(data.size() % 2 == 0);
     for(auto i = 0; i < data.size(); i+=2) {
         auto val1 = data[i];
         auto val2 = data[i+1];

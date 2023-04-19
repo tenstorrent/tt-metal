@@ -6,8 +6,8 @@
  * non_blocking APIs shouldn't be mixed with slow noc.h APIs
  * explicit flushes need to be used since the calls are non-blocking
  * */
-constexpr static std::uint32_t VALID = 0x1234;
-constexpr static std::uint32_t INVALID = 0x4321;
+constexpr static std::uint32_t VALID_VAL = 0x1234;
+constexpr static std::uint32_t INVALID_VAL = 0x4321;
 void kernel_main() {
     std::uint32_t dram_buffer_src_addr_base         = get_arg_val<uint32_t>(0);
     std::uint32_t dram_src_noc_x                    = get_arg_val<uint32_t>(1);
@@ -22,7 +22,7 @@ void kernel_main() {
 
     // Scratch address in L1, two write register value before we copy it to into local/remote registers
     volatile uint32_t* constant_ptr = reinterpret_cast<volatile uint32_t*>(CONSTANT_REGISTER_VALUE);
-    *(constant_ptr) = VALID;
+    *(constant_ptr) = VALID_VAL;
     // Local and remote register addresses (used for sync)
     std::uint64_t local = get_noc_addr(stream_register_address);
     std::uint64_t remote = get_noc_addr(consumer_core_noc_x, consumer_core_noc_y, stream_register_address);
@@ -33,20 +33,20 @@ void kernel_main() {
     while(counter < num_tiles) {
         // DRAM NOC src address
         std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
-        // Wait until sync register is INVALID (means its safe to corrupt destination buffer)
-        wait_for_sync_register_value(stream_register_address, INVALID);
+        // Wait until sync register is INVALID_VAL (means its safe to corrupt destination buffer)
+        wait_for_sync_register_value(stream_register_address, INVALID_VAL);
         // Copy data from dram into destination buffer
         noc_async_read(dram_buffer_src_noc_addr, local_buffer_addr, transient_buffer_size_bytes);
         dram_buffer_src_addr += transient_buffer_size_bytes;
         // wait all reads flushed (ie received)
         noc_async_read_barrier();
 
-        // Write VALID into local register
+        // Write VALID_VAL into local register
         noc_async_write(CONSTANT_REGISTER_VALUE, local, 4);
         noc_async_write_barrier();
 
 
-        // Write VALID into remote register
+        // Write VALID_VAL into remote register
         noc_async_write(CONSTANT_REGISTER_VALUE, remote, 4);
         noc_async_write_barrier();
 

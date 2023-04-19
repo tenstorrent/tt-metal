@@ -263,8 +263,22 @@ void device_setup() {
     core.wall_clock_mailbox()[0] = core.read_wall_clock();
 }
 
+
 #include "dataflow_api.h"
 #include "kernel.cpp"
+inline void notify_host_kernel_finished() {
+    uint32_t pcie_noc_x = NOC_X(0);
+    uint32_t pcie_noc_y = NOC_Y(4); // These are the PCIE core coordinates
+    uint64_t pcie_address =
+        get_noc_addr(pcie_noc_x, pcie_noc_y, 0);  // For now, we are writing to host hugepages at offset 0 (nothing else currently writing to it)
+
+    volatile uint32_t* done = reinterpret_cast<volatile uint32_t*>(NOTIFY_HOST_KERNEL_COMPLETE_ADDR);
+    done[0] = NOTIFY_HOST_KERNEL_COMPLETE_VALUE; // 512 was chosen arbitrarily, but it's less common than 1 so easier to check validity
+
+    // Write to host hugepages to notify of completion
+    noc_async_write(NOTIFY_HOST_KERNEL_COMPLETE_ADDR, pcie_address, 4);
+    noc_async_write_barrier();
+}
 
 void local_mem_copy() {
     volatile uint* l1_local_mem_start_addr;
@@ -298,13 +312,11 @@ int main() {
     // fine because this is done before we launch NCRISC (in "device_setup")
     // TODO: we could specialize it via "noc_id", in the same manner as "noc_init" (see below)
     risc_init();
-    //   uint32_t is_dispatch_core = *reinterpret_cast<volatile uint32_t*>(RUNTIME_CONFIG_BASE + 8);
 
+#if not defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)
     volatile uint32_t* enable_core_mailbox_ptr =
         (volatile uint32_t*)(l1_mem::address_map::FIRMWARE_BASE + ENABLE_CORE_MAILBOX);
-#if not defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_CORE)
-    while (enable_core_mailbox_ptr[0] != 0x1)
-        ;
+    while (enable_core_mailbox_ptr[0] != 0x1);
 #endif
 
     init_sync_registers();  // this init needs to be done before NCRISC / TRISCs are launched, only done by BRISC
@@ -358,7 +370,7 @@ int main() {
         test_mailbox_ptr[0] = 0x1;
 
 // disable core once we're done
-#if not defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_CORE)
+#if not defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)
     enable_core_mailbox_ptr[0] = 0x0;
 #endif
 
@@ -366,9 +378,21 @@ int main() {
     kernel_profiler::mark_time(CC_MAIN_END);
 #endif
 
-#if defined(DEVICE_DISPATCH_MODE) and not defined(IS_DISPATCH_CORE)
+/*
+    Some preprocessor checks to ensure we don't mix
+    dispatch variables with non-dispatch variables
+*/
+#if (defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)) and defined(WRITE_TO_HUGE_PAGE)
+    static_assert(false, "If under 'DEVICE_DISPATCH_MODE' we implicitly write to huge page, we don't need to explicitly have the 'WRITE_TO_HUGE_PAGE' define");
+#endif
+
+#if defined(IS_DISPATCH_KERNEL) or defined(WRITE_TO_HUGE_PAGE)
+    notify_host_kernel_finished();
+#endif
+
+#if defined(DEVICE_DISPATCH_MODE) and not defined(IS_DISPATCH_KERNEL)
+    // Notify dispatcher core that it has completed
     volatile uint64_t* dispatch_addr = reinterpret_cast<volatile uint64_t*>(DISPATCH_MESSAGE_ADDR);
-    // Notify dispatch that it has completed
     noc_semaphore_inc(*dispatch_addr, 1);
 #endif
 

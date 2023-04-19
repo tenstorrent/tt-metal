@@ -75,10 +75,8 @@ constexpr static std::uint32_t ASSERT_RESET_SRC_L1_ADDR   = 110784;
 
 // Dispatch message address
 constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = 110816;
-
-// Beware, this is uint64_t! not uint32_t, so make sure to set next addition
-// to this runtime map accordingly
 constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;
+constexpr static std::uint32_t NOTIFY_HOST_KERNEL_COMPLETE_ADDR = 110880;
 
 // Information for deassert/assert reset
 enum class TensixSoftResetOptions: std::uint32_t {

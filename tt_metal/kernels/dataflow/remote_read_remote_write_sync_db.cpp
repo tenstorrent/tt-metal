@@ -6,8 +6,8 @@
  * non_blocking APIs shouldn't be mixed with slow noc.h APIs
  * explicit flushes need to be used since the calls are non-blocking
  * */
-constexpr static std::uint32_t VALID = 0x1234;
-constexpr static std::uint32_t INVALID = 0x4321;
+constexpr static std::uint32_t VALID_VAL = 0x1234;
+constexpr static std::uint32_t INVALID_VAL = 0x4321;
 
 inline std::uint32_t ping_pong_address(std::uint32_t addr1, std::uint32_t addr2, std::uint32_t index) {
     if((index & 0x1) == 0) {
@@ -35,7 +35,7 @@ void kernel_main() {
 
     // Scratch address in L1, two write register value before we copy it to into local/remote registers
     volatile uint32_t* constant_ptr = reinterpret_cast<volatile uint32_t*>(CONSTANT_REGISTER_VALUE);
-    *(constant_ptr) = INVALID;
+    *(constant_ptr) = INVALID_VAL;
 
     std::uint32_t counter = 0;
     std::uint32_t dst_buffer_addr = buffer_dst_addr;
@@ -48,8 +48,8 @@ void kernel_main() {
         std::uint32_t src_buffer_address = ping_pong_address(buffer_src_addr1, buffer_src_addr2, counter);
         std::uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_buffer_address);
 
-        // Wait until sync register is VALID (means its safe to read data from source buffer into operand buffer)
-        wait_for_sync_register_value(reg_addr, VALID);
+        // Wait until sync register is VALID_VAL (means its safe to read data from source buffer into operand buffer)
+        wait_for_sync_register_value(reg_addr, VALID_VAL);
         noc_async_read(src_noc_addr, local_buffer_address, transient_buffer_size_bytes);
         noc_async_read_barrier();
 

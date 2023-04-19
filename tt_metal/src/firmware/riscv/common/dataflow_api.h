@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include "hostdevcommon/common_runtime_address_map.h"
+#include "hostdevcommon/common_values.hpp"
 #include "circular_buffer.h"
 
 /*
