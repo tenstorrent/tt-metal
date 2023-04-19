@@ -59,6 +59,54 @@ inline std::ostream& operator<<(std::ostream& os, const DataFormat& format) {
     return os;
 }
 
+// Size of datum in bytes
+inline constexpr static uint32_t datum_size(const DataFormat &format) {
+    switch (format) {
+        case DataFormat::Bfp2:
+        case DataFormat::Bfp2_b:
+        case DataFormat::Bfp4:
+        case DataFormat::Bfp4_b:
+        case DataFormat::Bfp8:
+        case DataFormat::Bfp8_b: throw std::invalid_argument("datum for bfp2, bfp4, bfp8 is invalid");
+        case DataFormat::Float16:
+        case DataFormat::Float16_b: return 2;
+        case DataFormat::Float32: return 4;
+        case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
+        case DataFormat::Int8: return 1;
+        case DataFormat::Lf8: return 1;
+        case DataFormat::UInt16: return 2;
+        case DataFormat::RawUInt8: return 1;
+        case DataFormat::RawUInt16: return 2;
+        case DataFormat::RawUInt32: return 4;
+        case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
+        default: throw std::invalid_argument("Unknown format");
+    }
+}
+
+// Size of tile in bytes
+inline constexpr static uint32_t tile_size(const DataFormat &format) {
+    switch (format) {
+        case DataFormat::Bfp2:
+        case DataFormat::Bfp2_b: return (64 * 4) + (16 * 4);
+        case DataFormat::Bfp4:
+        case DataFormat::Bfp4_b: return (128 * 4) + (16 * 4);
+        case DataFormat::Bfp8:
+        case DataFormat::Bfp8_b: return (256 * 4) + (16 *4);
+        case DataFormat::Float16:
+        case DataFormat::Float16_b: return (1024 * 2);
+        case DataFormat::Float32: return (1024 * 4);
+        case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
+        case DataFormat::Int8: return 1024;
+        case DataFormat::Lf8: return 1024;
+        case DataFormat::UInt16: return (1024 * 2);
+        case DataFormat::RawUInt8: return 1024;
+        case DataFormat::RawUInt16: return (1024 * 2);
+        case DataFormat::RawUInt32: return (1024 * 4);
+        case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
+        default: throw std::invalid_argument("Unknown format");
+    }
+}
+
 /**
  * @brief Device Enums
  */

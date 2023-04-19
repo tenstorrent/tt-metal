@@ -354,6 +354,31 @@ ComputeKernel *CreateComputeKernel(
     bool math_approx_mode);
 
 // ==================================================
+//                  HOST API: data format
+// ==================================================
+/**
+ * Returns datum size of given data format in bytes
+ *
+ * Return value: uint32_t
+ *
+ * | Argument    | Description    | Type                | Valid Range | Required |
+ * |-------------|----------------|---------------------|-------------|----------|
+ * | data_format | Format of data | tt::DataFormat enum |             | Yes      |
+ */
+uint32_t DatumSize(const DataFormat &data_format);
+
+/**
+ * Returns tile size of given data format in bytes
+ *
+ * Return value: uint32_t
+ *
+ * | Argument    | Description    | Type                | Valid Range | Required |
+ * |-------------|----------------|---------------------|-------------|----------|
+ * | data_format | Format of data | tt::DataFormat enum |             | Yes      |
+ */
+uint32_t TileSize(const DataFormat &data_format);
+
+// ==================================================
 //                  HOST API: buffers
 // ==================================================
 /**

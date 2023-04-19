@@ -30,6 +30,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_dram_loopback_single_core \
 		 tests/tt_metal/test_dram_loopback_single_core_db \
 		 tests/tt_metal/test_eltwise_binary \
+		 tests/tt_metal/test_matmul_single_tile_bfp8b \
 		 tests/tt_metal/test_matmul_single_tile \
 		 tests/tt_metal/test_matmul_multi_tile \
 		 tests/tt_metal/test_matmul_large_block \
@@ -39,6 +40,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_matmul_multi_core_multi_dram_in0_mcast \
 		 tests/tt_metal/test_matmul_multi_core_multi_dram_in1_mcast \
 		 tests/tt_metal/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast \
+		 tests/tt_metal/test_datacopy_bfp8b \
 		 tests/tt_metal/test_datacopy \
 		 tests/tt_metal/test_dataflow_cb \
 		 tests/tt_metal/test_flatten \

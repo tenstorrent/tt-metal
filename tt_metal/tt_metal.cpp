@@ -189,6 +189,14 @@ ComputeKernel *CreateComputeKernel(
     return kernel;
 }
 
+uint32_t DatumSize(const DataFormat &data_format) {
+    return tt::datum_size(data_format);
+}
+
+uint32_t TileSize(const DataFormat &data_format) {
+    return tt::tile_size(data_format);
+}
+
 DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address) {
     TT_ASSERT(dram_channel >= 0 and dram_channel <= 7, "Valid range for DRAM channel is [0, 7]");
     DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes, address);
