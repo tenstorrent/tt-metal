@@ -135,7 +135,8 @@ class ImageNet:
         return dataloader
 
 
-def prep_ImageNet(root, batch_size=1):
+def prep_ImageNet(batch_size=1):
+    root = "/mnt/MLPerf/pytorch_weka_data/imagenet/dataset/ILSVRC/Data/CLS-LOC"
     imagenet = ImageNet(root)
 
     dataloader = imagenet.get_dataset_loader(

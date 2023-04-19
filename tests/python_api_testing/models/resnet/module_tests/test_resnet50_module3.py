@@ -28,10 +28,6 @@ batch_size=1
 def test_resnet50_module3(fuse_ops, model_location_generator):
 
     with torch.no_grad():
-        # Initialize the device
-        device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-        ttl.device.InitializeDevice(device)
-        host = ttl.device.GetHost()
 
         torch_resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
         torch_resnet.eval()

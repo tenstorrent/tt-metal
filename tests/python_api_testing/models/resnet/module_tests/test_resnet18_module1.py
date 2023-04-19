@@ -28,10 +28,6 @@ batch_size=1
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
 def test_resnet18_module1(fuse_ops, model_location_generator):
     with torch.no_grad():
-        # Initialize the device
-        device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-        ttl.device.InitializeDevice(device)
-        host = ttl.device.GetHost()
 
         torch_resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         torch_resnet.eval()
