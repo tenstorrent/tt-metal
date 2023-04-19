@@ -11,7 +11,6 @@ permissions:
 
 jobs:
   create-tag:
-    runs-on: ubuntu-latest
     uses: tenstorrent-metal/public-workflow-test/.github/workflows/release-verify-or-create-tag.yaml@main
     with:
       bump_each_commit: true
@@ -22,11 +21,13 @@ jobs:
     needs: create-tag
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v3
       - name: Create VERSION
-        run: echo ${{ steps.get-next-semantic-version.version }} > VERSION
+        run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.get-next-semantic-version.version }}
-          name: ${{ steps.get-next-semantic-version.version }}
+          tag_name: ${{ needs.create-tag.outputs.version }}
+          name: ${{ needs.create-tag.outputs.version }}
           files: VERSION
