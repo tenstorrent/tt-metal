@@ -1,0 +1,29 @@
+name: Package and release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["release"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  tag-and-release-lfs:
+    uses: tenstorrent-metal/public-workflow-test/.github/workflows/release-verify-or-create-tag.yaml@main
+    with:
+      bump_each_commit: true
+    secrets:
+      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+  # Candidate for breaking up
+  create-and-upload-release:
+    steps:
+      - name: Create VERSION
+        run: echo ${{ steps.get-next-semantic-version.version }} > VERSION
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get-next-semantic-version.version }}
+          name: ${{ steps.get-next-semantic-version.version }}
+          files: VERSION
