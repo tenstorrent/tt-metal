@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 jobs:
-  tag-and-release-lfs:
+  create-tag:
     uses: tenstorrent-metal/public-workflow-test/.github/workflows/release-verify-or-create-tag.yaml@main
     with:
       bump_each_commit: true
