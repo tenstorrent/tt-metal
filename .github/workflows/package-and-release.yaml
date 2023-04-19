@@ -1,7 +1,6 @@
 name: Package and release
 
 on:
-  workflow_dispatch:
   push:
     branches: ["release"]
 
