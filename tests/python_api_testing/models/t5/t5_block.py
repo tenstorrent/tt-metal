@@ -106,7 +106,7 @@ class TtT5Block(nn.Module):
 
             # clamp inf values to enable fp16 training
             # Always true for Tt
-            if True: # hidden_states.dtype == torch.float16:
+            if False: # hidden_states.dtype == torch.float16:
                 hidden_states = tt2torch_tensor(hidden_states)
 
                 clamp_value = torch.where(
@@ -130,7 +130,7 @@ class TtT5Block(nn.Module):
 
         # clamp inf values to enable fp16 training
         # Always true for Tt
-        if True: # hidden_states.dtype == torch.float16:
+        if False: # hidden_states.dtype == torch.float16:
             hidden_states = tt2torch_tensor(hidden_states)
 
             clamp_value = torch.where(

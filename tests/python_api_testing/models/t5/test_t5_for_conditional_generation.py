@@ -244,7 +244,7 @@ def run_generate(input_sentance, run_tt_model, device):
     print(generation_config)
 
     decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
-    decoder_input_ids = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
+    decoder_input_ids = generation_config.pad_token_id * torch.ones(1, 64).to(torch.long)
     print(f"decoder_input_ids {decoder_input_ids}")
 
     tt_model = TtT5Model(config, hf_reference_model.state_dict(), device)
@@ -252,10 +252,15 @@ def run_generate(input_sentance, run_tt_model, device):
     use_cache = False
 
     for i in range(2048):
+
         # PyTorch forward pass
         pt_out = hf_reference_model(input_ids=input_ids, decoder_input_ids=decoder_input_ids, attention_mask=attention_mask)
 
         if run_tt_model:
+            print("----------------------------------------------------------------------")
+            print("---------------------> Running TT Model <-----------------------------")
+            print("----------------------------------------------------------------------")
+
             tt_out = tt_model(input_ids=input_ids, decoder_input_ids=decoder_input_ids, attention_mask=attention_mask, encoder_outputs=encoder_outputs, return_dict=True, use_cache=use_cache)
             encoder_outputs = tt_out.encoder_outputs
 
@@ -290,9 +295,19 @@ def run_generate(input_sentance, run_tt_model, device):
 
 def test_T5ForConditionalGeneration():
     input_sentance = "translate English to German: The house is wonderful."
-    #input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
-    #input_sentance = "translate English to French: Welcome to NYC"
-    #input_sentance = "The <extra_id_0> walks in <extra_id_1> park"
+    correct_output = "Das Haus ist wunderbar."
+
+    # input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
+    # correct_output = "QuillBot's Summarizer wants to change how you read. instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
+
+    # input_sentance = "translate English to French: Welcome to NYC"
+    # correct_output = "Bienvenue à NYC"
+
+    # input_sentance = "The <extra_id_0> walks in <extra_id_1> park"
+    # correct_output = "park offers the park."
+
+    # input_sentance = "summarize: I'm sitting here in a boring room. It's just another rainy Sunday afternoon. I'm wasting my time I got nothing to do. I'm hanging around I'm waiting for you. But nothing ever happens. And I wonder"
+    # correct_output = "i'm sitting here in a boring room. I'm wasting my time I got nothing to do. I wonder if nothing ever happens."
 
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
@@ -301,7 +316,7 @@ def test_T5ForConditionalGeneration():
     print(f"Decoded output: {output_sentance}")
 
     ttm.device.CloseDevice(device)
-    assert output_sentance == "Das Haus ist wunderbar."
+    assert output_sentance == correct_output
 
 
 if __name__ == "__main__":

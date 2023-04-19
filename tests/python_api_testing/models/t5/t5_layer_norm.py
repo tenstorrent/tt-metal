@@ -38,22 +38,8 @@ class TtT5LayerNorm(torch.nn.Module):
         self.variance_epsilon = config["layer_norm_epsilon"]
         self.device = device
 
-        # get weights
-        pytorch_weights = state_dict[f"{base_address}.weight"]
-        pytorch_weights = pytorch_weights.repeat(1, 1, 32, 1)
-
-        self.weight = torch2tt_tensor(pytorch_weights, device)
-
-    def forward(self, hidden_states):
-        # handle variance
-        torch_hidden_states = tt2torch_tensor(hidden_states)
-        variance = torch_hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
-        variance = variance.repeat(1, 1, 1, 32)
-        tt_variance = torch2tt_tensor(variance, self.device)
-
-        # Pytorch implementation: hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         # hadle constant variance_epsilon
-        tt_variance_epsilon_const = ttm.tensor.Tensor(
+        self.variance_epsilon_const = ttm.tensor.Tensor(
             [self.variance_epsilon] + [0.0 for _ in range(32 * 32 - 1)],
             [1, 1, 32, 32],
             ttm.tensor.DataType.BFLOAT16,
@@ -61,12 +47,24 @@ class TtT5LayerNorm(torch.nn.Module):
             self.device
         )
 
-        # Product 2: torch.rsqrt(variance + self.variance_epsilon)
-        op_add = ttm.tensor.bcast(tt_variance, tt_variance_epsilon_const, ttm.tensor.BcastOpMath.ADD, ttm.tensor.BcastOpDim.H)
-        term_2 = ttm.tensor.recip(ttm.tensor.sqrt(op_add))
+        # get weights
+        pytorch_weights = state_dict[f"{base_address}.weight"]
+        pytorch_weights = pytorch_weights.repeat(1, 1, 32, 1)
 
-        # Product 1 * Product 2: hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        hidden_states = ttm.tensor.bcast(hidden_states, term_2, ttm.tensor.BcastOpMath.MUL, ttm.tensor.BcastOpDim.W)
+        self.weight = torch2tt_tensor(pytorch_weights, device)
+
+    def forward(self, hidden_states):
+
+        # variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        torch_hidden_states = tt2torch_tensor(hidden_states)
+        variance = torch_hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        variance = variance.repeat(1, 1, 1, 32)
+        variance = torch2tt_tensor(variance, self.device)
+
+        # hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        tmp = ttm.tensor.bcast(variance, self.variance_epsilon_const, ttm.tensor.BcastOpMath.ADD, ttm.tensor.BcastOpDim.H)
+        tmp = ttm.tensor.recip(ttm.tensor.sqrt(tmp))
+        hidden_states = ttm.tensor.bcast(hidden_states, tmp, ttm.tensor.BcastOpMath.MUL, ttm.tensor.BcastOpDim.W)
 
         # weight * hidden_states
         result = ttm.tensor.bcast(hidden_states, self.weight, ttm.tensor.BcastOpMath.MUL, ttm.tensor.BcastOpDim.H)
