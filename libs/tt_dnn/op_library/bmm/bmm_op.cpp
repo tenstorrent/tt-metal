@@ -325,6 +325,108 @@ Tensor large_bmm_single_block(const Tensor& a, const Tensor& b, bool tilize_a, b
     return large_bmm_single_core_single_block(a, b, tilize_a, untilize_out);
 }
 
+Tensor bert_large_fused_qkv_matmul(const Tensor& a, const Tensor& b) {
+    TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
+    TT_ASSERT((b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 3072})), "Unsupported input shape");
+    tt_xy_pair compute_and_storage_grid_size = {12, 9};
+    auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
+    TT_ASSERT((compute_and_storage_grid_size.x <= compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= compute_and_storage_grid_size.y), "Unsupported grid shape");
+    tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+    uint32_t in0_block_w = 4;
+    uint32_t out_subblock_h = 4;
+    uint32_t out_subblock_w = 2;
+    uint32_t per_core_M = 12;
+    uint32_t per_core_N = 8;
+    bool fuse_batch = true;
+    return matmul_multi_core_reuse_mcast_padding_generalized(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+}
+
+Tensor bert_large_ff1_matmul(const Tensor& a, const Tensor& b) {
+    TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
+    TT_ASSERT((b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 4096})), "Unsupported input shape");
+    tt_xy_pair compute_and_storage_grid_size = {12, 9};
+    auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
+    TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
+    tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+    uint32_t in0_block_w = 4;
+    uint32_t out_subblock_h = 6;
+    uint32_t out_subblock_w = 1;
+    uint32_t per_core_M = 12;
+    uint32_t per_core_N = 11;
+    bool fuse_batch = true;
+    return matmul_multi_core_reuse_mcast_padding_generalized(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+}
+
+Tensor bert_large_ff2_matmul(const Tensor& a, const Tensor& b) {
+    TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 384, 4096})), "Unsupported input shape");
+    TT_ASSERT((b.shape() == std::array<uint32_t, 4>({1, 1, 4096, 1024})), "Unsupported input shape");
+    tt_xy_pair compute_and_storage_grid_size = {11, 9};
+    auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
+    TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
+    tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+    uint32_t in0_block_w = 4;
+    uint32_t out_subblock_h = 6;
+    uint32_t out_subblock_w = 1;
+    uint32_t per_core_M = 12;
+    uint32_t per_core_N = 3;
+    bool fuse_batch = true;
+    return matmul_multi_core_reuse_mcast_padding_generalized(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+}
+
+Tensor bert_large_selfout_matmul(const Tensor& a, const Tensor& b) {
+    TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
+    TT_ASSERT((b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 1024})), "Unsupported input shape");
+    tt_xy_pair compute_and_storage_grid_size = {11, 9};
+    auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
+    TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
+    tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+    uint32_t in0_block_w = 4;
+    uint32_t out_subblock_h = 6;
+    uint32_t out_subblock_w = 1;
+    uint32_t per_core_M = 12;
+    uint32_t per_core_N = 3;
+    bool fuse_batch = true;
+    return matmul_multi_core_reuse_mcast_padding_generalized(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+}
+
+Tensor bert_large_pre_softmax_bmm(const Tensor& a, const Tensor& b) {
+    TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 16, 384, 64})), "Unsupported input shape");
+    TT_ASSERT((b.shape() == std::array<uint32_t, 4>({9, 16, 64, 384})), "Unsupported input shape");
+    tt_xy_pair compute_and_storage_grid_size = {12, 9};
+    auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
+    TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
+    tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+    uint32_t in0_block_w = 2;
+    uint32_t out_subblock_h = 4;
+    uint32_t out_subblock_w = 2;
+    uint32_t per_core_M = 12;
+    uint32_t per_core_N = 12;
+    bool fuse_batch = true;
+    return bmm_multi_core_reuse_generalized_bert_large(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+}
+
+Tensor bert_large_post_softmax_bmm(const Tensor& a, const Tensor& b) {
+    TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 16, 384, 384})), "Unsupported input shape");
+    TT_ASSERT((b.shape() == std::array<uint32_t, 4>({9, 16, 384, 64})), "Unsupported input shape");
+    tt_xy_pair compute_and_storage_grid_size = {12, 9};
+    auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
+    TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
+    tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+    uint32_t in0_block_w = 12;
+    uint32_t out_subblock_h = 4;
+    uint32_t out_subblock_w = 2;
+    uint32_t per_core_M = 12;
+    uint32_t per_core_N = 2;
+    bool fuse_batch = true;
+    return bmm_multi_core_reuse_generalized_bert_large(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

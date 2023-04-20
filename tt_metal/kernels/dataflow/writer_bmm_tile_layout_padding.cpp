@@ -36,19 +36,29 @@ void kernel_main() {
     // bank-swizzling configurations
     constexpr uint32_t num_used_dram_ch = 8;
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
-    constexpr uint32_t tile_size_pow2_exponent = 11;
 
     constexpr uint32_t cb_id_out0 = 16;
 
     // single-tile
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
+    constexpr bool tile_size_is_pow2 = (get_compile_time_arg_val(0) == 1);
+    #if (tile_size_is_pow2)
+    const uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen s = {
+        .bank_base_address = out_tensor_addr,
+        .num_used_banks = num_used_dram_c,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent // TODO(AP): refactor
+    };
+    #else
+    const InterleavedAddrGen s = {
         .bank_base_address = out_tensor_addr,
         .num_used_banks = num_used_dram_ch,
         .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+        .bank_unit_size = single_tile_size_bytes
     };
+    #endif
 
     bool one_time_profile = true;
     for (uint32_t b = 0; b < batch; b++) {

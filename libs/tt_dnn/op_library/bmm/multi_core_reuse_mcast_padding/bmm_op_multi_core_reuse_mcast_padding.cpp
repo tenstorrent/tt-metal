@@ -71,10 +71,20 @@ tt_metal::Program * create_program_mcast_in0_in1(
         {(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
         {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
 
+    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+    tt_metal::DataMovementKernelArgs *reader_writer_compile_time_args;
+    if (tile_size_is_power_of_two) {
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(all_cores, {1, (std::uint32_t)log2(single_tile_size)});
+    } else {
+        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(all_cores, {0, 0});
+    }
+
     auto mm_reader_kernel_in0_sender_in1_sender = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
         in0_sender_in1_sender,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_0_default);
 
@@ -82,6 +92,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver_padding.cpp",
         in0_sender_in1_receiver,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_0_default);
 
@@ -89,6 +100,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender_padding.cpp",
         in0_receiver_in1_sender,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -96,6 +108,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
         in0_receiver_in1_receiver,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -103,6 +116,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_except_left_column,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -110,6 +124,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         left_column,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_1_default);
 
@@ -454,10 +469,20 @@ tt_metal::Program * create_program_mcast_in0(
         {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
         {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
 
+    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+    tt_metal::DataMovementKernelArgs *reader_writer_compile_time_args;
+    if (tile_size_is_power_of_two) {
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(all_cores, {1, (std::uint32_t)log2(single_tile_size)});
+    } else {
+        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(all_cores, {0, 0});
+    }
+
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_sender_padding.cpp",
         mcast_senders,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -465,6 +490,7 @@ tt_metal::Program * create_program_mcast_in0(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_receiver_padding.cpp",
         mcast_receivers,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -472,6 +498,7 @@ tt_metal::Program * create_program_mcast_in0(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_cores,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -730,10 +757,20 @@ tt_metal::Program * create_program_mcast_in1(
         {(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
         {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
 
+    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+    tt_metal::DataMovementKernelArgs *reader_writer_compile_time_args;
+    if (tile_size_is_power_of_two) {
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(all_cores, {1, (std::uint32_t)log2(single_tile_size)});
+    } else {
+        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(all_cores, {0, 0});
+    }
+
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_sender_padding.cpp",
         mcast_senders,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -741,6 +778,7 @@ tt_metal::Program * create_program_mcast_in1(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_receiver_padding.cpp",
         mcast_receivers,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -748,6 +786,7 @@ tt_metal::Program * create_program_mcast_in1(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_cores,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 

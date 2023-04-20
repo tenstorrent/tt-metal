@@ -48,7 +48,6 @@ void kernel_main() {
     // bank-swizzling configurations
     constexpr uint32_t num_used_dram_ch = 8;
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
-    constexpr uint32_t tile_size_pow2_exponent = 11;
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -61,19 +60,35 @@ void kernel_main() {
     uint32_t l1_zeros_addr_in2 = get_write_ptr(cb_id_in2);
 
 
+    constexpr bool tile_size_is_pow2 = (get_compile_time_arg_val(0) == 1);
+    #if (tile_size_is_pow2)
+    const uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen s0 = {
         .bank_base_address = in0_tensor_addr,
         .num_used_banks = num_used_dram_ch,
         .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
-
     const InterleavedPow2AddrGen s1 = {
         .bank_base_address = in1_tensor_addr,
         .num_used_banks = num_used_dram_ch,
         .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
         .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
     };
+    #else
+    const InterleavedAddrGen s0 = {
+        .bank_base_address = in0_tensor_addr,
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .bank_unit_size = single_tile_size_bytes
+    };
+    const InterleavedAddrGen s1 = {
+        .bank_base_address = in1_tensor_addr,
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .bank_unit_size = single_tile_size_bytes
+    };
+    #endif
 
 
     for (uint32_t b = 0; b < batch; b++) {

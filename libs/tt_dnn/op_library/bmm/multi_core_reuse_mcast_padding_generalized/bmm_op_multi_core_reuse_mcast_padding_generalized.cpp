@@ -7,15 +7,15 @@
 using namespace tt::constants;
 using namespace tt;
 
-
-namespace mcast_reuse_generalized_helpers {
+namespace mcast_reuse_padding_helpers {
 using namespace tt::constants;
 using namespace tt;
 
 tt_metal::Program * create_program_mcast_in0_in1(
     tt_metal::Device *device,
+    tt::DataFormat cb_data_format,
+    MathFidelity math_fidelity,
     uint32_t single_tile_size,
-    tt_xy_pair start_core,
     tt_xy_pair core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
@@ -33,10 +33,14 @@ tt_metal::Program * create_program_mcast_in0_in1(
     uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
     uint32_t out_CB_tiles = per_core_M * per_core_N;
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
-    TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N <= 400);
 
-    uint32_t start_core_x = start_core.x;
-    uint32_t start_core_y = start_core.y;
+    // Dummy cb to store one tile of zeros for padding
+    uint32_t in2_block_tiles = 1;
+    uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
+
+    TT_ASSERT(in0_CB_size + in1_CB_size  + in2_CB_size + out_CB_size <= device->l1_size() - UNRESERVED_BASE); // Need to add the mcast sepaphore buffers
+    uint32_t start_core_x = 0;
+    uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
@@ -87,7 +91,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
 
     auto mm_reader_kernel_in0_sender_in1_receiver = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
+        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver_padding.cpp",
         in0_sender_in1_receiver,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -95,7 +99,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
 
     auto mm_reader_kernel_in0_receiver_in1_sender = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
+        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender_padding.cpp",
         in0_receiver_in1_sender,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -111,7 +115,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
 
     auto unary_writer_kernel_noc0 = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_except_left_column,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -119,7 +123,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
 
     auto unary_writer_kernel_noc1 = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         left_column,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -165,10 +169,21 @@ tt_metal::Program * create_program_mcast_in0_in1(
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         mm_args,
-        MathFidelity::HiFi4,
+        math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
     );
+
+    // Parameters for last row, col, or block
+    uint32_t last_block_h = M % per_core_M == 0 ? per_core_M : M % per_core_M;
+    uint32_t last_block_w = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_block_num_nonzero_subblocks_h = (last_block_h  - 1) / out_subblock_h + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = (last_block_w  - 1) / out_subblock_w + 1;
+    uint32_t last_subblock_of_last_block_h = last_block_h % out_subblock_h == 0 ? out_subblock_h : last_block_h % out_subblock_h;
+    uint32_t last_subblock_of_last_block_w = last_block_w % out_subblock_w == 0 ? out_subblock_w : last_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip = single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
+    uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
@@ -188,7 +203,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t src1_cb_index = 1;
@@ -200,7 +215,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -211,7 +226,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t interm0_cb_index = 24;
@@ -223,7 +238,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 out_CB_tiles,
                 out_CB_size,
                 cb_output->address(),
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             std::vector<uint32_t> invalid = {INVALID};
@@ -310,15 +325,98 @@ tt_metal::Program * create_program_mcast_in0_in1(
             };
 
             if(core_idx_x == 0 and core_idx_y == 0) {
+                // h and w for writer_args
+                writer_args.push_back(per_core_M / out_subblock_h);
+                writer_args.push_back(out_subblock_h);
+                writer_args.push_back(0);
+                writer_args.push_back(per_core_N / out_subblock_w);
+                writer_args.push_back(out_subblock_w);
+                writer_args.push_back(0);
+                writer_args.push_back(0);
+
                 tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_sender_in1_sender, core, mm_reader_args); // RISCV_0_default
                 tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x == 0 and core_idx_y != 0) {
+                // h
+                if (core_idx_y == num_cores_r - 1) {
+                    mm_reader_args.push_back(last_block_h);
+                    writer_args.push_back(last_block_num_nonzero_subblocks_h);
+                    writer_args.push_back(last_subblock_of_last_block_h);
+                    writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                } else {
+                    mm_reader_args.push_back(per_core_M);
+                    writer_args.push_back(per_core_M / out_subblock_h);
+                    writer_args.push_back(out_subblock_h);
+                    writer_args.push_back(0);
+                }
+                // w
+                mm_reader_args.push_back(per_core_N); // not used
+                writer_args.push_back(per_core_N / out_subblock_w);
+                writer_args.push_back(out_subblock_w);
+                writer_args.push_back(0);
+                writer_args.push_back(0);
+
                 tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_sender_in1_receiver, core, mm_reader_args); // RISCV_0_default
                 tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x != 0 and core_idx_y == 0) {
+                // h
+                mm_reader_args.push_back(per_core_M); // not used
+                writer_args.push_back(per_core_M / out_subblock_h);
+                writer_args.push_back(out_subblock_h);
+                writer_args.push_back(0);
+                // w
+                if (core_idx_x == num_cores_c - 1) {
+                    mm_reader_args.push_back(last_block_w);
+                    writer_args.push_back(last_block_num_nonzero_subblocks_w);
+                    writer_args.push_back(last_subblock_of_last_block_w);
+                    writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
+                    writer_args.push_back(last_block_padded_block_tiles_w_skip);
+                } else {
+                    mm_reader_args.push_back(per_core_N);
+                    writer_args.push_back(per_core_N / out_subblock_w);
+                    writer_args.push_back(out_subblock_w);
+                    writer_args.push_back(0);
+                    writer_args.push_back(0);
+                }
+
                 tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_receiver_in1_sender, core, mm_reader_args); // RISCV_1_default
                 tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             } else {
+                // h and w for writer_args
+                if (core_idx_x == num_cores_c - 1 and core_idx_y == num_cores_r - 1) {
+                    writer_args.push_back(last_block_num_nonzero_subblocks_h);
+                    writer_args.push_back(last_subblock_of_last_block_h);
+                    writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                    writer_args.push_back(last_block_num_nonzero_subblocks_w);
+                    writer_args.push_back(last_subblock_of_last_block_w);
+                    writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
+                    writer_args.push_back(last_block_padded_block_tiles_w_skip);
+                } else if (core_idx_y == num_cores_r - 1) {
+                    writer_args.push_back(last_block_num_nonzero_subblocks_h);
+                    writer_args.push_back(last_subblock_of_last_block_h);
+                    writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                    writer_args.push_back(per_core_N / out_subblock_w);
+                    writer_args.push_back(out_subblock_w);
+                    writer_args.push_back(0);
+                    writer_args.push_back(0);
+                } else if (core_idx_x == num_cores_c - 1) {
+                    writer_args.push_back(per_core_M / out_subblock_h);
+                    writer_args.push_back(out_subblock_h);
+                    writer_args.push_back(0);
+                    writer_args.push_back(last_block_num_nonzero_subblocks_w);
+                    writer_args.push_back(last_subblock_of_last_block_w);
+                    writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
+                    writer_args.push_back(last_block_padded_block_tiles_w_skip);
+                } else {
+                    writer_args.push_back(per_core_M / out_subblock_h);
+                    writer_args.push_back(out_subblock_h);
+                    writer_args.push_back(0);
+                    writer_args.push_back(per_core_N / out_subblock_w);
+                    writer_args.push_back(out_subblock_w);
+                    writer_args.push_back(0);
+                    writer_args.push_back(0);
+                }
+
                 tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_receiver_in1_receiver, core, mm_reader_args); // RISCV_1_default
                 tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             }
@@ -331,8 +429,9 @@ tt_metal::Program * create_program_mcast_in0_in1(
 
 tt_metal::Program * create_program_mcast_in0(
     tt_metal::Device *device,
+    tt::DataFormat cb_data_format,
+    MathFidelity math_fidelity,
     uint32_t single_tile_size,
-    tt_xy_pair start_core,
     tt_xy_pair core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
@@ -350,10 +449,15 @@ tt_metal::Program * create_program_mcast_in0(
     uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
     uint32_t out_CB_tiles = per_core_M * per_core_N;
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
-    TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N <= 400);
 
-    uint32_t start_core_x = start_core.x;
-    uint32_t start_core_y = start_core.y;
+    // Dummy cb to store one tile of zeros for padding
+    uint32_t in2_block_tiles = 1;
+    uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
+
+    TT_ASSERT(in0_CB_size + in1_CB_size + out_CB_size <= device->l1_size() - UNRESERVED_BASE); // Need to add the mcast sepaphore buffers
+
+    uint32_t start_core_x = 0;
+    uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
@@ -379,7 +483,7 @@ tt_metal::Program * create_program_mcast_in0(
 
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_sender.cpp",
+        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_sender_padding.cpp",
         mcast_senders,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -387,7 +491,7 @@ tt_metal::Program * create_program_mcast_in0(
 
     auto mm_reader_kernel_receiver = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_receiver.cpp",
+        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_receiver_padding.cpp",
         mcast_receivers,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -395,7 +499,7 @@ tt_metal::Program * create_program_mcast_in0(
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_cores,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -440,10 +544,21 @@ tt_metal::Program * create_program_mcast_in0(
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         mm_args,
-        MathFidelity::HiFi4,
+        math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
     );
+
+    // Parameters for last row, col, or block
+    uint32_t last_block_h = M % per_core_M == 0 ? per_core_M : M % per_core_M;
+    uint32_t last_block_w = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_block_num_nonzero_subblocks_h = (last_block_h  - 1) / out_subblock_h + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = (last_block_w  - 1) / out_subblock_w + 1;
+    uint32_t last_subblock_of_last_block_h = last_block_h % out_subblock_h == 0 ? out_subblock_h : last_block_h % out_subblock_h;
+    uint32_t last_subblock_of_last_block_w = last_block_w % out_subblock_w == 0 ? out_subblock_w : last_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip = single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
+    uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
@@ -461,7 +576,7 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t src1_cb_index = 1;
@@ -473,7 +588,7 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -484,7 +599,7 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t interm0_cb_index = 24;
@@ -496,7 +611,7 @@ tt_metal::Program * create_program_mcast_in0(
                 out_CB_tiles,
                 out_CB_size,
                 cb_output->address(),
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             std::vector<uint32_t> invalid = {INVALID};
@@ -539,8 +654,8 @@ tt_metal::Program * create_program_mcast_in0(
                 (std::uint32_t)  num_cores_c - 1, // in0_mcast_num_dests
                 (std::uint32_t)  mcast_sender_phyiscal.x, //in0_mcast_sender_noc_x
                 (std::uint32_t)  mcast_sender_phyiscal.y, //in0_mcast_sender_noc_y
-                (std::uint32_t) in0_mcast_sender_semaphore->address(),
-                (std::uint32_t) in0_mcast_receiver_semaphore->address(),
+                (std::uint32_t)  in0_mcast_sender_semaphore->address(),
+                (std::uint32_t)  in0_mcast_receiver_semaphore->address(),
 
                 (std::uint32_t)  M * K, // MtKt
                 (std::uint32_t)  K * N, // KtNt
@@ -566,9 +681,32 @@ tt_metal::Program * create_program_mcast_in0(
                 (std::uint32_t) B // batch
             };
 
-            if(core_idx_x == 0) {
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_sender, core, mm_reader_args);
+            if (core_idx_x < num_cores_c - 1) {
+                mm_reader_args.push_back(last_block_h); // not used for receiver
+                mm_reader_args.push_back(per_core_N); // not used for sender
+                writer_args.push_back(last_block_num_nonzero_subblocks_h);
+                writer_args.push_back(last_subblock_of_last_block_h);
+                writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                writer_args.push_back(per_core_N / out_subblock_w);
+                writer_args.push_back(out_subblock_w);
+                writer_args.push_back(0);
+                writer_args.push_back(0);
+
+                if (core_idx_x == 0)
+                    tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_sender, core, mm_reader_args);
+                else
+                    tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_receiver, core, mm_reader_args);
             } else {
+                mm_reader_args.push_back(last_block_h); // not used
+                mm_reader_args.push_back(last_block_w);
+                writer_args.push_back(last_block_num_nonzero_subblocks_h);
+                writer_args.push_back(last_subblock_of_last_block_h);
+                writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                writer_args.push_back(last_block_num_nonzero_subblocks_w);
+                writer_args.push_back(last_subblock_of_last_block_w);
+                writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
+                writer_args.push_back(last_block_padded_block_tiles_w_skip);
+
                 tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_receiver, core, mm_reader_args);
             }
             tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
@@ -581,8 +719,9 @@ tt_metal::Program * create_program_mcast_in0(
 
 tt_metal::Program * create_program_mcast_in1(
     tt_metal::Device *device,
+    tt::DataFormat cb_data_format,
+    MathFidelity math_fidelity,
     uint32_t single_tile_size,
-    tt_xy_pair start_core,
     tt_xy_pair core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
@@ -600,10 +739,15 @@ tt_metal::Program * create_program_mcast_in1(
     uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
     uint32_t out_CB_tiles = per_core_M * per_core_N;
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
-    TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N <= 400);
 
-    uint32_t start_core_x = start_core.x;
-    uint32_t start_core_y = start_core.y;
+    // Dummy cb to store one tile of zeros for padding
+    uint32_t in2_block_tiles = 1;
+    uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
+
+    TT_ASSERT(in0_CB_size + in1_CB_size + out_CB_size <= device->l1_size() - UNRESERVED_BASE); // Need to add the mcast sepaphore buffers
+
+    uint32_t start_core_x = 0;
+    uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
@@ -629,7 +773,7 @@ tt_metal::Program * create_program_mcast_in1(
 
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_sender.cpp",
+        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_sender_padding.cpp",
         mcast_senders,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -637,7 +781,7 @@ tt_metal::Program * create_program_mcast_in1(
 
     auto mm_reader_kernel_receiver = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_receiver.cpp",
+        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_receiver_padding.cpp",
         mcast_receivers,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -645,7 +789,7 @@ tt_metal::Program * create_program_mcast_in1(
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_cores,
         reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -691,10 +835,21 @@ tt_metal::Program * create_program_mcast_in1(
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         mm_args,
-        MathFidelity::HiFi4,
+        math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
     );
+
+    // Parameters for last row, col, or block
+    uint32_t last_block_h = M % per_core_M == 0 ? per_core_M : M % per_core_M;
+    uint32_t last_block_w = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_block_num_nonzero_subblocks_h = (last_block_h  - 1) / out_subblock_h + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = (last_block_w  - 1) / out_subblock_w + 1;
+    uint32_t last_subblock_of_last_block_h = last_block_h % out_subblock_h == 0 ? out_subblock_h : last_block_h % out_subblock_h;
+    uint32_t last_subblock_of_last_block_w = last_block_w % out_subblock_w == 0 ? out_subblock_w : last_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip = single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
+    uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
@@ -712,7 +867,7 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t src1_cb_index = 1;
@@ -724,7 +879,7 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -735,7 +890,7 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t interm0_cb_index = 24;
@@ -816,9 +971,32 @@ tt_metal::Program * create_program_mcast_in1(
                 (std::uint32_t) B // batch
             };
 
-            if(core_idx_y == 0) {
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_sender, core, mm_reader_args);
+            if (core_idx_y < num_cores_r - 1) {
+                mm_reader_args.push_back(per_core_M); // not used for sender
+                mm_reader_args.push_back(last_block_w); // not used for receiver
+                writer_args.push_back(per_core_M / out_subblock_h);
+                writer_args.push_back(out_subblock_h);
+                writer_args.push_back(0);
+                writer_args.push_back(last_block_num_nonzero_subblocks_w);
+                writer_args.push_back(last_subblock_of_last_block_w);
+                writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
+                writer_args.push_back(last_block_padded_block_tiles_w_skip);
+
+                if (core_idx_y == 0)
+                    tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_sender, core, mm_reader_args);
+                else
+                    tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_receiver, core, mm_reader_args);
             } else {
+                mm_reader_args.push_back(last_block_h);
+                mm_reader_args.push_back(last_block_w); // not used
+                writer_args.push_back(last_block_num_nonzero_subblocks_h);
+                writer_args.push_back(last_subblock_of_last_block_h);
+                writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                writer_args.push_back(last_block_num_nonzero_subblocks_w);
+                writer_args.push_back(last_subblock_of_last_block_w);
+                writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
+                writer_args.push_back(last_block_padded_block_tiles_w_skip);
+
                 tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_receiver, core, mm_reader_args);
             }
             tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
@@ -836,7 +1014,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor &b, bool bcast_batch) {
+Tensor matmul_multi_core_reuse_mcast_padding_generalized_(const Tensor &a, const Tensor &b, bool bcast_batch, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -845,7 +1023,20 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
     TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
-    uint32_t single_tile_size = 2 * 1024;
+    TT_ASSERT(a.dtype() == b.dtype());
+    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format"); // TODO: Add BFP8_B
+
+    tt_metal::Device *device = a.device();
+
+    // TODO: CHANGE TO FUNCTION CONVERSION
+    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
+    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        cb_data_format = tt::DataFormat::Float16_b;
+    }
+    if (cb_data_format != output_cb_data_format) {
+        log_warning("Input tensor datatype does not match target output dataformat. Defaulting to input dataformat.");
+    }
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
     if (bcast_batch)
@@ -858,8 +1049,6 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
     TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0);
 
-    TT_ASSERT(ashape[0] * ashape[1] == 1, "Batch dimensions must be 1 for fast matmul"); // TODO: Support batch
-    TT_ASSERT(bshape[0] * bshape[1] == 1, "Batch dimensions must be 1 for fast matmul");
     TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
     TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
@@ -869,36 +1058,29 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
+    // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    // uint32_t B = ashape[0]*ashape[1]; // Only supports B = 1?
     uint32_t B = ashape[0]*ashape[1];
     uint32_t Mt = ashape[2]/TILE_HEIGHT;
     uint32_t Kt = ashape[3]/TILE_WIDTH;
     uint32_t Nt = bshape[3]/TILE_WIDTH;
-    uint32_t in0_block_w = 2;
+
+    if (fuse_batch) {
+        Mt = B * Mt;
+        B = 1;
+    }
+    TT_ASSERT(Kt % in0_block_w == 0);
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
-    auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
     uint32_t num_cores_x = compute_and_storage_grid_size.x;
     uint32_t num_cores_y = compute_and_storage_grid_size.y;
 
-    // Get large matmul params
-    auto matmul_params = bmm_op_utils::get_large_matmul_params(Mt, Nt, num_cores_y, num_cores_x, in0_block_w);
-    uint32_t per_core_M = std::get<0>(matmul_params);
-    uint32_t per_core_N = std::get<1>(matmul_params);
-    uint32_t out_subblock_h = std::get<2>(matmul_params);
-    uint32_t out_subblock_w = std::get<3>(matmul_params);
-
-    TT_ASSERT(Mt % per_core_M == 0);
-    TT_ASSERT(Nt % per_core_N == 0);
-    TT_ASSERT(Kt % in0_block_w == 0);
-
-    uint32_t num_blocks_total = (Mt / per_core_M) * (Nt / per_core_N);
+    // Calculate number of blocks along x and y; tensor dims are padded up to 512
+    uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
+    uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
+    uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
-    tt_xy_pair start_core = {0, 0};
-    tt_xy_pair core_range = bmm_op_utils::get_core_range((Mt / per_core_M), (Nt / per_core_N), num_cores_y, num_cores_x);
+    tt_xy_pair core_range = bmm_op_utils::get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -916,11 +1098,13 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program * program;
+
     if (core_range.x > 1 && core_range.y > 1) {
-        program = mcast_reuse_generalized_helpers::create_program_mcast_in0_in1(
+        program = mcast_reuse_padding_helpers::create_program_mcast_in0_in1(
             device,
+            cb_data_format,
+            math_fidelity,
             single_tile_size,
-            start_core,
             core_range,
             B, Mt, Nt, Kt,
             bcast_batch,
@@ -930,10 +1114,11 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
             in0_dram_addr, in1_dram_addr, out_dram_addr
         );
     } else if (core_range.x > 1) {
-        program = mcast_reuse_generalized_helpers::create_program_mcast_in0(
+        program = mcast_reuse_padding_helpers::create_program_mcast_in0(
             device,
+            cb_data_format,
+            math_fidelity,
             single_tile_size,
-            start_core,
             core_range,
             B, Mt, Nt, Kt,
             bcast_batch,
@@ -943,10 +1128,11 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
             in0_dram_addr, in1_dram_addr, out_dram_addr
         );
     } else {
-        program = mcast_reuse_generalized_helpers::create_program_mcast_in1(
+        program = mcast_reuse_padding_helpers::create_program_mcast_in1(
             device,
+            cb_data_format,
+            math_fidelity,
             single_tile_size,
-            start_core,
             core_range,
             B, Mt, Nt, Kt,
             bcast_batch,
@@ -977,12 +1163,12 @@ Tensor matmul_multi_core_reuse_mcast_generalized_(const Tensor &a, const Tensor 
     return output;
 }
 
-Tensor matmul_multi_core_reuse_mcast_generalized(const Tensor& a, const Tensor& b) {
-    return matmul_multi_core_reuse_mcast_generalized_(a, b, true);
+Tensor matmul_multi_core_reuse_mcast_padding_generalized(const Tensor& a, const Tensor& b, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+    return matmul_multi_core_reuse_mcast_padding_generalized_(a, b, true, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
-Tensor bmm_multi_core_reuse_mcast_generalized(const Tensor& a, const Tensor& b) {
-    return matmul_multi_core_reuse_mcast_generalized_(a, b, false);
+Tensor bmm_multi_core_reuse_mcast_padding_generalized(const Tensor& a, const Tensor& b, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+    return matmul_multi_core_reuse_mcast_padding_generalized_(a, b, false, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 }  // namespace tt_metal

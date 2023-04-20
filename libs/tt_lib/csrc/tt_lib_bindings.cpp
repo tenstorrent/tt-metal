@@ -640,6 +640,24 @@ void TensorModule(py::module &m_tensor) {
         | b            | RHS matmul operand                                                                         | Tensor    |             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
+    m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul, R"doc(
+        Perform a bert_large_fused_qkv non-batched matmul ``A x B`` with two tensors.
+    )doc");
+    m_tensor.def("bert_large_ff1_matmul", &bert_large_ff1_matmul, R"doc(
+        Perform a bert_large_ff1 non-batched matmul ``A x B`` with two tensors.
+    )doc");
+    m_tensor.def("bert_large_ff2_matmul", &bert_large_ff2_matmul, R"doc(
+        Perform a bert_large_ff2 non-batched matmul ``A x B`` with two tensors.
+    )doc");
+    m_tensor.def("bert_large_selfout_matmul", &bert_large_selfout_matmul, R"doc(
+        Perform a bert_large_selfout non-batched matmul ``A x B`` with two tensors.
+    )doc");
+    m_tensor.def("bert_large_pre_softmax_bmm", &bert_large_pre_softmax_bmm, R"doc(
+        Perform a bert_large_pre_softmax_bmm batched matmul ``A x B`` with two tensors.
+    )doc");
+    m_tensor.def("bert_large_post_softmax_bmm", &bert_large_post_softmax_bmm, R"doc(
+        Perform a bert_large_post_softmax_bmm batched matmul ``A x B`` with two tensors.
+    )doc");
     // broadcast math
     m_tensor.def("bcast", &bcast, R"doc(
         Perform a broadcasted binary math operation between two tensors.
