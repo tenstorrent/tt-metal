@@ -1,0 +1,20 @@
+---
+- name: Run HW-related verification tests
+  hosts: all
+  tasks:
+    - name: Verify AI Clock
+      command:
+        chdir: "infra_testing/scripts/hw_verif"
+        cmd: "python3 verify_ai_clock.py"
+    - name: Verify Driver version
+      command:
+        chdir: "infra_testing/scripts/hw_verif"
+        cmd: "python3 verify_driver_version.py"
+    - name: Verify FW Version
+      command:
+        chdir: "infra_testing/scripts/hw_verif"
+        cmd: "python3 verify_fw_version.py"
+    - name: Verify Family
+      command:
+        chdir: "infra_testing/scripts/hw_verif"
+        cmd: "python3 verify_gs_family.py"

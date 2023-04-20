@@ -55,12 +55,12 @@
         state: absent
     - name: Make workspace and syseng directories
       file:
-        path: infra_testing/scripts
+        path: infra_testing
         state: directory
-    - name: Copy hugepages script to host
+    - name: Copy scripts
       ansible.builtin.copy:
-        src: ../scripts/setup_hugepages.py
-        dest: "infra_testing/scripts/setup_hugepages.py"
+        src: ../scripts/
+        dest: "infra_testing/scripts/"
     - name: Copy driver install script to host
       ansible.builtin.copy:
         src: ../assets/tt_driver/install_ttkmd.bash
