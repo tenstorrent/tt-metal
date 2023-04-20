@@ -125,6 +125,12 @@ constexpr inline uint32_t packed_buffer_size_bytes<float>(uint32_t volume_unpack
     return (volume_unpacked_data/num_type_in_u32) * sizeof(uint32_t);
 }
 
+// Specialization for bfloat8_b because tile size is 1088 after being packed
+template <>
+constexpr inline uint32_t packed_buffer_size_bytes<bfloat8_b>(uint32_t volume_unpacked_data) {
+    auto num_tiles = volume_unpacked_data / (32 * 32);
+    return num_tiles * 1088; // TODO: Update to get size from tt_metal::GetTileSize (issue 462)
+}
 
 // ======================================================================================
 //                                  Layout converters
@@ -353,7 +359,13 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     } else {
         read_contiguous_data_from_device(tensor, size_in_bytes, device_data);
     }
-    auto unpacked_data = unpack_uint32_vec<T>(device_data);
+    std::vector<T> unpacked_data;
+    if (tensor.dtype() == DataType::BFLOAT8_B) {
+        std::vector<float> float_unpacked_data = unpack_bfp8_tiles_into_float_vec(device_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+        unpacked_data = cast_vec<T>(float_unpacked_data);
+    } else {
+        unpacked_data = unpack_uint32_vec<T>(device_data);
+    }
     return unpacked_data;
 }
 
@@ -361,7 +373,14 @@ void write_interleaved_data_to_device(const Tensor &tensor, std::vector<uint32_t
 
 template <typename T>
 inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
-    std::vector<uint32_t> uint32_data = pack_vec_into_uint32_vec<T>(data);
+    std::vector<uint32_t> uint32_data;
+    if (tensor.dtype() == DataType::BFLOAT8_B) {
+        std::vector<float> float_data = cast_vec<float>(data);
+        uint32_data = pack_fp32_vec_as_bfp8_tiles(float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+    }
+    else {
+        uint32_data = pack_vec_into_uint32_vec<T>(data);
+    }
     if (tensor.interleaved()) {
         write_interleaved_data_to_device(tensor, uint32_data);
     } else {
@@ -372,7 +391,12 @@ inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
 template <typename T>
 inline void initialize_data_on_device(Tensor &tensor, std::vector<T> &data) {
     TT_ASSERT(tensor.device() != nullptr);
-    uint32_t packed_size_in_bytes = packed_buffer_size_bytes<T>(data.size());
+    uint32_t packed_size_in_bytes;
+    if (tensor.dtype() == DataType::BFLOAT8_B) {
+        packed_size_in_bytes = packed_buffer_size_bytes<bfloat8_b>(data.size());
+    } else {
+        packed_size_in_bytes = packed_buffer_size_bytes<T>(data.size());
+    }
     allocate_buffer_on_device(tensor, packed_size_in_bytes);
     write_data_to_device<T>(tensor, data);
 }

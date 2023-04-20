@@ -18,7 +18,8 @@ void inline convert_and_write_data_wrapper(Tensor &tensor, std::vector<T> &data)
     const static std::map<DataType, std::function<void(Tensor &, std::vector<T> &)>> write_data_map = {
         {DataType::BFLOAT16, &convert_and_write_data<bfloat16, T>},
         {DataType::FLOAT32, &convert_and_write_data<float, T>},
-        {DataType::UINT32, &convert_and_write_data<uint32_t, T>}
+        {DataType::UINT32, &convert_and_write_data<uint32_t, T>},
+        {DataType::BFLOAT8_B, &convert_and_write_data<float, T>}
     };
     write_data_map.at(tensor.dtype())(tensor, data);
 }

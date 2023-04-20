@@ -72,7 +72,8 @@ void TensorModule(py::module &m_tensor) {
     py::enum_<DataType>(m_tensor, "DataType")
         .value("FLOAT32", DataType::FLOAT32)
         .value("BFLOAT16", DataType::BFLOAT16)
-        .value("UINT32", DataType::UINT32);
+        .value("UINT32", DataType::UINT32)
+        .value("BFLOAT8_B", DataType::BFLOAT8_B);
 
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
@@ -422,6 +423,9 @@ void TensorModule(py::module &m_tensor) {
                 break;
                 case DataType::UINT32:
                     return py::cast(*reinterpret_cast<std::vector<uint32_t>*>(self.data_ptr()));
+                break;
+                case DataType::BFLOAT8_B:
+                    return py::cast(*reinterpret_cast<std::vector<float>*>(self.data_ptr()));
                 break;
                 default:
                     TT_ASSERT(false && "Unsupported data type!");

@@ -10,6 +10,7 @@
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "common/bfloat16.hpp"
+#include "common/bfloat8.hpp"
 
 namespace tt {
 
@@ -33,7 +34,8 @@ enum class Layout {
 enum class DataType {
     BFLOAT16 = 0,
     FLOAT32 = 1,
-    UINT32 = 2
+    UINT32 = 2,
+    BFLOAT8_B = 3
 };
 
 struct MemoryConfig {

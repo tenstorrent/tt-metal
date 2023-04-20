@@ -12,6 +12,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
         case DataType::BFLOAT16: os << "bfloat16"; break;
         case DataType::FLOAT32: os << "float32"; break;
         case DataType::UINT32: os << "uint32"; break;
+        case DataType::BFLOAT8_B: os << "bfloat8_b"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
@@ -32,28 +33,35 @@ std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(
         }
         break;
         case Layout::TILE: {
-            uint32_t size_of_element;
-            int num_elements_packed_as_uint32;
+            int tile_size; // TODO: Update to be generic for data type (issue 462)
+
             switch (dtype) {
                 case DataType::BFLOAT16:
                 case DataType::FLOAT32: {
                     // Float is converted to bfloat16 before being written to device
-                    size_of_element = element_size_bytes_wrapper(DataType::BFLOAT16);
-                    num_elements_packed_as_uint32 = 2;
+                    uint32_t size_of_element = element_size_bytes_wrapper(DataType::BFLOAT16);
+                    tile_size = 32 * 32 * size_of_element;
+                    int num_elements_packed_as_uint32 = 2;
+                    num_entries_per_bank_unit = (32 * 32) / num_elements_packed_as_uint32;
                 }
                 break;
                 case DataType::UINT32: {
-                    size_of_element = element_size_bytes_wrapper(dtype);
-                    num_elements_packed_as_uint32 = 1;
+                    uint32_t size_of_element = element_size_bytes_wrapper(dtype);
+                    tile_size = 32 * 32 * size_of_element;
+                    int num_elements_packed_as_uint32 = 1;
+                    num_entries_per_bank_unit = (32 * 32) / num_elements_packed_as_uint32;
+                }
+                break;
+                case DataType::BFLOAT8_B:  {
+                    tile_size = 1088; // (256 * 4) + (16 *4)
+                    num_entries_per_bank_unit = 272; // 256 + 16
                 }
                 break;
                 default:
                     TT_ASSERT(false && "Unsupported data type!");
             }
-            int tile_size = 32 * 32 * size_of_element; // TODO: Update to be generic for data type
             TT_ASSERT(total_size_bytes % tile_size == 0);
             num_bank_units = total_size_bytes / tile_size;
-            num_entries_per_bank_unit = (32 * 32) / num_elements_packed_as_uint32;
             num_bytes_per_entry = 4;
         }
         break;
@@ -113,10 +121,26 @@ void write_contiguous_data_to_device(const Tensor &tensor, std::vector<uint32_t>
 
 void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
-    auto supported_dtype = [&dtype]() { return dtype == DataType::BFLOAT16; };
-    auto supported_layout = [&layout]() { return true; };
-    TT_ASSERT(supported_dtype() && "Only BFLOAT16 is supported on device!");
-    TT_ASSERT(supported_layout());
+    auto supported_dtype = [&dtype]() {
+        TT_ASSERT(
+            (dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B) &&
+            "Only BFLOAT16 or BFLOAT8_B is supported on device!"
+        );
+    };
+    auto supported_layout = [&dtype, &layout]() {
+        switch (dtype) {
+            case DataType::BFLOAT16:
+                break;
+            case DataType::BFLOAT8_B:
+                TT_ASSERT(layout == Layout::TILE && "Only TILE layout is supported for BFLOAT8_B dtype!");
+                break;
+            default:
+                TT_ASSERT(false && "Only BFLOAT16 or BFLOAT8_B is supported on device!");
+                break;
+            }
+    };
+    supported_dtype();
+    supported_layout();
 }
 
 
