@@ -1,0 +1,53 @@
+---
+- name: Enable hugepages
+  hosts: all
+  tasks:
+    - name: Get stat info of infra_testing folder
+      ansible.builtin.stat:
+        path: "infra_testing/scripts/"
+      register: infra_testing_stat
+    - name: Assert syseng exists
+      ansible.builtin.assert:
+        that:
+          - "infra_testing_stat.stat.exists == true"
+    - name: Get stat info of nr_hugepages
+      ansible.builtin.stat:
+        path: "/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+      register: nr_hugepages_stat
+    - name: Assert nr_hugepages exists
+      ansible.builtin.assert:
+        that:
+          - "nr_hugepages_stat.stat.exists == true"
+    - name: Get stat info of dev/tenstorrent
+      ansible.builtin.stat:
+        path: "/dev/tenstorrent"
+      register: tt_dev_stat
+    - name: Assert devices exist
+      ansible.builtin.assert:
+        that:
+          - "tt_dev_stat.stat.exists == true"
+    - name: Get number of devices
+      ansible.builtin.shell:
+        cmd: "echo $(($(ls -al /dev/tenstorrent/ | wc -l) - 3))"
+      args:
+        executable: /bin/bash
+      register: num_devices_output
+    - name: Print number of devices
+      debug:
+        msg: "{{ num_devices_output.stdout }}"
+    - name: Record number of devices
+      shell:
+        cmd: "echo {{ num_devices_output.stdout }} > infra_testing/devices"
+    - name: Put appropriate number of hugepages
+      become: yes
+      shell:
+        cmd: "cat infra_testing/devices | sudo tee /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+      register: run_hugepages_enable_output
+    - name: Execute script to enable
+      become: yes
+      shell:
+        chdir: "infra_testing/scripts/"
+        cmd: "python3 setup_hugepages.py first_pass"
+      environment:
+        PATH: "{{ lookup('ansible.builtin.env', 'PATH', default=Undefined) }}"
+      register: run_hugepages_enable_output

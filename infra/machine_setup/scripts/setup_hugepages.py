@@ -356,8 +356,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "operation",
-        choices=["check", "enable"],
-        help="Operation: check whether enabled, enable.",
+        choices=["check", "enable", "first_pass"],
+        help="Operation: check whether enabled, enable, first_pass.",
     )
     args = ap.parse_args()
 
@@ -366,17 +366,7 @@ def main() -> int:
         print("Sanity check failed:\n", insane)
         return 1
 
-    if args.operation == "check":
-        if (
-            not is_proc_cmdline_set()
-            or not is_hugepages_set()
-            or not is_hugepages_mounted()
-        ):
-            print("\nCheck failed - huge pages is not enabled")
-            return 1
-
-        print("Check passed!")
-    elif args.operation == "enable":
+    def enable_or_first_pass():
         if os.geteuid() != 0:
             print(
                 "To enable huge pages you need to run with sudo:\nsudo -E env PATH=$PATH python3 scripts/setup_hugepages.py enable"
@@ -409,6 +399,22 @@ def main() -> int:
 
             print("Huge pages is now set up")
             return 0
+
+    if args.operation == "check":
+        if (
+            not is_proc_cmdline_set()
+            or not is_hugepages_set()
+            or not is_hugepages_mounted()
+        ):
+            print("\nCheck failed - huge pages is not enabled")
+            return 1
+
+        print("Check passed!")
+    elif args.operation == "enable":
+        return enable_or_first_pass()
+    elif args.operation == "first_pass":
+        enable_or_first_pass()
+        return 0
     else:
         pass
 
