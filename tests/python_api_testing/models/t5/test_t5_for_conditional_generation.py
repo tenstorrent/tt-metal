@@ -274,7 +274,6 @@ def run_generate(input_sentance, run_tt_model, device):
 
         # pre-process distribution
         next_tokens_scores = logits_processor(input_ids, next_token_logits)
-        print(f"next_tokens_scores shape {next_tokens_scores.shape}")
 
         # argmax
         next_tokens = torch.argmax(next_tokens_scores, dim=-1)

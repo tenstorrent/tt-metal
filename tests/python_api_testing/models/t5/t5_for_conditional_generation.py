@@ -260,7 +260,6 @@ class TtT5ForConditionalGeneration(nn.Module):
         # Back to torch
         lm_logits = tt2torch_tensor(lm_logits)
         lm_logits = lm_logits[:, 0, :, :]
-        print(f"lm_logits shape {lm_logits.shape}")
 
         if labels is not None:
             loss_fct = CrossEntropyLoss(ignore_index=-100)

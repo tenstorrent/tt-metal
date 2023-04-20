@@ -78,6 +78,9 @@ class TtT5Stack(nn.Module):
         self.final_layer_norm = TtT5LayerNorm(config, state_dict, f"{base_address}.final_layer_norm", device)
         self.dropout = nn.Dropout(config["dropout_rate"])
 
+        self.cached_extended_attention_mask = None
+        self.cached_encoder_extended_attention_mask = None
+
         # Initialize weights and apply final processing
         #self.post_init()
 
@@ -124,6 +127,11 @@ class TtT5Stack(nn.Module):
             The extended attention mask, with a the same dtype as `attention_mask.dtype`.
         """
 
+        # if we have cached_extended_attention_mask return it
+        if self.cached_extended_attention_mask is not None:
+            if input_shape[0] == self.cached_extended_attention_mask.shape[0] and input_shape[1] == self.cached_extended_attention_mask.shape[3]:
+                return self.cached_extended_attention_mask
+
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
         if attention_mask.dim() == 3:
@@ -155,6 +163,7 @@ class TtT5Stack(nn.Module):
         # Added "/ 2" bec of Tt device preccision
         extended_attention_mask = extended_attention_mask.to(dtype=torch.float16)  # fp16 compatibility
         extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(torch.float16).min / 2
+        self.cached_extended_attention_mask = extended_attention_mask
 
         return extended_attention_mask
 
@@ -221,6 +230,25 @@ class TtT5Stack(nn.Module):
 
         # Must repeat dim 3 so it can be used as Tt Tensor -> Don't repeat for now -> add on host
         # encoder_extended_attention_mask = encoder_extended_attention_mask.repeat(1, 1, encoder_extended_attention_mask.shape[3], 1)
+
+        return encoder_extended_attention_mask
+
+    def get_encoder_extended_attention_mask(self, encoder_attention_mask, encoder_batch_size, encoder_sequence_length):
+
+        # Take from cache if we have it
+        if self.cached_encoder_extended_attention_mask is not None:
+            if encoder_batch_size == self.cached_encoder_extended_attention_mask.shape[0]:
+                if encoder_sequence_length == self.cached_encoder_extended_attention_mask.shape[3]:
+                    return self.cached_encoder_extended_attention_mask
+
+        if encoder_attention_mask is None:
+            encoder_attention_mask = torch.ones(encoder_batch_size, encoder_sequence_length, dtype=torch.long)
+
+        encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
+        self.cached_encoder_extended_attention_mask = encoder_extended_attention_mask
+
+        # Copy data to Tt device --- copy it later
+        # encoder_extended_attention_mask = torch2tt_tensor(encoder_extended_attention_mask, self.device)
 
         return encoder_extended_attention_mask
 
@@ -301,18 +329,9 @@ class TtT5Stack(nn.Module):
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
         if self.is_decoder and encoder_hidden_states is not None:
-
             encoder_batch_size, _, encoder_sequence_length, _ = encoder_hidden_states.shape()
+            encoder_extended_attention_mask = self.get_encoder_extended_attention_mask(encoder_attention_mask, encoder_batch_size, encoder_sequence_length)
 
-            if encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(encoder_batch_size, encoder_sequence_length, dtype=torch.long)
-            #else:
-            #    encoder_attention_mask = tt2torch_tensor(encoder_attention_mask)
-
-            encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
-
-            # Copy data to Tt device --- copy it later
-            # encoder_extended_attention_mask = torch2tt_tensor(encoder_extended_attention_mask, self.device)
         else:
             encoder_extended_attention_mask = None
 

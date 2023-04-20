@@ -318,6 +318,10 @@ class TtT5Attention(nn.Module):
             self.relative_attention_bias = nn.Embedding(self.relative_attention_num_buckets, self.n_heads)
             self.relative_attention_bias.weight = nn.Parameter(state_dict[f"{base_address}.relative_attention_bias.weight"])
 
+        self.cached_position_bias = None
+        self.cached_real_seq_length = None
+        self.cached_key_length = None
+
         self.pruned_heads = set()
         self.gradient_checkpointing = False
 
@@ -385,7 +389,7 @@ class TtT5Attention(nn.Module):
         relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)
         return relative_buckets
 
-    def compute_bias(self, query_length, key_length):
+    def compute_bias_const(self, query_length, key_length):
         """Compute binned relative position bias"""
         context_position = torch.arange(query_length, dtype=torch.long)[:, None]
         memory_position = torch.arange(key_length, dtype=torch.long)[None, :]
@@ -494,7 +498,14 @@ class TtT5Attention(nn.Module):
         # print(f"ttm.tensor.bmm query_states x transposed_key_states: {query_states.shape()} x {transposed_key_states.shape()}")
         scores = ttm.tensor.bmm(query_states, transposed_key_states)
 
-        if position_bias is None:
+        if position_bias is None and self.cached_real_seq_length == real_seq_length and self.cached_key_length == key_length:
+            # Take cached position bias
+            # print("---------------------> Taking position bias from cache <-----------------------------")
+            position_bias = self.cached_position_bias
+
+        elif position_bias is None:
+            # Compute position bias
+            # print("---------------------> Making new position bias <-----------------------------")
             if not self.has_relative_attention_bias:
 
                 position_bias = torch.zeros(
@@ -504,7 +515,7 @@ class TtT5Attention(nn.Module):
                 if self.gradient_checkpointing and self.training:
                     position_bias.requires_grad = True
             else:
-                position_bias = self.compute_bias(real_seq_length, key_length)
+                position_bias = self.compute_bias_const(real_seq_length, key_length)
 
             # if key and values are already calculated
             # we want only the last query position bias
@@ -517,19 +528,22 @@ class TtT5Attention(nn.Module):
             if mask is not None:
                 position_bias = position_bias + mask  # (batch_size, n_heads, seq_length, key_length)
 
-        # Prunned heads!
-        if self.pruned_heads:
-            mask = torch.ones(position_bias.shape()[2])
-            mask[list(self.pruned_heads)] = 0
-            position_bias_masked = position_bias[:, mask.bool()]
-        else:
-            position_bias_masked = position_bias
+            # Prunned heads!
+            if self.pruned_heads:
+                mask = torch.ones(position_bias.shape()[2])
+                mask[list(self.pruned_heads)] = 0
+                position_bias = position_bias[:, mask.bool()]
 
-        # Transfer to tt device
-        position_bias_masked = torch2tt_tensor(position_bias_masked, self.device)
+            # Transfer to tt device
+            position_bias = torch2tt_tensor(position_bias, self.device)
+
+            # Cache it
+            self.cached_position_bias = position_bias
+            self.cached_real_seq_length = real_seq_length
+            self.cached_key_length = key_length
 
         # scores += position_bias_masked
-        scores = ttm.tensor.add(scores, position_bias_masked)
+        scores = ttm.tensor.add(scores, position_bias)
 
         # attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
         attn_weights = tt_softmax(scores, stable=False) # (batch_size, n_heads, seq_length, key_length)
