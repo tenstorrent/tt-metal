@@ -25,4 +25,5 @@ python -m pip install -r tests/python_api_testing/requirements.txt
 
 env python tests/scripts/run_tt_metal.py
 
+# Please put model runs in here from now on - thank you
 ./tests/scripts/run_models.sh
