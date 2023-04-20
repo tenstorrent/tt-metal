@@ -22,7 +22,7 @@ from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pc
 
 
 
-def test_LeNet_inference():
+def test_LeNet_inference(model_location_generator):
     with torch.no_grad():
         torch.manual_seed(1234)
         # Initialize the device
@@ -31,7 +31,8 @@ def test_LeNet_inference():
         ttl.device.InitializeDevice(device)
         host = ttl.device.GetHost()
 
-        torch_LeNet, state_dict = load_torch_LeNet()
+        pt_model_path = model_location_generator("tt_dnn-models/LeNet/model.pt")
+        torch_LeNet, state_dict = load_torch_LeNet(pt_model_path)
         test_dataset, test_loader = prep_data()
 
         TTLeNet = TtLeNet5(num_classes, device, host, state_dict)
@@ -53,5 +54,3 @@ def test_LeNet_inference():
     logger.info(f"LeNet PASSED {passing[1]}")
 
     ttl.device.CloseDevice(device)
-
-test_LeNet_inference()

@@ -15,7 +15,7 @@ from libs import tt_lib as ttl
 from utility_functions import comp_pcc
 from mnist import *
 
-def test_mnist_convnet_inference():
+def test_mnist_convnet_inference(model_location_generator):
 
     with torch.no_grad():
         torch.manual_seed(1234)
@@ -25,7 +25,8 @@ def test_mnist_convnet_inference():
         ttl.device.InitializeDevice(device)
         host = ttl.device.GetHost()
 
-        torch_ConvNet, state_dict = load_torch()
+        weka_path = model_location_generator('tt_dnn-models/MNIST/ConvNet/mnist_ConvNet.pt')
+        torch_ConvNet, state_dict = load_torch(weka_path)
         test_dataset, test_loader = prep_data()
 
         tt_convnet = TtConvNet(device, host, state_dict)

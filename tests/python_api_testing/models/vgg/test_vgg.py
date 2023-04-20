@@ -17,7 +17,7 @@ from vgg import *
 _batch_size = 16
 
 
-def test_vgg16_inference():
+def test_vgg16_inference(model_location_generator):
     batch_size = _batch_size
     with torch.no_grad():
         # torch.manual_seed(1234)
@@ -34,7 +34,8 @@ def test_vgg16_inference():
 
         tt_vgg = vgg16(device, host, state_dict)
 
-        dataloader = prep_ImageNet(batch_size = batch_size)
+        root = model_location_generator("pytorch_weka_data/imagenet/dataset/ILSVRC/Data/CLS-LOC")
+        dataloader = prep_ImageNet(root, batch_size = batch_size)
         for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
             torch_output = torch_vgg(images).unsqueeze(1).unsqueeze(1)
             tt_output = tt_vgg(images)

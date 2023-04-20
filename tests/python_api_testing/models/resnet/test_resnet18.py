@@ -22,7 +22,7 @@ from utility_functions import comp_allclose_and_pcc, comp_pcc
 batch_size=1
 
 @pytest.mark.parametrize("fold_batchnorm", [False, True], ids=['Batchnorm not folded', "Batchnorm folded"])
-def test_run_resnet18_inference(fold_batchnorm):
+def test_run_resnet18_inference(fold_batchnorm, model_location_generator):
     with torch.no_grad():
         torch.manual_seed(1234)
         # Initialize the device
@@ -42,7 +42,8 @@ def test_run_resnet18_inference(fold_batchnorm):
                         state_dict=state_dict,
                         base_address="",
                         fold_batchnorm=fold_batchnorm)
-        dataloader = prep_ImageNet(batch_size=batch_size)
+        root = model_location_generator("pytorch_weka_data/imagenet/dataset/ILSVRC/Data/CLS-LOC")
+        dataloader = prep_ImageNet(root, batch_size=batch_size)
         for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
             torch_output = torch_resnet(images).unsqueeze(1).unsqueeze(1)
             tt_output = tt_resnet18(images)

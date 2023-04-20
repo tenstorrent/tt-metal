@@ -21,9 +21,8 @@ batch_size = 64
 num_classes = 10
 
 
-def load_torch_LeNet():
+def load_torch_LeNet(weka_path):
 
-    weka_path = '/mnt/MLPerf/tt_dnn-models/LeNet/model.pt'
     model2 = LeNet5(num_classes).to('cpu')
     checkpoint = torch.load(weka_path, map_location=torch.device('cpu'))
     model2.load_state_dict(checkpoint['model_state_dict'])

@@ -157,7 +157,7 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
         return result
 
 
-def run_mha_inference(model_version, batch, seq_len, on_weka, pcc):
+def run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
@@ -165,7 +165,7 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc):
     host = ttl.device.GetHost()
 
     if on_weka:
-        model_name = "/mnt/MLPerf/tt_dnn-models/Bert/BertForQuestionAnswering/models/" + model_version
+        model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
     else:
         model_name = model_version
 
@@ -206,12 +206,9 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc):
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, 0.99)
     ),
 )
-def test_mha_inference(model_version, batch, seq_len, on_weka, pcc):
+def test_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
 
     # enable_binary_cache()
     # enable_compile_cache()
 
-    run_mha_inference(model_version, batch, seq_len, on_weka, pcc)
-
-if __name__ == "__main__":
-    run_mha_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99)
+    run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator)

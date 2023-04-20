@@ -76,7 +76,7 @@ class TtBertForQuestionAnswering(TtBertShared):
         encoder_output = super().forward(input_ids, attention_mask, token_type_ids)
         return self.qa_linear(encoder_output)
 
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc):
+def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
 
     torch.manual_seed(1234)
 
@@ -85,8 +85,8 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     host = ttl.device.GetHost()
 
     if on_weka:
-        model_name = "/mnt/MLPerf/tt_dnn-models/Bert/BertForQuestionAnswering/models/" + model_version
-        tokenizer_name = "/mnt/MLPerf/tt_dnn-models/Bert/BertForQuestionAnswering/tokenizers/" + model_version
+        model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
+        tokenizer_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/tokenizers/") / model_version)
     else:
         model_name = model_version
         tokenizer_name = model_version
@@ -204,14 +204,9 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, True, True, True, 0.98) # Placeholder PCC until issues are resolved
     ),
 )
-def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc):
+def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
 
     # enable_binary_cache()
     # enable_compile_cache()
 
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc)
-
-if __name__ == "__main__":
-    # enable_binary_cache()
-    # enable_compile_cache()
-    run_bert_question_and_answering_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, True, True, 0.99)
+    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator)

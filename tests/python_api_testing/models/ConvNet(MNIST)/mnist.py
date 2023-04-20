@@ -142,8 +142,7 @@ class TtConvNet(nn.Module):
         return out
 
 
-def load_torch():
-    weka_path = '/mnt/MLPerf/tt_dnn-models/MNIST/ConvNet/mnist_ConvNet.pt'
+def load_torch(weka_path):
     model = ConvNet().to('cpu')
     checkpoint = torch.load(weka_path, map_location=torch.device('cpu'))
     model.load_state_dict(checkpoint['model_state_dict'])

@@ -25,7 +25,7 @@ from utility_functions import comp_allclose_and_pcc, comp_pcc
 batch_size=1
 
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
-def test_resnet50(fuse_ops):
+def test_resnet50(fuse_ops, model_location_generator):
     with torch.no_grad():
         # Initialize the device
         device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -70,7 +70,8 @@ def test_resnet50(fuse_ops):
 
             tt_resnet = torch.ao.quantization.fuse_modules(tt_resnet, modules_to_fuse)
 
-        dataloader = prep_ImageNet(batch_size=batch_size)
+        root = model_location_generator("pytorch_weka_data/imagenet/dataset/ILSVRC/Data/CLS-LOC")
+        dataloader = prep_ImageNet(root, batch_size=batch_size)
         for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
             image = images
             break
