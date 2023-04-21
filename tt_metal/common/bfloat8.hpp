@@ -131,7 +131,7 @@ inline uint32_t create_packed_bfp8_packed_as_u32(const std::vector<uint32_t> &u3
     return tmp_o;
 }
 
-inline std::vector<uint32_t> pack_row_major_fp32_vec_as_bfp8_tiles(const std::vector<float> &fp32_vec, bool is_exp_a) {
+inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(const std::vector<float> &fp32_vec, bool row_major_input, bool is_exp_a) {
     uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
     int num_float_in_tile = 1024;
     TT_ASSERT(fp32_vec.size() % num_float_in_tile == 0);
@@ -147,6 +147,7 @@ inline std::vector<uint32_t> pack_row_major_fp32_vec_as_bfp8_tiles(const std::ve
     int subtile_rows = 16;
     int subtile_cols = 16;
     int num_elements_in_dword = 4;
+    int fp32_element_index = 0;
     for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
         std::vector<uint32_t> packed_data;
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
@@ -155,7 +156,12 @@ inline std::vector<uint32_t> pack_row_major_fp32_vec_as_bfp8_tiles(const std::ve
                     std::vector<uint32_t> single_row;
                     // populate a single row
                     for (int j = 0; j < subtile_cols; ++j) {
-                        int data_index = (tr*16 + i)*32 + (tc*16 + j) + (num_float_in_tile * tile_index);
+                        int data_index;
+                        if (row_major_input) {
+                            data_index = (tr*16 + i)*32 + (tc*16 + j) + (num_float_in_tile * tile_index);
+                        } else {
+                            data_index = fp32_element_index++;
+                        }
                         float float_num = fp32_vec.at(data_index);
                         uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
                         single_row.push_back(uint32_num);
@@ -196,7 +202,7 @@ inline std::vector<uint32_t> pack_row_major_fp32_vec_as_bfp8_tiles(const std::ve
     return packed_result;
 }
 
-inline std::vector<float> unpack_bfp8_tiles_into_row_major_float_vec(const std::vector<uint32_t> &bfp8_tiles, bool is_exp_a) {
+inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uint32_t> &bfp8_tiles, bool row_major_output, bool is_exp_a) {
     int num_elements_in_dword = 4;
     uint32_t size_bytes = bfp8_tiles.size() * num_elements_in_dword; // each uint32_t contains 4 BFP8 values
     uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
@@ -222,6 +228,7 @@ inline std::vector<float> unpack_bfp8_tiles_into_row_major_float_vec(const std::
     int subtile_cols = 16;
     uint32_t num_bfp8_in_tile = 256 + 16;
     uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
+    uint32_t fp32_element_index = 0;
     std::vector<float> float_vec;
     float_vec.resize(num_tiles * num_float_in_tile);
     for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
@@ -269,7 +276,12 @@ inline std::vector<float> unpack_bfp8_tiles_into_row_major_float_vec(const std::
                         man = _mm256_sll_epi32(man, _mm_set_epi64x(0, 16)); // Shift mantissa
                         man = _mm256_or_si256(sign, _mm256_or_si256(exp_vector, man)); // Store final value in mantissa register and save
 
-                        uint32_t float_data_index = subtile_c + (32 * subtile_r) + (tile_index * num_float_in_tile);
+                        uint32_t float_data_index;
+                        if (row_major_output) {
+                            float_data_index = subtile_c + (32 * subtile_r) + (tile_index * num_float_in_tile);
+                        } else {
+                            float_data_index = fp32_element_index++;
+                        }
                         _mm256_storeu_ps(&float_vec[float_data_index],  _mm256_castsi256_ps(man));
                     }
                 }
@@ -295,7 +307,7 @@ inline std::vector<uint32_t> create_random_vector_of_bfp8(uint32_t num_bytes, bo
         fp32_vec.at(i) = rand_float() + offset;
     }
 
-    std::vector<uint32_t> packed_result = pack_row_major_fp32_vec_as_bfp8_tiles(fp32_vec, is_exp_a);
+    std::vector<uint32_t> packed_result = pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, is_exp_a);
 
     TT_ASSERT(packed_result.size() == packed_data_size);
 
@@ -318,7 +330,7 @@ inline std::vector<uint32_t> create_constant_vector_of_bfp8(uint32_t num_bytes, 
         fp32_vec.at(i) = value;
     }
 
-    std::vector<uint32_t> packed_result = pack_row_major_fp32_vec_as_bfp8_tiles(fp32_vec, is_exp_a);
+    std::vector<uint32_t> packed_result = pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, is_exp_a);
 
     TT_ASSERT(packed_result.size() == packed_data_size);
 
