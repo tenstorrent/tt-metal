@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include "dataflow_api.h"
-// #include "debug_print.h"
 
 void kernel_main() {
     volatile uint32_t* copy_desc_info_addr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(0));
@@ -41,6 +40,9 @@ void kernel_main() {
     noc_async_write_barrier();
 
     if (num_resets > 0) {
+        uint32_t num_workers = *copy_desc_info_addr;
+        copy_desc_info_addr++;
+
         // Let the receiver know that I am the sender
         for (uint32_t notify = 0; notify < num_resets; notify++) {
             uint64_t dst_addr = *reinterpret_cast<volatile uint64_t*>(copy_desc_info_addr);
@@ -61,7 +63,7 @@ void kernel_main() {
         }
 
         copy_desc_info_addr = reset_copy_desc_start;
-        while (*message_addr_ptr != num_resets);
+        while (*message_addr_ptr != num_workers); // Could be deasserting through a multicast, in which num_workers > num_resets
 
         for (uint32_t reset = 0; reset < num_resets; reset++) {
             uint64_t dst_addr = *reinterpret_cast<volatile uint64_t*>(copy_desc_info_addr);

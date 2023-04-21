@@ -497,21 +497,29 @@ void cleanup_risc_on_specified_core(
 void run_riscs_on_specified_cores(
     tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<tt_xy_pair> &cores, const std::vector<uint32_t> &hugepage_done_addrs) {
 
+    bool write_to_huge_page = hugepage_done_addrs.size() > 0;
+    if (write_to_huge_page) {
+        uint32_t dispatch_done_addr = 0;
+        vector<uint32_t> reset = {0};
+        cluster->write_sysmem_vec(reset, dispatch_done_addr, chip_id);
+    }
+
     for (const tt_xy_pair &core_ : cores) {
         tt_cxy_pair core = tt_cxy_pair(chip_id, core_);
         cluster->set_remote_tensix_risc_reset(core, TENSIX_DEASSERT_SOFT_RESET);
     }
 
-    bool write_to_huge_page = hugepage_done_addrs.size() > 0;
     if (write_to_huge_page) {
         // In this path, host polls hugepage memory rather than the cores
         // to check that they're done
         bool riscs_are_done = false;
+        uint32_t dispatch_done_addr = 0;
+        vector<uint32_t> reset = {0};
+
         vector<uint32_t> riscs_are_done_vec;
         while (not riscs_are_done) {
             riscs_are_done = true;
             // Poll hugepage to see that dispatch has completed
-            uint32_t dispatch_done_addr = 0;
             uint32_t idx = 0;
             for (const tt_xy_pair &core : cores) {
                 uint32_t hugepage_done_addr = hugepage_done_addrs.at(idx++);
@@ -519,6 +527,7 @@ void run_riscs_on_specified_cores(
                 riscs_are_done &= riscs_are_done_vec.at(0) == NOTIFY_HOST_KERNEL_COMPLETE_VALUE;
             }
         }
+        cluster->write_sysmem_vec(reset, dispatch_done_addr, chip_id);
     } else {
         // In this path, host polls core L1 to check whether they're done
         bool riscs_are_done = false;

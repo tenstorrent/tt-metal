@@ -179,6 +179,9 @@ tuple<uint32_t, uint64_t, uint32_t> create_kernel_transfer_info(
         case 4: write_addr = l1_mem::address_map::TRISC2_BASE; break;
         default: TT_ASSERT(false, "Invalid kernel_id");
     }
+
+    std::cout << "Kernel write addr: " << write_addr << std::endl;
+
     uint32_t kernel_size = std::get<1>(dram_config.kernel_addrs_and_sizes.at(kernel_id));
     tuple<uint32_t, uint64_t, uint32_t> kernel_transfer_info =
         make_tuple(l1_src, NOC_XY_ADDR(NOC_X(1), NOC_Y(1), write_addr), kernel_size);
@@ -194,6 +197,9 @@ tuple<uint32_t, uint64_t, uint32_t> create_rt_args_transfer_info(
         case 1: write_addr = NCRISC_L1_ARG_BASE; break;
         default: TT_ASSERT(false, "Invalid kernel_id");
     }
+        std::cout << "Rt args addr: " << write_addr << std::endl;
+
+
     uint32_t rt_args_size = std::get<1>(dram_config.runtime_args_addrs_and_sizes.at(kernel_id));
     tuple<uint32_t, uint64_t, uint32_t> runtime_args_transfer_info =
         make_tuple(l1_src, NOC_XY_ADDR(NOC_X(1), NOC_Y(1), write_addr), rt_args_size);
@@ -204,6 +210,8 @@ tuple<uint32_t, uint64_t, uint32_t> create_rt_args_transfer_info(
 tuple<uint32_t, uint64_t, uint32_t> create_cb_transfer_info(uint32_t cb_id, uint32_t &l1_src) {
     uint32_t num_bytes_per_cb = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     uint32_t write_addr = CIRCULAR_BUFFER_CONFIG_BASE + cb_id * num_bytes_per_cb;
+    std::cout << "CB config write addr: " << write_addr << std::endl;
+
     tuple<uint32_t, uint64_t, uint32_t> cb_transfer_info =
         make_tuple(l1_src, NOC_XY_ADDR(NOC_X(1), NOC_Y(1), write_addr), num_bytes_per_cb);
     l1_src = nearest_multiple_of_32(l1_src + num_bytes_per_cb);
@@ -252,11 +260,12 @@ CopyDescriptor construct_copy_descriptor_from_dram_config(
 
     // For this test, we are only running single-core datacopy
     uint32_t num_resets = 1;
+    uint32_t num_workers = 1;
 
     vector<uint64_t> notifies = {NOC_XY_ADDR(NOC_X(1), NOC_Y(1), DISPATCH_MESSAGE_ADDR)};
     vector<uint64_t> resets = {NOC_XY_ADDR(NOC_X(1), NOC_Y(1), DEVICE_DATA.TENSIX_SOFT_RESET_ADDR)};
 
-    return CopyDescriptor{copy_desc_l1_start, num_reads, reads, num_writes, writes, num_resets, notifies, resets};
+    return CopyDescriptor{copy_desc_l1_start, num_reads, reads, num_writes, writes, num_resets, num_workers, notifies, resets};
 }
 
 vector<uint32_t> convert_copy_desc_to_flat_vec(const CopyDescriptor &copy_desc) {
@@ -292,6 +301,7 @@ vector<uint32_t> convert_copy_desc_to_flat_vec(const CopyDescriptor &copy_desc) 
     }
 
     flat_desc.push_back(copy_desc.num_resets);
+    flat_desc.push_back(copy_desc.num_workers);
     for (uint64_t notify_noc_addr : copy_desc.notifies) {
         uint32_t notify_noc_info_part = notify_noc_addr >> 32;
         uint32_t notify_addr_part = notify_noc_addr & 0xffffffff;
@@ -310,6 +320,8 @@ vector<uint32_t> convert_copy_desc_to_flat_vec(const CopyDescriptor &copy_desc) 
         flat_desc.push_back(reset_noc_info_part);
     }
 
+    std::cout << "FLAT DESC SIZE: " << flat_desc.size() * sizeof(flat_desc.at(0)) << std::endl;
+
     return flat_desc;
 }
 
@@ -318,9 +330,9 @@ void write_copy_desc_to_l1(
     uint32_t l1_addr = copy_desc.l1_addr;
     vector<uint32_t> flat_desc = convert_copy_desc_to_flat_vec(copy_desc);
 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, dispatch_core, flat_desc, copy_desc.l1_addr);
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, dispatch_core, flat_desc, l1_addr);
 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, dispatch_core, {copy_desc.l1_addr}, BRISC_L1_ARG_BASE);
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, dispatch_core, {l1_addr}, BRISC_L1_ARG_BASE);
 }
 
 void host_dispatch(tt_cluster *cluster, int chip_id, string op, tt_xy_pair dispatch_core, tt_xy_pair worker_core) {
@@ -331,12 +343,12 @@ void host_dispatch(tt_cluster *cluster, int chip_id, string op, tt_xy_pair dispa
     DramConfig dram_config = construct_dram_config(op);
     std::cout << dram_config << std::endl;
     write_to_dram(cluster, chip_id, dram_config);
-    CopyDescriptor copy_desc = construct_copy_descriptor_from_dram_config(dram_config, 150 * 1024, 200 * 1024);
+    CopyDescriptor copy_desc = construct_copy_descriptor_from_dram_config(dram_config, 150 * 1024, 300 * 1024);
     std::cout << copy_desc << std::endl;
     write_copy_desc_to_l1(cluster, chip_id, dispatch_core, copy_desc);
 
     // Deassert dispatch core
-    tt_start_debug_print_server(cluster, {chip_id}, {dispatch_core});
+    // tt_start_debug_print_server(cluster, {chip_id}, {dispatch_core});
 
     tt::llrt::internal_::setup_riscs_on_specified_cores(
         cluster, chip_id, tt::llrt::TensixRiscsOptions::BRISC_ONLY, {dispatch_core});
@@ -367,6 +379,7 @@ bool test_dispatch_v1(tt_cluster *cluster, int chip_id, string op) {
         dram_buffer_size);
 
     bool pass = (src_vec == dst_vec);
+
 
     if (not pass) {
         print_vec_of_uint32_as_packed_bfloat16(src_vec, NUM_TILES, "Golden");

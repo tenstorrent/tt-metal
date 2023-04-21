@@ -25,9 +25,17 @@ struct CopyDescriptor {
     vector<tuple<uint32_t, uint64_t, uint32_t>> writes;
 
     /*
-        How many cores to deassert/assert.
+        How many cores to deassert/assert, potentially
+        through multicast
     */
     uint32_t num_resets;
+
+    /*
+        How many worker cores are running. Can be different
+        than num resets since we are potentially multicasting
+        the deassert/assert reset values.
+    */
+   uint32_t num_workers;
 
     /*
         In here we write the address of the dispatch core.
@@ -72,6 +80,7 @@ ostream &operator<<(ostream &os, const CopyDescriptor &copy_desc) {
     }
 
     os << "num_resets: " << copy_desc.num_resets << "\n";
+    os << "num_workers: " << copy_desc.num_workers << "\n";
     i = 0;
     for (uint64_t reset_addr : copy_desc.resets) {
         os << "reset " << i << ": " << reset_addr << "\n";
