@@ -101,10 +101,9 @@ def run_tt_lib_test(
     data_gen_funcs,
     output_comparison_func,
     pcie_slot,
+    test_args,
 ):
-    # Test specific args
-    test_args = {}
-
+    # Add test specific args
     ################################################
     #################### Tensor ####################
     ################################################
@@ -125,11 +124,13 @@ def run_tt_lib_test(
         # Cast to bfloat16 then back to float for exact match
         pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
 
-        test_args = {
-            "output_tensor_shape": output_tensor_shape,
-            "input_tensor_start": input_tensor_start,
-            "pad_value": pad_value,
-        }
+        test_args.update(
+            {
+                "output_tensor_shape": output_tensor_shape,
+                "input_tensor_start": input_tensor_start,
+                "pad_value": pad_value,
+            }
+        )
 
     elif ttlib_op == ttlib_ops.unpad:
         assert len(input_shapes) == 1
@@ -143,10 +144,12 @@ def run_tt_lib_test(
             for i in range(4)
         ]
 
-        test_args = {
-            "output_tensor_start": output_tensor_start,
-            "output_tensor_end": output_tensor_end,
-        }
+        test_args.update(
+            {
+                "output_tensor_start": output_tensor_start,
+                "output_tensor_end": output_tensor_end,
+            }
+        )
 
     logger.info(f"Running with args: {test_args}")
 

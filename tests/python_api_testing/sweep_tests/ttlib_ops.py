@@ -8,6 +8,7 @@ from tt_lib.utils import pad_weight
 ################################################
 def datacopy(x, pcie_slot, *args, **kwargs):
     # TODO: Add actual datacopy once tensor op implementation is added
+    ttl_tensor_dtype = kwargs.get("dtype", ttl.tensor.DataType.BFLOAT16)
 
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
@@ -18,7 +19,7 @@ def datacopy(x, pcie_slot, *args, **kwargs):
             ttl.tensor.Tensor(
                 x.reshape(-1).tolist(),
                 x.shape,
-                ttl.tensor.DataType.BFLOAT16,
+                ttl_tensor_dtype,
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)

@@ -92,6 +92,9 @@ def run_pytorch_test(args):
             getattr(comparison_funcs, comparison_dict["function"]), **comparison_args
         )
 
+        # Optional test args for dtype, etc...
+        test_args = test_config.get("args", {})
+
         skip_header = False
         if results_csv_path.exists():
             skip_header = True
@@ -124,6 +127,7 @@ def run_pytorch_test(args):
                     datagen_funcs,
                     comparison_func,
                     pcie_slot,
+                    test_args,
                 )
                 results_csv.flush()
 

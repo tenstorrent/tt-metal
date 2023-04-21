@@ -21,7 +21,13 @@ from python_api_testing.sweep_tests.common import (
 
 
 def run_single_pytorch_test(
-    test_name, input_shapes, datagen_funcs, comparison_func, pcie_slot, env=""
+    test_name,
+    input_shapes,
+    datagen_funcs,
+    comparison_func,
+    pcie_slot,
+    test_args,
+    env="",
 ):
     assert test_name in TT_DNN_TESTS or test_name in TT_TENSOR_TESTS
 
@@ -52,14 +58,17 @@ def run_single_pytorch_test(
 
     ################# RUN TEST #################
     logger.info(f"Running with shape: {input_shapes} on device: {pcie_slot}")
-    test_pass, _, _ = run_tt_lib_test(
+    test_pass, test_output, test_args = run_tt_lib_test(
         op_map[test_name]["ttlib_op"],
         op_map[test_name]["pytorch_op"],
         input_shapes,
         datagen_funcs,
         comparison_func,
         pcie_slot,
+        test_args,
     )
+    logger.debug(f"Test pass/fail: {test_pass} with {test_output}")
+    logger.debug(f"Test args: {test_args}")
 
     # Unset env variables
     for key, value in old_env_dict.items():

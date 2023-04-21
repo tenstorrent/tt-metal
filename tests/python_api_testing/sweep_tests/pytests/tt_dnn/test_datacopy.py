@@ -1,6 +1,7 @@
 import pytest
 import sys
 import torch
+import tt_lib as ttl
 from pathlib import Path
 from functools import partial
 
@@ -15,21 +16,28 @@ from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 
 
+@pytest.mark.parametrize("input_shapes", ([[1, 1, 32, 32]], [[1, 1, 256, 256]]))
+@pytest.mark.parametrize("pcie_slot", (0,))
 @pytest.mark.parametrize(
-    "input_shapes, pcie_slot",
-    (([[1, 1, 32, 32]], 0),),
+    "dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B)
 )
-def test_run_datacopy_test(input_shapes, pcie_slot, function_level_defaults):
+def test_run_datacopy_test(input_shapes, pcie_slot, dtype, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
         )
     ]
-    comparison_func = partial(comparison_funcs.comp_equal)
+
+    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+        comparison_func = partial(comparison_funcs.comp_allclose, atol=1.0)
+    else:
+        comparison_func = partial(comparison_funcs.comp_equal)
+
     run_single_pytorch_test(
         "datacopy",
         input_shapes,
         datagen_func,
         comparison_func,
         pcie_slot,
+        {"dtype": dtype},
     )

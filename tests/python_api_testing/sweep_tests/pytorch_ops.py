@@ -4,71 +4,71 @@ import torch
 ################################################
 #################### TT-DNN ####################
 ################################################
-def datacopy(x):
+def datacopy(x, *args, **kwargs):
     return x
 
 
-def recip(x):
+def recip(x, *args, **kwargs):
     return torch.reciprocal(x)
 
 
-def exp(x):
+def exp(x, *args, **kwargs):
     return torch.exp(x)
 
 
-def sqrt(x):
+def sqrt(x, *args, **kwargs):
     return torch.sqrt(x)
 
 
-def gelu(x):
+def gelu(x, *args, **kwargs):
     return torch.nn.functional.gelu(x)
 
 
-def relu(x):
+def relu(x, *args, **kwargs):
     return torch.nn.functional.relu(x)
 
 
-def sigmoid(x):
+def sigmoid(x, *args, **kwargs):
     return torch.nn.functional.sigmoid(x)
 
 
-def log(x):
+def log(x, *args, **kwargs):
     return torch.log(x)
 
 
-def tanh(x):
+def tanh(x, *args, **kwargs):
     return torch.tanh(x)
 
 
-def add(x, y):
+def add(x, y, *args, **kwargs):
     return torch.add(x, y)
 
 
-def sub(x, y):
+def sub(x, y, *args, **kwargs):
     return torch.sub(x, y)
 
 
-def mul(x, y):
+def mul(x, y, *args, **kwargs):
     return torch.mul(x, y)
 
 
-def matmul(x, y):
+def matmul(x, y, *args, **kwargs):
     return torch.matmul(x, y)
 
 
-def reduce_sum(x, dims=None, keepdim=True):
+def reduce_sum(x, dims=None, keepdim=True, *args, **kwargs):
     return torch.sum(x, dims, keepdim)
 
 
-def reduce_max(x, dims=None, keepdim=True):
+def reduce_max(x, dims=None, keepdim=True, *args, **kwargs):
     return torch.amax(x, dims, keepdim)
 
 
-def flatten(x):
+def flatten(x, *args, **kwargs):
     return torch.flatten(x)
 
 
-def transpose(x, dim0=-2, dim1=-1):
+def transpose(x, dim0=-2, dim1=-1, *args, **kwargs):
     return torch.transpose(x, dim0, dim1)
 
 
