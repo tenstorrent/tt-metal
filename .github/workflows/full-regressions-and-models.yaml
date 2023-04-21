@@ -10,8 +10,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
     environment: dev
-    runs-on:
-      group: gs-pool
+    runs-on: model-runner
     steps:
       - uses: actions/checkout@v3
         with:
