@@ -8,7 +8,6 @@ on:
 jobs:
   build-and-unit-tests:
     env:
-      TT_METAL_HOME: ${{ vars.TT_METAL_HOME }}
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
     environment: dev
     runs-on:
@@ -18,6 +17,9 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.CHECKOUT_TOKEN }}
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
         run: make build
       - name: Build tt-metal CPP tests
