@@ -4,7 +4,8 @@ import random
 import os
 import numpy as np
 from pathlib import Path
-
+from PIL import Image
+import torchvision.transforms as transforms
 
 @pytest.fixture(scope="function")
 def reset_seeds():
@@ -37,3 +38,12 @@ def model_location_generator():
             return Path("/opt/tt-metal-models") / rel_path
 
     return model_location_generator_
+
+@pytest.fixture
+def imagenet_sample_input():
+
+
+    im = Image.open("/mnt/MLPerf/tt_dnn-models/samples/ILSVRC2012_val_00048736.JPEG")
+    im = im.resize((224, 224))
+    im = transforms.ToTensor()(im).unsqueeze(0)
+    return im

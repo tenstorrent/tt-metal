@@ -16,17 +16,17 @@ from torchvision import models, transforms
 import pytest
 from tqdm import tqdm
 
-from imagenet import prep_ImageNet
 from libs import tt_lib as ttl
-from torch_resnet import _make_layer, Bottleneck
-from torch_resnet import *
+from torch_resnet import _make_layer, BasicBlock
+
 from utility_functions import comp_allclose_and_pcc, comp_pcc
 
 
 batch_size=1
 
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
-def test_resnet18_module3(fuse_ops, model_location_generator):
+def test_resnet18_module3(fuse_ops, imagenet_sample_input):
+    image = imagenet_sample_input
     with torch.no_grad():
 
         torch_resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
@@ -43,11 +43,6 @@ def test_resnet18_module3(fuse_ops, model_location_generator):
             modules_to_fuse.extend([['0.downsample.0', '0.downsample.1']])
             layer3 = torch.ao.quantization.fuse_modules(layer3, modules_to_fuse)
 
-        root = model_location_generator("pytorch_weka_data/imagenet/dataset/ILSVRC/Data/CLS-LOC")
-        dataloader = prep_ImageNet(root, batch_size=batch_size)
-        for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
-            image = images
-            break
 
         transformed_input = torch_resnet.conv1(image)
         transformed_input = torch_resnet.bn1(transformed_input)

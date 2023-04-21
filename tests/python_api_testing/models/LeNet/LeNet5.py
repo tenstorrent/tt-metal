@@ -6,7 +6,6 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-# Load in relevant libraries, and alias where appropriate
 import torch
 import torch.nn as nn
 import torchvision
@@ -16,7 +15,6 @@ from libs import tt_lib as ttl
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from libs.tt_lib.utils import pad_weight
 
-# Define relevant variables for the ML task
 batch_size = 64
 num_classes = 10
 
@@ -30,7 +28,6 @@ def load_torch_LeNet(weka_path):
     return model2, checkpoint['model_state_dict']
 
 def prep_data():
-     #Loading the dataset and preprocessing
     train_dataset = torchvision.datasets.MNIST(root = './data',
                                             train = True,
                                             transform = transforms.Compose([
@@ -215,31 +212,3 @@ class TtLeNet5(nn.Module):
         out = out.unpad((0, 0, 0, 0), (batch_size - 1, 0, 0, 9))
         out  = torch.Tensor(out.data()).reshape(out.shape())
         return out
-
-
-
-# snippet for visualization
-
-# examples = enumerate(test_loader)
-# batch_idx, (example_data, example_targets) = next(examples)
-
-# import matplotlib.pyplot as plt
-
-# model2 = LeNet5(num_classes).to(device)
-# checkpoint = torch.load(PATH)
-# model2.load_state_dict(checkpoint['model_state_dict'])
-# model2.eval()
-
-# fig = plt.figure()
-# for i in range(1):
-#     plt.subplot(2,3,i+1)
-#     plt.tight_layout()
-#     plt.imshow(example_data[i][0], cmap='gray', interpolation='none')
-#     print(example_data[i].shape)
-#     output = model2(example_data[i].unsqueeze(0).to(device))
-#     _, predicted = torch.max(output.data, 1)
-
-#     plt.title("Truth: {} Model {}".format(example_targets[i], predicted))
-#     plt.xticks([])
-#     plt.yticks([])
-# fig

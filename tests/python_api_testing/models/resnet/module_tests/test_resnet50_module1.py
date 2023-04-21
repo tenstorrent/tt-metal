@@ -14,20 +14,18 @@ from loguru import logger
 import torch
 from torchvision import models, transforms
 import pytest
-from tqdm import tqdm
 
-from imagenet import prep_ImageNet
 from libs import tt_lib as ttl
 from torch_resnet import _make_layer, Bottleneck
-from torch_resnet import *
+
 from utility_functions import comp_allclose_and_pcc, comp_pcc
 
 
 batch_size=1
 
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
-def test_resnet50_module1(fuse_ops, model_location_generator):
-
+def test_resnet50_module1(fuse_ops, imagenet_sample_input):
+    image = imagenet_sample_input
     with torch.no_grad():
 
         torch_resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
@@ -45,17 +43,10 @@ def test_resnet50_module1(fuse_ops, model_location_generator):
             modules_to_fuse.extend([['0.downsample.0', '0.downsample.1']])
             layer1 = torch.ao.quantization.fuse_modules(layer1, modules_to_fuse)
 
-        root = model_location_generator("pytorch_weka_data/imagenet/dataset/ILSVRC/Data/CLS-LOC")
-        dataloader = prep_ImageNet(root, batch_size=batch_size)
-        for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
-            image = images
-            break
-
         transformed_input = torch_resnet.conv1(image)
         transformed_input = torch_resnet.bn1(transformed_input)
         transformed_input = torch_resnet.relu(transformed_input)
         input = torch_resnet.maxpool(transformed_input)
-
 
         torch_output = torch_module1(input)
         tt_output = layer1(input)

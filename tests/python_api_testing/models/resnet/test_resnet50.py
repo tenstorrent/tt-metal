@@ -7,23 +7,22 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-from tqdm import tqdm
 from loguru import logger
 import torch
 import torchvision
 from torchvision import models
 from torchvision import transforms
 import pytest
+
 from resnetBlock import ResNet, Bottleneck
 from libs import tt_lib as ttl
-
-from imagenet import prep_ImageNet
 from utility_functions import comp_allclose_and_pcc, comp_pcc
 
 batch_size=1
 
 @pytest.mark.parametrize("fold_batchnorm", [False, True], ids=['Batchnorm not folded', "Batchnorm folded"])
-def test_run_resnet50_inference(fold_batchnorm, model_location_generator):
+def test_run_resnet50_inference(fold_batchnorm, imagenet_sample_input):
+    image = imagenet_sample_input
     with torch.no_grad():
         torch.manual_seed(1234)
         # Initialize the device
@@ -44,14 +43,11 @@ def test_run_resnet50_inference(fold_batchnorm, model_location_generator):
                         base_address="",
                         fold_batchnorm=fold_batchnorm)
 
-        root = model_location_generator("pytorch_weka_data/imagenet/dataset/ILSVRC/Data/CLS-LOC")
-        dataloader = prep_ImageNet(root, batch_size=batch_size)
-        for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
-            torch_output = torch_resnet50(images).unsqueeze(1).unsqueeze(1)
-            tt_output = tt_resnet50(images)
-            break
 
-        # print(comp_allclose_and_pcc(torch_output, tt_output))
+        torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
+        tt_output = tt_resnet50(image)
+
+
         passing, info = comp_pcc(torch_output, tt_output)
         logger.info(info)
         assert passing
