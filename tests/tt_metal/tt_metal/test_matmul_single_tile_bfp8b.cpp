@@ -147,7 +147,7 @@ int main(int argc, char **argv) {
         for(int i = 0; i < 32; i++) {
             vec.at(i * 32 + i) = (float)1;
         }
-        std::vector<uint32_t> weights = pack_row_major_fp32_vec_as_bfp8_tiles(vec, /*is_exp_a=*/false);
+        std::vector<uint32_t> weights = pack_fp32_vec_as_bfp8_tiles(vec, /*row_major_input=*/true, /*is_exp_a=*/false);
 
         pass &= tt_metal::WriteToDeviceDRAM(src1_dram_buffer, weights);
 
