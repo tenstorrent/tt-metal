@@ -280,7 +280,8 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
                         if (row_major_output) {
                             float_data_index = subtile_c + (32 * subtile_r) + (tile_index * num_float_in_tile);
                         } else {
-                            float_data_index = fp32_element_index++;
+                            float_data_index = fp32_element_index;
+                            fp32_element_index += 8;
                         }
                         _mm256_storeu_ps(&float_vec[float_data_index],  _mm256_castsi256_ps(man));
                     }

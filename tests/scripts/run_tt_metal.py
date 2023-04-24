@@ -10,6 +10,7 @@ from tests.scripts.cmdline_args import get_tt_metal_arguments_from_cmdline_args,
 
 TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_add_two_ints", "test_add_two_ints"),
+    TestEntry("tt_metal/tests/test_bfp8_conversion", "test_bfp8_conversion"),
 
     TestEntry("tt_metal/tests/test_dram_loopback_single_core", "test_dram_loopback_single_core"),
     TestEntry("tt_metal/tests/test_dram_loopback_single_core_db", "test_dram_loopback_single_core_db"),
