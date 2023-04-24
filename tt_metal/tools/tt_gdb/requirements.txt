@@ -1,3 +1,5 @@
+-r ../../python_env/requirements.txt
+
 rich==13.3.3
 pyelftools==0.29
 curtsies==0.4.1
