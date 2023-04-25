@@ -54,6 +54,24 @@ void kernel_main() {
     constexpr uint32_t num_used_dram_ch = 8;
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
 
+    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in1 = 1;
+
+    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
+
+    uint32_t l1_write_addr_in0;
+    uint32_t l1_write_addr_in1;
+
+    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
+    volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
+    *(in1_mcast_receiver_semaphore_addr_ptr) = VALID;
+    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
+    // to receive the mcast
+    volatile uint32_t* in1_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_sender_semaphore_addr);
+
+    bool one_time_noc_wait = true;
+    bool one_time_cb_push = true;
+
     constexpr bool tile_size_is_pow2 = (get_compile_time_arg_val(0) == 1);
     #if (tile_size_is_pow2)
     const uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
@@ -83,24 +101,6 @@ void kernel_main() {
         .bank_unit_size = single_tile_size_bytes
     };
     #endif
-
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
-
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
-
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
-    *(in1_mcast_receiver_semaphore_addr_ptr) = VALID;
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
-    volatile uint32_t* in1_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_sender_semaphore_addr);
-
-    bool one_time_noc_wait = true;
-    bool one_time_cb_push = true;
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;

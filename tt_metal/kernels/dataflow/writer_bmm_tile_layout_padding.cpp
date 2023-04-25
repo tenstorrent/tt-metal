@@ -47,7 +47,7 @@ void kernel_main() {
     const uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen s = {
         .bank_base_address = out_tensor_addr,
-        .num_used_banks = num_used_dram_c,
+        .num_used_banks = num_used_dram_ch,
         .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
         .log_base_2_of_bank_unit_size = tile_size_pow2_exponent // TODO(AP): refactor
     };

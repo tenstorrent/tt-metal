@@ -28,19 +28,40 @@ void kernel_main() {
     uint32_t itileA_batch = 0;
     uint32_t itileB_batch = 0;
 
+    // const args for tile-based bank-swizzled layout
+    // could be added to the arg list in the future to test different
+    // bank-swizzling configurations
+    constexpr uint32_t num_used_dram_ch = 8;
+    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
+    constexpr bool tile_size_is_pow2 = (get_compile_time_arg_val(0) == 1);
+    #if (tile_size_is_pow2)
+    const uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen s0 = {
         .bank_base_address = src0_addr,
-        .num_used_banks = 8,
-        .log_base_2_of_num_used_banks = 3,
-        .log_base_2_of_bank_unit_size = 11
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
-
     const InterleavedPow2AddrGen s1 = {
         .bank_base_address = src1_addr,
-        .num_used_banks = 8,
-        .log_base_2_of_num_used_banks = 3,
-        .log_base_2_of_bank_unit_size = 11
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
     };
+    #else
+    const InterleavedAddrGen s0 = {
+        .bank_base_address = src0_addr,
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .bank_unit_size = tile_bytes
+    };
+    const InterleavedAddrGen s1 = {
+        .bank_base_address = src1_addr,
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .bank_unit_size = tile_bytes
+    };
+    #endif
 
     for (uint32_t nb = 0; nb < batch; nb++) {
         uint32_t itileA = itileA_batch;

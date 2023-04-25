@@ -13,6 +13,8 @@ using namespace tt;
 
 tt_metal::Program * create_program(
     tt_metal::Device *device,
+    tt::DataFormat cb_data_format,
+    MathFidelity math_fidelity,
     uint32_t single_tile_size,
     uint32_t num_cores_x,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
@@ -31,7 +33,6 @@ tt_metal::Program * create_program(
     uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
     uint32_t out_CB_tiles = per_core_M * per_core_N;
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
-    TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N <= 400);
 
     // Compute kernel compile time args
     uint32_t num_blocks = (K/in0_block_w);
@@ -80,7 +81,7 @@ tt_metal::Program * create_program(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t src1_cb_index = 1;
@@ -92,7 +93,7 @@ tt_metal::Program * create_program(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -103,7 +104,7 @@ tt_metal::Program * create_program(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t interm0_cb_index = 24;
@@ -115,7 +116,7 @@ tt_metal::Program * create_program(
                 out_CB_tiles,
                 out_CB_size,
                 cb_output->address(),
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
@@ -153,7 +154,7 @@ tt_metal::Program * create_program(
                 "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
                 core,
                 mm_args,
-                MathFidelity::HiFi4,
+                math_fidelity,
                 fp32_dest_acc_en,
                 math_approx_mode
             );
@@ -233,7 +234,15 @@ Tensor matmul_multi_core_reuse_generalized_(const Tensor &a, const Tensor &b, bo
     TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
-    uint32_t single_tile_size = 2 * 1024;
+    TT_ASSERT(a.dtype() == b.dtype());
+    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
+    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        cb_data_format = tt::DataFormat::Float16_b;
+    }
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
+
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
     if (bcast_batch)
@@ -301,6 +310,8 @@ Tensor matmul_multi_core_reuse_generalized_(const Tensor &a, const Tensor &b, bo
 
     tt_metal::Program * program = reuse_generalized_helpers::create_program(
         device,
+        cb_data_format,
+        math_fidelity,
         single_tile_size,
         num_cores_x,
         B, Mt, Nt, Kt,

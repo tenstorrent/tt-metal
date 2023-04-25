@@ -22,7 +22,14 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
-    uint32_t single_tile_size = 2 * 1024;
+    TT_ASSERT(a.dtype() == b.dtype());
+    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
+    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        cb_data_format = tt::DataFormat::Float16_b;
+    }
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
     if (bcast_batch)
@@ -70,7 +77,7 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        tt::DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t src1_cb_index = 1;
@@ -81,7 +88,7 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        tt::DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -93,18 +100,26 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        tt::DataFormat::Float16_b
+        cb_data_format
     );
 
+    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+    tt_metal::DataMovementKernelArgs *reader_writer_compile_time_args;
+    if (tile_size_is_power_of_two) {
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
+    } else {
+        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {0, 0});
+    }
     auto reader = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
-        core, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
     auto writer = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
-        core, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
     vector<uint32_t> compute_args = {
         B, // B
@@ -120,7 +135,7 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         "tt_metal/kernels/compute/bmm.cpp",
         core,
         bmm_args,
-        MathFidelity::HiFi4,
+        math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
     );

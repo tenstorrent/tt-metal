@@ -93,15 +93,16 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
+        auto reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
         auto reader = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
-            core, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+            core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
         auto writer = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
-            core, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+            core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
         vector<uint32_t> compute_kernel_args = {
             B, // batch

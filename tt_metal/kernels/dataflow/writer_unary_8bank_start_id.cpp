@@ -12,12 +12,28 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
+    // const args for tile-based bank-swizzled layout
+    // could be added to the arg list in the future to test different
+    // bank-swizzling configurations
+    constexpr uint32_t num_used_dram_ch = 8;
+    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
+    constexpr bool tile_size_is_pow2 = (get_compile_time_arg_val(0) == 1);
+    #if (tile_size_is_pow2)
+    const uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen s = {
         .bank_base_address = dst_addr,
-        .num_used_banks = 8,
-        .log_base_2_of_num_used_banks = 3,
-        .log_base_2_of_bank_unit_size = 11 // TODO(AP): refactor
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
+    #else
+    const InterleavedAddrGen s = {
+        .bank_base_address = dst_addr,
+        .num_used_banks = num_used_dram_ch,
+        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
+        .bank_unit_size = tile_bytes
+    };
+    #endif
 
     for (uint32_t i = start_id; i<start_id + num_tiles; i ++) {
         uint64_t dst_noc_addr = get_noc_addr(i, s);

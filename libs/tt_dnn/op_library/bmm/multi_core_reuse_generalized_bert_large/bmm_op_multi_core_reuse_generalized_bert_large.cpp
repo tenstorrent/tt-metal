@@ -247,7 +247,7 @@ Tensor matmul_multi_core_reuse_generalized_bert_large_(const Tensor &a, const Te
     TT_ASSERT(bcast_batch == false, "Bcast batch not supported for this parallelization");
 
     TT_ASSERT(a.dtype() == b.dtype());
-    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format"); // TODO: Add BFP8_B
+    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
 
     tt_metal::Device *device = a.device();
 

@@ -7,7 +7,7 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace mcast_reuse_padding_helpers {
+namespace mcast_reuse_padding_generalized_helpers {
 using namespace tt::constants;
 using namespace tt;
 
@@ -38,7 +38,6 @@ tt_metal::Program * create_program_mcast_in0_in1(
     uint32_t in2_block_tiles = 1;
     uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
 
-    TT_ASSERT(in0_CB_size + in1_CB_size  + in2_CB_size + out_CB_size <= device->l1_size() - UNRESERVED_BASE); // Need to add the mcast sepaphore buffers
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
@@ -454,7 +453,6 @@ tt_metal::Program * create_program_mcast_in0(
     uint32_t in2_block_tiles = 1;
     uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
 
-    TT_ASSERT(in0_CB_size + in1_CB_size + out_CB_size <= device->l1_size() - UNRESERVED_BASE); // Need to add the mcast sepaphore buffers
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -744,7 +742,6 @@ tt_metal::Program * create_program_mcast_in1(
     uint32_t in2_block_tiles = 1;
     uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
 
-    TT_ASSERT(in0_CB_size + in1_CB_size + out_CB_size <= device->l1_size() - UNRESERVED_BASE); // Need to add the mcast sepaphore buffers
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -1024,7 +1021,7 @@ Tensor matmul_multi_core_reuse_mcast_padding_generalized_(const Tensor &a, const
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
     TT_ASSERT(a.dtype() == b.dtype());
-    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format"); // TODO: Add BFP8_B
+    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
 
     tt_metal::Device *device = a.device();
 
@@ -1100,7 +1097,7 @@ Tensor matmul_multi_core_reuse_mcast_padding_generalized_(const Tensor &a, const
     tt_metal::Program * program;
 
     if (core_range.x > 1 && core_range.y > 1) {
-        program = mcast_reuse_padding_helpers::create_program_mcast_in0_in1(
+        program = mcast_reuse_padding_generalized_helpers::create_program_mcast_in0_in1(
             device,
             cb_data_format,
             math_fidelity,
@@ -1114,7 +1111,7 @@ Tensor matmul_multi_core_reuse_mcast_padding_generalized_(const Tensor &a, const
             in0_dram_addr, in1_dram_addr, out_dram_addr
         );
     } else if (core_range.x > 1) {
-        program = mcast_reuse_padding_helpers::create_program_mcast_in0(
+        program = mcast_reuse_padding_generalized_helpers::create_program_mcast_in0(
             device,
             cb_data_format,
             math_fidelity,
@@ -1128,7 +1125,7 @@ Tensor matmul_multi_core_reuse_mcast_padding_generalized_(const Tensor &a, const
             in0_dram_addr, in1_dram_addr, out_dram_addr
         );
     } else {
-        program = mcast_reuse_padding_helpers::create_program_mcast_in1(
+        program = mcast_reuse_padding_generalized_helpers::create_program_mcast_in1(
             device,
             cb_data_format,
             math_fidelity,

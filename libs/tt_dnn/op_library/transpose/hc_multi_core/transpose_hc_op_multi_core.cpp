@@ -84,7 +84,14 @@ Tensor transpose_hc_multi_core(const Tensor &a) {
             num_output_tiles * single_tile_size,
             DataFormat::Float16_b
         );
-
+        bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+        tt_metal::DataMovementKernelArgs *reader_writer_compile_time_args;
+        if (tile_size_is_power_of_two) {
+            // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+            reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
+        } else {
+            reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {0, 0});
+        }
         tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/transpose_hc_8bank_partitioned.cpp",
@@ -98,6 +105,7 @@ Tensor transpose_hc_multi_core(const Tensor &a) {
             program,
             "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
             core,
+            reader_writer_compile_time_args,
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default);
 

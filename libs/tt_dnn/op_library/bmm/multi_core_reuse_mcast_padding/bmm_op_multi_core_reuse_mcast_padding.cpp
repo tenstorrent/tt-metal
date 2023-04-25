@@ -13,6 +13,8 @@ using namespace tt;
 
 tt_metal::Program * create_program_mcast_in0_in1(
     tt_metal::Device *device,
+    tt::DataFormat cb_data_format,
+    MathFidelity math_fidelity,
     uint32_t single_tile_size,
     tt_xy_pair core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
@@ -35,8 +37,6 @@ tt_metal::Program * create_program_mcast_in0_in1(
     // Dummy cb to store one tile of zeros for padding
     uint32_t in2_block_tiles = 1;
     uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
-
-    TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N + in2_block_tiles <= 400);
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -168,7 +168,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         mm_args,
-        MathFidelity::HiFi4,
+        math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
     );
@@ -202,7 +202,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t src1_cb_index = 1;
@@ -214,7 +214,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -225,7 +225,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t interm0_cb_index = 24;
@@ -237,7 +237,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 out_CB_tiles,
                 out_CB_size,
                 cb_output->address(),
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             std::vector<uint32_t> invalid = {INVALID};
@@ -428,6 +428,8 @@ tt_metal::Program * create_program_mcast_in0_in1(
 
 tt_metal::Program * create_program_mcast_in0(
     tt_metal::Device *device,
+    tt::DataFormat cb_data_format,
+    MathFidelity math_fidelity,
     uint32_t single_tile_size,
     tt_xy_pair core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
@@ -450,8 +452,6 @@ tt_metal::Program * create_program_mcast_in0(
     // Dummy cb to store one tile of zeros for padding
     uint32_t in2_block_tiles = 1;
     uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
-
-    TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N + in2_block_tiles <= 400);
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -541,7 +541,7 @@ tt_metal::Program * create_program_mcast_in0(
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         mm_args,
-        MathFidelity::HiFi4,
+        math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
     );
@@ -573,7 +573,7 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t src1_cb_index = 1;
@@ -585,7 +585,7 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -596,7 +596,7 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t interm0_cb_index = 24;
@@ -608,7 +608,7 @@ tt_metal::Program * create_program_mcast_in0(
                 out_CB_tiles,
                 out_CB_size,
                 cb_output->address(),
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             std::vector<uint32_t> invalid = {INVALID};
@@ -716,6 +716,8 @@ tt_metal::Program * create_program_mcast_in0(
 
 tt_metal::Program * create_program_mcast_in1(
     tt_metal::Device *device,
+    tt::DataFormat cb_data_format,
+    MathFidelity math_fidelity,
     uint32_t single_tile_size,
     tt_xy_pair core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
@@ -738,8 +740,6 @@ tt_metal::Program * create_program_mcast_in1(
     // Dummy cb to store one tile of zeros for padding
     uint32_t in2_block_tiles = 1;
     uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
-
-    TT_ASSERT(2 * in0_block_w * (per_core_M + per_core_N) + per_core_M * per_core_N + in2_block_tiles <= 400);
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -830,7 +830,7 @@ tt_metal::Program * create_program_mcast_in1(
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         mm_args,
-        MathFidelity::HiFi4,
+        math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
     );
@@ -862,7 +862,7 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t src1_cb_index = 1;
@@ -874,7 +874,7 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -885,7 +885,7 @@ tt_metal::Program * create_program_mcast_in1(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t interm0_cb_index = 24;
@@ -1018,7 +1018,14 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
     TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
-    uint32_t single_tile_size = 2 * 1024;
+    TT_ASSERT(a.dtype() == b.dtype());
+    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
+    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        cb_data_format = tt::DataFormat::Float16_b;
+    }
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
     if (bcast_batch)
@@ -1086,6 +1093,8 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
     if (core_range.x > 1 && core_range.y > 1) {
         program = mcast_reuse_padding_helpers::create_program_mcast_in0_in1(
             device,
+            cb_data_format,
+            math_fidelity,
             single_tile_size,
             core_range,
             B, Mt, Nt, Kt,
@@ -1098,6 +1107,8 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
     } else if (core_range.x > 1) {
         program = mcast_reuse_padding_helpers::create_program_mcast_in0(
             device,
+            cb_data_format,
+            math_fidelity,
             single_tile_size,
             core_range,
             B, Mt, Nt, Kt,
@@ -1110,6 +1121,8 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
     } else {
         program = mcast_reuse_padding_helpers::create_program_mcast_in1(
             device,
+            cb_data_format,
+            math_fidelity,
             single_tile_size,
             core_range,
             B, Mt, Nt, Kt,
