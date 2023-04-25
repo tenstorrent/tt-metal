@@ -109,21 +109,31 @@ void TensorModule(py::module &m_tensor) {
         Class constructor supports tensors of rank 4 where the size of both last two dimensions is a multiple of 32.
         The constructor takes following arguments:
 
-        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
-        |  Argument  |                 Description                            |       Data type           |           Valid range           | Required |
-        +============+========================================================+===========================+=================================+==========+
-        | data       | Data to store in TT tensor                             | List[float/int]           |                                 | Yes      |
-        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
-        | shape      | Shape of TT tensor                                     | List[int[4]]              |                                 | Yes      |
-        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
-        | data_type  | Data type of numbers in TT tensor                      | tt_lib.tensor.DataType    | tt_lib.tensor.DataType.BFLOAT16 | Yes      |
-        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
-        | layout     | Layout of tensor data in memory                        | tt_lib.tensor.Layout      | tt_lib.tensor.Layout.ROW_MAJOR  | Yes      |
-        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
-        | device     | Device on whihc tensor will be created                 | tt_lib.device.Device      | Host or TT accelerator device   | No       |
-        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
-        | mem_config | Layout of tensor in TT Accelerator device memory banks | tt_lib.tensor.MemoryConfig|                                 | No       |
-        +------------+--------------------------------------------------------+---------------------------+---------------------------------+----------+
+        +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
+        |  Argument  |                 Description                            |       Data type           |           Valid range              | Required |
+        +============+========================================================+===========================+====================================+==========+
+        | data       | Data to store in TT tensor                             | List[float/int]           |                                    | Yes      |
+        +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
+        | shape      | Shape of TT tensor                                     | List[int[4]]              |                                    | Yes      |
+        +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
+        | data_type  | Data type of numbers in TT tensor                      | tt_lib.tensor.DataType    | tt_lib.tensor.DataType.BFLOAT16    | Yes      |
+        |            |                                                        |                           |                                    |          |
+        |            |                                                        |                           | tt_lib.tensor.DataType.FLOAT32     |          |
+        |            |                                                        |                           |                                    |          |
+        |            |                                                        |                           | tt_lib.tensor.DataType.UINT32      |          |
+        |            |                                                        |                           |                                    |          |
+        |            |                                                        |                           | tt_lib.tensor.DataType.BFLOAT8_B   |          |
+        +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
+        | layout     | Layout of tensor data in memory                        | tt_lib.tensor.Layout      | tt_lib.tensor.Layout.ROW_MAJOR     | Yes      |
+        |            |                                                        |                           |                                    |          |
+        |            |                                                        |                           | tt_lib.tensor.Layout.TILE          |          |
+        |            |                                                        |                           |                                    |          |
+        |            |                                                        |                           | tt_lib.tensor.Layout.CHANNELS_LAST |          |
+        +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
+        | device     | Device on which tensor will be created                 | tt_lib.device.Device      | Host or TT accelerator device      | No       |
+        +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
+        | mem_config | Layout of tensor in TT Accelerator device memory banks | tt_lib.tensor.MemoryConfig|                                    | No       |
+        +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
 
     )doc");
 
@@ -153,6 +163,8 @@ void TensorModule(py::module &m_tensor) {
                     return Tensor(data, shape, data_type, layout, device);
                 }
             ), R"doc(
+                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
+
                 Example of creating a TT Tensor on TT accelerator device:
 
                 .. code-block:: python
@@ -175,13 +187,15 @@ void TensorModule(py::module &m_tensor) {
                     return Tensor(data, shape, data_type, layout, device, mem_config);
                 }
             ), R"doc(
+                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
+
                 Example of creating a TT Tensor on TT accelerator device with specified mem_config:
 
                 .. code-block:: python
 
                     py_tensor = torch.randn((1, 1, 32, 32))
                     tt_device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-                    mem_config = tt_lib.tensor.MemoryConfig(Fasle, 3)
+                    mem_config = tt_lib.tensor.MemoryConfig(False, 3)
                     // ...
                     tt_lib.tensor.Tensor(
                         py_tensor.reshape(-1).tolist(),
@@ -223,21 +237,26 @@ void TensorModule(py::module &m_tensor) {
         .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
             return self.to(device, mem_config);
         }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
-            Moves TT Tensor form host device to TT accelerator device.
+            Move TT Tensor from host device to TT accelerator device.
+            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
 
             .. code-block:: python
 
                 tt_tensor = tt_tensor.to(tt_device)
         )doc")
         .def("to", py::overload_cast<Host*>(&Tensor::to, py::const_), R"doc(
-            Move TT Tensor form TT accelerator device to host device.
+            Move TT Tensor from TT accelerator device to host device.
 
             .. code-block:: python
 
                 tt_tensor = tt_tensor.to(host)
         )doc")
         .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_), R"doc(
-            Convert TT Tensor to provided memory layout. Available layouts are TILE and ROW_MAJOR.
+            Convert TT Tensor to provided memory layout. Available layouts are:
+
+            * ROW_MAJOR to TILE or CHANNELS_LAST
+            * TILE to ROW_MAJOR
+            * CHANNELS_LAST to ROW_MAJOR
 
             .. code-block:: python
 
@@ -246,7 +265,7 @@ void TensorModule(py::module &m_tensor) {
         .def("pad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
             return self.pad(output_tensor_shape, input_tensor_start, pad_value);
         }, R"doc(
-            Pads TT Tensor with given `pad_value`. The input tensor must be on host and in ROW_MAJOR layout. Returns an output tensor that contains the input tensor at the given `input_tensor_start` indices and the padded value everywhere else.
+            Pad TT Tensor with given `pad_value`. The input tensor must be on host and in ROW_MAJOR layout. Returns an output tensor that contains the input tensor at the given `input_tensor_start` indices and the padded value everywhere else.
 
             +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
             | Argument            | Description                                          | Data type    | Valid range                                         | Required |
@@ -310,7 +329,7 @@ void TensorModule(py::module &m_tensor) {
         .def("unpad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
             return self.unpad(output_tensor_start, output_tensor_end);
         }, R"doc(
-            Unpads TT Tensor from given `input_tensor`. The input tensor must be on host and in ROW_MAJOR layout. Returns an output tensor from `output_tensor_start` to `output_tensor_end` (inclusive) of the input tensor.
+            Unpad TT Tensor from given `input_tensor`. The input tensor must be on host and in ROW_MAJOR layout. Returns an output tensor from `output_tensor_start` to `output_tensor_end` (inclusive) of the input tensor.
 
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
             | Argument            | Description                                  | Data type    | Valid range                                         | Required |
