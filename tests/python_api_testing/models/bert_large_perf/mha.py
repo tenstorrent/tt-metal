@@ -15,7 +15,7 @@ import numpy as np
 
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from python_api_testing.models.bert.fused_ops.linear import Linear as TtLinear
+from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear as TtLinear
 from libs.tt_lib.fused_ops.softmax import softmax
 from utility_functions import get_FR, set_FR, enable_compile_cache, enable_binary_cache, comp_pcc, comp_allclose, profiler
 

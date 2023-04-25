@@ -11,14 +11,15 @@ sys.path.append(f"{f}/../../../..")
 
 import time
 from libs import tt_lib as ttl
-from python_api_testing.models.bert.embeddings import PytorchEmbeddings
-from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
-from python_api_testing.models.bert.ffn import TtFeedForwardModel
-from python_api_testing.models.bert.bert_encoder import TtBertEncoder
-from python_api_testing.models.bert.fused_ops.linear import Linear
+from python_api_testing.models.bert_large_perf.embeddings import PytorchEmbeddings
+from python_api_testing.models.bert_large_perf.mha import TtMultiHeadAttentionModel
+from python_api_testing.models.bert_large_perf.ffn import TtFeedForwardModel
+from python_api_testing.models.bert_large_perf.bert_encoder import TtBertEncoder
+from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled, comp_allclose_and_pcc, comp_pcc, comp_allclose, disable_binary_cache, disable_compile_cache
+from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled, comp_allclose_and_pcc, comp_pcc, comp_allclose
 from utility_functions import profiler
+from utility_functions import disable_binary_cache, disable_compile_cache
 
 
 class TtBertShared(torch.nn.Module):
@@ -257,23 +258,23 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     # assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
-@pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
-    (
-        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, True, True, 0.99),
-        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, True, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, True, True, True, 0.98) # Placeholder PCC until issues are resolved
-    ),
-)
-def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+def profile_bert_question_and_answering_inference():
+
+    model_version = "phiyodr/bert-large-finetuned-squad2"
+    batch = 1
+    seq_len = 384
+    on_weka = True
+    real_input = True
+    attention_mask = True
+    token_type_ids = True
+    pcc = 0.98
+    model_location_generator = model_location_generator_
 
     enable_binary_cache()
     enable_compile_cache()
 
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator)
-
+    profiler.print()
 
 if __name__ == "__main__":
-    print(f"-------------> BERT <--------------------")
-    test_bert_question_and_answering_inference("phiyodr/bert-large-finetuned-squad2", 1, 384, True, True, True, True, 0.98, model_location_generator=model_location_generator_)
-    profiler.print()
+    profile_bert_question_and_answering_inference()
