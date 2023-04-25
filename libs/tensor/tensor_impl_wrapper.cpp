@@ -31,7 +31,8 @@ void initialize_data_wrapper(Tensor &tensor, Initialize init_type) {
     const static std::map<DataType, std::function<void(Tensor &, Initialize)>> initialize_data_map = {
         {DataType::BFLOAT16, &initialize_data_helper<bfloat16>},
         {DataType::FLOAT32, &initialize_data_helper<float>},
-        {DataType::UINT32, &initialize_data_helper<uint32_t>}
+        {DataType::UINT32, &initialize_data_helper<uint32_t>},
+        {DataType::BFLOAT8_B, &initialize_data_helper<float>}
     };
     return initialize_data_map.at(tensor.dtype())(tensor, init_type);
 }
@@ -70,7 +71,8 @@ Tensor pad_wrapper(const Tensor &tensor, const std::array<uint32_t, 4> &output_t
     const static std::map<DataType, std::function<Tensor(const Tensor &, const std::array<uint32_t, 4> &, const std::array<uint32_t, 4> &, float)>> pad_map = {
         {DataType::BFLOAT16, &pad<bfloat16>},
         {DataType::FLOAT32, &pad<float>},
-        {DataType::UINT32, &pad<uint32_t>}
+        {DataType::UINT32, &pad<uint32_t>},
+        {DataType::BFLOAT8_B, &pad<float>}
     };
     return pad_map.at(tensor.dtype())(tensor, output_tensor_shape, input_tensor_start, pad_value);
 }
@@ -79,7 +81,8 @@ Tensor unpad_wrapper(const Tensor &tensor, const std::array<uint32_t, 4> &output
     const static std::map<DataType, std::function<Tensor(const Tensor &, const std::array<uint32_t, 4> &, const std::array<uint32_t, 4> &)>> unpad_map = {
         {DataType::BFLOAT16, &unpad<bfloat16>},
         {DataType::FLOAT32, &unpad<float>},
-        {DataType::UINT32, &unpad<uint32_t>}
+        {DataType::UINT32, &unpad<uint32_t>},
+        {DataType::BFLOAT8_B, &unpad<float>}
     };
     return unpad_map.at(tensor.dtype())(tensor, output_tensor_start, output_tensor_end);
 }
@@ -88,7 +91,8 @@ void print_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print)
     const static std::map<DataType, std::function<void(const Tensor &, Layout, bool)>> print_map = {
         {DataType::BFLOAT16, &print<bfloat16>},
         {DataType::FLOAT32, &print<float>},
-        {DataType::UINT32, &print<uint32_t>}
+        {DataType::UINT32, &print<uint32_t>},
+        {DataType::BFLOAT8_B, &print<float>}
     };
     print_map.at(tensor.dtype())(tensor, print_layout, pretty_print);
 }
@@ -107,7 +111,8 @@ void deepcopy_device_data_wrapper(const Tensor &src, Tensor &dst) {
     const static std::map<DataType, std::function<void(const Tensor &, Tensor &)>> deepcopy_dev_data_map = {
         {DataType::BFLOAT16, &deepcopy_device_data<bfloat16>},
         {DataType::FLOAT32, &deepcopy_device_data<float>},
-        {DataType::UINT32, &deepcopy_device_data<uint32_t>}
+        {DataType::UINT32, &deepcopy_device_data<uint32_t>},
+        {DataType::BFLOAT8_B, &deepcopy_device_data<float>}
     };
     deepcopy_dev_data_map.at(src.dtype())(src, dst);
 }
