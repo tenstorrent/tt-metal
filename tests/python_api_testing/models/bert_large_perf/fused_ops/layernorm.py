@@ -4,6 +4,8 @@ import torch
 
 from libs.tt_lib import tensor, device
 from libs.tt_lib.utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, tt2torch as t2t, tt2torch_rm as t2trm, roundup32, float_to_bits
+from utility_functions import profiler
+
 
 # This ref implementation is only here for debugging
 def ref_ln(x, gamma, beta = None, epsilon = 1e-5):
@@ -117,10 +119,15 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims 
         var = tensor.mul(x_minus_mean, x_minus_mean) # (x-m)^2
         var_redW = tensor.reduce(var, RSUM, RW, 1.0) # sum[(x-m)^2]
 
+        profiler.start("___var_scaler_creation")
+
         constant = float_to_bits(1/W)
         scaler = (constant >> 16) & 0xFFFF
         var_scaler_ = tensor.fill_rm(1, 1, roundup32(H), 32, H_, 1, epsilon_, scaler, 0)
         var_scaler_ = tensor.tilize(var_scaler_)
+
+        profiler.end("___var_scaler_creation")
+        print(f"layernorm_1d_ var_scaler_ shape {var_scaler_.shape()} scaler {scaler} ")
 
         var_div_n1 = tensor.bcast(var_redW, var_scaler_, BCMUL, BCW)
         var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
@@ -157,6 +164,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims 
         hmasku = tensor.fill_ones_rm(N, C, H, 32, 1, 1, x) # generate a H-mask with mask[h, w] = 1.0 where h,w < 1
         hmaskt = tensor.tilize(hmasku) # tilize the mask
         x_minus_mean = tensor.bcast(x_minus_mean0, hmaskt, BCMUL, BCW) # zero out (x-m) for h>=H_, h<H
+
+        print(f"layernorm_2d_ hmasku shape {hmasku.shape()}")
 
         var = tensor.mul(x_minus_mean, x_minus_mean) # (x-m)^2
         var_redW = tensor.reduce(var, RSUM, RW, 1.0) # sum[(x-m)^2]
