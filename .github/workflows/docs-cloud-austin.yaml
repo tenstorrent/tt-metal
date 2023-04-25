@@ -2,6 +2,8 @@ name: Build and deploy docs to Austin Colo VPN
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 */2 * * *"
 
 concurrency:
   group: '${{ github.workflow }}'
