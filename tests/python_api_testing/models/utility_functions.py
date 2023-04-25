@@ -1,5 +1,6 @@
 import math
 
+import time
 import torch
 import numpy as np
 from loguru import logger
@@ -262,3 +263,45 @@ def tt2torch_tensor(tt_tensor, tt_host=None):
     tt_output = tt_tensor.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
     py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
     return py_output
+
+
+class Profiler():
+    def __init__(self):
+        self.start_times = dict()
+        self.times = dict()
+        self.disabled = False
+
+    def enable(self):
+        self.disabled = False
+
+    def disable(self):
+        self.disabled = True
+
+    def start(self, key):
+        if self.disabled:
+            return
+
+        self.start_times[key] = time.time()
+
+    def end(self, key):
+        if self.disabled:
+            return
+
+        if key not in self.start_times:
+            return
+
+        diff = time.time() - self.start_times[key]
+
+        if key not in self.times:
+            self.times[key] = []
+
+        self.times[key].append(diff)
+
+    def print(self):
+
+        for key, values in self.times.items():
+            average = sum(values) / len(values)
+            print(f"{key}: {average:.3f}s")
+
+
+profiler = Profiler()
