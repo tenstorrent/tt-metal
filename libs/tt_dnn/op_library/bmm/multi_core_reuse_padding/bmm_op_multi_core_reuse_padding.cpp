@@ -77,7 +77,8 @@ tt_metal::Program * create_program(
     uint32_t last_subblock_of_last_block_h = last_block_h % out_subblock_h == 0 ? out_subblock_h : last_block_h % out_subblock_h;
     uint32_t last_subblock_of_last_block_w = last_block_w % out_subblock_w == 0 ? out_subblock_w : last_block_w % out_subblock_w;
     uint32_t last_block_padded_subblock_tiles_addr_skip = single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
-    uint32_t last_block_padded_block_tiles_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
+    uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
+    uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
     uint32_t num_blocks_read = 0; // Shouldn't be used since this op is only used for 1 core
     uint32_t num_blocks_y = (M - 1) / per_core_M + 1; // Should always be 1
@@ -227,10 +228,11 @@ tt_metal::Program * create_program(
 
                 (std::uint32_t) last_block_num_nonzero_subblocks_h,
                 (std::uint32_t) last_subblock_of_last_block_h,
+                (std::uint32_t) last_block_padded_block_tiles_h_skip,
                 (std::uint32_t) last_block_num_nonzero_subblocks_w,
                 (std::uint32_t) last_subblock_of_last_block_w,
                 (std::uint32_t) last_block_padded_subblock_tiles_addr_skip,
-                (std::uint32_t) last_block_padded_block_tiles_skip
+                (std::uint32_t) last_block_padded_block_tiles_w_skip
             };
 
             tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel, core, mm_reader_args);
