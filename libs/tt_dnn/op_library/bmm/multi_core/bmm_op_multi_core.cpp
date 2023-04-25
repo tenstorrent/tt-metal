@@ -38,9 +38,9 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     tt_metal::Device *device = a.device();
     std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
 
-    auto logical_grid_size = device->logical_grid_size();
-    uint32_t num_cores_x = logical_grid_size.x;
-    uint32_t num_cores_y = logical_grid_size.y;
+    auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
+    uint32_t num_cores_x = compute_and_storage_grid_size.x;
+    uint32_t num_cores_y = compute_and_storage_grid_size.y;
     auto num_output_tiles = cshape[0] * cshape[1] * cshape[2] * cshape[3] / TILE_HW;
     auto num_cores = std::min(num_output_tiles, num_cores_x * num_cores_y);
     std::vector<uint32_t> num_output_tiles_per_core(num_cores, num_output_tiles / num_cores);

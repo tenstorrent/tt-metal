@@ -184,9 +184,9 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
     uint32_t in0_block_w = 2;
 
     tt::tt_metal::Device *device = a.device();
-    auto logical_grid_size = device->logical_grid_size();
-    uint32_t num_cores_x = logical_grid_size.x;
-    uint32_t num_cores_y = logical_grid_size.y;
+    auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
+    uint32_t num_cores_x = compute_and_storage_grid_size.x;
+    uint32_t num_cores_y = compute_and_storage_grid_size.y;
 
     bool use_general_large_matmul_params = false; // Hard force to use default 16, 16, 4, 2
     uint32_t per_core_M, per_core_N, out_subblock_h, out_subblock_w;

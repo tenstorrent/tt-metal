@@ -76,6 +76,13 @@ tt_xy_pair Device::logical_grid_size() const {
     return this->cluster_->get_soc_desc(pcie_slot_).worker_grid_size;
 }
 
+tt_xy_pair Device::compute_and_storage_grid_size() const {
+    if (not cluster_is_initialized()) {
+        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
+    }
+    return this->cluster_->get_soc_desc(pcie_slot_).compute_and_storage_grid_size;
+}
+
 tt_xy_pair Device::worker_core_from_logical_core(const tt_xy_pair &logical_core) const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");

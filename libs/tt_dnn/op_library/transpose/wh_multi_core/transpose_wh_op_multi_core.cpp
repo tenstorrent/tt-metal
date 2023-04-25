@@ -42,9 +42,9 @@ Tensor transpose_wh_multi_core(const Tensor &a) {
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    auto logical_grid_size = device->logical_grid_size();
-    uint32_t num_cores_x = logical_grid_size.x;
-    uint32_t num_cores_y = logical_grid_size.y;
+    auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
+    uint32_t num_cores_x = compute_and_storage_grid_size.x;
+    uint32_t num_cores_y = compute_and_storage_grid_size.y;
     auto HtWt = Ht * Wt;
     auto num_cores = std::min(num_tensor_tiles, num_cores_x * num_cores_y);
     std::vector<uint32_t> num_tiles_per_core(num_cores, num_tensor_tiles / num_cores);

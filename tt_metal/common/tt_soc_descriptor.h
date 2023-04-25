@@ -52,10 +52,14 @@ struct tt_SocDescriptor {
   tt::ARCH arch;
   tt_xy_pair grid_size;
   tt_xy_pair worker_grid_size;
+  tt_xy_pair compute_and_storage_grid_size;
   std::unordered_map<tt_xy_pair, CoreDescriptor> cores;
   std::vector<tt_xy_pair> arc_cores;
   std::vector<tt_xy_pair> workers;
   std::vector<tt_xy_pair> harvested_workers;
+  std::vector<tt_xy_pair> compute_and_storage_cores;  // saved as CoreType::WORKER
+  std::vector<tt_xy_pair> storage_cores;  // saved as CoreType::WORKER
+  std::vector<tt_xy_pair> dispatch_cores; // saved as CoreType::WORKER
   std::vector<tt_xy_pair> pcie_cores;
   std::unordered_map<int, int> worker_log_to_routing_x;
   std::unordered_map<int, int> worker_log_to_routing_y;

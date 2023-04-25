@@ -42,6 +42,15 @@ functional_workers:
 harvested_workers:
   []
 
+compute_and_storage_cores:
+  []
+
+storage_cores:
+  []
+
+dispatch_cores:
+  []
+
 router_only:
   [
    0-2, 0-4, 0-8, 0-9

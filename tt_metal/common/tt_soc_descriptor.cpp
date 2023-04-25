@@ -185,6 +185,37 @@ void load_core_descriptors_from_device_descriptor(
     core_descriptor.type = CoreType::HARVESTED;
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
   }
+
+  std::set<int> compute_and_storage_coords_x;
+  std::set<int> compute_and_storage_coords_y;
+  auto compute_and_storage_cores = device_descriptor_yaml["compute_and_storage_cores"].as<std::vector<std::string>>();
+  // compute_and_storage_cores are a subset of worker cores
+  // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
+  for (const auto &core_string : compute_and_storage_cores) {
+    tt_xy_pair coord = format_node(core_string);
+    compute_and_storage_coords_x.insert(coord.x);
+    compute_and_storage_coords_y.insert(coord.y);
+    soc_descriptor.compute_and_storage_cores.push_back(coord);
+  }
+
+  soc_descriptor.compute_and_storage_grid_size = tt_xy_pair(compute_and_storage_coords_x.size(), compute_and_storage_coords_y.size());
+
+  auto storage_cores = device_descriptor_yaml["storage_cores"].as<std::vector<std::string>>();
+  // storage_cores are a subset of worker cores
+  // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
+  for (const auto &core_string : storage_cores) {
+    tt_xy_pair coord = format_node(core_string);
+    soc_descriptor.storage_cores.push_back(coord);
+  }
+
+  auto dispatch_cores = device_descriptor_yaml["dispatch_cores"].as<std::vector<std::string>>();
+  // dispatch_cores are a subset of worker cores
+  // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
+  for (const auto &core_string : dispatch_cores) {
+    tt_xy_pair coord = format_node(core_string);
+    soc_descriptor.dispatch_cores.push_back(coord);
+  }
+
   auto router_only_cores = device_descriptor_yaml["router_only"].as<std::vector<std::string>>();
   for (const auto &core_string : router_only_cores) {
     CoreDescriptor core_descriptor;
