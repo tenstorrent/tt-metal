@@ -54,22 +54,22 @@ Tensor softmax(const Tensor &a) {
     auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_cb_addr  = 200 * 1024, in0_t = 16;
-    uint32_t out0_cb_addr = 250 * 1024, out0_t = 16;
-    uint32_t im1_cb_addr  = 300 * 1024, im1_t = 16;
-    uint32_t in2_cb_addr  = 350 * 1024, in2_t = 2; // scaler for reduce coming from reader
-    uint32_t im2_cb_addr  = 355 * 1024, im2_t = 2; // recip result
-    uint32_t im0_cb_addr  = 360 * 1024, im0_t = 128; // buffer for exps
+    uint32_t in0_t = 16;
+    uint32_t out0_t = 16;
+    uint32_t im1_t = 16;
+    uint32_t in2_t = 2; // scaler for reduce coming from reader
+    uint32_t im2_t = 2; // recip result
+    uint32_t im0_t = 128; // buffer for exps
     TT_ASSERT(im0_t % 8 == 0 && "Size of exp Wt storage buffer must be divisible by the size of block used by the reader and compute kernel.");
 
     TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
     // see softmax.cpp for which buffers are needed
-    CreateCircularBuffer( program, device, CB::c_in0,       core, in0_t,  in0_t*single_tile_size,  in0_cb_addr,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_out0,      core, out0_t, out0_t*single_tile_size, out0_cb_addr, DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_intermed1, core, im1_t,  im1_t*single_tile_size,  im1_cb_addr,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_in2,       core, in2_t,  in2_t*single_tile_size,  in2_cb_addr,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_intermed2, core, im2_t,  im2_t*single_tile_size,  im2_cb_addr,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_intermed0, core, im0_t,  im0_t*single_tile_size,  im0_cb_addr,  DataFormat::Float16_b );
+    CreateCircularBuffer( program, device, CB::c_in0,       core, in0_t,  in0_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffer( program, device, CB::c_out0,      core, out0_t, out0_t*single_tile_size, DataFormat::Float16_b );
+    CreateCircularBuffer( program, device, CB::c_intermed1, core, im1_t,  im1_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffer( program, device, CB::c_in2,       core, in2_t,  in2_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffer( program, device, CB::c_intermed2, core, im2_t,  im2_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffer( program, device, CB::c_intermed0, core, im0_t,  im0_t*single_tile_size,  DataFormat::Float16_b );
 
     DataMovementKernel *reader_kernel = CreateDataMovementKernel(
         program, "tt_metal/kernels/dataflow/reader_unary_8bank_sm.cpp", core,
