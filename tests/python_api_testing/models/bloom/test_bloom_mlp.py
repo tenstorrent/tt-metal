@@ -10,7 +10,8 @@ import torch
 from libs import tt_lib as ttm
 
 from transformers import BloomForCausalLM
-from utility_functions import print_diff_argmax, comp_allclose, comp_pcc
+from utility_functions import print_diff_argmax
+from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
 
@@ -28,11 +29,11 @@ def run_bloom_mlp_test(device):
     test_in = torch.rand(1, 1, 4096, 1024)
     res = torch.rand(1, 1, 4096, 1024)
 
-    tt_mlp = bloom_mlp.TtBloomMLP(hugging_bloom_reference_model, 0.0, 1024, False, device)
+    tt_mlp = bloom_mlp.TtBloomMLP(device, "transformer.h", 0, hugging_bloom_reference_model, 0.0, 1024, False)
 
     tt_out =  tt_mlp.forward(test_in, res, device)
 
-    pt_mlp = bloom_mlp.BloomMLP(hugging_bloom_reference_model.state_dict(), 0.0, 1024, False)
+    pt_mlp = bloom_mlp.BloomMLP("transformer.h", 0, hugging_bloom_reference_model.state_dict(), 0.0, 1024, False)
 
     pt_out = pt_mlp.forward(test_in, res)
 

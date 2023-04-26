@@ -10,7 +10,8 @@ import torch
 from libs import tt_lib as ttm
 
 from transformers import BloomForCausalLM
-from utility_functions import print_diff_argmax, comp_allclose, comp_pcc
+from utility_functions import print_diff_argmax
+from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
 
@@ -21,14 +22,19 @@ def run_dropout_add_test(device):
 
     # Prepare input
     torch.manual_seed(0)
-    test_in = torch.rand(1, 1, 64, 64)
-    res = torch.rand(1, 1, 64, 64)
+    test_in = torch.rand(1, 1, 61, 61)
+    res = torch.rand(1, 1, 61, 61)
 
     pt_out = dropout_add.dropout_add(test_in, res, 0.3, False)
 
     tt_out =  dropout_add.tt_dropout_add(test_in, res, 0.3, False, device)
 
-    tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
+
+    tt_out = bloom_utils.create_unpadded_tensor(tt_out, pt_out.shape, input_tensor_start=[0,0,0,0])
+
+    input_tensor_shape = pt_out.size()
+
+    tt_out_converted = torch.Tensor(tt_out.data()).reshape(*input_tensor_shape)
 
     print_diff_argmax(pt_out, tt_out_converted)
     does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.99)

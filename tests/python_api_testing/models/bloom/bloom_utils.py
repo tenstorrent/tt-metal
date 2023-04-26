@@ -5,6 +5,60 @@ from libs import tt_lib as ttm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 
 
+
+def calculate_shape(input_tensor_shape):
+    s1 = input_tensor_shape[0]
+    s2 = input_tensor_shape[1]
+    s3 = input_tensor_shape[2]
+    s4 = input_tensor_shape[3]
+
+    if(s3%32!=0):
+        diff = s3%32
+        s3 = s3 + (32-diff)
+
+    if(s4%32!=0):
+        diff = s4%32
+        s4 = s4 + (32-diff)
+
+    padded_shape = [s1, s2, s3, s4]
+    return padded_shape
+
+
+def create_padded_tensor(input_tensors_shape, input_tensor, output_tensor_shape, pad_value, device, input_tensor_start=[0,0,0,0]):
+    while len(input_tensors_shape) < 4:
+        input_tensors_shape.insert(0, 1)
+
+    if isinstance(input_tensor, ttm.tensor.Tensor):
+        torch_tensor = torch.Tensor(input_tensor.data()).reshape(input_tensor.shape())
+    else:
+        torch_tensor = input_tensor
+
+    # Create tensor on host
+    a = ttm.tensor.Tensor(
+        torch_tensor.reshape(-1).tolist(),
+        input_tensors_shape,
+        ttm.tensor.DataType.BFLOAT16,
+        ttm.tensor.Layout.ROW_MAJOR,
+    )
+    # Pad inputs on host
+    a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
+    #a_pt = torch.Tensor(a_pad.data()).reshape(*output_tensor_shape)
+    a_dev = a_pad.to(ttm.tensor.Layout.TILE).to(device)
+
+    return a_dev
+
+
+def create_unpadded_tensor(ttm_tensor, input_tensors_shape, input_tensor_start=[0,0,0,0]):
+    output_tensor_start = input_tensor_start
+    output_tensor_end = tuple(
+        input_tensor_start[i] + input_tensors_shape[i] - 1
+        for i in range(len(input_tensors_shape))
+    )
+    ttm_tensor = ttm_tensor.to(ttm.device.GetHost()).to(ttm.tensor.Layout.ROW_MAJOR).unpad(output_tensor_start, output_tensor_end)
+
+    return ttm_tensor
+
+
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
     size = list(py_tensor.size())
 

@@ -10,7 +10,8 @@ import torch
 from libs import tt_lib as ttm
 
 from transformers import BloomForCausalLM
-from utility_functions import print_diff_argmax, comp_allclose, comp_pcc
+from utility_functions import print_diff_argmax
+from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
 

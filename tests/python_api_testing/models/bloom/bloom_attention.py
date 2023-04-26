@@ -12,10 +12,14 @@ import math
 from torch.nn import functional as F
 
 from libs import tt_lib as ttm
-from utility_functions import comp_allclose, comp_pcc
+from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 import numpy as np
-import bloom_utils as bloom_utils
-import baddbmm
+import python_api_testing.models.bloom.bloom_utils as bloom_utils
+import python_api_testing.models.bloom.baddbmm as baddbmm
+import python_api_testing.models.bloom.dropout_add as dropout_add
+
+import python_api_testing.models.bloom.bloom_attention_merge_heads as bloom_attention_merge_heads
+
 from fused_ops.linear import Linear as TtLinear
 from fused_ops.softmax import softmax as TtSoftmax
 from transformers import BloomForCausalLM
@@ -35,11 +39,15 @@ def split_heads(fused_qkv: torch.Tensor, num_heads, head_dim) -> Tuple[torch.Ten
         query: [batch_size, seq_length, num_heads, head_dim] key: [batch_size, seq_length, num_heads, head_dim]
         value: [batch_size, seq_length, num_heads, head_dim]
     """
-    _, batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
+    if(len(fused_qkv.shape)==3):
+        batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
+    else:
+        _, batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
+
     fused_qkv = fused_qkv.view(batch_size, seq_length, num_heads, 3, head_dim)
     return fused_qkv[..., 0, :], fused_qkv[..., 1, :], fused_qkv[..., 2, :]
 
-def merge_heads(self, x: torch.Tensor) -> torch.Tensor:
+def merge_heads(x: torch.Tensor, num_heads, head_dim) -> torch.Tensor:
     """
     Merge heads together over the last dimenstion
 
@@ -52,21 +60,23 @@ def merge_heads(self, x: torch.Tensor) -> torch.Tensor:
     # What we want to achieve is:
     # batch_size * num_heads, seq_length, head_dim -> batch_size, seq_length, num_heads * head_dim
     batch_size_and_num_heads, seq_length, _ = x.shape
-    batch_size = batch_size_and_num_heads // self.num_heads
+    batch_size = batch_size_and_num_heads // num_heads
 
     # First view     to decompose the batch size
     # batch_size * num_heads, seq_length, head_dim -> batch_size, num_heads, seq_length, head_dim
-    x = x.view(batch_size, self.num_heads, seq_length, self.head_dim)
+    x = x.view(batch_size, num_heads, seq_length, head_dim)
 
     # batch_size, num_heads, seq_length, head_dim -> batch_size, seq_length, num_heads, head_dim
     x = x.permute(0, 2, 1, 3)
 
     # batch_size, seq_length, num_heads, head_dim -> batch_size, seq_length, num_heads * head_dim
-    return x.reshape(batch_size, seq_length, self.num_heads * self.head_dim)
+    return x.reshape(batch_size, seq_length, num_heads * head_dim)
 
 class BloomAttention(torch.nn.Module):
-    def __init__(self, hugging_bloom_reference_model, hidden_size, num_heads, hidden_dropout, device):
+    def __init__(self, dict_name, num, bloom_reference_model, hidden_size, num_heads, hidden_dropout, beta):
         super().__init__()
+
+        sd = bloom_reference_model.state_dict()
 
         self.hidden_size = hidden_size
         self.num_heads = num_heads
@@ -82,11 +92,26 @@ class BloomAttention(torch.nn.Module):
 
         # Layer-wise attention scaling
         self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)
-        self.beta = 1.0
+        self.beta = beta
+
+        weight_q = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.self_attention.query_key_value.weight", sd)
+        bias_q = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.self_attention.query_key_value.bias", sd)
+
+        weight_d = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.self_attention.dense.weight", sd)
+        bias_d = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.self_attention.dense.bias", sd)
 
         self.query_key_value = torch.nn.Linear(self.hidden_size, 3 * self.hidden_size, bias=True)
         self.dense = torch.nn.Linear(self.hidden_size, self.hidden_size)
         self.attention_dropout = torch.nn.Dropout(self.hidden_dropout)
+
+        self.query_key_value.weight = weight_q
+        self.query_key_value.bias = bias_q
+
+        self.dense.weight = weight_d
+        self.dense.bias = bias_d
+
+        self.pretraining_tp = False
+        self.slow_but_exact = False
 
     def forward(
         self,
@@ -103,6 +128,12 @@ class BloomAttention(torch.nn.Module):
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = split_heads(fused_qkv, self.num_heads, self.head_dim)
+
+
+        if use_cache is True:
+            present = (key_layer, value_layer)
+        else:
+            present = None
 
         batch_size, q_length, _, _ = query_layer.shape
 
@@ -121,6 +152,7 @@ class BloomAttention(torch.nn.Module):
 
         # [batch_size * num_heads, q_length, kv_length]
         # we use `torch.Tensor.baddbmm` instead of `torch.baddbmm` as the latter isn't supported by TorchScript v1.11
+
         matmul_result = alibi.baddbmm(
             batch1=query_layer,
             batch2=key_layer,
@@ -152,7 +184,7 @@ class BloomAttention(torch.nn.Module):
         context_layer = torch.bmm(attention_probs_reshaped, value_layer)
 
         # change view [batch_size, num_heads, q_length, head_dim]
-        context_layer = self.merge_heads(context_layer)
+        context_layer = merge_heads(context_layer, self.num_heads, self.head_dim)
 
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
         if self.pretraining_tp > 1 and self.slow_but_exact:
@@ -166,19 +198,18 @@ class BloomAttention(torch.nn.Module):
         else:
             output_tensor = self.dense(context_layer)
 
-        output_tensor = dropout_add(output_tensor, residual, self.hidden_dropout, self.training)
+        output_tensor = dropout_add.dropout_add(output_tensor, residual, self.hidden_dropout, self.training)
 
-        outputs = (output_tensor, present)
-        if output_attentions:
-            outputs += (attention_probs,)
 
-        return outputs
+        return output_tensor
+
+
 
 class TtBloomAttention(torch.nn.Module):
-    def __init__(self, bloom_refernce_model, hidden_size, num_heads, hidden_dropout, beta, device):
+    def __init__(self, device, dict_name, num, bloom_reference_model, hidden_size, num_heads, hidden_dropout, beta):
         super().__init__()
 
-        sd = bloom_refernce_model.state_dict()
+        sd = bloom_reference_model.state_dict()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = self.hidden_size // self.num_heads
@@ -191,11 +222,11 @@ class TtBloomAttention(torch.nn.Module):
                 f" {self.num_heads})."
             )
 
-        weight_q = bloom_utils.tt_load_layer_weights("transformer.h.0.self_attention.query_key_value.weight", sd)
-        bias_q = bloom_utils.tt_load_layer_weights("transformer.h.0.self_attention.query_key_value.bias", sd)
+        weight_q = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.self_attention.query_key_value.weight", sd)
+        bias_q = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.self_attention.query_key_value.bias", sd)
 
-        weight_d = bloom_utils.tt_load_layer_weights("transformer.h.0.self_attention.dense.weight", sd)
-        bias_d = bloom_utils.tt_load_layer_weights("transformer.h.0.self_attention.dense.bias", sd)
+        weight_d = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.self_attention.dense.weight", sd)
+        bias_d = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.self_attention.dense.bias", sd)
 
         # Layer-wise attention scaling
         self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)
@@ -208,6 +239,7 @@ class TtBloomAttention(torch.nn.Module):
 
     def forward(
         self,
+        device,
         hidden_states: torch.Tensor,
         residual: torch.Tensor,
         alibi: torch.Tensor,
@@ -241,7 +273,7 @@ class TtBloomAttention(torch.nn.Module):
         #key_layer = key_layer.permute(0, 2, 3, 1).reshape(batch_size * self.num_heads, self.head_dim, q_length)
         key_layer = key_layer.permute(0, 2, 3, 1)
 
-        tt_key_layer = torch2tt_tensor(key_layer, device)
+        tt_key_layer = bloom_utils.torch2tt_tensor(key_layer, device)
         tt_reshaped_key_layer = ttm.tensor.reshape(tt_key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
 
         #value_layer = value_layer.transpose(1, 2).reshape(batch_size * self.num_heads, q_length, self.head_dim)
@@ -250,60 +282,94 @@ class TtBloomAttention(torch.nn.Module):
         tt_transposed_value_layer = ttm.tensor.transpose(tt_value_layer)
         tt_reshaped_value_layer = ttm.tensor.reshape(tt_transposed_value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
 
-        matmul_result = baddbmm.tt_baddbmm(alibi, batch1=p_reshaped_query_layer, batch2=p_reshaped_key_layer, beta=self.beta, alpha=self.inv_norm_facto)
+        p_reshaped_key_layer = bloom_utils.tt2torch_tensor(tt_reshaped_key_layer)
+        p_reshaped_query_layer = bloom_utils.tt2torch_tensor(tt_reshaped_query_layer)
+
+        tt_alibi = bloom_utils.torch2tt_tensor(alibi, device)
+        alibi_padded = bloom_utils.tt2torch_tensor(tt_alibi)
+
+        print('ALIBI SHAPE----------------')
+        print(alibi_padded.shape)
+        print('----------------------')
+
+        p_reshaped_query_layer_squeezed = p_reshaped_query_layer.squeeze()
+        p_reshaped_key_layer_squeezed = p_reshaped_key_layer.squeeze()
+
+        _, _, kv_length = p_reshaped_key_layer_squeezed.shape
+
+
+        tt_matmul_result = baddbmm.tt_baddbmm(device=device, input=alibi, batch1=p_reshaped_query_layer_squeezed, batch2=p_reshaped_key_layer_squeezed, beta=self.beta, alpha=self.inv_norm_factor)
 
         # change view to [batch_size, num_heads, q_length, kv_length]
-        tt_attention_scores = ttm.tensor.reshape(tt_matmul_result, 1, batch_size, self.num_heads, q_length, kv_length)
-        attention_scores = tt2torch_tensor(tt_attention_scores)
+        tt_attention_scores = ttm.tensor.reshape(tt_matmul_result, batch_size, self.num_heads, q_length, kv_length)
+        attention_scores = bloom_utils.tt2torch_tensor(tt_attention_scores)
 
         attn_weights = torch.masked_fill(attention_scores, attention_mask, torch.finfo(attention_scores.dtype).min)
 
-        tt_attn_weights = torch2tt_tensor(attn_weights, device)
+        tt_attn_weights = bloom_utils.torch2tt_tensor(attn_weights, device)
 
-        tt_attention_probs = TtSoftmax.softmax(tt_attn_weights)
+        tt_attention_probs = TtSoftmax(tt_attn_weights)
 
-        #TO BE DONE
-        # [batch_size, num_heads, q_length, kv_length]
-        #attention_probs = self.attention_dropout(attention_probs)
 
         if head_mask is not None:
-            tt_head_mask =  torch2tt_tensor(head_mask, device)
+            tt_head_mask =  bloom_utils.torch2tt_tensor(head_mask, device)
             tt_attention_probs = ttm.mul(tt_attention_probs, head_mask)
 
         # change view [batch_size x num_heads, q_length, kv_length]
         tt_attention_probs_reshaped = ttm.tensor.reshape(tt_attention_probs, 1, batch_size * self.num_heads, q_length, kv_length)
 
         # matmul: [batch_size * num_heads, q_length, head_dim]
-        tt_context_layer = ttm.tensor.matmul(tt_attention_probs_reshaped, value_layer)
+
+        tt_context_layer = ttm.tensor.bmm(tt_attention_probs_reshaped, tt_reshaped_value_layer)
+
+        pt_context_layer = bloom_utils.tt2torch_tensor(tt_context_layer)
+
+        #tt_context_layer = ttm.tensor.matmul(tt_attention_probs_reshaped, tt_reshaped_value_layer)
 
         # change view [batch_size, num_heads, q_length, head_dim]
-        merged_context_layer = bloom_attention_merge_heads.tt_merge_heads(tt_context_layer)
+
+        merged_context_layer = bloom_attention_merge_heads.tt_merge_heads(pt_context_layer.squeeze(), self.num_heads, self.hidden_size, self.num_heads, device)
 
         output_tensor = self.dense(merged_context_layer)
 
-        output_tensor = dropout_add.tt_dropout_add(output_tensor, residual, self.hidden_dropout, False)
+        pt_output_tensor = bloom_utils.tt2torch_tensor(output_tensor)
 
-        outputs = ttm.tensor.add(output_tensor, attention_probs)
+        output_tensor = dropout_add.tt_dropout_add(pt_output_tensor, residual, self.hidden_dropout, False, device)
 
-        return outputs
+        #outputs = ttm.tensor.add(output_tensor, tt_attention_probs_reshaped)
+
+        #outputs = (output_tensor, present)
+        #if output_attentions:
+        #    outputs += (attention_probs,)
+
+        return output_tensor
+
 
 def run_bloom_attention_inference(device):
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
-    print(hugging_bloom_reference_model.state_dict())
 
-
-    tt_bloom_attention = TtBloomAttention(hugging_bloom_reference_model, 1024, 8, 0.0, 0.0, device)
+    tt_bloom_attention = TtBloomAttention(device, "transformer.h", 0, hugging_bloom_reference_model, 1024, 32, 0.0, 0.0)
+    pt_bloom_attention = BloomAttention("transformer.h",0, hugging_bloom_reference_model, 1024, 32, 0.0, 0.0)
 
     # Prepare input
     torch.manual_seed(0)
 
-    hidden_states = torch.rand(1024, 3072)
-    residual = torch.rand(1024, 1024)
-    alibi = torch.rand(3072)
-    attention_mask = torch.rand(1024)
+    hidden_states = torch.rand(1, 64, 1024)
+    residual = torch.rand(1, 64, 1024)
+    alibi = torch.rand(32, 64, 64)
+    attention_mask = torch.randint(0, 2, (1, 1, 64, 64))
 
-    tt_out = tt_bloom_attention.forward(hidden_states, residual, alibi, attention_mask)
-    print("Finished calc")
+    pt_out = pt_bloom_attention.forward(hidden_states, residual, alibi, attention_mask)
+    print("Finished calc pt")
+    print(pt_out)
+
+    tt_out = tt_bloom_attention.forward(device, hidden_states, residual, alibi, attention_mask)
+    print("Finished calc tt")
+
+    tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
+
+    print(comp_allclose(pt_out.unsqueeze(0), tt_out_converted))
+    print(comp_pcc(pt_out, tt_out_converted))
 
     #tt_out = untilize(torch.Tensor(tt_out.data()).reshape(*pytorch_out.shape))
 

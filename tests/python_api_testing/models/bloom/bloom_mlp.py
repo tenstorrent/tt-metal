@@ -12,10 +12,11 @@ import math
 from torch.nn import functional as F
 from transformers import BloomForCausalLM
 
-from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm, comp_allclose, comp_pcc
+from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 
 
 from libs import tt_lib as ttm
+from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 import numpy as np
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
 
@@ -26,7 +27,7 @@ import python_api_testing.models.bloom.bloom_gelu_forward as bloom_gelu_forward
 
 
 class TtBloomMLP(torch.nn.Module):
-    def __init__(self, hugging_bloom_reference_model, hidden_dropout, hidden_size, training, device):
+    def __init__(self, device, dict_name, num, hugging_bloom_reference_model, hidden_dropout, hidden_size, training):
         super().__init__()
         self.hidden_size = hidden_size
         self.hidden_dropout = hidden_dropout
@@ -34,12 +35,11 @@ class TtBloomMLP(torch.nn.Module):
 
         state_dict = hugging_bloom_reference_model.state_dict()
 
+        tt_weight_mlp_h4h = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.mlp.dense_h_to_4h.weight", state_dict)
+        tt_bias_mlp_h4h =  bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.mlp.dense_h_to_4h.bias", state_dict)
 
-        tt_weight_mlp_h4h = bloom_utils.tt_load_layer_weights("transformer.h.0.mlp.dense_h_to_4h.weight", state_dict)
-        tt_bias_mlp_h4h =  bloom_utils.tt_load_layer_weights("transformer.h.0.mlp.dense_h_to_4h.bias", state_dict)
-
-        tt_weight_mlp_4hh = bloom_utils.tt_load_layer_weights("transformer.h.0.mlp.dense_4h_to_h.weight", state_dict)
-        tt_bias_mlp_4hh = bloom_utils.tt_load_layer_weights("transformer.h.0.mlp.dense_4h_to_h.bias", state_dict)
+        tt_weight_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.mlp.dense_4h_to_h.weight", state_dict)
+        tt_bias_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.mlp.dense_4h_to_h.bias", state_dict)
 
         self.dense_h_to_4h = TtLinear(hidden_size, 4 * hidden_size, tt_weight_mlp_h4h, tt_bias_mlp_h4h, device)
 
@@ -71,7 +71,7 @@ class TtBloomMLP(torch.nn.Module):
 
 class BloomMLP(torch.nn.Module):
 
-    def __init__(self, state_dict, hidden_dropout, hidden_size, training):
+    def __init__(self, dict_name, num, state_dict, hidden_dropout, hidden_size, training):
         super().__init__()
         self.hidden_size = hidden_size
         self.hidden_dropout = hidden_dropout
@@ -83,11 +83,11 @@ class BloomMLP(torch.nn.Module):
         self.gelu_impl = bloom_gelu_forward.bloom_gelu_forward
         self.dense_4h_to_h = torch.nn.Linear(4 * hidden_size, hidden_size)
 
-        weight_mlp_h_to_4h = bloom_utils.pt_load_layer_weights("transformer.h.0.mlp.dense_h_to_4h.weight", state_dict)
-        bias_mlp_h_to_4h =  bloom_utils.pt_load_layer_weights("transformer.h.0.mlp.dense_h_to_4h.bias", state_dict)
+        weight_mlp_h_to_4h = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.mlp.dense_h_to_4h.weight", state_dict)
+        bias_mlp_h_to_4h =  bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.mlp.dense_h_to_4h.bias", state_dict)
 
-        weight_mlp_4hh = bloom_utils.pt_load_layer_weights("transformer.h.0.mlp.dense_4h_to_h.weight", state_dict)
-        bias_mlp_4hh = bloom_utils.pt_load_layer_weights("transformer.h.0.mlp.dense_4h_to_h.bias", state_dict)
+        weight_mlp_4hh = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.mlp.dense_4h_to_h.weight", state_dict)
+        bias_mlp_4hh = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.mlp.dense_4h_to_h.bias", state_dict)
 
         self.dense_4h_to_h.weight = weight_mlp_4hh
         self.dense_4h_to_h.bias = bias_mlp_4hh
@@ -114,11 +114,11 @@ def run_bloom_mlp_inference(device):
     test_in = torch.rand(1, 1, 4096, 1024)
     res = torch.rand(1, 1, 4096, 1024)
 
-    tt_mlp = TtBloomMLP(hugging_bloom_reference_model, 0.0, 1024, False, device)
+    tt_mlp = TtBloomMLP(device, "transformer.h", 0, hugging_bloom_reference_model, 0.0, 1024, False)
 
     tt_out =  tt_mlp.forward(test_in, res, device)
 
-    pt_mlp = BloomMLP(hugging_bloom_reference_model.state_dict(), 0.0, 1024, False)
+    pt_mlp = BloomMLP("transformer.h", 0, hugging_bloom_reference_model.state_dict(), 0.0, 1024, False)
 
     pt_out = pt_mlp.forward(test_in, res)
 
