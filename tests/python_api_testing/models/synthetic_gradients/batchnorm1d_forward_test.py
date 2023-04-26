@@ -49,7 +49,7 @@ def tt_batch_norm(x, gamma, beta, running_mean, running_var, eps:float, momentum
     else:
         print('train mode')
         x_tor = x.to(host).data()
-        x_tor = torch.Tensor(x_tor).reshape((batch_size,1,H,W))
+        x_tor = torch.Tensor(x_tor).view(batch_size,1,H,W)
         x_tor = untilize(x_tor)
         mean = x_tor.mean(dim=0)
         var = ((x_tor - mean) ** 2).mean(dim=0)
@@ -104,9 +104,8 @@ def tt_batch_norm(x, gamma, beta, running_mean, running_var, eps:float, momentum
     return Y, running_mean, running_var
 
 
-class ttBatchNorm():
+class ttBatchNorm:
     def __init__(self, bn_size, gamma=None, beta =None, running_mean = None, running_var = None, epsilon = 1e-5, momentum=0.1):
-        super().__init__()
         if (gamma == None) | (beta == None) | (running_mean == None) | (running_var == None):
             # The scale parameter and the shift parameter (model parameters) are initialized to 1 and 0, respectively
             zeros_torch = torch.tensor([[[bn_size*[0.0]]]])
@@ -155,17 +154,21 @@ class PytorchBatchNorm1D(nn.Module):
 
 # run
 def run_btchnorm_forward(bn_size):
-    #host = ttl.device.GetHost()
     epsilon = 1e-5
 
     inputs = torch.FloatTensor(2, bn_size).uniform_(-1., 1.).requires_grad_(True)
     # torch
     bn_torch = PytorchBatchNorm1D(bn_size)
     bn_torch.train()
-    weight_bn = torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(True))
-    bias_bn =  torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(True))
-    running_mean = torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(False)
-    running_var = torch.FloatTensor(bn_size).uniform_(0., 1.).requires_grad_(False)  #must be positive
+    # weight_bn = torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(True))
+    # bias_bn =  torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(True))
+    # running_mean = torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(False)
+    # running_var = torch.FloatTensor(bn_size).uniform_(0., 1.).requires_grad_(False)  #must be positive
+
+    weight_bn = torch.nn.Parameter(torch.ones([bn_size]).requires_grad_(True))
+    bias_bn =  torch.nn.Parameter(torch.zeros([bn_size]).requires_grad_(True))
+    running_mean = torch.zeros([bn_size]).requires_grad_(False)
+    running_var = torch.ones([bn_size]).requires_grad_(False)  #must be positive
 
     bn_torch.batchnorm1d_1.weight = weight_bn
     bn_torch.batchnorm1d_1.bias = bias_bn
@@ -173,7 +176,7 @@ def run_btchnorm_forward(bn_size):
     bn_torch.batchnorm1d_1.running_var = running_var
     bn_torch.batchnorm1d_1.eps = epsilon
 
-    # tt
+    #tt
     weight_bn_src = weight_bn.view(1, 1, 1, bn_size)
     gamma_padded = pad_weight(weight_bn_src)
     gamma_untilized = tilize_to_list(gamma_padded)
@@ -202,13 +205,13 @@ def run_btchnorm_forward(bn_size):
     inputs_torch = inputs.view(inputs.shape[0], 1, 1, bn_size)
     inputs_padded = pad_activation(inputs_torch)
     inputs_tilized = tilize_to_list(inputs_padded)
-    inputs_tt = ttl.tensor.Tensor(inputs_tilized, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    inputs_tt = ttl.tensor.Tensor(inputs_tilized, [inputs_padded.shape[0], 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
 
     # run through models
     output_bn_torch = bn_torch(inputs)
-    bn_tt =  ttBatchNorm(32)
-    output_bn_tt = bn_tt(inputs_tt)
+    bn_tt =  ttBatchNorm(bn_size)
+    output_bn_tt, _, _ = bn_tt.forward(inputs_tt)
 
     output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.to(host).data()).reshape(output_bn_tt.shape()))
     output_bn_tt_untilized = output_bn_tt_untilized[0, 0, 0, :]
