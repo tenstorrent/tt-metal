@@ -1,3 +1,5 @@
+.. _Getting Started:
+
 Getting Started
 ===============
 
@@ -29,8 +31,11 @@ Congratulations! You've run your first program on this stack. For more
 explanation for what you just ran and a deeper dive into the API, please go to
 :ref:`Dram Loopback<DRAM Loopback Example>`.
 
-If you're a developer, please now read :ref:`Getting Started for
-Devs<Getting started for devs>` for further instructions for developers.
+If you're an ML developer and looking for further for using the Python library
+APIs to build models, please now go to :ref:`TT-Metal Models Get Started`.
+
+If you're an internal TT-Metal developer, please now read :ref:`Getting Started
+for Devs<Getting started for devs>` for further instructions for developers.
 
 .. only:: not html
 

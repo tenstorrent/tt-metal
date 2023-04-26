@@ -1,0 +1,50 @@
+.. _TT-Metal Models Get Started:
+
+Getting Started
+===============
+
+Prerequisites
+-------------
+
+Ensure that you have the base TT-Metal source and environment configuration
+:ref:`built and ready<Getting Started>`.
+
+Now, from the project root, get the Python virtual environment in which you'll
+be working in ready.
+
+::
+
+    source build/python_env/bin/activate
+
+Next, install ``pip`` requirements needed by models.
+
+::
+
+    python -m pip install -r tests/python_api_testing/requirements.txt
+
+Set ``PYTHONPATH`` to the root for running models. This is a common practice.
+
+::
+
+    export PYTHONPATH=$(pwd)
+
+Running an example model
+------------------------
+
+Let's run the TT-Metal version of BERT-Tiny.
+
+We developed our models to be run with ``pytest``.
+
+The models are written and stored in ``tests/python_api_testing/models``.
+
+::
+
+    pytest tests/python_api_testing/models/bert -k tiny
+
+You can add the ``-s`` option to see the ``stdout``/``stderr`` output.
+
+Next steps
+----------
+
+We write the models with the Python Libraries we have for TT-Metal. Refer to
+the docs under *Libraries* for documentation.

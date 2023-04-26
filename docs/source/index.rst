@@ -30,7 +30,12 @@ Welcome to TT-Metal documentation!
    frameworks/tt_dispatch
 
 .. toctree::
-   :caption: Developer Onboarding (Internal Devs Only)
+   :caption: TT-Metal Models
+
+   tt_metal_models/get_started
+
+.. toctree::
+   :caption: Developer Onboarding (Internal Devs)
 
    dev_onboarding/get_started
 
