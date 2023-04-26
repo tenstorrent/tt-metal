@@ -108,6 +108,7 @@ void ComputeKernel::configure_for_compilation(build_kernel_for_riscv_options_t *
     // build_kernel_for_riscv_options->set_hlk_args_all_cores(compute_kernel_args, compute_kernel_args_size);
     build_kernel_for_riscv_options->set_hlk_file_name_all_cores(kernel_path_file_name_);
     build_kernel_for_riscv_options->set_hlk_math_fidelity_all_cores(math_fidelity_);
+    build_kernel_for_riscv_options->set_hlk_math_approx_mode_all_cores(math_approx_mode_);
     build_kernel_for_riscv_options->fp32_dest_acc_en = fp32_dest_acc_en_;
     build_kernel_for_riscv_options->hlk_defines = defines_;
 

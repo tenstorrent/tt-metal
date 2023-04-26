@@ -37,6 +37,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/tilize/tilize_op.cpp \
 	libs/tt_dnn/op_library/untilize/untilize_op.cpp \
 	libs/tt_dnn/op_library/softmax/softmax_op.cpp \
+	libs/tt_dnn/op_library/layernorm/layernorm_op.cpp \
 	libs/tt_dnn/op_library/reshape/reshape_op.cpp
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a

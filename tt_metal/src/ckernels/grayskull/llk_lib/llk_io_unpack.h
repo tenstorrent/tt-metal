@@ -6,6 +6,8 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_unpack_common.h"
 
+#include "debug_print.h"
+
 using namespace ckernel;
 
 // GS RISC-V RTL bug workaround (l1 reads followed by local mem reads causes a hang)
@@ -31,6 +33,7 @@ inline void llk_setup_cb_read_interface() {
         cb_read_interface[cb_id].fifo_size = fifo_size;
         cb_read_interface[cb_id].fifo_limit = fifo_addr + fifo_size - 1;  // Check if there is overflow
         cb_read_interface[cb_id].tiles_acked = 0;
+        //cb_read_interface[cb_id].tiles_acked1 = 0;
 
         buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; // move by 3 uint32's
     }
@@ -55,6 +58,8 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
         tiles_received = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - cb_read_interface[input].tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
+
+    //DPRINT << "UNPACKER LLK_W NTR = " << U32(num_tiles_recv) << ENDL();
 }
 
 // Pop N tiles from the incoming stream
@@ -78,7 +83,6 @@ inline void llk_pop_tiles(
     TT_SETDMAREG(0, cb_read_interface[input].tiles_acked, 0, LO_16(4));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
-
     cb_read_interface[input].fifo_rd_ptr += num_words;
 
     if (cb_read_interface[input].fifo_rd_ptr > cb_read_interface[input].fifo_limit) {

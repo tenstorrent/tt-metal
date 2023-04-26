@@ -356,6 +356,13 @@ void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
 
 /**
  * A blocking call that waits for the specified number of tiles to be available in the specified circular buffer (CB). This call is used by the consumer of the CB to wait for the producer to fill the CB with at least the specfied number of tiles.
+ * Important note: in case multiple calls of cb_wait_front(n) are issued without a paired cb_pop_front() call, n is expected to be incremented by the user to be equal to a cumulative total of tiles.
+ * Example: 4 calls of cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of cb_wait_front() waiting on 8, 16, 24, 32 tiles should be issued.
+ *
+ * Important note: number of tiles used in all cb_* calls must evenly divide the cb size and must be the same number in all cb_wait_front calls in the same kernel.
+ * Example 1: cb_wait_front(32), cb_wait_front(40), cb_pop_front(32+8) tiles on a CB of size 64 would produce incorrect behavior.
+ * Example 2: cb_wait_front(3) on a cb of size 32 would also produce incorrect behavior.
+ * These limitations are due to performance optimizations in the CB implementation.
  *
  * Return value: None
  *

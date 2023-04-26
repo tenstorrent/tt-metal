@@ -149,6 +149,21 @@ To use debug printing capability, it is first required to start the debug print 
     tt_start_debug_print_server(device->cluster(), {chip_id}, cores, hart_mask);
     ...
 - Note that the core coordinates used in tt_start_debug_print_server are currently NOC coordinates (not logical).
+- Since on TRISCs the same code compiles 3 times and executes on 3 threads, you can use the pattern ``MATH(( DPRINT << x << ENDL() ));`` to make prints execute only on one of 3 threads.
+- The two other available macros for pack/unpack threads are ``PACK(( ))`` and ``UNPACK(( ))``
+- ``DPRINT << SETW(width, sticky);`` supports a sticky flag (defaults to different froim std::setw() behavior).
+
+*Printing tiles:*
+-----------------
+
+Debug print supports printing tile contents with the help of TSLICE macros.
+These allow to sample a tile with a given sample count, starting index and stride.
+This can be used on TRISCs as follows:
+``PACK(( { DPRINT  << TSLICE(CB::c_intermed1, 0, TileSlice::s0_32_8()) << ENDL(); } ));``
+This will extract a numpy slice ``[0:32:8, 0:32:8]`` from tile 0 from CB::c_intermed1.
+The ``PACK(())`` wrapper will limit printing to only be from the pack trisc thread.
+Note that due to asynchronous and triple-threaded nature of compute engine kernels, this print statement has restrictions on validity and cannot be inserted at an arbitrary point in the kernel code.
+See extended comments before TileSlice declaration in debug_print.h for additional information on when this DPRINT is valid.
 
 
 *Known issues:*

@@ -6,7 +6,6 @@
 #include "ckernel_globals.h"
 #include "ckernel.h"
 #include "ckernel_gpr_map.h"
-#include "debug_print.h"
 #include "chlkc_list.h"
 //#include "llk_defs.h"
 
@@ -192,7 +191,7 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) {
  * | dst_tile_index | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 ALWI void matmul_tiles(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t itile1, uint32_t idst, bool transpose) {
-    UNPACK((  llk_unpack_AB_matmul(c_in0,c_in1,itile0,itile1) ));
+    UNPACK(( llk_unpack_AB_matmul(c_in0,c_in1,itile0,itile1) ));
     MATH(( llk_math_matmul<MATH_FIDELITY>(idst)  ));
 }
 
@@ -212,6 +211,10 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles)
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
  *
+ * Each subsequent pack call will increment the write pointer in the cb by single
+ * tile size. The pointer is then again set to a valid position with space for n
+ * reserved tiles by another cb_reserve_back call.
+ *
  * Operates in tandem with functions cb_reserve_back and cb_push_back.
  *
  * A typical use case is first the producer ensures that there is a number of
@@ -228,9 +231,9 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles)
  * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
  * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
  */
-ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t icb_tile=0)
+ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb)
 {
-    PACK(( llk_pack<false, SYNC, false >(ifrom_dst, icb, icb_tile)  ));
+    PACK((  llk_pack<false, SYNC, false >(ifrom_dst, icb)  ));
 }
 
 // documented in dataflow_api.h
@@ -518,8 +521,47 @@ ALWI void any_tiles_bcast(tt::Dim bt, uint32_t icb0, uint32_t icb1, uint32_t iti
     UNPACK(( llk_unpack_AB<BCAST_DIM>(icb0, icb1, itile0, itile1) ));
 }
 
+
 /**
- * This document applies to either one of the 3 broadcast operation variants -
+ * Shorthand template instantiation of sub_tiles_bcast.
+ */
+ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
+{
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWSUB, BroadcastType::COL, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    UNPACK(( llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1) ));
+}
+
+/**
+ * Shorthand template instantiation of mul_tiles_bcast.
+ */
+ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
+{
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::COL, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    UNPACK(( llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1) ));
+}
+
+/**
+ * Shorthand template instantiation of mul_tiles_bcast.
+ */
+ALWI void mul_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
+{
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    UNPACK(( llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1) ));
+}
+
+/**
+ * Please refer to documentation for sub_tiles_bcast
+ */
+ALWI void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
+{
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWADD, BroadcastType::ROW, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    UNPACK(( llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1) ));
+}
+
+
+
+/**
+ * This documentation applies to either one of the 3 broadcast operation variants -
  * *add_tiles_bcast*, *sub_tiles_bcast* and *mul_tiles_bcast*.
  *
  * The description below describes *add_tiles_bcast*, the other 2 operations
@@ -575,10 +617,40 @@ ALWI void mul_tiles_bcast(tt::Dim bt, uint32_t icb0, uint32_t icb1, uint32_t iti
 
 #endif // BCAST_LLKOP
 
-ALWI void add_bcast_rows_init_short() // TODO(AP): generalize or automate
+/**
+ * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_rows to be executed correctly.
+ */
+ALWI void add_bcast_rows_init_short()
 {
     MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>() ));
+}
+
+/**
+ * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed correctly.
+ */
+ALWI void mul_bcast_cols_init_short()
+{
+    MATH(( llk_math_eltwise_binary_init<ELWMUL, BroadcastType::COL, MATH_FIDELITY>() )); // TODO(AP)
+    UNPACK(( llk_unpack_AB_init<BroadcastType::COL>() ));
+}
+
+/**
+ * Performs a switch-from-another-op tile hw reconfiguration step needed for mul_bcast_rows to be executed correctly.
+ */
+ALWI void mul_bcast_rows_init_short()
+{
+    MATH(( llk_math_eltwise_binary_init<ELWMUL, BroadcastType::ROW, MATH_FIDELITY>() ));
+    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>() ));
+}
+
+/**
+ * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_bcast_cols to be executed correctly.
+ */
+ALWI void sub_bcast_cols_init_short()
+{
+    MATH(( llk_math_eltwise_binary_init<ELWSUB, BroadcastType::COL, MATH_FIDELITY>() )); // TODO(AP)
+    UNPACK(( llk_unpack_AB_init<BroadcastType::COL>() ));
 }
 
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
@@ -614,9 +686,20 @@ ALWI void reduce_init_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>() ));
 }
 
-ALWI void reduce_revert_v2(uint32_t icb)
+// Delta from binary_op_init_common
+template<bool at_start>
+ALWI void reduce_init_delta_v2(PoolType reduce_op, ReduceDim dim)
 {
-    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false, true>(icb) ));
+    UNPACK(( llk_unpack_AB_init() ));
+
+    MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
+
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(16) ));
+}
+
+ALWI void reduce_revert_delta_v2()
+{
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false, true>(16) ));
 }
 
 /**

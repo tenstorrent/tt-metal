@@ -36,20 +36,6 @@
 //#include "perf_lib/scratch_api.h" // not used unless perf dump enabled?
 
 
-// Returns the buffer address for current thread+core. Differs for NC/BR/TR0-2.
-inline uint8_t* get_debug_print_buffer() {
-  extern uint32_t __firmware_start[];
-//    return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T1);
-  if ((uint32_t)__firmware_start == (uint32_t)l1_mem::address_map::TRISC0_BASE) {
-    return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T0);
-  } else if ((uint32_t)__firmware_start == (uint32_t)l1_mem::address_map::TRISC1_BASE) {
-    return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T1);
-  } else {
-    return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T2);
-  }
-}
-
-
 namespace ckernel
 {
 

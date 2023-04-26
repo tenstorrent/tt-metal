@@ -5,6 +5,8 @@
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "tt_dnn/op_library/softmax/softmax_op.hpp"
+#include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/transpose_rm/transpose_rm_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
@@ -683,6 +685,14 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("sigmoid", &sigmoid, "Performs a unary sigmoid operation on a tensor.");
     m_tensor.def("log", &log, "Performs a unary log operation on a tensor.");
     m_tensor.def("tanh", &tanh, "Performs a unary tanh operation on a tensor.");
+
+    // softmax
+    m_tensor.def("softmax", &softmax, "Performs a softmax operation on the last tensor dimension.");
+
+    // layernorm
+    m_tensor.def("layernorm", &layernorm, "Performs a layernorm operation on the last tensor dimension.");
+    m_tensor.def("layernorm_gamma", &layernorm_gamma, "Performs a layernorm operation on the last tensor dimension fused with post-multiplication via W-bcast.");
+    m_tensor.def("layernorm_gamma_beta", &layernorm_gamma_beta, "Performs a layernorm operation on the last tensor dimension fused with post-multiplication and addition via W-bcast.");
 
     // TMs
     m_tensor.def("reshape", &reshape, R"doc(

@@ -178,6 +178,7 @@ void write_graph_interpreter_op_info_to_core(
 }
 
 // for BRISC and NCRISC
+// TODO(AP): deduplicate with trisc variant
 bool test_load_write_read_risc_binary(
     tt_cluster *cluster, std::string hex_file_path, int chip_id, const tt_xy_pair &core, int riscv_id) {
     // PROF_BEGIN("get_risc")
@@ -188,8 +189,10 @@ bool test_load_write_read_risc_binary(
     std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id);  // 0 = BRISC, 1 = NCRISC
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
-    log_debug(
-        tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size() * sizeof(uint32_t));
+    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
+    auto fwsize = riscv_id == 0 ? l1_mem::address_map::BRISC_FIRMWARE_SIZE : l1_mem::address_map::NCRISC_FIRMWARE_SIZE;
+    if (hex_vec.size() * 4 >= fwsize && riscv_id != 0) // TODO(AP): what should this check be on BRISC?
+        std::cout << "WARNING: Hex size=" << hex_vec.size()*4 << " core=" << riscv_id << " path=" << hex_file_path << std::endl;
     // PROF_END("get_risc")
 
     uint64_t addr = 0;
@@ -224,24 +227,25 @@ bool test_load_write_read_trisc_binary(
     // PROF_END("trisc_get")
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
-    log_debug(
-        tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size() * sizeof(uint32_t));
+    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
 
-    uint64_t addr = 0;
+    uint32_t fwsize = 0, fwaddr = 0;
     switch (triscv_id) {
-        case 0: addr = l1_mem::address_map::TRISC0_BASE; break;
-        case 1: addr = l1_mem::address_map::TRISC1_BASE; break;
-        case 2: addr = l1_mem::address_map::TRISC2_BASE; break;
+        case 0: fwaddr = l1_mem::address_map::TRISC0_BASE; fwsize = l1_mem::address_map::TRISC0_SIZE; break;
+        case 1: fwaddr = l1_mem::address_map::TRISC1_BASE; fwsize = l1_mem::address_map::TRISC1_SIZE; break;
+        case 2: fwaddr = l1_mem::address_map::TRISC2_BASE; fwsize = l1_mem::address_map::TRISC2_SIZE; break;
         default: std::cout << "Unknown triscv_id = " << triscv_id << std::endl; exit(1);
     }
 
-    write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr);       // PROF_BEGIN("trisc_write")
+    write_hex_vec_to_core(cluster, chip_id, core, hex_vec, fwaddr);       // PROF_BEGIN("trisc_write")
     log_debug(tt::LogLLRuntime, "wrote trisc binary hex to the core");  // PROF_END("trisc_write")
+    if (hex_vec.size() * 4 > fwsize)
+        std::cout << "WARNING: Hex size=" << hex_vec.size()*4 << " trisc core=" << triscv_id << " path=" << hex_file_path << std::endl;
 
     if (std::getenv("TT_KERNEL_READBACK_DISABLE") == nullptr) {
         std::vector<uint32_t> read_hex_vec;  // PROF_BEGIN("trisc_read_back")
         read_hex_vec = read_hex_vec_from_core(
-            cluster, chip_id, core, addr, hex_vec.size() * sizeof(uint32_t));     // size to read in Bytes
+            cluster, chip_id, core, fwaddr, hex_vec.size() * sizeof(uint32_t));     // size to read in Bytes
         log_debug(tt::LogLLRuntime, "read trisc binary hex back from the core");  // PROF_END("trisc_read_back")
         return hex_vec == read_hex_vec;
     }

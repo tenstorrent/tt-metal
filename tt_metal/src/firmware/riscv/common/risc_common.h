@@ -177,18 +177,6 @@ void risc_get_next_epoch();
 // be overwritten with the next epoch state from DRAM.
 void risc_signal_epoch_done();
 
-// Returns the buffer address for current thread+core. Differs for NC/BR/TR0-2.
-inline uint8_t* get_debug_print_buffer() {
-  #if defined(COMPILE_FOR_NCRISC)
-  return reinterpret_cast<uint8_t*>(PRINT_BUFFER_NC);
-  #elif defined(COMPILE_FOR_BRISC)
-  return reinterpret_cast<uint8_t*>(PRINT_BUFFER_BR);
-  #else
-  // TODO(AP): needs refactor
-  #error "This path shouldn't be compiled. The implementation for TRISCS is in ckernel.h"
-  #endif
-}
-
 inline void breakpoint_(uint32_t line) {
     /*
         When called, writes the stack pointer to a known location

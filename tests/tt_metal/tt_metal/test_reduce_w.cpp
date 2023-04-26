@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "tt_metal/kernels/dataflow/reader_unary_8bank.cpp"
+            multibank ? "tt_metal/kernels/dataflow/reader_unary_8bank_reduce.cpp"
                       : "tt_metal/kernels/dataflow/reader_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,

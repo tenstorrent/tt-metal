@@ -85,7 +85,7 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         program,
         reduce_dim == ReduceOpDim::H ?
             "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp" :
-            "tt_metal/kernels/dataflow/reader_unary_8bank.cpp",
+            "tt_metal/kernels/dataflow/reader_unary_8bank_reduce.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);

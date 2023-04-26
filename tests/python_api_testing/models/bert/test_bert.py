@@ -208,5 +208,10 @@ def test_bert_question_and_answering_inference(model_version, batch, seq_len, on
 
     # enable_binary_cache()
     # enable_compile_cache()
-
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator)
+
+if __name__ == "__main__":
+    # enable_binary_cache()
+    # enable_compile_cache()
+    #run_bert_question_and_answering_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.99)
+    run_bert_question_and_answering_inference("phiyodr/bert-large-finetuned-squad2", 1, 128, True, True, 0.85) # Placeholder PCC until issues are resolved

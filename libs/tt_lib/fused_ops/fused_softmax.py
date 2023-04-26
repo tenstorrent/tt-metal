@@ -1,83 +1,69 @@
 import math
 from pathlib import Path
 import sys
+import time
 f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../../../tests")
 
 import torch
 
-import ll_buda_bindings.ll_buda_bindings._C as _C
-from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
+from libs import tt_lib
+from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 
+tensor = tt_lib.tensor
+device = tt_lib.device
 
-def softmax(x, stable=False):
-    RMAX = _C.tensor.ReduceOpMath.MAX
-    RSUM = _C.tensor.ReduceOpMath.SUM
-    RW = _C.tensor.ReduceOpDim.W
-    BCW = _C.tensor.BcastOpDim.W
-    BCMUL = _C.tensor.BcastOpMath.MUL
-    BCSUB = _C.tensor.BcastOpMath.MUL
-
-    if stable:
-        sumsW = _C.tensor.reduce(x, RMAX, RW, 1.0)
-        z = _C.tensor.bcast(x, sumsW, BCSUB, BCW) # x-max(x)
-    else:
-        z = x
-    numerator = _C.tensor.exp(z) # exp(z)
-    denom1 = _C.tensor.reduce(numerator, RSUM, RW, 1.0) # torch.sum(x, 3)
-    denom = _C.tensor.recip(denom1)
-    output = _C.tensor.bcast(numerator, denom, BCMUL, BCW)
-
-    return output
 
 def ref_stable_softmax(x):
-    """
-    z = x - torch.max(x, dim=3, keepdim=True)[0]
+    torch.set_printoptions(precision=2, threshold=1000, sci_mode=False, edgeitems=8, linewidth=180)
+    #print("Ref x=\n", x[0, 0, 0:32:8, 0:64:8])
+    z = x #- torch.max(x, dim=3, keepdim=True)[0]
     numerator = torch.exp(z)
-    denominator = torch.sum(numerator, 3)
+    #print(x.shape)
+    H = x.shape[-2]
+    #print("H=", H)
+    pw0 = 0 # prints a tile slice with these tile coord range
+    pw1 = 3
+    ph0 = 0
+    ph1 = 2
+    #print("Ref exps=\n", numerator[0, 0, ph0*32 : ph1*32 : 8, pw0*32 : pw1*32 : 8])
+    denominator = torch.sum(numerator, 3, keepdim=True)
+    #print("denom shape=", denominator.shape)
+    #print("Ref sumexp=\n", torch.reshape(denominator, (-1,H))[:, ph0*32:ph1*32])
+
     denom1 = torch.reciprocal(denominator)
+    #print("ref 1/sumexp=\n", denom1[0, 0, 0:32:8, 0:64:8])
     softmax = numerator*denom1
-    """
+    #print("softmaxManual=\n", softmax[0, 0, 0:32:8, 0:64:8])
     softmax = torch.nn.Softmax(3)(x)
+    #print("softmaxTorch=\n", softmax[0, 0, 0:32:8, 0:64:8])
 
     return softmax
 
 if __name__ == "__main__":
-    device = _C.device.CreateDevice(_C.device.Arch.GRAYSKULL, 0)
-    _C.device.InitializeDevice(device)
-    _C.device.StartDebugPrintServer(device)
-    host = _C.device.GetHost()
-    H, W = 32, 32
+    dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
+    device.InitializeDevice(dev)
+    #device.StartDebugPrintServer(dev)
+    host = device.GetHost()
+    #N, C, H, W = 1, 7, 5*32, 17*32
+    N, C, H, W = 1, 1, 2048, 4*8*32 # W must be a multiple of 8*32
     torch.manual_seed(123)
 
-    x = torch.randn((1,1,H,W))
-    ref_sm = ref_stable_softmax(x)
+    for j in range(0, 1):
+        x = torch.randn((N,C,H,W)) + 0.01
 
-    x_t = tilize_to_list(x)
-    t0 = _C.tensor.Tensor(x_t, [1, 1, H, W], _C.tensor.DataFormat.FLOAT32, _C.tensor.Layout.TILE, device)
-    test_unfused = False
-    if test_unfused:
-        func = softmax
-        t1 = func(t0)
-        t2_data = t1.to(host).data()
-        tt_got_back = torch.Tensor(t2_data).reshape((1,1,H,W))
-        tt_got_back = untilize(tt_got_back)
+        ref_sm = ref_stable_softmax(x)
 
-        print("Max diff=")
-        print_diff_argmax(tt_got_back, ref_sm)
+        x_t = tilize_to_list(x)
+        t0 = tensor.Tensor(x_t, [N, C, H, W], tensor.DataType.BFLOAT16, tensor.Layout.TILE, dev)
 
-    test_fused = True
-    if test_fused:
-        print("skip_hlkc = ", _C.device.GetSkipHlkc())
-        _C.device.SetSkipHlkc(False)
-        _C.device.SetSkipHlkc(True)
-        print("skip_hlkc = ", _C.device.GetSkipHlkc())
-        t1_fused = _C.tensor.softmax(t0)
+        t1_fused = tensor.softmax(t0)
         t2_data_fused = t1_fused.to(host).data()
-        tt_got_back_fused = torch.Tensor(t2_data_fused).reshape((1,1,H,W))
+        tt_got_back_fused = torch.Tensor(t2_data_fused).reshape((N,C,H,W))
         tt_unt = untilize(tt_got_back_fused)
+
+        time.sleep(0.33) # so prints don't overlap with kernel prints
         print("Max diff=")
         print_diff_argmax(tt_unt, ref_sm)
 
-
-    _C.device.CloseDevice(device)
+    device.CloseDevice(dev)

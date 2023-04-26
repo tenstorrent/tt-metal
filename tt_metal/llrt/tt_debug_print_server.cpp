@@ -20,6 +20,8 @@ using std::endl;
 using std::setw;
 using std::flush;
 
+#define CAST_U8P(p) reinterpret_cast<uint8_t*>(p)
+
 namespace {
 
 static inline float bfloat16_to_float(uint16_t bfloat_val) {
@@ -169,6 +171,31 @@ private:
     }
 };
 
+static void print_tile_slice(ostream& stream, uint8_t* ptr) {
+    TileSliceHostDev<0>* ts = reinterpret_cast<TileSliceHostDev<0>*>(ptr);
+    stream << "TILE: (" << endl << std::flush;
+    if (ts->w0_ == 0xFFFF) {
+        stream << "BAD TILE POINTER" << std::flush;
+        stream << " count=" << ts->count_ << std::flush;
+    } else {
+        uint32_t i = 0;
+        for (int h = ts->h0_; h < ts->h1_; h += ts->hs_) {
+            stream << "  ";
+            for (int w = ts->w0_; w < ts->w1_; w += ts->ws_) {
+                if (i >= ts->count_)
+                    goto done;
+                stream << bfloat16_to_float(ts->samples_[i]);
+                stream << " ";
+                i++;
+            }
+            if (ts->endl_rows_)
+                stream << endl;
+        }
+    }
+done:
+    stream << endl << "  ptr=" << ts->ptr_ << ")" << endl;
+}
+
 // Checks if our magic value was cleared by the device code
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
@@ -181,7 +208,6 @@ bool check_init_magic_cleared(tt_cluster* cluster, int chip_id, const tt_xy_pair
     auto result = my_read_hex_vec_from_core(cluster, chip_id, core, base_addr, 4);
     return (result[0] != initbuf[0]);
 } // check_init_magic_cleared
-
 
 // rename the current thread so it's easier to distinguish in the debugger
 // TODO(AP): this renaming didn't show up in VSCODE thread list
@@ -215,6 +241,8 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
     uint32_t counter = 0;
     uint32_t sigval = 0;
+    uint32_t sticky_setw = 0; // std::setw is not sticky by default, we have to implement it manually
+    char val = 0;
     ostream& stream = *stream_;
     if (rpos < wpos) {
         // Now read the entire buffer
@@ -231,13 +259,12 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
         // parse the input codes
         const char* cptr = nullptr;
         int nlen = 0;
+        uint32_t i = 0, h = 0, w = 0;
         while (rpos < wpos) {
             uint8_t code = l->data[rpos++]; TT_ASSERT(rpos <= bufsize);
             uint8_t sz = l->data[rpos++]; TT_ASSERT(rpos <= bufsize);
             uint8_t* ptr = l->data + rpos;
 
-            TileSamplesHostDev<8>* ts8 = nullptr; // need this decl ouside of switch :(
-            TileSamplesHostDev<32>* ts32 = nullptr; // TODO(AP): unify template params
             // we are sharing the same output file between debug print threads for multiple cores
             switch(code) {
                 // TODO(AP): better code index sync with debug_print.h
@@ -253,26 +280,9 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     unlock_stream();
                     TT_ASSERT(sz == strlen(cptr)+1);
                 break;
-                case DEBUG_PRINT_TYPEID_TILESAMPLES8:
+                case DEBUG_PRINT_TYPEID_TILESLICE:
                     lock_stream();
-                    ts8 = reinterpret_cast< TileSamplesHostDev<8>* >(ptr);
-                    stream << "TILE: (";
-                    for (int j = 0; j < ts8->count_; j++) {
-                        stream << bfloat16_to_float(reinterpret_cast<uint16_t*>(ptr)[j]);
-                        stream << " ";
-                    }
-                    stream << "ptr=" << ts8->ptr_ << ")" << endl;
-                    unlock_stream();
-                break;
-                case DEBUG_PRINT_TYPEID_TILESAMPLES32:
-                    lock_stream();
-                    ts32 = reinterpret_cast< TileSamplesHostDev<32>* >(ptr);
-                    stream << "TILE: (";
-                    for (int j = 0; j < ts32->count_; j++) {
-                        stream << bfloat16_to_float(reinterpret_cast<uint16_t*>(ptr)[j]);
-                        stream << " ";
-                    }
-                    stream << "ptr=" << ts32->ptr_ << ")" << endl;
+                    print_tile_slice(stream, ptr);
                     unlock_stream();
                 break;
 
@@ -284,7 +294,9 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                 break;
                 case DEBUG_PRINT_TYPEID_SETW:
                     lock_stream();
-                    stream << setw(*ptr);
+                    val = CAST_U8P(ptr)[0];
+                    stream << setw(val & 0b01111111); // low 7 bits are setw value
+                    sticky_setw  = (val & 0b10000000) ? (val&0b01111111) : 0; // top bit is sticky flag
                     unlock_stream();
                     TT_ASSERT(sz == 1);
                 break;
@@ -309,18 +321,21 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
 
                 case DEBUG_PRINT_TYPEID_UINT32:
                     lock_stream();
+                    if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<uint32_t*>(ptr);
                     unlock_stream();
                     TT_ASSERT(sz == 4);
                 break;
                 case DEBUG_PRINT_TYPEID_FLOAT32:
                     lock_stream();
+                    if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<float*>(ptr);
                     unlock_stream();
                     TT_ASSERT(sz == 4);
                 break;
                 case DEBUG_PRINT_TYPEID_BFLOAT16:
                     lock_stream();
+                    if (sticky_setw) stream << setw(sticky_setw);
                     stream << bfloat16_to_float(*reinterpret_cast<uint16_t*>(ptr));
                     unlock_stream();
                     TT_ASSERT(sz == 2);
@@ -357,6 +372,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                 break;
                 case DEBUG_PRINT_TYPEID_INT32:
                     lock_stream();
+                    if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<int32_t*>(ptr);
                     unlock_stream();
                     TT_ASSERT(sz == 4);

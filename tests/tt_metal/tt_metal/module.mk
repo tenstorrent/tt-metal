@@ -7,6 +7,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/dtx/overlap \
 		 tests/tt_metal/dtx/collapse_transformations \
 		 tests/tt_metal/ops/test_softmax_op \
+		 tests/tt_metal/ops/test_layernorm_op \
 		 tests/tt_metal/ops/test_transpose_op \
 		 tests/tt_metal/ops/test_transpose_wh_single_core \
 		 tests/tt_metal/ops/test_transpose_wh_multi_core \

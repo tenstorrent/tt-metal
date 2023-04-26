@@ -187,6 +187,7 @@ struct CompileContext {
                 result += " -fno-tree-loop-distribute-patterns";
             break;
             default:
+                //result += " -finline-limit=1 --no-inline -fno-inline-functions -fno-inline-small-functions -fno-inline-functions-called-once ";
                 result += " -O3";
             break;
         }
@@ -231,8 +232,9 @@ struct CompileContext {
         if (defs.perf_dump_level != 0 || defs.is_trisc()) // TODO(AP): double check
             result += " -DPERF_DUMP_LEVEL=" + to_string(defs.perf_dump_level);
         result += " -DTENSIX_FIRMWARE"; // TODO(AP): verify where firmware flag comes from
-        if (defs.profile_kernel)
+        if (defs.profile_kernel) {
             result += " -DPROFILE_KERNEL=1";
+        }
         for (int j = 0; j < defs.compile_time_args.size(); j++)
             result += " -DKERNEL_COMPILE_TIME_ARG_" + to_string(j) + "=" + to_string(defs.compile_time_args[j]);
         if (!defs.is_trisc())
@@ -289,8 +291,18 @@ struct CompileContext {
             linkopts += " -Wl,--defsym=__trisc2_size=" + to_string(TriscParams().get_trisc_size(RISCID::TR2));
             linkopts += " -fno-exceptions"; // TODO(AP): odd that this was not present for brisc in the Makefile
         } else if (defs.is_brisc() || defs.is_ncrisc()) {
-            // TODO(AP): where does this come from for BR?
-            linkopts += " -Wl,--defsym=__trisc_base=27648 -Wl,--defsym=__trisc0_size=16384 -Wl,--defsym=__trisc1_size=16384 -Wl,--defsym=__trisc2_size=16384 ";
+            if (0) {
+                string tr0_size = to_string(TriscParams().get_trisc_size(RISCID::TR0));
+                string tr1_size = to_string(TriscParams().get_trisc_size(RISCID::TR1));
+                string tr2_size = to_string(TriscParams().get_trisc_size(RISCID::TR2));
+                string tr_base = to_string(TriscParams().TRISC_BASE);
+                std::cout << "BR params: base=" << tr_base << " tr0s=" << tr0_size << " tr1s=" << tr1_size << " tr2s=" << tr2_size << std::endl;
+                linkopts += " -Wl,--defsym=__trisc_base="+tr_base+" -Wl,--defsym=__trisc0_size="+tr0_size+" -Wl,--defsym=__trisc1_size="+tr1_size+
+                            " -Wl,--defsym=__trisc2_size=" +tr2_size + " ";
+            } else {
+                // TODO(AP): unclear which is correct
+                linkopts += " -Wl,--defsym=__trisc_base=27648 -Wl,--defsym=__trisc0_size=16384 -Wl,--defsym=__trisc1_size=16384 -Wl,--defsym=__trisc2_size=16384 ";
+            }
             if (defs.is_brisc()) // TODO(AP): not on ncrisc, why?
                 linkopts += " -fno-tree-loop-distribute-patterns";
         }

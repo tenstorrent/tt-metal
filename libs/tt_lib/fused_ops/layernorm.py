@@ -1,9 +1,8 @@
-import math
-
 import torch
 
 from .. import tensor, device
 from ..utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, tt2torch as t2t, tt2torch_rm as t2trm, roundup32, float_to_bits
+
 
 # This ref implementation is only here for debugging
 def ref_ln(x, gamma, beta = None, epsilon = 1e-5):

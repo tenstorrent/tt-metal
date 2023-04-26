@@ -8,7 +8,8 @@ namespace utils
     {
         int ret;
         if (getenv("TT_BACKEND_DUMP_RUN_CMD") or verbose) {
-            cout << "running: `" + cmd + '`';
+            cout << "===== RUNNING SYSTEM COMMAND:" << std::endl;
+            cout << cmd << std::endl << std::endl;
             ret = system(cmd.c_str());
         } else {
             string redirected_cmd = cmd + " >> " + log_file + " 2>&1";

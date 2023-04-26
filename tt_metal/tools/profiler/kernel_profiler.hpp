@@ -9,6 +9,10 @@
 #include "ckernel.h"
 #endif
 
+#ifdef PROFILE_KERNEL
+#include "debug_print_buffer.h" // only needed because the address is shared
+#endif
+
 #include "hostdevcommon/profiler_common.h"
 
 //#define PROFILER_OPTIONS KERNEL_FUNCT_MARKER

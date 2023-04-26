@@ -36,6 +36,7 @@ class TtAddAndNormModel(torch.nn.Module):
         self.add_and_norm = AddAndNorm(gamma, beta, config.layer_norm_eps, config.hidden_size, config.hidden_size, device)
 
     def forward(self, a, b):
+        print(a.shape(), b.shape())
         return self.add_and_norm(a, b)
 
 class PytorchAddAndNormModel(torch.nn.Module):
@@ -109,4 +110,5 @@ def test_add_and_norm_inference(model_version, batch, seq_len, on_weka, pcc, mod
 
 
 if __name__ == "__main__":
-    run_add_and_norm_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99)
+    #run_add_and_norm_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99)
+    run_add_and_norm_inference("phiyodr/bert-large-finetuned-squad2", 1, 128, True, 0.99)

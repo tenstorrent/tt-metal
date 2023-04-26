@@ -191,7 +191,6 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
         tensix_sync();
     }
 
-#if 1
     volatile uint *cfg = get_cfg_pointer();
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
         for (uint i = 0; i < 4; i++)
@@ -210,5 +209,4 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
         //cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = revert ? 0xFFFFffff : 0x0;
         //cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = revert ? 0xFFFFffff : 0x0000ffff;
     }
-    #endif
 }

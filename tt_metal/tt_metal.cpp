@@ -375,7 +375,7 @@ bool GenerateBinaries(
     if (kernel_group.compute != nullptr) {
         auto triscs_lambda = [=]() {
             generate_binaries_for_triscs(
-                    build_kernel_for_riscv_options, op_path, arch_name, kernel_group.compute->compile_time_args(logical_core), profile_kernel);
+                build_kernel_for_riscv_options, op_path, arch_name, kernel_group.compute->compile_time_args(logical_core), profile_kernel);
         };
         std::thread tr_thread(triscs_lambda);
         tr_thread.join();

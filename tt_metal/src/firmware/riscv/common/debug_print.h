@@ -27,50 +27,24 @@
 #include "risc_common.h"
 #endif
 #include "hostdevcommon/debug_print_common.h"
+#include "hostdevcommon/common_runtime_address_map.h"
+
+#include "debug_print_buffer.h"
 
 #define DPRINT DebugPrinter()
-#define ATTR_ALIGN4 __attribute__((aligned(4)))
-#define ATTR_PACK __attribute__((packed))
 
 struct BF16 { uint16_t val; BF16(uint16_t val) : val(val) {} } ATTR_PACK;
-struct F32 { float val; F32(float val) : val(val) {} } ATTR_PACK;
-struct U32 { uint32_t val; U32(uint32_t val) : val(val) {} } ATTR_PACK;
+struct F32  { float val; F32(float val) : val(val) {} } ATTR_PACK;
+struct U32  { uint32_t val; U32(uint32_t val) : val(val) {} } ATTR_PACK;
 
 struct ENDL { char tmp; } ATTR_PACK; // Analog of cout << std::endl - not making it zero size to avoid special cases
-struct SETW { char w; SETW(char wa) : w(wa) {} } ATTR_PACK; // Analog of cout << std::setw()
 struct SETP { char p; SETP(char pa) : p(pa) {} } ATTR_PACK; // Analog of cout << std::setprecision()
 struct FIXP { char tmp; } ATTR_PACK; // Analog of cout << std::fixed
-struct HEX { char tmp; } ATTR_PACK; // Analog of cout << std::hex
-
-//
-// Samples count values of a tile itile at cb with value offset and stride.
-// sampling happens relative to the current CB read or write pointer.
-// This means that for printing a tile read from the front of the CB,
-// the DPRINT << TILESAMPLES(...) call has to occur after cb_wait_front and before cb_pop_front
-// For this case, bool packer=true needs to be passed as an argument
-// For the case of printing a tile from the back of the CB, packer=false needs to passed and
-// the DPRINT << TILESAMPLES(...) call has to occur after cb_reserve_back and before cb_push_back.
-//
-template<int MAXSAMPLES>
-struct TileSamples : TileSamplesHostDev<MAXSAMPLES> {
-    inline int min_(int a, int b) { return a < b ? a : b; } // to avoid inclusion of <algorithm>
-    inline TileSamples(bool packer, int cb, int itile, int count, int offs, int stride) {
-        struct TILE { uint16_t vals[1024] __attribute__((packed)); } __attribute__((aligned(2)));
-        this->count_ = count;
-        volatile TILE* t;
-        if (packer) { // note that front is not valid in packer and back is not valid/initialized in packer
-            this->ptr_ = cb_write_interface[cb].fifo_wr_ptr<<4;
-            t = (reinterpret_cast<volatile TILE*>(this->ptr_) + itile); // front of q is reader/consumer
-        } else {
-            this->ptr_ = cb_read_interface[cb].fifo_rd_ptr<<4;
-            t = (reinterpret_cast<volatile TILE*>(this->ptr_) + itile); // back of q is writer/producer
-        }
-        for (int j = 0; j < min_(MAXSAMPLES, count); j++)
-            this->samples_[j] = t->vals[offs + stride*j];
-    }
-};
-using TILESAMPLES8 = TileSamples<8>; // max 8 values
-using TILESAMPLES32 = TileSamples<32>; // max 32 values
+struct HEX  { char tmp; } ATTR_PACK; // Analog of cout << std::hex
+struct SETW {
+    char w;
+    SETW(char wa, bool sticky = true) { w = wa; if (sticky) w |= 0b10000000; }
+} ATTR_PACK; // Analog of cout << std::setw(), defaults to sticky TODO(AP): 2 chars didn't work
 
 // These primitives are intended for ordering debug prints
 // A possible use here is to synchronize debug print order between cores/harts
@@ -99,32 +73,31 @@ template<typename T> uint8_t DebugPrintTypeToId();
 template<typename T> uint32_t DebugPrintTypeToSize(T val) { return sizeof(T); };
 template<typename T> const uint8_t* DebugPrintTypeAddr(T* val) { return reinterpret_cast<const uint8_t*>(val); }
 
-template<> uint8_t DebugPrintTypeToId<const char*>() { return DEBUG_PRINT_TYPEID_CSTR; }
-template<> uint8_t DebugPrintTypeToId<char*>() { return DEBUG_PRINT_TYPEID_CSTR; }
-template<> uint8_t DebugPrintTypeToId<ENDL>() { return DEBUG_PRINT_TYPEID_ENDL; }
-template<> uint8_t DebugPrintTypeToId<SETW>() { return DEBUG_PRINT_TYPEID_SETW; }
-template<> uint8_t DebugPrintTypeToId<uint32_t>() { return DEBUG_PRINT_TYPEID_UINT32; }
-template<> uint8_t DebugPrintTypeToId<float>() { return DEBUG_PRINT_TYPEID_FLOAT32; }
-template<> uint8_t DebugPrintTypeToId<char>() { return DEBUG_PRINT_TYPEID_CHAR; }
-template<> uint8_t DebugPrintTypeToId<RAISE>() { return DEBUG_PRINT_TYPEID_RAISE; }
-template<> uint8_t DebugPrintTypeToId<WAIT>() { return DEBUG_PRINT_TYPEID_WAIT; }
-template<> uint8_t DebugPrintTypeToId<BF16>() { return DEBUG_PRINT_TYPEID_BFLOAT16; }
-template<> uint8_t DebugPrintTypeToId<SETP>() { return DEBUG_PRINT_TYPEID_SETP; }
-template<> uint8_t DebugPrintTypeToId<FIXP>() { return DEBUG_PRINT_TYPEID_FIXP; }
-template<> uint8_t DebugPrintTypeToId<HEX>() { return DEBUG_PRINT_TYPEID_HEX; }
-template<> uint8_t DebugPrintTypeToId<F32>() { return DEBUG_PRINT_TYPEID_FLOAT32; }
-template<> uint8_t DebugPrintTypeToId<U32>() { return DEBUG_PRINT_TYPEID_UINT32; }
-template<> uint8_t DebugPrintTypeToId<int>() { return DEBUG_PRINT_TYPEID_INT32; }
-template<> uint8_t DebugPrintTypeToId<TILESAMPLES8>() { return DEBUG_PRINT_TYPEID_TILESAMPLES8; }
-template<> uint8_t DebugPrintTypeToId<TILESAMPLES32>() { return DEBUG_PRINT_TYPEID_TILESAMPLES32; }
-template<> uint8_t DebugPrintTypeToId<uint64_t>() { return DEBUG_PRINT_TYPEID_UINT64; }
+template<> uint8_t DebugPrintTypeToId<const char*>()   { return DEBUG_PRINT_TYPEID_CSTR; }
+template<> uint8_t DebugPrintTypeToId<char*>()         { return DEBUG_PRINT_TYPEID_CSTR; }
+template<> uint8_t DebugPrintTypeToId<ENDL>()          { return DEBUG_PRINT_TYPEID_ENDL; }
+template<> uint8_t DebugPrintTypeToId<SETW>()          { return DEBUG_PRINT_TYPEID_SETW; }
+template<> uint8_t DebugPrintTypeToId<uint32_t>()      { return DEBUG_PRINT_TYPEID_UINT32; }
+template<> uint8_t DebugPrintTypeToId<float>()         { return DEBUG_PRINT_TYPEID_FLOAT32; }
+template<> uint8_t DebugPrintTypeToId<char>()          { return DEBUG_PRINT_TYPEID_CHAR; }
+template<> uint8_t DebugPrintTypeToId<RAISE>()         { return DEBUG_PRINT_TYPEID_RAISE; }
+template<> uint8_t DebugPrintTypeToId<WAIT>()          { return DEBUG_PRINT_TYPEID_WAIT; }
+template<> uint8_t DebugPrintTypeToId<BF16>()          { return DEBUG_PRINT_TYPEID_BFLOAT16; }
+template<> uint8_t DebugPrintTypeToId<SETP>()          { return DEBUG_PRINT_TYPEID_SETP; }
+template<> uint8_t DebugPrintTypeToId<FIXP>()          { return DEBUG_PRINT_TYPEID_FIXP; }
+template<> uint8_t DebugPrintTypeToId<HEX>()           { return DEBUG_PRINT_TYPEID_HEX; }
+template<> uint8_t DebugPrintTypeToId<F32>()           { return DEBUG_PRINT_TYPEID_FLOAT32; }
+template<> uint8_t DebugPrintTypeToId<U32>()           { return DEBUG_PRINT_TYPEID_UINT32; }
+template<> uint8_t DebugPrintTypeToId<int>()           { return DEBUG_PRINT_TYPEID_INT32; }
+template<> uint8_t DebugPrintTypeToId<uint64_t>()      { return DEBUG_PRINT_TYPEID_UINT64; }
 static_assert(sizeof(int) == 4);
 
 // Specializations for const char* (string literals), typically you will not need these for other types
-template<> uint32_t DebugPrintTypeToSize<const char*>(const char* val) { return DebugPrintStrLen(val); } // also copy the terminating zero
-template<> const uint8_t* DebugPrintTypeAddr<const char*>(const char** val) { return reinterpret_cast<const uint8_t*>(*val); }
-template<> uint32_t DebugPrintTypeToSize<char*>(char* val) { return DebugPrintStrLen(val); } // also copy the terminating zero
-template<> const uint8_t* DebugPrintTypeAddr<char*>(char** val) { return reinterpret_cast<const uint8_t*>(*val); }
+template<> uint32_t       DebugPrintTypeToSize<const char*>(const char* val) { return DebugPrintStrLen(val); } // also copy the terminating zero
+template<> const uint8_t* DebugPrintTypeAddr<const char*>(const char** val)  { return reinterpret_cast<const uint8_t*>(*val); }
+template<> uint32_t       DebugPrintTypeToSize<char*>(char* val)             { return DebugPrintStrLen(val); } // also copy the terminating zero
+template<> const uint8_t* DebugPrintTypeAddr<char*>(char** val)              { return reinterpret_cast<const uint8_t*>(*val); }
+
 
 struct DebugPrinter {
     volatile uint32_t* wpos() {
@@ -151,6 +124,7 @@ struct DebugPrinter {
 };
 
 template<typename T>
+__attribute__((__noinline__))
 DebugPrinter operator <<(DebugPrinter dp, T val) {
 
     if (*dp.wpos() == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
@@ -228,5 +202,5 @@ template DebugPrinter operator<< <SETP>(DebugPrinter, SETP val);
 template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
-template DebugPrinter operator<< <TILESAMPLES8>(DebugPrinter, TILESAMPLES8 val);
-template DebugPrinter operator<< <TILESAMPLES32>(DebugPrinter, TILESAMPLES32 val);
+
+#include "debug_print_tile.h"

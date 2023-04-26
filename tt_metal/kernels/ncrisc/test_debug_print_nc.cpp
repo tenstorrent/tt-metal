@@ -41,7 +41,7 @@ void kernel_main() {
             DPRINT << WAIT{wait_x + wait_y*20 + 20000}; // wait on previous core's NC hart to raise a signal
         }
 
-        DPRINT << SETW(ARG0) << ARG1;
+        DPRINT << SETW(ARG0, false) << ARG1;
         DPRINT << ENDL();
         // Using a string of size 17 here which is non-multiple of 4 (there was a bug with .rodata alignment for non-multiple of 4 strings)
         //         0123456789abcdef

@@ -254,7 +254,14 @@ def print_diff_argmax(a, b, annotation = ""):
     diff = absdiff.reshape(-1)[argmax]
     rela = a.abs()/(torch.max(a.abs(), b.abs()))
     relb = b.abs()/(torch.max(a.abs(), b.abs()))
-    print("Abs diff=", diff, " at ", argmax, " --- ", annotation)
+    HT = a.shape[-2] // 32
+    WT = a.shape[-1] // 32
+    hwt = argmax//1024
+    wt = hwt % WT
+    ht = hwt // WT
+    h = (argmax % 1024) // 32
+    w = (argmax % 1024) % 32
+    print("Abs diff=", diff, " at ", argmax, " --- ", annotation, "HTWT=", ht, wt, "HW=", h, w)
     print("  (a=", a.reshape(-1)[argmax].item(), ")")
     print("  (b=", b.reshape(-1)[argmax].item(), ")")
     print("  Rel a=", rela.reshape(-1)[argmax], " at ", argmax)

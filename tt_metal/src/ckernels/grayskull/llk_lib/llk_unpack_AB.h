@@ -106,6 +106,8 @@ inline void llk_unpack_AB(
 
     std::uint32_t base_address_a = cb_read_interface[inputA].fifo_rd_ptr;
     std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], tile_index_a);
+    //DPRINT << "tia=" << tile_index_a << ENDL();
+    //DPRINT << "oaa=" << offset_address_a << ENDL();
     std::uint32_t base_address_b = cb_read_interface[inputB].fifo_rd_ptr;
     std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], tile_index_b);
 

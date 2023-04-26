@@ -105,7 +105,7 @@ bool run_sfpu_test(string sfpu_name) {
         };
         tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
+        bool math_approx_mode = true;
         string hlk_kernel_name = "tt_metal/kernels/compute/eltwise_sfpu.cpp";
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
@@ -184,11 +184,12 @@ bool run_sfpu_test(string sfpu_name) {
         pass &= packed_uint32_t_vector_comparison(result_vec, golden, sfpu_op_to_comparison_function.at(sfpu_name));
 
         if (not pass) {
-            std::cout << "GOLDEN" << std::endl;
-            print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles);
+            // Printing of large tiles causes a system lockup. Do not print these unless debugging please.
+            //std::cout << "GOLDEN" << std::endl;
+            //print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles);
 
-            std::cout << "RESULT" << std::endl;
-            print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
+            //std::cout << "RESULT" << std::endl;
+            //print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
         }
 
         pass &= tt_metal::CloseDevice(device);;

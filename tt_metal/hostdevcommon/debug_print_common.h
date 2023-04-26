@@ -21,10 +21,10 @@ constexpr int DEBUG_PRINT_TYPEID_SETP           = 9; // std::setprecision
 constexpr int DEBUG_PRINT_TYPEID_FIXP           = 10; // std::fixed
 constexpr int DEBUG_PRINT_TYPEID_HEX            = 11; // std::hex
 constexpr int DEBUG_PRINT_TYPEID_INT32          = 12;
-constexpr int DEBUG_PRINT_TYPEID_TILESAMPLES8   = 13;
-constexpr int DEBUG_PRINT_TYPEID_TILESAMPLES32  = 14;
-constexpr int DEBUG_PRINT_TYPEID_UINT64         = 15;
+constexpr int DEBUG_PRINT_TYPEID_TILESLICE      = 13;
+constexpr int DEBUG_PRINT_TYPEID_UINT64         = 14;
 
+// We need to set thw wpos, rpos pointers to 0 in the beginning of the kernel startup
 // Because there's no mechanism (known to me) to initialize values at fixed mem locations in kernel code,
 // in order to initialize the pointers in the buffers we use a trick with print server writing
 // a magic value to a fixed location, we look for it on device, and only if it's present we initialize
@@ -38,23 +38,35 @@ constexpr int DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0x23455432;
 // (making it impossible to print) we will instead print this message.
 constexpr const char* debug_print_overflow_error_message = "*** INTERNAL DEBUG PRINT BUFFER OVERFLOW ***\n\n";
 
+#define ATTR_ALIGN4 __attribute__((aligned(4)))
+#define ATTR_ALIGN2 __attribute__((aligned(2)))
+#define ATTR_ALIGN1 __attribute__((aligned(1)))
+#define ATTR_PACK   __attribute__((packed))
+
 struct DebugPrintMemLayout {
     struct Aux {
         // current writer offset in buffer
-        uint32_t wpos __attribute__((aligned(4)));
-        uint32_t rpos __attribute__((aligned(4)));
-    } aux __attribute__((aligned(4)));
+        uint32_t wpos ATTR_ALIGN4;
+        uint32_t rpos ATTR_ALIGN4;
+    } aux ATTR_ALIGN4;
     uint8_t data[PRINT_BUFFER_SIZE-sizeof(Aux)];
 
     static size_t rpos_offs() { return offsetof(DebugPrintMemLayout::Aux, rpos) + offsetof(DebugPrintMemLayout, aux); }
 
-} __attribute__((packed));
+} ATTR_PACK;
 
-template<int MAXSAMPLES>
-struct TileSamplesHostDev {
-    uint16_t samples_[MAXSAMPLES] __attribute__((aligned(2)));
-    uint16_t count_               __attribute__((aligned(2)));
-    uint32_t ptr_                 __attribute__((aligned(4))); // also print the cb fifo pointer for debugging
-} __attribute__((packed));
+template<int MAXCOUNT=0>
+struct TileSliceHostDev {
+    uint32_t ptr_                ATTR_ALIGN4; // also print the cb fifo pointer for debugging
+    uint16_t h0_                 ATTR_ALIGN2;
+    uint16_t h1_                 ATTR_ALIGN2;
+    uint16_t hs_                 ATTR_ALIGN2;
+    uint16_t w0_                 ATTR_ALIGN2;
+    uint16_t w1_                 ATTR_ALIGN2;
+    uint16_t ws_                 ATTR_ALIGN2;
+    uint16_t count_              ATTR_ALIGN2;
+    uint16_t endl_rows_          ATTR_ALIGN2;
+    uint16_t samples_[MAXCOUNT]  ATTR_ALIGN2;
+} ATTR_PACK;
 
 static_assert(sizeof(DebugPrintMemLayout) == PRINT_BUFFER_SIZE);
