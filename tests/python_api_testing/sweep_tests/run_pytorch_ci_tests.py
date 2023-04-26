@@ -26,7 +26,7 @@ def run_single_pytorch_test(
     datagen_funcs,
     comparison_func,
     pcie_slot,
-    test_args,
+    test_args={},
     env="",
 ):
     assert test_name in TT_DNN_TESTS or test_name in TT_TENSOR_TESTS

@@ -25,5 +25,8 @@ python -m pip install -r tests/python_api_testing/requirements.txt
 
 env python tests/scripts/run_tt_metal.py
 
+# Tests tensor and tt_dnn op APIs
+./tests/scripts/run_tt_lib_regressions.sh
+
 # Please put model runs in here from now on - thank you
 ./tests/scripts/run_models.sh
