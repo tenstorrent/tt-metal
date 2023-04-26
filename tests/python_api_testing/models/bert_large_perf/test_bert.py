@@ -177,6 +177,9 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     print(f"Enable profiler")
     profiler.enable()
 
+    enable_binary_cache()
+    enable_compile_cache()
+
     execution_of_bert_start = time.time()
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
@@ -270,8 +273,8 @@ def profile_bert_question_and_answering_inference():
     pcc = 0.98
     model_location_generator = model_location_generator_
 
-    enable_binary_cache()
-    enable_compile_cache()
+    disable_binary_cache()
+    disable_compile_cache()
 
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator)
     profiler.print()

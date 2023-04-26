@@ -53,25 +53,36 @@ class TtBertEncoder(torch.nn.Module):
         self.ffn_add_and_norm = AddAndNorm(ffn_gamma, ffn_beta, config.layer_norm_eps, config.hidden_size, config.hidden_size, device)
 
     def forward(self, activation, attention_mask=None):
+
+        # MHA - OP1 - OP10 ------------------------------->
         profiler.start("_mha")
         mha_res = self.mha(activation, attention_mask)
         profiler.end("_mha")
+        # MHA - OP1 - OP10 <-------------------------------
 
+        # attention_output - OP11 ------------------------>
         profiler.start("_attention_output")
         mha_out = self.attention_output(mha_res)
         profiler.end("_attention_output")
+        # attention_output - OP11 <------------------------
 
+        # Add + LayerNorm - OP12 ------------------------>
         profiler.start("_mha_add_and_norm")
         mha_out_add_and_norm = self.mha_add_and_norm(activation, mha_out)
         profiler.end("_mha_add_and_norm")
+        # Add + LayerNorm - OP12 <------------------------
 
+        # FFN - OP13 - OP14 ----------------------------->
         profiler.start("_ffn")
         ffn_out = self.ffn(mha_out_add_and_norm)
         profiler.end("_ffn")
+        # FFN - OP13 - OP14 <-----------------------------
 
+        # Add + LayerNorm - OP15 ------------------------>
         profiler.start("_ffn_out_add_and_norm")
         ffn_out_add_and_norm = self.ffn_add_and_norm(mha_out_add_and_norm, ffn_out)
         profiler.end("_ffn_out_add_and_norm")
+        # Add + LayerNorm - OP15 <------------------------
 
         return ffn_out_add_and_norm
 

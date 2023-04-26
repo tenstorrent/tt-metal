@@ -89,6 +89,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def mha_(activation, attention_mask):
 
+        # Q,K,V – TT custom using create_heads - OP1 - OP5 --------->
         profiler.start("__qkv_projection")
         Q = QProjection(activation)
         K = KProjection(activation)
@@ -99,10 +100,12 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         Q_heads = make_attention_heads(Q)
         K_heads = make_attention_heads(K)
         V_heads = make_attention_heads(V)
-        K_T_heads = ttl.tensor.transpose(K_heads)
         profiler.end("__make_attention_heads")
+        # Q,K,V – TT custom using create_heads - OP1 - OP5 <---------
 
+        # Scaled dot-product attn - OP6 - OP9 ---------------------->
         profiler.start("__bmm_heads")
+        K_T_heads = ttl.tensor.transpose(K_heads)
         qkt = ttl.tensor.bmm(Q_heads, K_T_heads)
         profiler.end("__bmm_heads")
 
@@ -134,10 +137,13 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         profiler.start("__weighted_activation")
         weighted_activation = ttl.tensor.bmm(attention_scores, V_heads)
         profiler.end("__weighted_activation")
+        # Scaled dot-product attn - OP6 - OP9 <---------------------
 
+        # Attention output​ - OP10 --------------------------------->
         profiler.start("__unmake_attention_heads")
         res = unmake_attention_heads(weighted_activation) # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
         profiler.end("__unmake_attention_heads")
+        # Attention output​ - OP10 <---------------------------------
 
         return res
 
