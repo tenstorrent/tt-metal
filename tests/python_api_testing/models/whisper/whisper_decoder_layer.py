@@ -49,6 +49,7 @@ class TtWhisperDecoderLayer(nn.Module):
         self.dropout = config.dropout
 
         self.self_attn = TtWhisperAttention(
+            config = config,
             base_address=f"{base_address}.self_attn",
             state_dict = self.state_dict,
             device=self.device,
@@ -65,6 +66,7 @@ class TtWhisperDecoderLayer(nn.Module):
         self.self_attn_layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, self.embed_dim, self.embed_dim, device, 1)
 
         self.encoder_attn = TtWhisperAttention(
+            config = config,
             base_address=f"{base_address}.encoder_attn",
             state_dict = self.state_dict,
             device=self.device,
@@ -77,7 +79,7 @@ class TtWhisperDecoderLayer(nn.Module):
         beta1 = torch2tt_tensor(self.state_dict[f"{base_address}.encoder_attn_layer_norm.bias"], ttm.device.GetHost())
         tt_gamma1 = gamma1.data()
         tt_beta1 = beta1.data()
-        self.encoder_attn_layer_norm = TtLayernorm(tt_gamma1, tt_beta1, 1e-05, self.embed_dim, self.embed_dim, device, 1)
+        self.encoder_attn_layer_norm = TtLayernorm(tt_gamma1, tt_beta1, 1e-05, 1, self.embed_dim, device, 1)
 
         fc1_weight = torch2tt_tensor(self.state_dict[f"{base_address}.fc1.weight"], ttm.device.GetHost())
         fc1_bias = torch2tt_tensor(self.state_dict[f"{base_address}.fc1.bias"], ttm.device.GetHost())
@@ -91,7 +93,7 @@ class TtWhisperDecoderLayer(nn.Module):
         beta2 = torch2tt_tensor(self.state_dict[f"{base_address}.final_layer_norm.bias"], ttm.device.GetHost())
         tt_gamma2 = gamma2.data()
         tt_beta2 = beta2.data()
-        self.final_layer_norm = TtLayernorm(tt_gamma2, tt_beta2, 1e-05, self.embed_dim, self.embed_dim, device, 1)
+        self.final_layer_norm = TtLayernorm(tt_gamma2, tt_beta2, 1e-05, 1, self.embed_dim, device, 1)
 
 
     def forward(
@@ -133,6 +135,7 @@ class TtWhisperDecoderLayer(nn.Module):
         # Self Attention
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
+
         # add present self-attn cache to positions 1,2 of present_key_value tuple
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
@@ -142,6 +145,7 @@ class TtWhisperDecoderLayer(nn.Module):
             output_attentions=output_attentions,
         )
 
+        # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = ttm.tensor.add(hidden_states, residual)
 
@@ -166,6 +170,7 @@ class TtWhisperDecoderLayer(nn.Module):
                 output_attentions=output_attentions,
             )
 
+            # TODO: When implement training
             # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
             hidden_states = ttm.tensor.add(hidden_states, residual)
@@ -182,12 +187,12 @@ class TtWhisperDecoderLayer(nn.Module):
         hidden_states = self.fc1(hidden_states)
         hidden_states = ttm.tensor.gelu(hidden_states)
 
-        # No dropout
+        # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
 
         hidden_states = self.fc2(hidden_states)
 
-        # No dropout
+        # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         hidden_states = ttm.tensor.add(residual, hidden_states)

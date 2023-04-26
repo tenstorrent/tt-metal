@@ -36,16 +36,16 @@ class TtWhisperEncoderLayer(nn.Module):
         config: WhisperConfig=None
     ):
         super().__init__()
-
         self.device = device
         self.config = config
         self.state_dict = state_dict
-
+        self.base_address = base_address
         self.embed_dim = embed_dim
         self.encoder_ffn_dim = encoder_ffn_dim
 
 
         self.self_attn = TtWhisperAttention(
+            config = config,
             base_address = f"{base_address}.self_attn",
             state_dict = self.state_dict,
             device=self.device,
@@ -55,10 +55,10 @@ class TtWhisperEncoderLayer(nn.Module):
 
         gamma = torch2tt_tensor(self.state_dict[f"{base_address}.self_attn_layer_norm.weight"], ttm.device.GetHost())
         beta = torch2tt_tensor(self.state_dict[f"{base_address}.self_attn_layer_norm.bias"], ttm.device.GetHost())
-        tt_gamma = gamma.data()
+        tt_gamma = gamma.data() # [1, 1, 1, 1024]
         tt_beta = beta.data()
 
-        self.self_attn_layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, self.embed_dim, self.embed_dim, device, 1)
+        self.self_attn_layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, 1, self.embed_dim, device, 1)
 
         # DO not use DROPOUT for now
         # self.dropout = config.dropout
@@ -77,8 +77,7 @@ class TtWhisperEncoderLayer(nn.Module):
         tt_gamma_1 = gamma_1.data()
         tt_beta_1 = beta_1.data()
 
-        self.final_layer_norm = TtLayernorm(tt_gamma_1, tt_beta_1, 1e-05, self.embed_dim, self.embed_dim, device, 1)
-
+        self.final_layer_norm = TtLayernorm(tt_gamma_1, tt_beta_1, 1e-05, 1, self.embed_dim, device, 1)
 
     def forward(
         self,
@@ -100,9 +99,8 @@ class TtWhisperEncoderLayer(nn.Module):
         """
         residual = hidden_states
 
-        H_hidden_states = hidden_states.shape()[-2]
-
-        hidden_states = self.self_attn_layer_norm(hidden_states,overrideH=H_hidden_states)
+        H_hidden_states = 1500 #hidden_states.shape()[-2]
+        hidden_states = self.self_attn_layer_norm(hidden_states, overrideH=H_hidden_states)
 
         hidden_states, attn_weights, _ = self.self_attn(
             hidden_states=hidden_states,
@@ -118,7 +116,7 @@ class TtWhisperEncoderLayer(nn.Module):
 
         residual = hidden_states
 
-        H_hidden_states = hidden_states.shape()[-2]
+        H_hidden_states = 1500 #hidden_states.shape()[-2]
         hidden_states = self.final_layer_norm(hidden_states, overrideH=H_hidden_states)
 
         hidden_states = self.fc1(hidden_states)

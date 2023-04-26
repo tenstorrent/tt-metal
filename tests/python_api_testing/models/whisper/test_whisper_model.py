@@ -28,15 +28,10 @@ from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 def run_whisper_model(device):
-    model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
-    configuration = model.config
+    pytorch_model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
+    configuration = pytorch_model.config
 
-    # Change config and re-initialize model
-    configuration.max_source_positions = 1024
-
-    pytorch_model = WhisperModel(configuration)
     pytorch_model.eval()
-
     state_dict = pytorch_model.state_dict()
 
     """
@@ -60,20 +55,11 @@ def run_whisper_model(device):
         ```
     """
 
-    # Define inputs
-    create_synthetic_inputs = False
-
-    if create_synthetic_inputs:
-        batch = 1
-        feature_size = 80
-        seq_len = 2048 # original from HF example should be: seq_len = 3000, when max_source_positions=1500
-        input_features = torch.rand((batch, feature_size, seq_len))
-    else:
-        feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-tiny")
-        ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-        inputs = feature_extractor(ds[0]["audio"]["array"], return_tensors="pt")
-        # original from HF example should be: seq_len = 3000, when max_source_positions=1500
-        input_features = inputs.input_features[:,:,:2048]
+    feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-tiny")
+    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    inputs = feature_extractor(ds[0]["audio"]["array"], return_tensors="pt")
+    # original from HF example should be: seq_len = 3000, when max_source_positions=1500
+    input_features = inputs.input_features
 
     dec_seq_len = 32
     decoder_input_ids = torch.tensor([[1,] * dec_seq_len]) * pytorch_model.config.decoder_start_token_id
@@ -84,7 +70,8 @@ def run_whisper_model(device):
             decoder_input_ids=decoder_input_ids
         )
 
-    print("****** TTM WhisperModel ******")
+    logger.info("Running tt whisper model")
+
     tt_whisper = TtWhisperModel(
         state_dict=state_dict,
         device=device,
@@ -120,3 +107,6 @@ def test_WhipserModel_inference():
     ttm.device.InitializeDevice(device)
     run_whisper_model(device=device)
     ttm.device.CloseDevice(device)
+
+if __name__ == "__main__":
+    test_WhipserModel_inference()

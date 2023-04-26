@@ -15,7 +15,7 @@ import numpy as np
 import random
 from typing import Optional, Tuple, Union
 
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
 
 from libs import tt_lib as ttm
 
@@ -25,6 +25,7 @@ from fused_ops.softmax import softmax as Ttsoftmax
 class TtWhisperAttention(nn.Module):
     def __init__(
         self,
+        config,
         state_dict,
         base_address,
         device,
@@ -33,16 +34,21 @@ class TtWhisperAttention(nn.Module):
         dropout: float = 0.0,
         is_decoder: bool = False,
         bias: bool = True,
+        use_torch_softmax: bool = True,
     ):
         super().__init__()
 
         self.device = device
         self.state_dict = state_dict
 
+        self.use_torch_softmax = use_torch_softmax
+
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
+        self.config = config
+        self.base_address = base_address
 
         if (self.head_dim * num_heads) != self.embed_dim:
             raise ValueError(
@@ -76,7 +82,6 @@ class TtWhisperAttention(nn.Module):
         H dim equals to num_head, which is set to 6 in config for Whisper-Tiny
         """
         torch_out = tt2torch_tensor(tt_tensor)
-
         return torch_out.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
     def forward(
@@ -94,7 +99,7 @@ class TtWhisperAttention(nn.Module):
 
         is_cross_attention = key_value_states is not None
 
-        _, bsz, tgt_len, _, = hidden_states.shape() # [1, 32, 32, 384]
+        _, bsz, tgt_len, _, = hidden_states.shape()
 
         tt_q_proj_output = self.q_proj(hidden_states)
 
@@ -102,7 +107,7 @@ class TtWhisperAttention(nn.Module):
         torch_q_proj_mul_const = torch.full((q_proj_shape), self.scaling)
         q_proj_mul_const = torch2tt_tensor(torch_q_proj_mul_const, self.device)
 
-        query_states_t = ttm.tensor.mul(tt_q_proj_output, q_proj_mul_const) # [1, 16, 32, 384]
+        query_states_t = ttm.tensor.mul(tt_q_proj_output, q_proj_mul_const)
 
         # get key, value proj
         # `past_key_value[0].shape[2] == key_value_states.shape[1]`
@@ -124,6 +129,7 @@ class TtWhisperAttention(nn.Module):
             # cross_attentions
             key_states = self._shape(self.k_proj(key_value_states), -1, bsz)
             value_states = self._shape(self.v_proj(key_value_states), -1, bsz)
+            # torch.Size([1, 6, 1504, 64])
 
         elif past_key_value is not None:
             # reuse k, v, self_attention
@@ -142,14 +148,8 @@ class TtWhisperAttention(nn.Module):
             key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
             value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
 
-
         tt_key_states = torch2tt_tensor(key_states, self.device)
         tt_value_states = torch2tt_tensor(value_states, self.device)
-        # Shape is here [32, 6, 32, 64]
-        # print(tt_key_states.shape())
-        # print(tt_value_states.shape())
-        # But past_key_value is changed in the end because of reshape in lines 184-185....
-        # So shape is not correct!
 
         if self.is_decoder:
             # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
@@ -166,7 +166,6 @@ class TtWhisperAttention(nn.Module):
             past_key_value = (past_key_0, past_key_1)
 
         proj_shape = [1, bsz * self.num_heads, -1, self.head_dim]
-
         query_states = self._shape(query_states_t, tgt_len, bsz) # 4d
 
         # Conversion query_states to TTM Tensor
@@ -176,10 +175,6 @@ class TtWhisperAttention(nn.Module):
         tt_query_states = ttm.tensor.reshape(tt_query_states, *proj_shape)
         tt_key_states = ttm.tensor.reshape(tt_key_states, *proj_shape)
         tt_value_states = ttm.tensor.reshape(tt_value_states, *proj_shape)
-
-        # transpose Key states. Torch size was torch.Size([192, 32, 64]), TT size is then [1, 192, 32, 64]
-        # So transpose 1,2 in torch is here H,W transpose
-        # key_states_transposed = key_states.transpose(1, 2)
 
         key_states_transposed = ttm.tensor.transpose(tt_key_states)
 
@@ -210,9 +205,50 @@ class TtWhisperAttention(nn.Module):
             torch_attn_weights = torch_attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
             attn_weights = torch2tt_tensor(torch_attn_weights, self.device)
+            # print("Return from attention mask")
+            # return attn_weights # PCC = 1.0
 
-        # Apply TTM Softmax
-        attn_weights = Ttsoftmax(attn_weights)
+        if (not self.is_decoder) or (self.is_decoder and "encoder_attn" in self.base_address):
+            # Unpad and pad with high negative value
+            if self.use_torch_softmax:
+                pad_value = -torch.inf
+            else:
+                pad_value = -100000
+
+            input_tensors_shape = attn_weights.shape()
+            input_tensors_shape[-1] = 1500
+
+            if not "encoder_attn" in self.base_address: # encoder last hidden states [1, 1, 1500, 384]
+                input_tensors_shape[-2] = 1500
+
+            attn_weights = create_unpadded_tensor(attn_weights, input_tensors_shape)
+
+            output_tensor_shape = attn_weights.shape()
+            output_tensor_shape[-1] = 1504
+
+            if not "encoder_attn" in self.base_address:
+                output_tensor_shape[-2] = 1504
+
+            attn_weights = create_padded_tensor(attn_weights.shape(), attn_weights, output_tensor_shape, pad_value= pad_value, device=self.device)
+
+            if not self.use_torch_softmax:
+                # pad with -10^5
+                attn_weights = Ttsoftmax(attn_weights)
+
+            else:
+                # torch softmax
+                attn_weights = tt2torch_tensor(attn_weights)
+                attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+                attn_weights = torch2tt_tensor(attn_weights, self.device)
+
+        else:
+            #Case when padding is not used before softmax
+            if self.use_torch_softmax:
+                attn_weights = tt2torch_tensor(attn_weights)
+                attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+                attn_weights = torch2tt_tensor(attn_weights, self.device)
+            else:
+                attn_weights = Ttsoftmax(attn_weights)
 
         if layer_head_mask is not None:
             if layer_head_mask.size() != (self.num_heads,):
@@ -255,16 +291,15 @@ class TtWhisperAttention(nn.Module):
 
         attn_output = ttm.tensor.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
 
-        # Transposing whith these dims had to be done in Pytorch because not % 32
-        attn_output_p = tt2torch_tensor(attn_output)
-        attn_output_p = attn_output_p.transpose(1, 2)
+        # Transposing whith these dims had to be done in Pytorch
+        torch_attn_output = tt2torch_tensor(attn_output)
+        torch_attn_output = torch_attn_output.transpose(1, 2)
         # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
         # partitioned across GPUs when using tensor-parallelism.
-        attn_output_p = attn_output_p.reshape(1, bsz, tgt_len, self.embed_dim)
-        # Doesn't give expected result when above reshape is implemented in ttm when comapared to pytoch tensor implementation
-        # because input tesnor is of shape torch.Size([32, 32, 6, 64])
+        torch_attn_output = torch_attn_output.reshape(1, bsz, tgt_len, self.embed_dim)
+        attn_output = torch2tt_tensor(torch_attn_output, self.device)
 
-        attn_output = torch2tt_tensor(attn_output_p, self.device)
+        attn_output = ttm.tensor.reshape(attn_output, 1, bsz, tgt_len, self.embed_dim)
 
         attn_output = self.out_proj(attn_output)
 

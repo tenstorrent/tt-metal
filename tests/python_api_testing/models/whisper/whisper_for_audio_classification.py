@@ -18,7 +18,7 @@ from typing import Optional, Tuple, Union
 
 from transformers import  WhisperConfig
 
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
 from python_api_testing.models.whisper.whisper_encoder import TtWhisperEncoder
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 
@@ -61,6 +61,7 @@ class TtWhisperForAudioClassification(nn.Module):
 
         projector_weight = torch2tt_tensor(state_dict[f"projector.weight"], ttm.device.GetHost())
         projector_bias = torch2tt_tensor(state_dict[f"projector.bias"], ttm.device.GetHost())
+
         self.projector = TtLinear(in_features=config.hidden_size, out_features=config.classifier_proj_size, weight=projector_weight.data(), bias=projector_bias.data(), device=device)
 
         self.classifier = nn.Linear(config.classifier_proj_size, config.num_labels)
@@ -138,6 +139,7 @@ class TtWhisperForAudioClassification(nn.Module):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if encoder_outputs is None:
+
             encoder_outputs = self.encoder(
                 input_features,
                 head_mask=head_mask,
@@ -160,15 +162,36 @@ class TtWhisperForAudioClassification(nn.Module):
         else:
             hidden_states = encoder_outputs.last_hidden_state
 
-        print(hidden_states.shape())
-        hidden_states = self.projector(hidden_states)
-        print(hidden_states.shape())
+        """Add padding"""
+        add_padding = True
+        if add_padding:
 
-        # Back to torch
-        torch_hidden_states = tt2torch_tensor(hidden_states)
+            input_tensors_shape = list(hidden_states.shape())
+            # Pad inputs
+            output_tensor_shape = input_tensors_shape
+            output_tensor_shape[-2] = 1504
+            hidden_states = create_padded_tensor(input_tensors_shape, hidden_states, output_tensor_shape, pad_value=0, device=self.device)
+
+        # # return hidden_states
+        # print(hidden_states.shape())
+        # hidden_states = torch.Tensor(hidden_states.data()).reshape(hidden_states.shape())
+        """ Apply Linear layer"""
+        hidden_states = self.projector(hidden_states)
+
+        if add_padding:
+            """ Unpad """
+            input_tensors_shape = list(hidden_states.shape())
+            input_tensors_shape[-2] = 1500
+            hidden_states = create_unpadded_tensor(hidden_states, input_tensors_shape)
+            # Convert to Torch
+            torch_hidden_states = torch.Tensor(hidden_states.data()).reshape(hidden_states.shape())
+        else:
+            torch_hidden_states = tt2torch_tensor(hidden_states)
 
         torch_pooled_output = torch_hidden_states.mean(dim=-2)
         # If something changes these dimension -2 should always work
+
+        """ Apply classifier layer """
 
         logits = self.classifier(torch_pooled_output)
         loss = None

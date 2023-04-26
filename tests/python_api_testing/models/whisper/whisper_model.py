@@ -19,7 +19,7 @@ from typing import Optional, Tuple, Union
 from transformers import WhisperConfig
 
 from libs import tt_lib as ttm
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
 from python_api_testing.models.whisper.whisper_encoder import TtWhisperEncoder, TtWhisperEncoderOutput
 from python_api_testing.models.whisper.whisper_decoder import TtWhisperDecoder
 

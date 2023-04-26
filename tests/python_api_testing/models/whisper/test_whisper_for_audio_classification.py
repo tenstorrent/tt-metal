@@ -30,15 +30,9 @@ def run_whisper_for_audio_classification(device):
     feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
     model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
 
-    # change config
-    configuration = model.config
-    configuration.max_source_positions = 1024
-    print(configuration)
-
-    model = WhisperForAudioClassification(configuration)
-
     model.eval()
     state_dict = model.state_dict()
+    print(model.config)
 
     ds = load_dataset("google/fleurs", "all", split="validation", streaming=True)
     sample = next(iter(ds))
@@ -46,9 +40,11 @@ def run_whisper_for_audio_classification(device):
     inputs = feature_extractor(
         sample["audio"]["array"], sampling_rate=sample["audio"]["sampling_rate"], return_tensors="pt"
     )
-    # Take only 2048 features on last dim. 3000 not supported because of shape and encoder max_source_positions
+
     input_features = inputs.input_features
-    input_features = input_features[:,:,:2048]
+    print(f"Input of size {input_features.size()}") # 1, 80, 3000 [:2048]
+    print("Input audio language:")
+    print(sample["language"])
 
     with torch.no_grad():
         logits = model(input_features).logits
@@ -95,3 +91,6 @@ def test_WhipserForAudioClassification_inference():
     ttm.device.InitializeDevice(device)
     run_whisper_for_audio_classification(device=device)
     ttm.device.CloseDevice(device)
+
+if __name__=="__main__":
+    test_WhipserForAudioClassification_inference()

@@ -5,6 +5,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+from loguru import logger
 
 from libs import tt_lib as ttm
 from utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float, untilize
@@ -33,63 +34,37 @@ def tt2torch_tensor(tt_tensor):
     return py_output
 
 
-def ttm_to_torch_tensor(tt_tensor: ttm.tensor.Tensor) -> torch.Tensor:
-    host = ttm.device.GetHost()
+def create_padded_tensor(input_tensors_shape, input_tensor, output_tensor_shape, pad_value, device, input_tensor_start=[0,0,0,0]):
+    while len(input_tensors_shape) < 4:
+        input_tensors_shape.insert(0, 1)
 
-    # move TT Tensor output from TT accelerator device to host
-    # and then on host, change memory layout of TT Tensor to ROW_MAJOR
-    tt_output = tt_tensor.to(host).to(ttm.tensor.Layout.ROW_MAJOR)
+    if isinstance(input_tensor, ttm.tensor.Tensor):
+        torch_tensor = torch.Tensor(input_tensor.data()).reshape(input_tensor.shape())
+    else:
+        torch_tensor = input_tensor
 
-    # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
-    # and then reshape PyTorch tensor to shape of TT Tensor
-    py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
-
-    return py_output
-
-def torch_to_ttm_tensor(torch_tensor: torch.Tensor, shape:list, device: ttm.device.Device) -> ttm.tensor.Tensor:
-
-    tt_tensor = (
-        ttm.tensor.Tensor(
-            torch_tensor.reshape(-1).tolist(), # PyTorch tensor flatten into a list of floats
-            shape,                             # shape of TT Tensor that will be created
-            ttm.tensor.DataType.BFLOAT16,      # data type that will be used in created TT Tensor
-            ttm.tensor.Layout.ROW_MAJOR,       # memory layout that will be used in created TT Tensor
-        )
-        .to(ttm.tensor.Layout.TILE)            # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
-        .to(device)                            # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
+    # Create tensor on host
+    a = ttm.tensor.Tensor(
+        torch_tensor.reshape(-1).tolist(),
+        input_tensors_shape,
+        ttm.tensor.DataType.BFLOAT16,
+        ttm.tensor.Layout.ROW_MAJOR,
     )
-    return tt_tensor
+    logger.info(f"Padding tensor with value {pad_value}")
+    # Pad inputs on host
+    a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
+    #a_pt = torch.Tensor(a_pad.data()).reshape(*output_tensor_shape)
+    a_dev = a_pad.to(ttm.tensor.Layout.TILE).to(device)
 
-def np_compare_tensors(torch_tensor: torch.Tensor, ttm_tensor: ttm.tensor.Tensor, squeeze:bool = True, rtol:float=0.1, atol:float=0.1):
-    print("Torch tensor output size")
-    print(torch_tensor.size())
+    return a_dev
 
-    print("TT Metal tensor output size")
-    print(ttm_tensor.shape())
 
-    tt_out_to_torch = ttm_to_torch_tensor(ttm_tensor)
+def create_unpadded_tensor(ttm_tensor, input_tensors_shape, input_tensor_start=[0,0,0,0]):
+    output_tensor_start = input_tensor_start
+    output_tensor_end = tuple(
+        input_tensor_start[i] + input_tensors_shape[i] - 1
+        for i in range(len(input_tensors_shape))
+    )
+    ttm_tensor = ttm_tensor.to(ttm.device.GetHost()).to(ttm.tensor.Layout.ROW_MAJOR).unpad(output_tensor_start, output_tensor_end)
 
-    print("TT Metal to Torch size")
-    print(tt_out_to_torch.size())
-
-    if squeeze:
-        tt_out_to_torch = torch.squeeze(tt_out_to_torch, 0)
-        print("TT Metal to Torch tensor after torch.squeeze size")
-        print(tt_out_to_torch.size())
-
-    print("Torch sample data")
-    print(torch_tensor.detach().numpy()[0])
-    print("TTMetal sample data")
-    print(tt_out_to_torch.numpy()[0])
-
-    assert np.allclose(torch_tensor.detach().numpy(), tt_out_to_torch.numpy(), rtol, atol)
-
-def print_corr_coef(x: torch.Tensor, y: torch.Tensor):
-    x = torch.reshape(x, (-1, ))
-    y = torch.reshape(y, (-1, ))
-
-    input = torch.stack((x, y))
-
-    corrval = torch.corrcoef(input)
-    print(f"Corr coef:")
-    print(f"{corrval}")
+    return ttm_tensor

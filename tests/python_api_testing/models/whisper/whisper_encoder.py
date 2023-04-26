@@ -17,7 +17,7 @@ from typing import Optional, Tuple, Union
 from transformers import WhisperConfig
 from dataclasses import dataclass
 
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
 from python_api_testing.models.whisper.whisper_encoder_layer import TtWhisperEncoderLayer
 from python_api_testing.fused_ops.layernorm import Layernorm as TtLayernorm
 
@@ -64,7 +64,6 @@ class TtWhisperEncoder(nn.Module):
         self.max_source_positions = config.max_source_positions
 
         self.embed_scale = math.sqrt(embed_dim) if config.scale_embedding else 1.0
-
         # Init
         self.conv1 = nn.Conv1d(self.num_mel_bins, embed_dim, kernel_size=3, padding=1)
         self.conv1.weight = nn.Parameter(state_dict[f"{base_address}.conv1.weight"])
@@ -74,7 +73,6 @@ class TtWhisperEncoder(nn.Module):
         self.conv2.weight = nn.Parameter(state_dict[f"{base_address}.conv2.weight"])
         self.conv2.bias = nn.Parameter(state_dict[f"{base_address}.conv2.bias"])
 
-        # Changed max_source_positions = 1024 (initial whisper-tiny config is 1500)
         self.embed_positions = nn.Embedding(self.max_source_positions, embed_dim)
         self.embed_positions.weight = nn.Parameter(state_dict[f"{base_address}.embed_positions.weight"])
 
@@ -95,8 +93,8 @@ class TtWhisperEncoder(nn.Module):
         beta = torch2tt_tensor(self.state_dict[f"{base_address}.layer_norm.bias"], ttm.device.GetHost())
         tt_gamma = gamma.data()
         tt_beta = beta.data()
+        self.layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, 1, config.d_model, self.device, 1)
 
-        self.layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, config.d_model, config.d_model, self.device, 1)
         self.gradient_checkpointing = False
 
     def _freeze_parameters(self):
@@ -160,9 +158,17 @@ class TtWhisperEncoder(nn.Module):
         hidden_states = inputs_embeds + embed_pos
         """PyTorch implementation end"""
 
-        """TTM implementation"""
-        hidden_states = torch2tt_tensor(hidden_states, self.device)
+        # if self.config.architectures[0] == "WhisperForAudioClassification":
+        """Add padding"""
+        print(hidden_states.size())
+        output_tensor_shape = list(hidden_states.size())
+        while len(output_tensor_shape) < 4:
+            output_tensor_shape.insert(0,1)
+        output_tensor_shape[-2] = 1504
+        hidden_states = create_padded_tensor(list(hidden_states.size()), hidden_states, output_tensor_shape, pad_value=0.0, device=self.device)
+        print(hidden_states.shape())
 
+        """TTM implementation"""
         # Not suppporting dropout at moment
         #hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
@@ -202,6 +208,7 @@ class TtWhisperEncoder(nn.Module):
                         (head_mask[idx] if head_mask is not None else None),
                     )
                 else:
+
                     layer_outputs = encoder_layer(
                         hidden_states,
                         None,
@@ -214,8 +221,15 @@ class TtWhisperEncoder(nn.Module):
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
 
-        H_hidden_states = hidden_states.shape()[-2]
+        H_hidden_states = 1500 #hidden_states.shape()[-2]
         hidden_states = self.layer_norm(hidden_states, overrideH=H_hidden_states)
+
+        # if self.config.architectures[0] == "WhisperForAudioClassification":
+        """Unpad output tensor"""
+        input_tensors_shape = hidden_states.shape()
+        input_tensors_shape[-2] = 1500
+
+        hidden_states = create_unpadded_tensor(hidden_states, input_tensors_shape)
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)

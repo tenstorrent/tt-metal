@@ -18,7 +18,7 @@ from typing import Optional, Tuple, Union
 
 from transformers import WhisperConfig
 
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
 from python_api_testing.models.whisper.whisper_decoder_layer import TtWhisperDecoderLayer
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from python_api_testing.fused_ops.layernorm import Layernorm as TtLayernorm
@@ -102,13 +102,16 @@ class TtWhisperDecoder(nn.Module):
         state_dict,
         base_address,
         device,
-        config: WhisperConfig
+        config: WhisperConfig,
+        already_padded_inputs: bool = False
     ):
         super().__init__()
 
         self.config = config
         self.device = device
         self.state_dict = state_dict
+
+        self.already_padded_inputs = already_padded_inputs
 
         self.dropout = config.dropout
         self.layerdrop = config.decoder_layerdrop
@@ -134,7 +137,7 @@ class TtWhisperDecoder(nn.Module):
                 embed_dim = config.d_model,
                 num_heads = config.decoder_attention_heads,
                 decoder_ffn_dim = config.decoder_ffn_dim,
-                config = config,
+                config = self.config,
             )
             for ind in range(config.decoder_layers)
         ])
@@ -144,7 +147,7 @@ class TtWhisperDecoder(nn.Module):
         tt_gamma = gamma.data()
         tt_beta = beta.data()
 
-        self.layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, config.d_model, config.d_model, self.device, 1)
+        self.layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, 1, config.d_model, self.device, 1)
 
         self.gradient_checkpointing = False
 
@@ -267,7 +270,6 @@ class TtWhisperDecoder(nn.Module):
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        # past_key_values_length
         past_key_values_length = past_key_values[0][0].shape[-1] if past_key_values is not None else 0
 
         if inputs_embeds is None:
@@ -284,14 +286,22 @@ class TtWhisperDecoder(nn.Module):
             positions = self.embed_positions(inputs_embeds, past_key_values_length=past_key_values_length)
 
         hidden_states = inputs_embeds + positions
+
         """PyTorch implementation end"""
 
-
         """TTM implementation"""
+        if not self.already_padded_inputs:
+            # Add padding
+            output_tensor_shape = encoder_hidden_states.shape()
+            while len(output_tensor_shape) < 4:
+                output_tensor_shape.insert(0,1)
+            output_tensor_shape[-2] = 1504
+            encoder_hidden_states = create_padded_tensor(encoder_hidden_states.shape(), encoder_hidden_states, output_tensor_shape, pad_value=0.0, device=self.device)
+
         hidden_states = torch2tt_tensor(hidden_states, self.device)
         attention_mask = torch2tt_tensor(attention_mask, self.device)
 
-        # Dropout not supported for not
+        # TODO: Dropout not supported for not
         #hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         """TODO: Training not supported for now"""
@@ -376,7 +386,6 @@ class TtWhisperDecoder(nn.Module):
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                 )
-                # return layer_outputs
 
             hidden_states = layer_outputs[0]
 
