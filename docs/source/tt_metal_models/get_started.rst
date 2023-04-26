@@ -47,4 +47,5 @@ Next steps
 ----------
 
 We write the models with the Python Libraries we have for TT-Metal. Refer to
-the docs under *Libraries* for documentation.
+the docs under *Libraries* for documentation, such as the :ref:`Tensor
+API<Tensor>` or the :ref:`TT-DNN Library<TT-DNN>`.
