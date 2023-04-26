@@ -154,11 +154,12 @@ class PytorchBatchNorm1D(nn.Module):
 
 # run
 def run_btchnorm_forward(bn_size):
-    epsilon = 1e-5
+    epsilon = 1e-2
 
     inputs = torch.FloatTensor(2, bn_size).uniform_(-1., 1.).requires_grad_(True)
     # torch
     bn_torch = PytorchBatchNorm1D(bn_size)
+    bn_torch.half()
     bn_torch.train()
     # weight_bn = torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(True))
     # bias_bn =  torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(True))
@@ -222,7 +223,7 @@ def run_btchnorm_forward(bn_size):
     test_results, output = comp_allclose_and_pcc(output_bn_torch[0], output_bn_tt_untilized)
 
     print('\n\n', 'atol/rtol:', test_results, '| pcc:', output, '\n\n')
-
+    assert float(output[-18:]) > 0.99, f'pcc is lower than 0.99: {float(output[-18:])}'
 
 def test_batchnorm_inference():
     # Initialize the device
