@@ -33,9 +33,9 @@ void kernel_main() {
     // bank-swizzling configurations
     constexpr uint32_t num_used_dram_ch = 8;
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
-    constexpr bool tile_size_is_pow2 = (get_compile_time_arg_val(0) == 1);
+    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
     #if (tile_size_is_pow2)
-    const uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen s0 = {
         .bank_base_address = src0_addr,
         .num_used_banks = num_used_dram_ch,

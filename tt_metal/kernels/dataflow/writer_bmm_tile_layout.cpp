@@ -33,9 +33,9 @@ void kernel_main() {
     // single-tile
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
-    constexpr bool tile_size_is_pow2 = (get_compile_time_arg_val(0) == 1);
+    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
     #if (tile_size_is_pow2)
-    const uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen s = {
         .bank_base_address = out_tensor_addr,
         .num_used_banks = num_used_dram_ch,

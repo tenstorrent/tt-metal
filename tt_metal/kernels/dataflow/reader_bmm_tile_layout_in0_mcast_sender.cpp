@@ -72,9 +72,9 @@ void kernel_main() {
     // to receive the mcast
     volatile uint32_t* in0_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in0_mcast_sender_semaphore_addr);
 
-    constexpr bool tile_size_is_pow2 = (get_compile_time_arg_val(0) == 1);
+    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
     #if (tile_size_is_pow2)
-    const uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen s0 = {
         .bank_base_address = in0_tensor_addr,
         .num_used_banks = num_used_dram_ch,
