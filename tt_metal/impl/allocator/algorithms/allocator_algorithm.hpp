@@ -9,12 +9,12 @@ namespace tt_metal {
 
 namespace allocator {
 
-class Allocator {
+class Algorithm {
    public:
-    Allocator(uint32_t max_size_bytes, uint32_t min_allocation_size, uint32_t alignment)
+    Algorithm(uint32_t max_size_bytes, uint32_t min_allocation_size, uint32_t alignment)
         : max_size_bytes_(max_size_bytes), min_allocation_size_(min_allocation_size), alignment_(alignment) {}
 
-    virtual ~Allocator() {}
+    virtual ~Algorithm() {}
 
     uint32_t align(uint32_t address) {
         uint32_t factor = (address + alignment_ - 1) / alignment_;
@@ -27,7 +27,7 @@ class Allocator {
 
     virtual uint32_t allocate(uint32_t size_bytes) = 0;
 
-    virtual uint32_t reserve(uint32_t start_address, uint32_t size_bytes) = 0;
+    virtual uint32_t allocate(uint32_t start_address, uint32_t size_bytes) = 0;
 
     virtual void deallocate(uint32_t address) = 0;
 

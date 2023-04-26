@@ -82,8 +82,8 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
     TestEntry("tt_metal/tests/test_pipeline_across_rows", "test_pipeline_across_rows"),
 
-    # Mem manager Tests
-    TestEntry("tt_metal/tests/memory_manager/test_free_list_mem_manager", "memory_manager/test_free_list_mem_manager"),
+    # Allocator Tests
+    TestEntry("tt_metal/tests/allocator/test_free_list_allocator_algo", "allocator/test_free_list_allocator_algo"),
 
     # DTX Tests
     TestEntry("tt_metal/tests/dtx/tensor", "dtx/tensor"),

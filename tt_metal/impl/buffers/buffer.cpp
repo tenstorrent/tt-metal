@@ -11,7 +11,7 @@ DramBuffer::DramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes)
 }
 
 DramBuffer::DramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address) : dram_channel_(dram_channel), Buffer(device, size_in_bytes, address, true) {
-    device->reserve_dram_buffer(dram_channel, size_in_bytes, address);
+    device->allocate_dram_buffer(dram_channel, size_in_bytes, address);
 }
 
 Buffer *DramBuffer::clone() {
@@ -41,7 +41,7 @@ L1Buffer::L1Buffer(Device *device, const tt_xy_pair &logical_core, uint32_t size
 
 L1Buffer::L1Buffer(Device *device, const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address) : logical_core_(logical_core), Buffer(device, size_in_bytes, address, false) {
     // TODO (abhullar): Enable this when we have a spec for overlapping buffers in L1
-    //device->reserve_l1_buffer(logical_core, size_in_bytes, address);
+    //device->allocate_l1_buffer(logical_core, size_in_bytes, address);
     TT_ASSERT(address_ >= UNRESERVED_BASE, "First " + std::to_string(UNRESERVED_BASE) + " bytes in L1 are reserved");
     // This assertion is only added for L1 buffers because DRAM buffers and Interleaved DRAM buffers invoke mem manager
     // to reserve specific addresses which checks for aligned addresses.
@@ -57,7 +57,7 @@ tt_xy_pair L1Buffer::noc_coordinates() const {
 }
 
 void L1Buffer::reserve() {
-    auto address = this->device_->reserve_l1_buffer(this->logical_core_, this->size_in_bytes_, this->address_);
+    auto address = this->device_->allocate_l1_buffer(this->logical_core_, this->size_in_bytes_, this->address_);
     TT_ASSERT(address == this->address_);
 }
 

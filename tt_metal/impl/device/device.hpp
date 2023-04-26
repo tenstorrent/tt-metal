@@ -1,6 +1,8 @@
 #pragma once
 
-#include "tt_metal/impl/memory_manager/memory_manager.hpp"
+#include <memory>
+
+#include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "llrt/tt_cluster.hpp"
 
 namespace tt {
@@ -30,6 +32,13 @@ class Device {
 
     ~Device();
 
+    // TODO: Add copy/move semantics
+    Device(const Device &other) { }
+    Device& operator=(const Device &other) { return *this; }
+
+    Device(Device &&other) { }
+    Device& operator=(Device &&other) { return *this; }
+
     tt::ARCH arch() const { return arch_; }
 
     int pcie_slot() const { return pcie_slot_; }
@@ -48,15 +57,13 @@ class Device {
 
    private:
     bool cluster_is_initialized() const { return cluster_ != nullptr; }
-    bool is_initialized() const { return cluster_is_initialized() and not banked_dram_manager_.empty(); }
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     bool initialize();
     friend bool InitializeDevice(Device *device);
     void initialize_cluster();
-    void initialize_banked_dram_manager();
-    void initialize_l1_manager();
+    void initialize_allocator();
 
     // Puts device into reset
     bool close();
@@ -64,10 +71,10 @@ class Device {
 
     // Interfaces to memory manager
     uint32_t allocate_dram_buffer(int dram_channel, uint32_t size_in_bytes);
-    uint32_t reserve_dram_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
+    uint32_t allocate_dram_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
     void free_dram_buffer(int dram_channel, uint32_t address);
     uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes);
-    uint32_t reserve_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
+    uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
     void free_l1_buffer(const tt_xy_pair &logical_core, uint32_t address);
     uint32_t address_for_interleaved_dram_buffer(const std::map<int, uint32_t> &size_in_bytes_per_bank);
     uint32_t address_for_l1_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes);
@@ -89,8 +96,7 @@ class Device {
     tt::ARCH arch_;
     tt_cluster *cluster_;
     int pcie_slot_;
-    std::unordered_map<int, MemoryManager *> banked_dram_manager_;
-    std::unordered_map<tt_xy_pair, MemoryManager *> l1_manager_;
+    std::unique_ptr<Allocator> allocator_;
     bool closed_;
 };
 

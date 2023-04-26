@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tt_metal/impl/memory_manager/allocators/allocator.hpp"
+#include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 
 namespace tt {
 
@@ -8,7 +8,7 @@ namespace tt_metal {
 
 namespace allocator {
 
-class FreeList : public Allocator {
+class FreeList : public Algorithm {
    public:
     enum class SearchPolicy {
         BEST = 0,
@@ -25,7 +25,7 @@ class FreeList : public Allocator {
 
     uint32_t allocate(uint32_t size_bytes);
 
-    uint32_t reserve(uint32_t start_address, uint32_t size_bytes);
+    uint32_t allocate(uint32_t start_address, uint32_t size_bytes);
 
     void deallocate(uint32_t address);
 
