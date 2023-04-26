@@ -7,10 +7,25 @@ from utility_functions import pad_activation, pad_weight, tilize_to_list, untili
 
 
 def calculate_shape(input_tensor_shape):
-    s1 = input_tensor_shape[0]
-    s2 = input_tensor_shape[1]
-    s3 = input_tensor_shape[2]
-    s4 = input_tensor_shape[3]
+    print(len(input_tensor_shape))
+    print(input_tensor_shape)
+
+    if(len(input_tensor_shape)==4):
+        s1 = input_tensor_shape[0]
+        s2 = input_tensor_shape[1]
+        s3 = input_tensor_shape[2]
+        s4 = input_tensor_shape[3]
+    if(len(input_tensor_shape)==3):
+        s1 = 1
+        s2 = input_tensor_shape[0]
+        s3 = input_tensor_shape[1]
+        s4 = input_tensor_shape[2]
+    if(len(input_tensor_shape)==2):
+        s1 = 1
+        s2 = 1
+        s3 = input_tensor_shape[0]
+        s4 = input_tensor_shape[1]
+
 
     if(s3%32!=0):
         diff = s3%32
