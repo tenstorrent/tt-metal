@@ -52,7 +52,8 @@ tt_metal::Program * create_program(
     uint32_t num_block_cols_per_batch = (unfused_N / per_core_N);
     uint32_t num_output_blocks_per_batch = num_block_rows_per_batch * num_block_cols_per_batch;
     uint32_t num_output_blocks_total = (M / per_core_M) * (unfused_N / per_core_N);
-    std::vector<uint32_t> num_output_blocks_per_core(num_cores, num_output_blocks_total / num_cores);
+    uint32_t num_evenly_divided_output_blocks = num_output_blocks_total / num_cores;
+    std::vector<uint32_t> num_output_blocks_per_core(num_cores, num_evenly_divided_output_blocks);
     for(uint32_t i = 0; i < num_output_blocks_total % num_cores; i++){
         num_output_blocks_per_core[i]++;
     }
@@ -128,7 +129,7 @@ tt_metal::Program * create_program(
             core,
             reader_writer_compile_time_args,
             tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            num_output_blocks_per_core[i] > num_evenly_divided_output_blocks ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default);
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -136,7 +137,7 @@ tt_metal::Program * create_program(
             core,
             reader_writer_compile_time_args,
             tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            num_output_blocks_per_core[i] > num_evenly_divided_output_blocks ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default);
 
         vector<uint32_t> compute_kernel_args = {
             in0_block_w, // in0_block_w
