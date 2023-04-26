@@ -13,6 +13,7 @@ export PYTHONPATH=$TT_METAL_HOME
 
 env pytest tests/python_api_testing/models/bert/bert_encoder.py -k bert_encoder
 env pytest tests/python_api_testing/models/bert -k bert_question_and_answering
+env pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k bert_large
 
 env pytest tests/python_api_testing/models/t5 -k t5_dense_act_dense
 env pytest tests/python_api_testing/models/t5 -k t5_layer_norm
