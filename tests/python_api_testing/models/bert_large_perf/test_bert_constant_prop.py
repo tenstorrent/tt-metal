@@ -242,7 +242,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     # assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
-def test_bert_large_loop_the_model():
+def test_bert_large_constant_prop():
 
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
@@ -262,4 +262,4 @@ def test_bert_large_loop_the_model():
     profiler.print()
 
 if __name__ == "__main__":
-    test_bert_large_loop_the_model()
+    test_bert_large_constant_prop()
