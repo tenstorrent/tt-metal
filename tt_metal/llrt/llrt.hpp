@@ -205,7 +205,7 @@ void cleanup_risc_on_specified_core(
     tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const tt_xy_pair &core);
 
 void run_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<tt_xy_pair> &cores, const std::vector<uint32_t> &hugepage_done_addrs = vector<uint32_t>());
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<tt_xy_pair> &cores, const std::vector<uint32_t> &hugepage_done_addrs = vector<uint32_t>(), bool stagger_start = false);
 
 void dispatch(
     tt_cluster *cluster,

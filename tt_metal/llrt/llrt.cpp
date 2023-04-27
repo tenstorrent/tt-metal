@@ -499,7 +499,7 @@ void cleanup_risc_on_specified_core(
 }
 
 void run_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<tt_xy_pair> &cores, const std::vector<uint32_t> &hugepage_done_addrs) {
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<tt_xy_pair> &cores, const std::vector<uint32_t> &hugepage_done_addrs, bool stagger_start) {
 
     bool write_to_huge_page = hugepage_done_addrs.size() > 0;
     if (write_to_huge_page) {
@@ -510,7 +510,13 @@ void run_riscs_on_specified_cores(
 
     for (const tt_xy_pair &core_ : cores) {
         tt_cxy_pair core = tt_cxy_pair(chip_id, core_);
-        cluster->set_remote_tensix_risc_reset(core, TENSIX_DEASSERT_SOFT_RESET);
+        if (stagger_start){
+            cluster->set_remote_tensix_risc_reset(core, TENSIX_DEASSERT_SOFT_RESET);
+        }
+        else
+        {
+            cluster->set_remote_tensix_risc_reset(core, TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
+        }
     }
 
     if (write_to_huge_page) {

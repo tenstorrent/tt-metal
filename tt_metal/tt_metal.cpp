@@ -38,8 +38,12 @@ void DumpHostProfileResults(std::string name_prepend){
 }
 
 void DumpDeviceProfileResults(Device *device, Program *program) {
-    auto logical_cores_used_in_program = program->logical_cores();
-    tt_metal_profiler.dumpDeviceResults(device,logical_cores_used_in_program);
+    auto worker_cores_used_in_program =\
+        device->worker_cores_from_logical_cores(program->logical_cores());
+
+    auto cluster = device->cluster();
+    auto pcie_slot = device->pcie_slot();
+    tt_metal_profiler.dumpDeviceResults(cluster, pcie_slot, worker_cores_used_in_program);
 }
 
 void SetProfilerDir(std::string output_dir){

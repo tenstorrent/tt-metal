@@ -44,7 +44,7 @@ struct generate_binaries_params_t {
 
 void generate_binaries_all_riscs(
     tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string& out_dir_path, const std::string& arch_name,
-    generate_binaries_params_t params);
+    generate_binaries_params_t params, bool profile_kernel = false);
 
 inline void generate_binary_for_brisc(
     tt::build_kernel_for_riscv_options_t* topts,

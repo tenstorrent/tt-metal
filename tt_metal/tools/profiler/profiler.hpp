@@ -6,7 +6,6 @@
 #include <iostream>
 #include <filesystem>
 
-#include "tt_metal/impl/device/device.hpp"
 #include "llrt/llrt.hpp"
 
 using std::chrono::steady_clock;
@@ -54,8 +53,9 @@ class Profiler {
 
         // Helper function for reading risc profile results
         void readRiscProfilerResults(
-                tt::tt_metal::Device *device,
-                const tt_xy_pair &logical_core,
+                tt_cluster *cluster,
+                int pcie_slot,
+                const tt_xy_pair &worker_core,
                 std::string risc_name,
                 int risc_print_buffer_addr);
 
@@ -82,5 +82,5 @@ class Profiler {
         void dumpHostResults(std::string name_append);
 
         //Traverse all cores on the device and dump the device profile results
-        void dumpDeviceResults(tt::tt_metal::Device *device, const vector<tt_xy_pair> &logical_cores);
+        void dumpDeviceResults(tt_cluster *cluster, int pcie_slot, const vector<tt_xy_pair> &worker_cores);
 };

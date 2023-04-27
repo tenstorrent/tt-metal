@@ -864,23 +864,23 @@ void generate_math_approx_mode_descriptor(build_kernel_for_riscv_options_t* buil
 
 void generate_binaries_all_riscs(
     tt::build_kernel_for_riscv_options_t* opts, const std::string& out_dir_path, const std::string& arch_name,
-    generate_binaries_params_t p)
+    generate_binaries_params_t p, bool profile_kernel)
 {
     generate_descriptors(opts, out_dir_path);
 
     std::vector<std::thread> threads;
     std::function<void()> lambdas[] = {
-        [opts, out_dir_path, arch_name, p] () {
+        [opts, out_dir_path, arch_name, p, profile_kernel] () {
             generate_binaries_for_triscs(
-                opts, out_dir_path, arch_name, p.compute_kernel_compile_time_args);
+                opts, out_dir_path, arch_name, p.compute_kernel_compile_time_args, profile_kernel);
         },
-        [opts, out_dir_path, arch_name, p] () {
+        [opts, out_dir_path, arch_name, p, profile_kernel] () {
             generate_binary_for_ncrisc(
-                opts, out_dir_path, arch_name, p.nc_noc_index, p.nc_kernel_compile_time_args);
+                opts, out_dir_path, arch_name, p.nc_noc_index, p.nc_kernel_compile_time_args, profile_kernel);
         },
-        [opts, out_dir_path, arch_name, p] () {
+        [opts, out_dir_path, arch_name, p, profile_kernel] () {
             generate_binary_for_brisc(
-                opts, out_dir_path, arch_name, p.br_noc_index, p.br_kernel_compile_time_args);
+                opts, out_dir_path, arch_name, p.br_noc_index, p.br_kernel_compile_time_args, profile_kernel);
         },
     };
 

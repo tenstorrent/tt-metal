@@ -97,54 +97,58 @@ void Profiler::dumpHostResults(std::string name_prepend)
 }
 
 void Profiler::dumpDeviceResults (
-        tt::tt_metal::Device *device,
-        const vector<tt_xy_pair> &logical_cores){
+        tt_cluster *cluster,
+        int pcie_slot,
+        const vector<tt_xy_pair> &worker_cores){
 
-    for (const auto &logical_core : logical_cores) {
+    for (const auto &worker_core : worker_cores) {
         readRiscProfilerResults(
-            device,
-            logical_core,
+            cluster,
+            pcie_slot,
+            worker_core,
             "NCRISC",
             PRINT_BUFFER_NC);
         readRiscProfilerResults(
-            device,
-            logical_core,
+            cluster,
+            pcie_slot,
+            worker_core,
             "BRISC",
             PRINT_BUFFER_BR);
         readRiscProfilerResults(
-            device,
-            logical_core,
+            cluster,
+            pcie_slot,
+            worker_core,
             "TRISC_0",
             PRINT_BUFFER_T0);
-        readRiscProfilerResults(
-            device,
-            logical_core,
-            "TRISC_1",
-            PRINT_BUFFER_T1);
-        readRiscProfilerResults(
-            device,
-            logical_core,
-            "TRISC_2",
-            PRINT_BUFFER_T2);
+	readRiscProfilerResults(
+	    cluster,
+	    pcie_slot,
+	    worker_core,
+	    "TRISC_1",
+	    PRINT_BUFFER_T1);
+	readRiscProfilerResults(
+	    cluster,
+	    pcie_slot,
+	    worker_core,
+	    "TRISC_2",
+	    PRINT_BUFFER_T2);
     }
 }
 
 void Profiler::readRiscProfilerResults(
-        tt::tt_metal::Device *device,
-        const tt_xy_pair &logical_core,
+        tt_cluster *cluster,
+        int pcie_slot,
+        const tt_xy_pair &worker_core,
         std::string risc_name,
         int risc_print_buffer_addr){
-
-    auto pcie_slot = device->pcie_slot();
 
     vector<std::uint32_t> profile_buffer;
     uint32_t end_index;
     uint32_t dropped_marker_counter;
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
 
     profile_buffer = tt::llrt::read_hex_vec_from_core(
-            device->cluster(),
-            device->pcie_slot(),
+            cluster,
+            pcie_slot,
             worker_core,
             risc_print_buffer_addr,
             PRINT_BUFFER_SIZE);
@@ -156,11 +160,11 @@ void Profiler::readRiscProfilerResults(
     if(dropped_marker_counter > 0){
         log_debug(
                 tt::LogDevice,
-                "{} device markers on device {} core {},{} risc {} were dropped. End index {}",
+                "{} device markers on device {} worker core {},{} risc {} were dropped. End index {}",
                 dropped_marker_counter,
                 pcie_slot,
-                logical_core.x,
-                logical_core.y,
+                worker_core.x,
+                worker_core.y,
                 risc_name,
                 end_index);
     }

@@ -39,6 +39,9 @@ second, ConfigureDeviceWithProgram, 675598392545035, 675598625864988, 233319953
 ### Default Markers
 On the host side minimal changes are necessary on the code.
 
+
+#### TT_METAL
+
 1. The compile flag for device side profiling has to be set, this is done by setting the flag in `tt_metal::CompileProgram`.
 2. For each kernel launch through `tt_metal::LaunchKernels(device, program);`  that you want device side profiler markers dumped,
 A call to `tt_metal::DumpDeviceProfileResults(device, program);` has to be made to append the markers to
@@ -58,7 +61,37 @@ e.g.
     tt_metal::DumpDeviceProfileResults(device, program);
 ```
 
-After this setup, default markers will be generated and can be post-processed.
+#### llrt
+
+1. Under `tests/tt_metal/build_kernels_for_riscv`, for whichever test that you want to profile, enable kernel profiling
+through `generate_binaries_all_riscs`
+
+e.g.
+```
+    constexpr bool profiler_kernel = true;
+    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params, profiler_kernel);
+```
+
+2. Under `tests/tt_metal/llrt/`, for whichever test that you want to profile, instantiate a local `Profiler` object,
+and call `dumpDeviceResults` after you have finished running your kernels on the same cluster and cores.
+
+e.g.
+```
+    #include "tools/profiler/profiler.hpp"
+    static Profiler data_copy_profiler = Profiler();
+    .
+    .
+    .
+    .
+    pass &= run_data_copy_multi_tile(cluster, chip_id, core, 2048);
+
+    data_copy_profiler.dumpDeviceResults(cluster, chip_id, cores);
+
+```
+
+#### Markers
+
+After the setup, default markers will be generated and can be post-processed.
 
 Default markers are:
 
@@ -67,7 +100,7 @@ Default markers are:
 3. Kernel end
 4. FW end
 
-The generated csv is `profile_log_device.csv` is saved under `tt_metal/tools/profiler/logs` by default.
+The generated csv is `profile_log_device.csv` and it is saved under `tt_metal/tools/profiler/logs` by default.
 
 Sample generated csv for a run on core 0,0:
 
