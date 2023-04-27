@@ -13,7 +13,7 @@ from torchvision import transforms, datasets
 import libs
 
 from libs import tt_lib as ttl
-from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc, tt2torch, torch2tt_tensor
+from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc, comp_pcc
 from libs.tt_lib.utils import pad_activation, pad_weight
 
 def create_global_variables():
@@ -72,7 +72,10 @@ def tt_batch_norm(x, gamma, beta, running_mean, running_var, eps:float, momentum
         momentum_padded = pad_activation(momentum_torch)
         momentum_tilized = tilize_to_list(momentum_padded)
         momentum_tt = ttl.tensor.Tensor(momentum_tilized, [1, 1, H, W], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
-        ones_tt = ttl.tensor.fill_ones_rm(1, 1, H, W, 1, W, momentum_tt)
+        ones_torch = torch.tensor([[[bn_size*[1.0]]]])
+        ones_padded = pad_activation(ones_torch)
+        ones_tilized = tilize_to_list(ones_padded)
+        ones_tt = ttl.tensor.Tensor(ones_tilized, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
         running_mean_left = ttl.tensor.mul(ttl.tensor.sub(ones_tt, momentum_tt), running_mean)
         mean_reshaped = mean.view(1, 1, 32, 32)
@@ -112,7 +115,10 @@ class ttBatchNorm:
             zeros_padded = pad_activation(zeros_torch)
             zeros_tilized = tilize_to_list(zeros_padded)
             zeros_tt = ttl.tensor.Tensor(zeros_tilized, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
-            ones_tt = ttl.tensor.fill_ones_rm(1, 1, 32, bn_size, 1, bn_size, zeros_tt)
+            ones_torch = torch.tensor([[[bn_size*[1.0]]]])
+            ones_padded = pad_activation(ones_torch)
+            ones_tilized = tilize_to_list(ones_padded)
+            ones_tt = ttl.tensor.Tensor(ones_tilized, [1, 1, 32, bn_size], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
             self.gamma = ones_tt
             self.beta = zeros_tt
@@ -154,12 +160,11 @@ class PytorchBatchNorm1D(nn.Module):
 
 # run
 def run_btchnorm_forward(bn_size):
-    epsilon = 1e-2
+    epsilon = 1e-5
 
     inputs = torch.FloatTensor(2, bn_size).uniform_(-1., 1.).requires_grad_(True)
     # torch
     bn_torch = PytorchBatchNorm1D(bn_size)
-    bn_torch.half()
     bn_torch.train()
     # weight_bn = torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(True))
     # bias_bn =  torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1., 1.).requires_grad_(True))
@@ -223,11 +228,13 @@ def run_btchnorm_forward(bn_size):
     test_results, output = comp_allclose_and_pcc(output_bn_torch[0], output_bn_tt_untilized)
 
     print('\n\n', 'atol/rtol:', test_results, '| pcc:', output, '\n\n')
-    assert float(output[-18:]) > 0.99, f'pcc is lower than 0.99: {float(output[-18:])}'
+
+    pcc = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
+    assert float(pcc[1][5:]) > 0.99, f'pcc is lower than 0.99: {float(pcc[1][5:])}'
+
 
 def test_batchnorm_inference():
     # Initialize the device
-    #device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     create_global_variables()
     ttl.device.InitializeDevice(device)
     run_btchnorm_forward(32)
