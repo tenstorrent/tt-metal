@@ -297,10 +297,16 @@ class Profiler():
 
         self.times[key].append(diff)
 
+    def get(self, key):
+        if key not in self.times:
+            return 0
+
+        return sum(self.times[key]) / len(self.times[key])
+
     def print(self):
 
-        for key, values in self.times.items():
-            average = sum(values) / len(values)
+        for key in self.times:
+            average = self.get(key)
             print(f"{key}: {average:.3f}s")
 
 

@@ -214,7 +214,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     assert processing_of_input_time < 1.5
     assert execution_of_bert_time < 65.0
-    assert processing_output_to_string < 0.1
+    assert processing_output_to_string_time < 0.1
 
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
     # start_logit_match = (abs(tt_start_logits - pytorch_start_logits) < 0.1).all().item()

@@ -1,4 +1,3 @@
-from abc import abstractmethod
 import pytest
 from loguru import logger
 import torch
@@ -11,19 +10,16 @@ sys.path.append(f"{f}/../../../..")
 
 import time
 from libs import tt_lib as ttl
-from python_api_testing.models.bert_large_perf.embeddings import PytorchEmbeddings
-from python_api_testing.models.bert_large_perf.mha import TtMultiHeadAttentionModel
-from python_api_testing.models.bert_large_perf.ffn import TtFeedForwardModel
-from python_api_testing.models.bert_large_perf.bert_encoder import TtBertEncoder
-from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
-from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled, comp_allclose_and_pcc, comp_pcc, comp_allclose
+from python_api_testing.models.bert.embeddings import PytorchEmbeddings
+from python_api_testing.models.bert.bert_encoder import TtBertEncoder
+from python_api_testing.models.bert.fused_ops.linear import Linear
+from libs.tt_lib.utils import pad_activation, pad_weight
+from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled, comp_pcc, comp_allclose
 from utility_functions import profiler
 from utility_functions import disable_binary_cache, disable_compile_cache
 
 
-class TtBertShared(torch.nn.Module):
-    @abstractmethod
+class TtBertForQuestionAnswering(torch.nn.Module):
     def __init__(self, config, hugging_face_reference_model, device):
         super().__init__()
 
@@ -38,44 +34,6 @@ class TtBertShared(torch.nn.Module):
         self.encoders = torch.nn.ModuleList([TtBertEncoder(config, encoder_idx, state_dict, device) for encoder_idx in range(config.num_hidden_layers)])
         self.device = device
 
-    @abstractmethod
-    def forward(self, input_ids, attention_mask=None, token_type_ids=None):
-        embeddings = self.embeddings(input_ids, token_type_ids)
-        if attention_mask is not None:
-            extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
-            extended_attention_mask = torch.clamp(extended_attention_mask, -100000) # Limit neg value that goes into exp
-            extended_attention_mask = pad_activation(extended_attention_mask)
-            tt_attention_mask = ttl.tensor.Tensor(extended_attention_mask.reshape(-1).tolist(), extended_attention_mask.shape, ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
-            tt_attention_mask = tt_attention_mask.to(self.device)
-        else:
-            tt_attention_mask = attention_mask
-        # Convert to ll buda tensor
-        profiler.start("calc_embeddings")
-        pad_embeddings = pad_activation(embeddings)
-        tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
-        tt_embeddings = tt_embeddings.to(self.device)
-        hidden_states = tt_embeddings
-        profiler.end("calc_embeddings")
-
-        print(f"Num encoders {len(self.encoders)}")
-
-        profiler.start("run_encoders")
-        for encoder in self.encoders:
-            profiler.start("_one_encoder")
-            hidden_states = encoder(hidden_states, tt_attention_mask)
-            profiler.end("_one_encoder")
-        profiler.end("run_encoders")
-
-        return hidden_states
-
-class TtBertForQuestionAnswering(TtBertShared):
-    def __init__(self, config, hugging_face_reference_model, device):
-        super().__init__(config, hugging_face_reference_model, device)
-
-        # NOTE: Once we make embeddings run on device, pass in state dict
-        # instead of model itself
-        state_dict = hugging_face_reference_model.state_dict()
-
         num_classes, hidden_size = state_dict["qa_outputs.weight"].shape
 
         weight = pad_weight(state_dict["qa_outputs.weight"])
@@ -87,13 +45,37 @@ class TtBertForQuestionAnswering(TtBertShared):
         self.qa_linear = Linear(hidden_size, 32, weight, bias, device)
 
     def forward(self, input_ids, attention_mask=None, token_type_ids=None):
-        encoder_output = super().forward(input_ids, attention_mask, token_type_ids)
+        embeddings = self.embeddings(input_ids, token_type_ids)
+        if attention_mask is not None:
+            extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
+            extended_attention_mask = torch.clamp(extended_attention_mask, -100000) # Limit neg value that goes into exp
+            extended_attention_mask = pad_activation(extended_attention_mask)
+            tt_attention_mask = ttl.tensor.Tensor(extended_attention_mask.reshape(-1).tolist(), extended_attention_mask.shape, ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+            tt_attention_mask = tt_attention_mask.to(self.device)
+        else:
+            tt_attention_mask = attention_mask
+        # Convert to ll buda tensor
+        profiler.start("_calc_embeddings")
+        pad_embeddings = pad_activation(embeddings)
+        tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+        tt_embeddings = tt_embeddings.to(self.device)
+        hidden_states = tt_embeddings
+        profiler.end("_calc_embeddings")
 
-        profiler.start("qa_linear")
-        res = self.qa_linear(encoder_output)
-        profiler.end("qa_linear")
+        print(f"Num encoders {len(self.encoders)}")
 
-        return res
+        profiler.start("_run_encoders")
+        for encoder in self.encoders:
+            profiler.start("__one_encoder")
+            hidden_states = encoder(hidden_states, tt_attention_mask)
+            profiler.end("__one_encoder")
+        profiler.end("_run_encoders")
+
+        profiler.start("_qa_linear")
+        hidden_states = self.qa_linear(hidden_states)
+        profiler.end("_qa_linear")
+
+        return hidden_states
 
 
 def model_location_generator_(rel_path):
@@ -106,9 +88,7 @@ def model_location_generator_(rel_path):
         return Path("/opt/tt-metal-models") / rel_path
 
 
-PERF_CNT = 5
-
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
 
     torch.manual_seed(1234)
 
@@ -127,10 +107,9 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     hugging_face_reference_model.eval()
     tt_bert_model = TtBertForQuestionAnswering(hugging_face_reference_model.config, hugging_face_reference_model, device)
 
-    processing_of_input_start = time.time()
+    profiler.start("processing_of_input")
 
     if real_input:
-        print("-------------------> real_input <------------------")
         tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
         context = batch * ["Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."]
         question = batch * ["What discipline did Winkelmann create?"]
@@ -164,7 +143,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
             bert_input = torch.stack(oneseq)
             bert_input = bert_input.reshape(batch, seq_len)
 
-    processing_of_input_end = time.time()
+    profiler.end("processing_of_input")
 
     # tt_bert_input = ttl.tensor.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
     pytorch_out = hugging_face_reference_model(**bert_input)
@@ -174,13 +153,10 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     tt_out = tt_bert_model(**bert_input).to(host)
     tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
 
-    print(f"Enable profiler")
+    print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
-
     enable_binary_cache()
     enable_compile_cache()
-
-    execution_of_bert_start = time.time()
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
@@ -188,12 +164,13 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         print(f"Running BERT model for perf measurement {i}")
 
         profiler.start("whole_model")
-        tt_out = tt_bert_model(**bert_input).to(host)
+        tt_out = tt_bert_model(**bert_input)
         profiler.end("whole_model")
 
-        tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
+    profiler.start("processing_output_to_string")
 
-    execution_of_bert_end = time.time()
+    tt_out = tt_out.to(host)
+    tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
     ttl.device.CloseDevice(device)
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
@@ -238,11 +215,10 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         logger.info(f"PT: {pt_answer}")
         logger.info(f"PL: {pl_answer}")
 
-    processing_output_to_string_end = time.time()
+    profiler.end("processing_output_to_string")
 
-    print(f"processing_of_input: {(processing_of_input_end - processing_of_input_start):.2f}s")
-    print(f"execution_of_bert: {((execution_of_bert_end - execution_of_bert_start)/PERF_CNT):.2f}s PERF_CNT {PERF_CNT}")
-    print(f"processing_output_to_string: {(processing_output_to_string_end - execution_of_bert_end):.2f}s")
+    processing_time = profiler.get("whole_model")
+    assert processing_time < 61.0
 
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
     # start_logit_match = (abs(tt_start_logits - pytorch_start_logits) < 0.1).all().item()
@@ -261,7 +237,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     # assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
-def profile_bert_question_and_answering_inference():
+def test_bert_large_loop_the_model():
 
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
@@ -272,12 +248,13 @@ def profile_bert_question_and_answering_inference():
     token_type_ids = True
     pcc = 0.98
     model_location_generator = model_location_generator_
+    PERF_CNT = 5
 
     disable_binary_cache()
     disable_compile_cache()
 
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator)
+    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)
     profiler.print()
 
 if __name__ == "__main__":
-    profile_bert_question_and_answering_inference()
+    test_bert_large_loop_the_model()
