@@ -47,10 +47,11 @@ class TtBloomBlock(torch.nn.Module):
 
         self.self_attention = bloom_attention.TtBloomAttention(device, dict_name, num, hugging_bloom_reference_model, self.hidden_size, self.num_heads, hidden_dropout, beta)
 
-        tt_beta_2 = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.post_attention_layernorm.bias", state_dict)
-        tt_gamma_2 = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.post_attention_layernorm.weight", state_dict)
+        tt_beta_2 = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.post_attention_layernorm.bias", state_dict)
 
-        self.post_attention_layernorm = TtLayernorm(tt_gamma, tt_beta, layer_norm_epsilon, self.hidden_size, self.hidden_size, device, 1)
+        tt_gamma_2 = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.post_attention_layernorm.weight", state_dict)
+
+        self.post_attention_layernorm = TtLayernorm(tt_gamma_2, tt_beta_2, layer_norm_epsilon, self.hidden_size, self.hidden_size, device, 1)
 
         self.mlp = bloom_mlp.TtBloomMLP(device, dict_name, num, hugging_bloom_reference_model, self.hidden_dropout, self.hidden_size, False)
 

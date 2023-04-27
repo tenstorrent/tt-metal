@@ -104,11 +104,11 @@ class BloomAttention(torch.nn.Module):
         self.dense = torch.nn.Linear(self.hidden_size, self.hidden_size)
         self.attention_dropout = torch.nn.Dropout(self.hidden_dropout)
 
-        #self.query_key_value.weight = weight_q
-        #self.query_key_value.bias = bias_q
+        self.query_key_value.weight = weight_q
+        self.query_key_value.bias = bias_q
 
-        #self.dense.weight = weight_d
-        #self.dense.bias = bias_d
+        self.dense.weight = weight_d
+        self.dense.bias = bias_d
 
         self.pretraining_tp = False
         self.slow_but_exact = False

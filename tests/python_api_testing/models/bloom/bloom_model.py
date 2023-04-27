@@ -117,7 +117,7 @@ class TtBloomModel():
         word_embeddings_layernorm_bias = bloom_utils.tt_load_layer_weights("transformer.word_embeddings_layernorm.bias", state_dict)
         word_embeddings_layernorm_weight = bloom_utils.tt_load_layer_weights("transformer.word_embeddings_layernorm.weight", state_dict)
 
-        self.word_embeddings_layernorm = TtLayernorm(word_embeddings_layernorm_bias, word_embeddings_layernorm_weight, layer_norm_epsilon, hidden_size, hidden_size, device, 1)
+        self.word_embeddings_layernorm = TtLayernorm(word_embeddings_layernorm_weight, word_embeddings_layernorm_bias, layer_norm_epsilon, hidden_size, hidden_size, device, 1)
 
         # Transformer blocks
         self.h = torch.nn.ModuleList([
@@ -130,7 +130,7 @@ class TtBloomModel():
 
         # Final Layer Norm
 
-        self.ln_f = TtLayernorm(ln_f_bias, ln_f_weight, layer_norm_epsilon, hidden_size, hidden_size, device, 1)
+        self.ln_f = TtLayernorm(ln_f_weight, ln_f_bias, layer_norm_epsilon, hidden_size, hidden_size, device, 1)
 
 
         # Initialize weights and apply final processing
@@ -280,8 +280,8 @@ class BloomModel():
 
         self.word_embeddings_layernorm = torch.nn.LayerNorm(embed_dim, eps=layer_norm_epsilon)
 
-        #self.word_embeddings_layernorm.bias=bloom_utils.pt_load_layer_weights("transformer.word_embeddings_layernorm.bias", state_dict)
-        #self.word_embeddings_layernorm.weight = bloom_utils.pt_load_layer_weights("transformer.word_embeddings_layernorm.weight", state_dict)
+        self.word_embeddings_layernorm.bias=bloom_utils.pt_load_layer_weights("transformer.word_embeddings_layernorm.bias", state_dict)
+        self.word_embeddings_layernorm.weight = bloom_utils.pt_load_layer_weights("transformer.word_embeddings_layernorm.weight", state_dict)
 
         # Transformer blocks
         self.h = torch.nn.ModuleList([
@@ -292,8 +292,8 @@ class BloomModel():
         # Final Layer Norm
         self.ln_f = torch.nn.LayerNorm(embed_dim, eps=layer_norm_epsilon)
 
-        #self.ln_f.bias = bloom_utils.pt_load_layer_weights("transformer.ln_f.bias", state_dict)
-        #self.ln_f.weight = bloom_utils.pt_load_layer_weights("transformer.ln_f.weight", state_dict)
+        self.ln_f.bias = bloom_utils.pt_load_layer_weights("transformer.ln_f.bias", state_dict)
+        self.ln_f.weight = bloom_utils.pt_load_layer_weights("transformer.ln_f.weight", state_dict)
 
         # Initialize weights and apply final processing
 

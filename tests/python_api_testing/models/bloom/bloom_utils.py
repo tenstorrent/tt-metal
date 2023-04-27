@@ -7,9 +7,6 @@ from utility_functions import pad_activation, pad_weight, tilize_to_list, untili
 
 
 def calculate_shape(input_tensor_shape):
-    print(len(input_tensor_shape))
-    print(input_tensor_shape)
-
     if(len(input_tensor_shape)==4):
         s1 = input_tensor_shape[0]
         s2 = input_tensor_shape[1]
@@ -103,12 +100,10 @@ def tt_const_tensor(value, shape, device):
 
 
 def tt_load_layer_weights(layer_name, state_dict):
-    print(torch.tensor(state_dict[layer_name]).shape)
     weights = tilize_to_list(pad_weight(state_dict[layer_name]))
     return weights
 
 def pt_load_layer_weights(layer_name, state_dict):
-    print(torch.tensor(state_dict[layer_name]).shape)
     weights = torch.nn.Parameter(torch.tensor(state_dict[layer_name]))
     return weights
 
