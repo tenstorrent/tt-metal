@@ -1,21 +1,13 @@
 from typing import Optional, Callable, List, Any, Tuple, Union
-import torch
-import torch.nn as nn
-from torch import Tensor
-
 import math
 from functools import partial
-
-
-######## stochastic depth
 
 import torch
 import torch.fx
 from torch import nn, Tensor
 
 
-
-
+######## stochastic depth
 def stochastic_depth(input: Tensor, p: float, mode: str, training: bool = True) -> Tensor:
     """
     Implements the Stochastic Depth from `"Deep Networks with Stochastic Depth"

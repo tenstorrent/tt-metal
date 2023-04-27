@@ -1,4 +1,3 @@
-
 from pathlib import Path
 import sys
 f = f"{Path(__file__).parent}"
@@ -10,10 +9,9 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 from torchvision import models
-
 from loguru import logger
-from libs import tt_lib as ttl
 
+from libs import tt_lib as ttl
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 from vgg import *
 
@@ -21,7 +19,8 @@ from vgg import *
 _batch_size = 16
 
 
-def test_vgg16_inference(model_location_generator):
+def test_vgg16_inference(imagenet_sample_input):
+    image = imagenet_sample_input
     batch_size = _batch_size
     with torch.no_grad():
         # Initialize the device
@@ -37,15 +36,12 @@ def test_vgg16_inference(model_location_generator):
 
         tt_vgg = vgg16(device, host, state_dict)
 
-        root = model_location_generator("pytorch_weka_data/imagenet/dataset/ILSVRC/Data/CLS-LOC")
-        dataloader = prep_ImageNet(root, batch_size = batch_size)
-        for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
-            torch_output = torch_vgg(images).unsqueeze(1).unsqueeze(1)
-            tt_output = tt_vgg(images)
 
-            passing = comp_pcc(torch_output, tt_output)
+        torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)
+        tt_output = tt_vgg(image)
 
-            assert passing[0], passing[1:]
+        passing = comp_pcc(torch_output, tt_output)
 
-            break
+        assert passing[0], passing[1:]
+
     logger.info(f"vgg16 PASSED {passing[1]}")

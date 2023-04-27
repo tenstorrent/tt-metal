@@ -15,9 +15,9 @@ from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 import collections
 
-
 import torch
 from torch import nn, Tensor
+
 from misc import FusedMBConvConfig, MBConvConfig, _MBConvConfig, Conv2dNormActivation
 from misc import assign_linear_weights, assign_conv_weight, assign_batchnorm_weight
 
@@ -135,8 +135,6 @@ class EfficientNet(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return self._forward_impl(x)
-
-
 
 
 def _efficientnet_conf(

@@ -14,12 +14,10 @@ import torchvision
 from torchvision import models
 import torchvision.transforms as transforms
 from utils import *
-from tqdm import tqdm
 
 from libs import tt_lib as ttl
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from libs.tt_lib.utils import pad_weight
-from resnet.imagenet import prep_ImageNet
 from typing import List, Union, Optional, Dict, cast
 
 num_classes = 1000

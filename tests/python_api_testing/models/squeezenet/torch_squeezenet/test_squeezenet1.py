@@ -7,6 +7,7 @@ sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
+sys.path.append(f"{f}/../../../../..")
 
 import torch
 from torchvision import models
@@ -14,7 +15,6 @@ import pytest
 from loguru import logger
 from libs import tt_lib as ttl
 from tqdm import tqdm
-from imagenet import prep_ImageNet
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 from squeezenet import squeezenet1_0
 
@@ -22,7 +22,8 @@ from squeezenet import squeezenet1_0
 _batch_size = 1
 
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
-def test_squeezenet1_inference(fuse_ops):
+def test_squeezenet1_inference(fuse_ops, imagenet_sample_input):
+    image = imagenet_sample_input
     batch_size = _batch_size
     with torch.no_grad():
 
@@ -34,7 +35,7 @@ def test_squeezenet1_inference(fuse_ops):
 
         tt_squeezenet = squeezenet1_0(state_dict)
         tt_squeezenet.eval()
-        print(tt_squeezenet)
+
         if fuse_ops:
             modules_to_fuse = [['features.0', 'features.1'], ['classifier.1', 'classifier.2']]
             fire_indices = [3, 4, 5, 7, 8, 9, 10, 12]
@@ -46,15 +47,13 @@ def test_squeezenet1_inference(fuse_ops):
             modules_to_fuse.extend(fire_3)
 
             tt_squeezenet = torch.ao.quantization.fuse_modules(tt_squeezenet, modules_to_fuse)
-        print(tt_squeezenet)
-        dataloader = prep_ImageNet(batch_size = batch_size)
-        for i, (images, targets, _, _, _) in enumerate(tqdm(dataloader)):
-            torch_output = torch_squeezenet(images).unsqueeze(1).unsqueeze(1)
-            tt_output = tt_squeezenet(images)
 
-            passing = comp_pcc(torch_output, tt_output)
 
-            assert passing[0], passing[1:]
+        torch_output = torch_squeezenet(image).unsqueeze(1).unsqueeze(1)
+        tt_output = tt_squeezenet(image)
 
-            break
+        passing = comp_pcc(torch_output, tt_output)
+
+        assert passing[0], passing[1:]
+
     logger.info(f"vgg16 PASSED {passing[1]}")

@@ -1,5 +1,5 @@
-import torch.nn as nn
 from typing import Optional, Union, Tuple
+import torch.nn as nn
 
 from basicconv import BasicConv2d
 

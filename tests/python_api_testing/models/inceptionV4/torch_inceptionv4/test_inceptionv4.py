@@ -9,14 +9,14 @@ sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
 import torch
+from torchvision import models, transforms
+import timm
 import pytest
 from loguru import logger
-from torchvision import models, transforms
 
 from utility_functions import comp_allclose_and_pcc, comp_pcc
 from libs import tt_lib as ttl
 from inception import InceptionV4
-import timm
 
 
 _batch_size = 1
@@ -44,14 +44,3 @@ def test_inception_inference(fuse_ops, imagenet_sample_input):
         assert passing[0], passing[1:]
 
     logger.info(f"PASSED {passing[1]}")
-
-
-def imagenet_sample_input():
-    from PIL import Image
-    im = Image.open("/mnt/MLPerf/tt_dnn-models/samples/ILSVRC2012_val_00048736.JPEG")
-    im = im.resize((224, 224))
-    from torchvision import transforms
-    return transforms.ToTensor()(im).unsqueeze(0)
-
-
-test_inception_inference(False, imagenet_sample_input())

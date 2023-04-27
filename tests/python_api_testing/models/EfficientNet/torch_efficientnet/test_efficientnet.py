@@ -13,12 +13,10 @@ import pytest
 from loguru import logger
 from torchvision import models, transforms
 
-
 from utility_functions import comp_allclose_and_pcc, comp_pcc
 from libs import tt_lib as ttl
 
 from efficientnet import efficientnet_v2_s
-
 
 
 _batch_size = 1

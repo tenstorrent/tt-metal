@@ -100,11 +100,9 @@ def _squeezenet(version: str, state_dict, ) -> SqueezeNet:
 
 # weights: SqueezeNet1_0_Weights.IMAGENET1K_V1
 def squeezenet1_0(state_dict) -> SqueezeNet:
-
     return _squeezenet("1_0", state_dict=state_dict)
 
 
 # weights:  SqueezeNet1_1_Weights.IMAGENET1K_V1
 def squeezenet1_1(state_dict) -> SqueezeNet:
-
     return _squeezenet("1_1", state_dict=state_dict)
