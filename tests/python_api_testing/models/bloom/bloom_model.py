@@ -102,9 +102,9 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
 
 
 
-class TtBloomModel():
+class TtBloomModel(torch.nn.Module):
     def __init__(self, device, hugging_bloom_reference_model, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers):
-        #super().__init__()
+        super().__init__()
 
         self.embed_dim = hidden_size
         self.num_heads = n_head
@@ -264,10 +264,10 @@ class TtBloomModel():
 
 
 
-class BloomModel():
+class BloomModel(torch.nn.Module):
 
     def __init__(self, hugging_bloom_reference_model, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers):
-        #super().__init__()
+        super().__init__()
 
         self.embed_dim = hidden_size
         self.num_heads = n_head

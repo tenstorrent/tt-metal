@@ -19,7 +19,8 @@ import python_api_testing.models.bloom.baddbmm
 import python_api_testing.models.bloom.bloom_attention as bloom_attention
 import python_api_testing.models.bloom.bloom_mlp as bloom_mlp
 import python_api_testing.models.bloom.bloom_block as bloom_block
-import python_api_testing.model.bloom.pt_bloom_model as pt_bloom_model
+
+import python_api_testing.models.bloom.bloom_model as bloom_model
 
 from fused_ops.linear import Linear as TtLinear
 
@@ -30,17 +31,19 @@ from transformers import BloomForCausalLM
 
 from typing import Optional, Tuple, Union
 
-class BloomForCausalLM():
+class PtBloomForCausalLM():
 
-    def __init__(self, hugging_bloom_reference_model, hidden_size, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers)
+    def __init__(self, hugging_bloom_reference_model, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers):
 
-        state_dict = hugging_bloom_reference_model
+        state_dict = hugging_bloom_reference_model.state_dict()
 
-        self.transformer = bloom_model.(hugging_bloom_reference_model, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers)
+        self.use_return_dict = False
 
-        lm_head_weight = bloom_utils.pt_load_layer_weights("trasnsormer.lm_head.weight", state_dict)
+        self.transformer = bloom_model.BloomModel(hugging_bloom_reference_model, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers)
 
-        self.lm_head = nn.Linear(hidden_size, cvocab_size, bias=False)
+        lm_head_weight = bloom_utils.pt_load_layer_weights("lm_head.weight", state_dict)
+
+        self.lm_head = torch.nn.Linear(hidden_size, vocab_size, bias=False)
         self.lm_head.weight = lm_head_weight
 
     def get_output_embeddings(self):
@@ -93,7 +96,7 @@ class BloomForCausalLM():
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         **deprecated_arguments,
-    ) -> Union[Tuple[torch.Tensor], CausalLMOutputWithCrossAttentions]:
+    ):
         r"""
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for language modeling. Note that the labels **are shifted** inside the model, i.e. you can set
@@ -110,7 +113,7 @@ class BloomForCausalLM():
         if len(deprecated_arguments) > 0:
             raise ValueError(f"Got unexpected arguments: {deprecated_arguments}")
 
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = return_dict if return_dict is not None else self.use_return_dict
 
         transformer_outputs = self.transformer(
             input_ids,
@@ -178,27 +181,12 @@ class BloomForCausalLM():
         return self._convert_to_bloom_cache(reordered_past)
 
 
-@add_start_docstrings(
-    """
-    The Bloom Model transformer with a sequence classification head on top (linear layer).
-    [`BloomForSequenceClassification`] uses the last token in order to do the classification, as other causal models
-    (e.g. GPT-1) do.
-    Since it does classification on the last token, it requires to know the position of the last token. If a
-    `pad_token_id` is defined in the configuration, it finds the last token that is not a padding token in each row. If
-    no `pad_token_id` is defined, it simply takes the last value in each row of the batch. Since it cannot guess the
-    padding tokens when `inputs_embeds` are passed instead of `input_ids`, it does the same (take the last value in
-    each row of the batch).
-    """,
-    BLOOM_START_DOCSTRING,
-)
-
-
 def run_bloom_causal_lm_inference(device):
-
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
+
     print(hugging_bloom_reference_model.state_dict())
-    tt_bloom_model = TtBloomModel(device, hugging_bloom_reference_model, 1024, 32,  250880, 1024, 1e-5, 2)
-    pt_bloom_model = BloomModel(hugging_bloom_reference_model, 1024, 32,  250880, 1024, 1e-5, 2)
+    #tt_bloom_model = TtBloomModel(device, hugging_bloom_reference_model, 1024, 32,  250880, 1024, 1e-5, 2)
+    pt_bloom_causal_lm = PtBloomForCausalLM(hugging_bloom_reference_model, 1024, 32,  250880, 1024, 1e-5, 2)
 
 
     # Prepare input
@@ -206,18 +194,18 @@ def run_bloom_causal_lm_inference(device):
 
     input_ids = torch.randint(0, 100, (64, 2048))
 
-    pt_out = pt_bloom_model.forward(input_ids)
+    pt_out = pt_bloom_causal_lm.forward(input_ids)
 
-    print(pt_out[0])
+    #print(pt_out[0])
     print("PT finished")
 
-    tt_out = tt_bloom_model.forward(device, input_ids)
+    #tt_out = tt_bloom_model.forward(device, input_ids)
 
-    print("TT finished")
+    #print("TT finished")
 
-    print(tt_out)
+    #print(tt_out)
 
-    print(comp_allclose(pt_out[0], tt_out[0]))
+    #print(comp_allclose(pt_out[0], tt_out[0]))
     #print(comp_pcc(pt_out, tt_out_converted))
 
 if __name__ == "__main__":
