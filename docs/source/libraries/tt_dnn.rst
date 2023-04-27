@@ -67,6 +67,8 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.transpose_hc_rm
 
+.. autofunction:: tt_lib.tensor.transpose_cn
+
 .. autofunction:: tt_lib.tensor.tilize
 
 .. autofunction:: tt_lib.tensor.untilize

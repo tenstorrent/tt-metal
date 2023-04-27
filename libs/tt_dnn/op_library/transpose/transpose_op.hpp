@@ -7,8 +7,8 @@ namespace tt {
 namespace tt_metal {
 
 struct TransposeOpDim {
-    enum Enum { WH = 0, HC = 1 };
-    static const vector<Enum> all() { return { WH, HC }; }
+    enum Enum { WH = 0, HC = 1, CN = 2 };
+    static const vector<Enum> all() { return { WH, HC, CN }; }
 };
 
 struct TransposeOpParallelizationStrategy {
@@ -21,6 +21,7 @@ Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim=TransposeO
 inline Tensor transpose(const Tensor &a) { return transpose_(a, TransposeOpDim::WH); }
 inline Tensor transpose_wh(const Tensor &a) { return transpose_(a, TransposeOpDim::WH); }
 inline Tensor transpose_hc(const Tensor &a) { return transpose_(a, TransposeOpDim::HC); }
+inline Tensor transpose_cn(const Tensor &a) { return transpose_(a, TransposeOpDim::CN); }
 
 Tensor transpose_single_core(const Tensor &a, TransposeOpDim::Enum transpose_dim);
 Tensor transpose_wh_multi_core(const Tensor &a);

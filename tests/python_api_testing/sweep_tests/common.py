@@ -73,6 +73,7 @@ TT_DNN_TESTS = [
     # Transpose
     "transpose-wh",
     "transpose-hc",
+    "transpose-cn",
 ]
 
 

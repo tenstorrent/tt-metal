@@ -140,6 +140,10 @@ op_map = {
         "ttlib_op": ttlib_ops.transpose_hc,
         "pytorch_op": partial(pytorch_ops.transpose, dim0=-3, dim1=-2),
     },
+    "transpose-cn": {
+        "ttlib_op": ttlib_ops.transpose_cn,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=1),
+    },
     ################################################
     #################### Tensor ####################
     ################################################

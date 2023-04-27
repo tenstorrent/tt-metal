@@ -759,6 +759,15 @@ void TensorModule(py::module &m_tensor) {
         | a        | Input tensor         | Tensor    |             | Yes      |
         +----------+----------------------+-----------+-------------+----------+
     )doc");
+    m_tensor.def("transpose_cn", &transpose_cn, R"doc(
+        Transposes a given tensor's C and N dimensions.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
     m_tensor.def("tilize", &tilize, R"doc(
         Tilizes a given tensor across memory on device.
 
