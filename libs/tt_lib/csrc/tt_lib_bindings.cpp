@@ -1,3 +1,5 @@
+#include "dtx/dtx.hpp"
+#include "dtx/dtx_passes.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/conv/conv_op.hpp"
@@ -14,7 +16,6 @@
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
-
 #include "tensor/tensor_utils.hpp"
 
 #include "tt_lib_bindings.hpp"
@@ -613,32 +614,18 @@ void TensorModule(py::module &m_tensor) {
         | untilize_out | Whether or not to untilize the output (useful if a consuming op requires row major layout) | bool      |             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
-    m_tensor.def("conv_as_large_bmm_single_core_single_block", &conv_as_large_bmm_single_core_single_block, R"doc(
-        Perform a batched matmul ``A x B`` with two tensors, where batch dims match.
-        This op also supports tilizing tensor A and untilizing the output if you so choose.
-
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | Argument     | Description                                                                                | Data type | Valid range | Required |
-        +==============+============================================================================================+===========+=============+==========+
-        | a            | LHS matmul operand                                                                         | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | b            | RHS matmul operand                                                                         | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | untilize_out | Whether or not to untilize the output (useful if a consuming op requires row major layout) | bool      |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | use_single_bank_reader | Whether or not to use single bank reader kernel. Useful for debugging.           | bool      |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    )doc");
-    m_tensor.def("conv_as_large_bmm_single_core", &conv_as_large_bmm_single_core, R"doc(
+    m_tensor.def("conv", &conv, R"doc(
         Perform a batched matmul ``A x B`` with two tensors, where batch dims match.
         This op tilizes tensor A and untilizes the output
 
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
         | Argument     | Description                                                                                | Data type | Valid range | Required |
         +==============+============================================================================================+===========+=============+==========+
-        | a            | LHS matmul operand                                                                         | Tensor    |             | Yes      |
+        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | b            | RHS matmul operand                                                                         | Tensor    |             | Yes      |
+        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
     m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul, R"doc(
@@ -659,6 +646,8 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("bert_large_post_softmax_bmm", &bert_large_post_softmax_bmm, R"doc(
         Perform a bert_large_post_softmax_bmm batched matmul ``A x B`` with two tensors.
     )doc");
+    m_tensor.def("conv_fits_on_single_core", &conv_fits_on_single_core);
+    m_tensor.def("compute_conv_op_block_info", &compute_conv_op_block_info);
     // broadcast math
     m_tensor.def("bcast", &bcast, R"doc(
         Perform a broadcasted binary math operation between two tensors.
@@ -914,6 +903,41 @@ void DeviceModule(py::module &m_device) {
     )doc");
 }
 
+void DTXModule(py::module &m_dtx) {
+    auto pyDataTransformations = py::class_<DataTransformations>(m_dtx, "DataTransformations", "Class describing the data transformations.");
+    m_dtx.def("evaluate", [](vector<float> data, DataTransformations * dtx){
+        return evaluate(data, dtx);
+    }, R"doc(
+        Evaluates data transformation on host cpu.
+        +------------------+----------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                 | Data type            | Valid range | Required |
+        +==================+=============================+======================+=============+==========+
+        | data             | Input data to transform     | vector of floats     |             | Yes      |
+        | DataTransformations* | List of data transformations |  Pointer to dtx object |      | Yes      |
+        +------------------+-----------------------------+----------------------+-------------+----------+
+    )doc");
+    m_dtx.def("generate_address_map", [](DataTransformations * dtx){
+        return generate_address_map(dtx);
+    }, R"doc(
+        Generates address map.
+        +------------------+----------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                 | Data type            | Valid range | Required |
+        +==================+=============================+======================+=============+==========+
+        | DataTransformations*             | Data transform object    |     |             | Yes      |
+        +------------------+-----------------------------+----------------------+-------------+----------+
+    )doc");
+    m_dtx.def("conv_transform", [](vector<int> shape, vector<int> conv_params, std::pair<vector<int>,vector<int>> block_info){
+        return conv_transform(shape, conv_params, block_info);
+    }, R"doc(
+        Evaluates data transformation on host cpu.
+        +------------------+----------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                 | Data type            | Valid range | Required |
+        +==================+=============================+======================+=============+==========+
+        | data             | Input data to transform     | vector of floats     |             | Yes      |
+        +------------------+-----------------------------+----------------------+-------------+----------+
+    )doc");
+}
+
 } // end namespace tt_metal
 
 } // end namespace tt
@@ -929,4 +953,7 @@ PYBIND11_MODULE(_C, m) {
 
     py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an tt_metal tensor");
     tt::tt_metal::TensorModule(m_tensor);
+
+    py::module_ m_dtx = m.def_submodule("dtx", "Submodule defining data transformation engine");
+    tt::tt_metal::DTXModule(m_dtx);
 }

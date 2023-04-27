@@ -239,7 +239,7 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
 
     return passing, output
 
-def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
+def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, tt_layout=ttl.tensor.Layout.TILE, tt_memory_config=ttl.tensor.MemoryConfig(True, -1)):
     size = list(py_tensor.size())
 
     while len(size) < 4:
@@ -250,7 +250,7 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
         size,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE).to(tt_device)
+    ).to(tt_layout).to(tt_device, tt_memory_config)
 
     return tt_tensor
 

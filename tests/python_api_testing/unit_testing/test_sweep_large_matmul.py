@@ -42,7 +42,7 @@ def run_large_matmul(Ha, Wa, Wb):
         ttl.tensor.Layout.TILE,
         device)
 
-    out = ttl.tensor.large_bmm(tta, ttb)
+    out = ttl.tensor.large_bmm(tta, ttb, True, True)
     out_shape = [1,1,Ha,Wb]
     out_pytorch = torch.tensor(out.to(host).data()).reshape(out_shape)
     ttl.device.CloseDevice(device)

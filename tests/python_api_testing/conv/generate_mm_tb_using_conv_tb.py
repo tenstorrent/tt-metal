@@ -16,7 +16,8 @@ def generate_mm_tb_using_conv_tb():
     mm_tb_list = []
     conv_test_bench = generate_conv_tb()
 
-    for ctp in conv_test_bench:
+    for ctp_ in conv_test_bench:
+        ctp = ctp_.conv_params
         conv_out_h = ((int) ((ctp.act_shape[2] - ctp.weight_shape[2] + 2 * ctp.pad_h) / ctp.stride_h)) + 1
         conv_out_w = ((int) ((ctp.act_shape[3] - ctp.weight_shape[3] + 2 * ctp.pad_w) / ctp.stride_w)) + 1
         M = conv_out_h * conv_out_w

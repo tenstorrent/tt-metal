@@ -168,15 +168,145 @@ Tensor bmm_single_core(const Tensor& a, const Tensor& b) {
     return matmul_single_core_(a, b, false);
 }
 
-
-void create_CBs_for_fused_matmul(tt_metal::Program* program,
+void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program* program,
                                 tt_metal::Device* device,
                                 tt_xy_pair core,
                                 uint32_t M,
                                 uint32_t N,
                                 uint32_t in0_block_w,
                                 uint32_t out_subblock_h,
-                                uint32_t num_bytes_for_df) {
+                                uint32_t num_bytes_for_df,
+                                bool tilize_act,
+                                bool untilize_out) {
+    uint32_t in0_cb                                   = 0;
+    uint32_t in1_cb                                   = 1;
+    uint32_t tilize_mode_tilized_in0_cb               = 24;
+    uint32_t matmul_partials_cb                       = 25;
+    uint32_t untilize_mode_final_matmul_partials_cb   = 26;
+    uint32_t untilize_mode_reblock_cb                 = 27;
+    uint32_t out0_cb                                  = 16;
+
+    uint32_t single_tile_size = num_bytes_for_df * 1024;
+
+    uint32_t num_output_tiles = M * N;
+
+    // Invariants
+    uint32_t cb0_tiles = M * in0_block_w * 2;
+    auto cb_in0 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        in0_cb,
+        core,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        tt::DataFormat::Float16_b
+    );
+
+    uint32_t cb1_tiles = N * in0_block_w * 2;
+    auto cb_in1 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        in1_cb,
+        core,
+        cb1_tiles,
+        cb1_tiles * single_tile_size,
+        tt::DataFormat::Float16_b
+    );
+    if(tilize_act) {
+        // Used for placing tilized activations
+        auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            tilize_mode_tilized_in0_cb,
+            core,
+            cb0_tiles,
+            cb0_tiles * single_tile_size,
+            tt::DataFormat::Float16_b
+        );
+    }
+    if(untilize_out) {
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            matmul_partials_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            tt::DataFormat::Float16_b
+        );
+
+        // Shares same address space as matmul partials
+        auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            untilize_mode_final_matmul_partials_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            tt::DataFormat::Float16_b
+        );
+
+        // Supposed to be a small CB only responsible for reorganizing
+        // the output blocks to fill the whole "per core output block width"
+        uint32_t reblock_cb_tiles = N; // Only space for one row
+        auto cb_reblock = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            untilize_mode_reblock_cb,
+            core,
+            reblock_cb_tiles,
+            reblock_cb_tiles * single_tile_size,
+            tt::DataFormat::Float16_b
+        );
+
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            out0_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            tt::DataFormat::Float16_b
+        );
+    }
+    else {
+
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            matmul_partials_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            tt::DataFormat::Float16_b
+        );
+
+        auto cb_matmul_partials_addr = cb_matmul_partials->address();
+
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            out0_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            cb_matmul_partials_addr,
+            tt::DataFormat::Float16_b
+        );
+
+    }
+}
+
+void create_CBs_for_fused_matmul_old_alloc(tt_metal::Program* program,
+                                tt_metal::Device* device,
+                                tt_xy_pair core,
+                                uint32_t M,
+                                uint32_t N,
+                                uint32_t in0_block_w,
+                                uint32_t out_subblock_h,
+                                uint32_t num_bytes_for_df,
+                                bool activations_rm,
+                                bool output_rm) {
 
     uint32_t in0_cb                                   = 0;
     uint32_t in1_cb                                   = 1;
@@ -218,79 +348,202 @@ void create_CBs_for_fused_matmul(tt_metal::Program* program,
     );
 
 
-    // Used for placing tilized activations
-    uint32_t tilized_cb_addr = 320 * 1024;
-    auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
-        program,
-        device,
-        tilize_mode_tilized_in0_cb,
-        core,
-        cb0_tiles,
-        cb0_tiles * single_tile_size,
-        tilized_cb_addr,
-        tt::DataFormat::Float16_b
-    );
+    if (not activations_rm and not output_rm) { // no tilize, no untilize
+        uint32_t matmul_partials_addr = 440 * 1024;
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            matmul_partials_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            matmul_partials_addr,
+            tt::DataFormat::Float16_b
+        );
 
-    uint32_t cb_matmul_partials_addr = 440 * 1024;
-    auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
-        program,
-        device,
-        matmul_partials_cb,
-        core,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
-        cb_matmul_partials_addr,
-        tt::DataFormat::Float16_b
-    );
+        // Partials share same L1 address space as output
+        uint32_t output_cb_addr = matmul_partials_addr;
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            out0_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
 
-    // Shares same address space as matmul partials
-    uint32_t temp_addr = 560 * 1024;
-    auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
-        program,
-        device,
-        untilize_mode_final_matmul_partials_cb,
-        core,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
-        temp_addr,
-        tt::DataFormat::Float16_b
-    );
+    } else if (not activations_rm and output_rm) { // no tilize, just untilize
 
-    // Supposed to be a small CB only responsible for reorganizing
-    // the output blocks to fill the whole "per core output block width"
-    uint32_t reblock_cb_addr = 680 * 1024;
-    uint32_t reblock_cb_tiles = N; // Only space for one row. Based on in1 cb space - N <= 25 tiles
-    auto cb_reblock = tt_metal::CreateCircularBuffer(
-        program,
-        device,
-        untilize_mode_reblock_cb,
-        core,
-        reblock_cb_tiles,
-        reblock_cb_tiles * single_tile_size,
-        reblock_cb_addr,
-        tt::DataFormat::Float16_b
-    );
+        uint32_t matmul_partials_addr = 440 * 1024;
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            matmul_partials_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            matmul_partials_addr,
+            tt::DataFormat::Float16_b
+        );
 
-    uint32_t output_cb_addr = 730 * 1024;
-    auto cb_output = tt_metal::CreateCircularBuffer(
-        program,
-        device,
-        out0_cb,
-        core,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
-        output_cb_addr,
-        tt::DataFormat::Float16_b
-    );
 
+        // Need a new CB to push output block to since other
+        // intermediate read pointer changes in enable reload
+        // block
+        uint32_t temp_addr = 560 * 1024;
+        auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            untilize_mode_final_matmul_partials_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            temp_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        // Supposed to be a small CB only responsible for reorganizing
+        // the output blocks to fill the whole "per core output block width"
+        uint32_t reblock_cb_addr = 680 * 1024;
+        uint32_t reblock_cb_tiles = N; // Only space for one row
+        auto cb_reblock = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            untilize_mode_reblock_cb,
+            core,
+            reblock_cb_tiles,
+            reblock_cb_tiles * single_tile_size,
+            reblock_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t output_cb_addr = 750 * 1024;
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            out0_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+
+    } else if (activations_rm and not output_rm) { // just tilize, no untilize
+
+        uint32_t tilized_cb_addr = 320 * 1024;
+        auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            tilize_mode_tilized_in0_cb,
+            core,
+            cb0_tiles,
+            cb0_tiles * single_tile_size,
+            tilized_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t matmul_partials_addr = 440 * 1024;
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            matmul_partials_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            matmul_partials_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t output_cb_addr = matmul_partials_addr;
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            out0_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+    } else { // tilize activations and untilize output
+
+        // Used for placing tilized activations
+        uint32_t tilized_cb_addr = 320 * 1024;
+        auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            tilize_mode_tilized_in0_cb,
+            core,
+            cb0_tiles,
+            cb0_tiles * single_tile_size,
+            tilized_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t cb_matmul_partials_addr = 440 * 1024;
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            matmul_partials_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            cb_matmul_partials_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        // Shares same address space as matmul partials
+        uint32_t temp_addr = 560 * 1024;
+        auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            untilize_mode_final_matmul_partials_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            temp_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        // Supposed to be a small CB only responsible for reorganizing
+        // the output blocks to fill the whole "per core output block width"
+        uint32_t reblock_cb_addr = 680 * 1024;
+        uint32_t reblock_cb_tiles = N; // Only space for one row
+        auto cb_reblock = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            untilize_mode_reblock_cb,
+            core,
+            reblock_cb_tiles,
+            reblock_cb_tiles * single_tile_size,
+            reblock_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+
+        uint32_t output_cb_addr = 750 * 1024;
+        auto cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            out0_cb,
+            core,
+            num_output_tiles,
+            num_output_tiles * single_tile_size,
+            output_cb_addr,
+            tt::DataFormat::Float16_b
+        );
+    }
 }
-
-Tensor create_output_dram_buffer(Device * device, DataType data_type, uint32_t M, uint32_t N) {
+Tensor create_output_dram_buffer(Device * device, DataType data_type, uint32_t M, uint32_t N, bool untilize_out) {
     std::array<uint32_t, 4> cshape{1, 1, M, N};
     tt_metal::Tensor output = tt_metal::Tensor(
         cshape,
         data_type,
-        tt::tt_metal::Layout::ROW_MAJOR,
+        untilize_out ? tt::tt_metal::Layout::ROW_MAJOR : tt::tt_metal::Layout::TILE,
         device);
 
     return output;
@@ -360,7 +613,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_block_info(uint32_t M, uint32_t
 
 // TODO(whoever gets a chance!): Refactor this so it's a part of matmul_single_core_... keeping it
 // independent for now as it's easier for me to progress
-Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b) {
+Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_act, bool untilize_out) {
 
     const auto [Ba, Ca, Ha, Wa] = a.shape();
     const auto [Bb, Cb, Hb, Wb] = b.shape();
@@ -394,7 +647,7 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b) {
 
     tt_metal::Device *device = a.device();
 
-    Tensor output = create_output_dram_buffer(a.device(), a.dtype(), Ha, Wb);
+    Tensor output = create_output_dram_buffer(a.device(), a.dtype(), Ha, Wb, untilize_out);
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -481,7 +734,9 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b) {
 
 
         {
-            create_CBs_for_fused_matmul(
+        bool old_alloc = false;
+        if(old_alloc) {
+            create_CBs_for_fused_matmul_old_alloc(
                 program,
                 a.device(),
                 core,
@@ -489,38 +744,102 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b) {
                 Wbt,
                 in0_block_w,
                 out_subblock_h,
-                2); // TODO(agrebenisan): fix df num bytes
-
-            string writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp";
-            vector<uint32_t> writer_rt_args = {
-                out_dram_addr,
-                Ha,
-                out_row_size
-            };
-
-            string reader_kernel = "tt_metal/kernels/dataflow/reader_matmul_row_major_activations_tile_layout_weights.cpp";
-            vector<uint32_t> reader_rt_args = {
-                in0_dram_addr,
-                0,
-
-                in0_block_h,
-                in0_block_num_tiles,
-
-                in0_row_size,
-                in0_partial_row_size,
-
-                in1_dram_addr,
-                0,
-                1,
+                2,
+                tilize_act,
+                untilize_out); // TODO(agrebenisan): fix df num bytes
+        }
+        else {
+            create_CBs_for_fused_matmul_new_alloc(
+                program,
+                a.device(),
+                core,
+                Hat,
                 Wbt,
-                in0_block_w * Wbt,
+                in0_block_w,
+                out_subblock_h,
+                2,
+                tilize_act,
+                untilize_out); // TODO(agrebenisan): fix df num bytes
+        }
+            string writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp";
+            vector<uint32_t> writer_rt_args;
+            if (untilize_out) {
+                writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp";
+                writer_rt_args = {
+                    out_dram_addr,
+                    Ha,
+                    out_row_size
+                };
+            } else {
+                writer_kernel = "tt_metal/kernels/dataflow/writer_matmul_tile_layout.cpp";
+                writer_rt_args = {
+                    out_dram_addr,
+                    0,
+                    1,
+                    Wbt,
+                    out_subblock_w,
+                    out_subblock_h * Wbt,
 
-                in1_block_w,
-                in1_block_h,
-                in1_block_num_tiles,
+                    out_subblock_w,
+                    out_subblock_h,
+                    out_subblock_w * out_subblock_h,
+                    Wbt / out_subblock_w,
+                    Hat / out_subblock_h
+                };
+            }
 
-                num_blocks
-            };
+            string reader_kernel;
+            vector<uint32_t> reader_rt_args;
+            if (tilize_act) {
+                reader_kernel = "tt_metal/kernels/dataflow/reader_matmul_row_major_activations_tile_layout_weights.cpp";
+                reader_rt_args = {
+                    in0_dram_addr,
+                    0,
+
+                    in0_block_h,
+                    in0_block_num_tiles,
+
+                    in0_row_size,
+                    in0_partial_row_size,
+
+                    in1_dram_addr,
+                    0,
+                    1,
+                    Wbt,
+                    in0_block_w * Wbt,
+
+                    in1_block_w,
+                    in1_block_h,
+                    in1_block_num_tiles,
+
+                    num_blocks
+                };
+            } else {
+                reader_kernel = "tt_metal/kernels/dataflow/reader_matmul_tile_layout.cpp";
+                reader_rt_args = {
+                    in0_dram_addr,
+                    0,
+                    1,
+                    Wat,
+                    in0_block_w,
+
+                    in0_block_w,
+                    in0_block_h,
+                    in0_block_num_tiles,
+
+                    in1_dram_addr,
+                    0,
+                    1,
+                    Wbt,
+                    in0_block_w * Wbt,
+
+                    in1_block_w,
+                    in1_block_h,
+                    in1_block_num_tiles,
+
+                    num_blocks
+                };
+            }
 
 
             auto reader = tt_metal::CreateDataMovementKernel(
@@ -550,8 +869,8 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b) {
                 out_subblock_w,
                 out_subblock_num_tiles,
 
-                true,
-                true
+                tilize_act,
+                untilize_out
             };
 
             tt_metal::ComputeKernelArgs *bmm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
@@ -589,9 +908,9 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b) {
     return output;
 }
 
-Tensor large_bmm_single_core(const Tensor& a, const Tensor &b) {
+Tensor large_bmm_single_core(const Tensor& a, const Tensor &b, bool tilize_act, bool untilize_out) {
 
-    Tensor output = large_bmm_single_core_(a, b);
+    Tensor output = large_bmm_single_core_(a, b, tilize_act, untilize_out);
     return output;
 }
 

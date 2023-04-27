@@ -76,6 +76,7 @@ bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<in
 
         vector<int> block_shape = vector_pad_on_left(block_shape_yx, rank-2, 1);
         if (DEBUG) cout << s(4) << "block shape      = " << v2s(block_shape) << endl;
+        if (DEBUG) cout << s(4) << "shape      = " << v2s(shape) << endl;
         vector<int> shape_blocked = vector_division(shape, block_shape);
         vector<vector<int>> list_of_counted_dims = dim_order_counting(shape_blocked,   dim_order, block_shape);
 
@@ -87,6 +88,7 @@ bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<in
 
         int block_size = block_shape[Y(rank)] * block_shape[X(rank)];
         int num_blocks = (shape[Y(rank)] / block_shape[Y(rank)]) * (shape[X(rank)] / block_shape[X(rank)]);
+        assert(list_of_counted_dims.size() == num_blocks);
         int consumer_shape_z = Z(rank) >= 0 ? shape[Z(rank)] * num_blocks : num_blocks;
         assert(consumer_shape_z == num_blocks); // TODO: generalize for z > 1
         consumer_group->shape = {consumer_shape_z, block_shape[Y(rank)], block_shape[X(rank)]};

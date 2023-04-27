@@ -71,7 +71,9 @@ def unpad_from_zero(x, desired_shape, host):
     if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2] :
         x = tt2torch_tensor(x)
     else:
-        x = x.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+        x = x.to(host)
+        if(x.layout() != ttl.tensor.Layout.ROW_MAJOR):
+            x = x.to(ttl.tensor.Layout.ROW_MAJOR)
         x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
         x = torch.Tensor(x.data()).reshape(x.shape())
     return x
@@ -94,3 +96,39 @@ def fold_bn_to_conv(conv: torch.nn.Conv2d, bn: torch.nn.BatchNorm2d) -> Tuple[nn
     bias = bias.squeeze(-1).squeeze(-1).squeeze(-1)
 
     return (nn.Parameter(weight), nn.Parameter(bias))
+
+def can_run_conv_on_device(act_shape, conv_params):
+    K, C, R, S, U, V, P_H, P_W = [conv_params[i] for i in range(8)]
+    [N,C,H,W] = act_shape
+    print("Conv with following parameters -")
+    print("K="+str(K)+" C="+str(C)+" H="+str(H)+" W="+str(W)+" R="+str(R)+" S="+str(S)+" U="+str(U)+" V="+str(V)+" PH="+str(P_H)+" PW="+str(P_W))
+    #if(H==14):
+    #    return False
+    assert (H - R + 2 * P_H) >= 1 and (W - S + 2 * P_W) >= 1
+    OH = ((int) ((H - R + 2 * P_H) / U)) + 1
+    OW = ((int) ((W - S + 2 * P_W) / V)) + 1
+    matrix_activation_h = (int) (nearest_32(OH*OW) / 32)
+    matrix_weight_w = (int) (nearest_32(K) / 32)
+    matrix_activation_w = (int) (nearest_32(C*R*S)/32)
+
+    (fits,report_string) = ttl.tensor.conv_fits_on_single_core(act_shape, [K,C,R,S], conv_params[2:])
+    if not fits:
+        print(report_string)
+        return False
+    return True
+def run_conv_on_tt_device(x: torch.Tensor, conv_on_tt, conv_params, device, host):
+    K, C, R, S, U, V, P_H, P_W = [conv_params[i] for i in range(8)]
+    [N,C,H,W] = x.shape
+    assert (H - R + 2 * P_H) >= 1 and (W - S + 2 * P_W) >= 1
+    OH = ((int) ((H - R + 2 * P_H) / U)) + 1
+    OW = ((int) ((W - S + 2 * P_W) / V)) + 1
+    conv_as_mm_output_shape_unpadded = [1,1,OH*OW,K]
+    x = torch2tt_tensor(x, device, ttl.tensor.Layout.CHANNELS_LAST, ttl.tensor.MemoryConfig(False, 0))
+    print("Going to run conv on tt device")
+    x = conv_on_tt(x)
+    print("conv on tt device done")
+    x = unpad_from_zero(x, conv_as_mm_output_shape_unpadded, host)
+    # Convert matmul output layout to conv output layout
+    x = torch.transpose(x, 2, 3)
+    assert(list(x.shape) == [1,1,K,(OH*OW)])
+    return x.reshape([1,K,OH,OW])

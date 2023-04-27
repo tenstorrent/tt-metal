@@ -42,4 +42,5 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, num_tiles_c);
     }
+
 }

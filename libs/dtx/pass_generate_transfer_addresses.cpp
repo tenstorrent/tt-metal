@@ -24,10 +24,11 @@ bool generate_transfer_addresses(DataTransformations * dtx){
             int rank = consumer_tp->src_tensor->str.size();
 
             Transfer * transfer = new Transfer();
-            transfer->src_address = consumer_tp->src_tensor->str[X(rank)] + producer_node->groups[consumer_tp->src_group]->address;
+            transfer->src_address = consumer_tp->src_tensor->str[X(rank)] + producer_node->groups[0]->address;
             transfer->dst_address = consumer_tp->dst_tensor->str[X(rank)] + consumer_group->address;
             transfer->size = consumer_tp->src_tensor->volume();
-            transfer->src_soc_core =  copy_vector_of_ints(producer_node->groups[consumer_tp->src_group]->core);
+            transfer->pad = consumer_tp->src_group == -1 ? 1 : 0;
+            transfer->src_soc_core =  copy_vector_of_ints(producer_node->groups[0]->core);
 
             consumer_group->transfers.push_back(transfer);
 

@@ -1,1 +1,1 @@
-from ._C import tensor, device
+from ._C import tensor, device, dtx

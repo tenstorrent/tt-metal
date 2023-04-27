@@ -310,6 +310,49 @@ def float_to_bits(x):
     s = struct.pack('>f', x)
     return struct.unpack('>l', s)[0]
 
+def read_conv_act_into_mm_act(conv_act, address_map, num_blocks, block_h, block_w):
+    block_size = block_h*block_w
+    mm_act_shape = [num_blocks,block_size]
+    block_size = block_h*block_w
+    mm_act = torch.zeros(mm_act_shape, dtype=torch.bfloat16).float()
+    index = 0
+    for b in range(num_blocks):
+        # read conv activation into mm activation block
+        r_size = 0
+        while(r_size != block_size):
+            src_address = address_map[index]
+            dst_address = address_map[index+1]
+            read_size = address_map[index+2]
+            pad = address_map[index+3]
+            for s in range(read_size):
+                assert(dst_address+s < block_size)
+                if pad:
+                    mm_act[b][dst_address+s] = 0
+                else:
+                    assert(src_address+s < len(conv_act))
+                    mm_act[b][dst_address+s] = conv_act[src_address+s]
+            r_size += read_size
+            index += 4
+    mm_act = mm_act.reshape([num_blocks,block_h,block_w])
+    return mm_act
+
+def blocked_mm_with_conv_act(conv_act, mm_weight, mm_output_shape, address_map, num_blocks, block_h, block_w):
+    assert len(mm_output_shape) == 4
+    assert len(mm_weight.shape) == 3
+    assert mm_output_shape[3] == mm_weight.shape[2]
+    ret_shape = mm_output_shape
+    ret = torch.zeros(ret_shape, dtype=torch.bfloat16).float()
+    mm_act_shape = [1,block_h,block_w]
+    block_size = block_h*block_w
+    mm_act = read_conv_act_into_mm_act(conv_act, address_map, num_blocks, block_h, block_w)
+    assert len(mm_act.shape) == 3
+    index = 0
+    for b in range(num_blocks):
+        for oh in range(ret_shape[2]):
+            for ow in range(ret_shape[3]):
+                ret[0][0][oh][ow] += torch.dot(mm_act[b,oh,:].reshape(-1), mm_weight[b,:,ow].reshape(-1))
+    return ret
+
 
 def is_close(a, b, rtol=7e-2, atol=8e-2, max_mag=4.0, max_mag_fraction=0.02):
     """

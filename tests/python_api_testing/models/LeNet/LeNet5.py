@@ -13,7 +13,9 @@ import torchvision.transforms as transforms
 
 from libs import tt_lib as ttl
 from python_api_testing.fused_ops.linear import Linear as TtLinear
+from python_api_testing.fused_ops.conv import conv as TtConv
 from libs.tt_lib.utils import pad_weight
+from resnet.utils import can_run_conv_on_device, run_conv_on_tt_device
 
 batch_size = 64
 num_classes = 10
@@ -94,10 +96,21 @@ class TtLeNet5(nn.Module):
 
 
         self.conv1 = nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=0)
+        conv1_weight = state_dict["layer1.0.weight"]
+        self.conv1_bias = state_dict["layer1.0.bias"]
+        self.conv1_params = [6, 1, 5, 5, 1, 1, 0, 0]
+        self.conv1_on_tt = TtConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device)
+
         self.batch_norm1 = nn.BatchNorm2d(6)
         self.relu1 = ttl.tensor.relu
         self.maxp1 = nn.MaxPool2d(kernel_size = 2, stride = 2)
+
         self.conv2 = nn.Conv2d(6, 16, kernel_size=5, stride=1, padding=0)
+        conv2_weight = state_dict["layer2.0.weight"]
+        self.conv2_bias = state_dict["layer2.0.bias"]
+        self.conv2_params = [16, 6, 5, 5, 1, 1, 0, 0]
+        self.conv2_on_tt = TtConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device)
+
         self.batch_norm2 = nn.BatchNorm2d(16)
         self.relu2 = ttl.tensor.relu
         self.maxp2 = nn.MaxPool2d(kernel_size = 2, stride = 2)
@@ -150,8 +163,16 @@ class TtLeNet5(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.shape[0]
+        #assert batch_size == 1
         # Layer1
-        out = self.conv1(x) # HOST
+        # TODO: nshanker. Enable conv on hardware. Fails with assertion (read size (channel depth) not divisible by 32)
+        if(False and can_run_conv_on_device(list(x.size()), self.conv1_params)):
+            print("Conv on tt device.")
+            out = run_conv_on_tt_device(x, self.conv1_on_tt, self.conv1_params, self.device, self.host)
+            out = out + self.conv1_bias
+        else:
+            print("Conv on CPU.")
+            out = self.conv1(x) # HOST
         out = self.batch_norm1(out) # HOST
         # PAD
         tt_tensor = ttl.tensor.Tensor(
@@ -171,7 +192,18 @@ class TtLeNet5(nn.Module):
 
         out = self.maxp1(out) # HOST
         # Layer2
-        out = self.conv2(out) # HOST
+        # TODO: nshanker. Enable conv on hardware. Fails with assertion (read size (channel depth) not divisible by 32)
+        if(False and can_run_conv_on_device(list(out.size()), self.conv2_params)):
+            print("Conv on tt device.")
+            out = run_conv_on_tt_device(out, self.conv2_on_tt, self.conv2_params, self.device, self.host)
+            print(out.shape)
+            bias = torch.tensor(self.conv2_bias.clone().detach()).view(1, -1, 1, 1)
+            print(self.conv2_bias)
+            print(bias.shape)
+            out = out + bias
+        else:
+            print("Conv on CPU.")
+            out = self.conv2(out) # HOST
         out = self.batch_norm2(out) # HOST
         #PAD
         tt_tensor = ttl.tensor.Tensor(

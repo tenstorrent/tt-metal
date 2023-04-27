@@ -53,19 +53,19 @@ bool generate_transfer_addresses_tiled_data(DataTransformations * dtx);
 
 bool row_major_memory_store(DataTransformations * dtx);
 
+bool row_major_memory_store_blocks(DataTransformations * dtx);
+
 // Slice into tiles (32x32) - WORKS?
 bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order);
+
+bool pad_2d_matrix(DataTransformations * dtx, vector<int> pad_to_nearest);
 
 bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<int> block_shape_yx);
 
 // Slice into tiles and store into row-major, col-major, or any other dim order - IS THIS NOW OBSOLETE?
 bool slice_into_tiles_and_store(DataTransformations * dtx, vector<int> dim_order);
 
-// TO DO: rename to: convert_MathTensor_to_2Dmatrix_conv3x3_s1()
-bool convert_tensor_layout_CL1_to_2Dmatrix_conv3x3_s1(DataTransformations * dtx);
-
-bool convert_tensor_layout_CL1_to_2Dmatrix_conv1x1_s1(DataTransformations * dtx);
-
+bool convert_tensor_layout_3d_conv_act_to_2Dmatrix(DataTransformations * dtx, vector<int> conv_params);
 bool convert_abstract_tensor_to_channels_last_layout(DataTransformations * dtx);
 
 // Convert from a particular layout, stored in 1 place (ex, CPU), to the same layout, stored in 8 places (ex. device DRAM), with sharding
@@ -122,7 +122,9 @@ bool convert_tensor_layout_rowmajor_2_channelslast(DataTransformations * dtx);
 // ========================================================
 //             PART 6: HIGH LEVEL PASSES
 // ========================================================
-template <typename T>
-vector<T> evaluate(vector<T> data, DataTransformations * dtx);
 
+vector<float> evaluate(vector<float> data, DataTransformations * dtx);
+vector<uint32_t> generate_address_map(DataTransformations * dtx);
 DataTransformations * simple_high_level_pass(vector<int> shape);
+
+DataTransformations * conv_transform(vector<int> shape, vector<int> conv_params, std::pair<vector<int>,vector<int>> block_info);

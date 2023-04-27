@@ -1,7 +1,7 @@
 TT_LIB_LIB = $(LIBDIR)/libtt_lib_csrc.so
 TT_LIB_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
 TT_LIB_INCLUDES = $(LIBS_INCLUDES) $(shell python3-config --includes) -I$(TT_METAL_HOME)/tt_metal/third_party/pybind11/include
-TT_LIB_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -L$(TT_METAL_HOME) -ldevice -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal -ltt_dnn -lyaml-cpp -lprofiler -lbuild_kernels_for_riscv
+TT_LIB_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -L$(TT_METAL_HOME) -ldtx -ldevice -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal -ltt_dnn -lyaml-cpp -lprofiler -lbuild_kernels_for_riscv
 TT_LIB_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 TT_LIB_SRCS = \

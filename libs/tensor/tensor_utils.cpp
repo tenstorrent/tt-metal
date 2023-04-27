@@ -8,14 +8,27 @@ namespace tt_metal {
     Tensor to_weight_tile_layout(Tensor conv_weight_tensor) {
         auto w_shape = conv_weight_tensor.shape();
         auto data = *reinterpret_cast<std::vector<T>*>(conv_weight_tensor.data_ptr());
-        std::array<uint32_t, 4> new_shape = {1, 1, w_shape[1]*w_shape[2]*w_shape[3], w_shape[0]};
-        std::vector<T> new_data;
+        auto weight_matrix_cols = w_shape[0];
+        // width padding
+        if(weight_matrix_cols%32 != 0) {
+            weight_matrix_cols = (uint32_t) std::ceil( (double) weight_matrix_cols / (double) 32 ) * 32;
+        }
+        // height padding
+        auto weight_matrix_rows = w_shape[1]*w_shape[2]*w_shape[3];
+        if (weight_matrix_rows % 32 != 0) {
+            weight_matrix_rows = (uint32_t) std::ceil( (double) weight_matrix_rows / (double) 32 ) * 32;
+        }
+        std::array<uint32_t, 4> new_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
+        std::vector<T> new_data(weight_matrix_rows*weight_matrix_cols, 0);
         for(auto r = 0; r < w_shape[2]; r++) {
             for(auto s = 0; s < w_shape[3]; s++) {
                 for(auto c = 0; c < w_shape[1]; c++) {
-                    for(auto k = 0; k < w_shape[0]; k++) {
-                        auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
-                        new_data.push_back(data[idx]);
+                    for(auto k = 0; k < weight_matrix_cols; k++) {
+                        auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols + r * w_shape[3] * w_shape[1] * weight_matrix_cols;
+                        if (k < w_shape[0]) {
+                            auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+                            new_data[matrix_idx] = data[idx];
+                        }
                     }
                 }
             }
