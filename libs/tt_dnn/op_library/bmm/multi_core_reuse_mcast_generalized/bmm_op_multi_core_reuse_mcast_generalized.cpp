@@ -463,7 +463,7 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t src1_cb_index = 1;
@@ -475,7 +475,7 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -486,7 +486,7 @@ tt_metal::Program * create_program_mcast_in0(
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             uint32_t interm0_cb_index = 24;
@@ -498,7 +498,7 @@ tt_metal::Program * create_program_mcast_in0(
                 out_CB_tiles,
                 out_CB_size,
                 cb_output->address(),
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             std::vector<uint32_t> invalid = {INVALID};

@@ -217,6 +217,18 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 cb_data_format
             );
 
+            uint32_t src2_cb_index = 2;
+            uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
+            auto cb_src2 = tt_metal::CreateCircularBuffer(
+                program,
+                device,
+                src2_cb_index,
+                core,
+                cb2_tiles,
+                cb2_tiles * single_tile_size,
+                cb_data_format
+            );
+
             uint32_t ouput_cb_index = 16; // output operands start at index 16
             auto cb_output = tt_metal::CreateCircularBuffer(
                 program,
@@ -588,6 +600,18 @@ tt_metal::Program * create_program_mcast_in0(
                 cb_data_format
             );
 
+            uint32_t src2_cb_index = 2;
+            uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
+            auto cb_src2 = tt_metal::CreateCircularBuffer(
+                program,
+                device,
+                src2_cb_index,
+                core,
+                cb2_tiles,
+                cb2_tiles * single_tile_size,
+                cb_data_format
+            );
+
             uint32_t ouput_cb_index = 16; // output operands start at index 16
             auto cb_output = tt_metal::CreateCircularBuffer(
                 program,
@@ -877,6 +901,18 @@ tt_metal::Program * create_program_mcast_in1(
                 cb_data_format
             );
 
+            uint32_t src2_cb_index = 2;
+            uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
+            auto cb_src2 = tt_metal::CreateCircularBuffer(
+                program,
+                device,
+                src2_cb_index,
+                core,
+                cb2_tiles,
+                cb2_tiles * single_tile_size,
+                cb_data_format
+            );
+
             uint32_t ouput_cb_index = 16; // output operands start at index 16
             auto cb_output = tt_metal::CreateCircularBuffer(
                 program,
@@ -897,7 +933,7 @@ tt_metal::Program * create_program_mcast_in1(
                 out_CB_tiles,
                 out_CB_size,
                 cb_output->address(),
-                tt::DataFormat::Float16_b
+                cb_data_format
             );
 
             std::vector<uint32_t> invalid = {INVALID};

@@ -183,6 +183,7 @@ def run_test_and_save_results(
             test_status = "error"
             test_output = err
             test_result = "fail"
+            test_args = {}
 
         # test_pass and test_output comes from actual test
         # test_status is completed/error (ie. runtime)
