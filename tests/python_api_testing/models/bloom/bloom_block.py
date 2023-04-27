@@ -144,13 +144,13 @@ class BloomBlock(torch.nn.Module):
         self.hidden_size = hidden_size
         state_dict = hugging_bloom_reference_model.state_dict()
         pt_beta = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.input_layernorm.bias", state_dict)
-        pt_gamma = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.input_layernorm.bias", state_dict)
+        pt_gamma = bloom_utils.pt_load_layer_weights(f"{dict_name}.{num}.input_layernorm.weight", state_dict)
 
         #pt_beta = bloom_utils.pt_load_layer_weights("transformer.h.0.input_layernorm.bias", state_dict)
         ##pt_gamma = bloom_utils.pt_load_layer_weights("transformer.h.0.input_layernorm.weight", state_dict)
         self.input_layernorm = torch.nn.LayerNorm(hidden_size, eps=layer_norm_epsilon)
-        self.input_layernorm.bias = pt_beta
-        self.input_layernorm.weight = pt_gamma
+        #self.input_layernorm.bias = pt_beta
+        #self.input_layernorm.weight = pt_gamma
 
 
         self.num_heads = num_heads
@@ -163,8 +163,8 @@ class BloomBlock(torch.nn.Module):
 
 
         self.post_attention_layernorm = torch.nn.LayerNorm(hidden_size, eps=layer_norm_epsilon)
-        self.post_attention_layernorm.bias = pt_beta_2
-        self.post_attention_layernorm.weight = pt_gamma_2
+        #self.post_attention_layernorm.bias = pt_beta_2
+        #self.post_attention_layernorm.weight = pt_gamma_2
 
         self.mlp = bloom_mlp.BloomMLP(dict_name, num, state_dict, hidden_dropout, hidden_size, False)
 

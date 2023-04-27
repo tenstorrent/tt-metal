@@ -236,6 +236,8 @@ class TtBloomModel():
 
         outputs = self.h[0](device, hidden_states=hidden_states,attention_mask=causal_mask,head_mask=None,use_cache=False, alibi=alibi)
 
+        #outputs = self.h[1](device, hidden_states=outputs,attention_mask=causal_mask,head_mask=None,use_cache=False, alibi=alibi)
+
         hidden_states = outputs
 
         if output_attentions:
@@ -243,6 +245,9 @@ class TtBloomModel():
 
         # Add last hidden state
         hidden_states = self.ln_f(hidden_states)
+        print('HIDDEN--------')
+        print(hidden_states.shape())
+
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -268,9 +273,15 @@ class BloomModel():
         self.num_heads = n_head
         self.n_layer = num_hidden_layers
 
+        state_dict = hugging_bloom_reference_model.state_dict()
         # Embedding + LN Embedding
         self.word_embeddings = torch.nn.Embedding(vocab_size, embed_dim)
+
+
         self.word_embeddings_layernorm = torch.nn.LayerNorm(embed_dim, eps=layer_norm_epsilon)
+
+        #self.word_embeddings_layernorm.bias=bloom_utils.pt_load_layer_weights("transformer.word_embeddings_layernorm.bias", state_dict)
+        #self.word_embeddings_layernorm.weight = bloom_utils.pt_load_layer_weights("transformer.word_embeddings_layernorm.weight", state_dict)
 
         # Transformer blocks
         self.h = torch.nn.ModuleList([
@@ -280,6 +291,9 @@ class BloomModel():
 
         # Final Layer Norm
         self.ln_f = torch.nn.LayerNorm(embed_dim, eps=layer_norm_epsilon)
+
+        #self.ln_f.bias = bloom_utils.pt_load_layer_weights("transformer.ln_f.bias", state_dict)
+        #self.ln_f.weight = bloom_utils.pt_load_layer_weights("transformer.ln_f.weight", state_dict)
 
         # Initialize weights and apply final processing
 
@@ -375,6 +389,7 @@ class BloomModel():
         )
 
         outputs = self.h[0](hidden_states=hidden_states,attention_mask=causal_mask,head_mask=None,use_cache=False, alibi=alibi)
+        #outputs = self.h[1](hidden_states=outputs,attention_mask=causal_mask,head_mask=None,use_cache=False, alibi=alibi)
 
         hidden_states = outputs
 
@@ -383,6 +398,8 @@ class BloomModel():
 
         # Add last hidden state
         hidden_states = self.ln_f(hidden_states)
+        print('HIDDEN--------')
+        print(hidden_states.shape)
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -409,20 +426,30 @@ def run_bloom_model_inference(device):
     # Prepare input
     torch.manual_seed(0)
 
-    input_ids = torch.randint(0, 100, (64, 2048))
+    input_ids = torch.randint(0, 100, (1, 64))
 
     pt_out = pt_bloom_model.forward(input_ids)
 
-    print(pt_out[0])
+    print("PT---------------")
+    print(pt_out[0].shape)
+    #print(pt_out[1].shape)
+
     print("PT finished")
 
     tt_out = tt_bloom_model.forward(device, input_ids)
 
     print("TT finished")
 
-    print(tt_out)
+    print("TT---------------")
+    print(tt_out[0].shape())
 
-    print(comp_allclose(pt_out[0], tt_out[0]))
+    tt_out_converted = bloom_utils.tt2torch_tensor(tt_out[0])
+    tt_out_converted = tt_out_converted.squeeze(0)
+    tt_out_converted = tt_out_converted.squeeze(0)
+
+    print(tt_out_converted.shape)
+
+    print(comp_allclose(pt_out[0], tt_out_converted))
     #print(comp_pcc(pt_out, tt_out_converted))
 
 if __name__ == "__main__":
