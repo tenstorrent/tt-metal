@@ -19,7 +19,7 @@ from utility_functions import comp_pcc, comp_allclose, profiler
 
 
 class TtBertEncoder(torch.nn.Module):
-    def __init__(self, config, encoder_idx, state_dict, device):
+    def __init__(self, config, encoder_idx, state_dict, var_scaler, device):
         super().__init__()
         hidden_dim = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"]).shape[-1]
 
@@ -38,7 +38,7 @@ class TtBertEncoder(torch.nn.Module):
         mha_gamma = ttl.tensor.Tensor(mha_gamma.reshape(-1).tolist(), mha_gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         mha_beta = pad_weight(beta0)
         mha_beta = ttl.tensor.Tensor(mha_beta.reshape(-1).tolist(), mha_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
-        self.mha_add_and_norm = AddAndNorm(mha_gamma, mha_beta, config.layer_norm_eps, config.hidden_size, config.hidden_size, device)
+        self.mha_add_and_norm = AddAndNorm(mha_gamma, mha_beta, config.layer_norm_eps, var_scaler, config.hidden_size, config.hidden_size, device)
 
         # FFN part
         self.ffn = TtFeedForwardModel(encoder_idx, state_dict, device)
@@ -50,38 +50,38 @@ class TtBertEncoder(torch.nn.Module):
         ffn_gamma = ttl.tensor.Tensor(ffn_gamma.reshape(-1).tolist(), ffn_gamma.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         ffn_beta = pad_weight(beta1)
         ffn_beta = ttl.tensor.Tensor(ffn_beta.reshape(-1).tolist(), ffn_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
-        self.ffn_add_and_norm = AddAndNorm(ffn_gamma, ffn_beta, config.layer_norm_eps, config.hidden_size, config.hidden_size, device)
+        self.ffn_add_and_norm = AddAndNorm(ffn_gamma, ffn_beta, config.layer_norm_eps, var_scaler, config.hidden_size, config.hidden_size, device)
 
     def forward(self, activation, attention_mask=None):
 
         # MHA - OP1 - OP10 ------------------------------->
-        profiler.start("_mha")
+        profiler.start("__mha")
         mha_res = self.mha(activation, attention_mask)
-        profiler.end("_mha")
+        profiler.end("__mha")
         # MHA - OP1 - OP10 <-------------------------------
 
         # attention_output - OP11 ------------------------>
-        profiler.start("_attention_output")
+        profiler.start("__attention_output")
         mha_out = self.attention_output(mha_res)
-        profiler.end("_attention_output")
+        profiler.end("__attention_output")
         # attention_output - OP11 <------------------------
 
         # Add + LayerNorm - OP12 ------------------------>
-        profiler.start("_mha_add_and_norm")
+        profiler.start("__mha_add_and_norm")
         mha_out_add_and_norm = self.mha_add_and_norm(activation, mha_out)
-        profiler.end("_mha_add_and_norm")
+        profiler.end("__mha_add_and_norm")
         # Add + LayerNorm - OP12 <------------------------
 
         # FFN - OP13 - OP14 ----------------------------->
-        profiler.start("_ffn")
+        profiler.start("__ffn")
         ffn_out = self.ffn(mha_out_add_and_norm)
-        profiler.end("_ffn")
+        profiler.end("__ffn")
         # FFN - OP13 - OP14 <-----------------------------
 
         # Add + LayerNorm - OP15 ------------------------>
-        profiler.start("_ffn_out_add_and_norm")
+        profiler.start("__ffn_out_add_and_norm")
         ffn_out_add_and_norm = self.ffn_add_and_norm(mha_out_add_and_norm, ffn_out)
-        profiler.end("_ffn_out_add_and_norm")
+        profiler.end("__ffn_out_add_and_norm")
         # Add + LayerNorm - OP15 <------------------------
 
         return ffn_out_add_and_norm
@@ -109,6 +109,9 @@ def run_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc, mode
         model_name = model_version
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    config = hugging_face_reference_model.config
+    var_scaler = create_var_scaler(seq_len, config.hidden_size, config.layer_norm_eps, device)
+
     tt_bert_encoder_model = TtBertEncoder(hugging_face_reference_model.config, 0, hugging_face_reference_model.state_dict(), device)
     pytorch_bert_model = PytorchBertEncoder(hugging_face_reference_model)
 

@@ -90,59 +90,59 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     def mha_(activation, attention_mask):
 
         # Q,K,V – TT custom using create_heads - OP1 - OP5 --------->
-        profiler.start("__qkv_projection")
+        profiler.start("___qkv_projection")
         Q = QProjection(activation)
         K = KProjection(activation)
         V = VProjection(activation)
-        profiler.end("__qkv_projection")
+        profiler.end("___qkv_projection")
 
-        profiler.start("__make_attention_heads")
+        profiler.start("___make_attention_heads")
         Q_heads = make_attention_heads(Q)
         K_heads = make_attention_heads(K)
         V_heads = make_attention_heads(V)
-        profiler.end("__make_attention_heads")
+        profiler.end("___make_attention_heads")
         # Q,K,V – TT custom using create_heads - OP1 - OP5 <---------
 
         # Scaled dot-product attn - OP6 - OP9 ---------------------->
-        profiler.start("__bmm_heads")
+        profiler.start("___bmm_heads")
         K_T_heads = ttl.tensor.transpose(K_heads)
         qkt = ttl.tensor.bmm(Q_heads, K_T_heads)
-        profiler.end("__bmm_heads")
+        profiler.end("___bmm_heads")
 
         # Attention scores computation
-        profiler.start("__qkt_reshape")
+        profiler.start("___qkt_reshape")
         N, C, H, W = qkt.shape() # Need to reshape right now since multi-C not supported for broadcast yet
         new_shape = [N, 1, C*H, W]
         ttl.tensor.reshape(qkt, *new_shape)
-        profiler.end("__qkt_reshape")
+        profiler.end("___qkt_reshape")
 
-        profiler.start("__multiply_by_sqrt_hidden_dim")
+        profiler.start("___multiply_by_sqrt_hidden_dim")
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
-        profiler.end("__multiply_by_sqrt_hidden_dim")
+        profiler.end("___multiply_by_sqrt_hidden_dim")
 
-        profiler.start("__attention_mask_add")
+        profiler.start("___attention_mask_add")
         if (attention_mask is not None):
             attention_score_input = ttl.tensor.bcast(attention_score_input, attention_mask, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
-        profiler.end("__attention_mask_add")
+        profiler.end("___attention_mask_add")
 
-        profiler.start("__softmax")
+        profiler.start("___softmax")
         attention_scores = softmax(attention_score_input)
-        profiler.end("__softmax")
+        profiler.end("___softmax")
 
-        profiler.start("__reshape_back")
+        profiler.start("___reshape_back")
         ttl.tensor.reshape(attention_scores, N, C, H, W) # Reshape back to original shape
-        profiler.end("__reshape_back")
+        profiler.end("___reshape_back")
 
         # Apply attention to value matrix
-        profiler.start("__weighted_activation")
+        profiler.start("___weighted_activation")
         weighted_activation = ttl.tensor.bmm(attention_scores, V_heads)
-        profiler.end("__weighted_activation")
+        profiler.end("___weighted_activation")
         # Scaled dot-product attn - OP6 - OP9 <---------------------
 
         # Attention output​ - OP10 --------------------------------->
-        profiler.start("__unmake_attention_heads")
+        profiler.start("___unmake_attention_heads")
         res = unmake_attention_heads(weighted_activation) # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
-        profiler.end("__unmake_attention_heads")
+        profiler.end("___unmake_attention_heads")
         # Attention output​ - OP10 <---------------------------------
 
         return res

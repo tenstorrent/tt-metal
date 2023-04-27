@@ -7,6 +7,24 @@ from libs.tt_lib.utils import pad_activation, pad_weight, tilize, untilize, tili
 from utility_functions import profiler
 
 
+def create_var_scaler(H, W, layer_norm_eps, device):
+
+    epsilon_ = tensor.Tensor(
+        [layer_norm_eps] + [0.0 for _ in range(32 * 32 - 1)],
+        [1, 1, 32, 32],
+        tensor.DataType.BFLOAT16,
+        tensor.Layout.TILE,
+        device
+    )
+
+    constant = float_to_bits(1/W)
+    scaler = (constant >> 16) & 0xFFFF
+    var_scaler = tensor.fill_rm(1, 1, roundup32(H), 32, H, 1, epsilon_, scaler, 0)
+    var_scaler = tensor.tilize(var_scaler)
+
+    return var_scaler
+
+
 # This ref implementation is only here for debugging
 def ref_ln(x, gamma, beta = None, epsilon = 1e-5):
     mean = x.mean(dim=-1, keepdim=True)
@@ -97,9 +115,10 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims 
     BCSUB = tensor.BcastOpMath.SUB
     BCADD = tensor.BcastOpMath.ADD
 
+
     # 1D variant
     # TODO(AP): merge with 2d? refactor.
-    def layernorm_1d_(x, overrideH = None, refx = None, refgamma = None, refbeta = None):
+    def layernorm_1d_(x, var_scaler, overrideH = None, refx = None, refgamma = None, refbeta = None):
 
         N = x.shape()[0]
         C = x.shape()[1]
@@ -119,17 +138,9 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims 
         var = tensor.mul(x_minus_mean, x_minus_mean) # (x-m)^2
         var_redW = tensor.reduce(var, RSUM, RW, 1.0) # sum[(x-m)^2]
 
-        profiler.start("___var_scaler_creation")
+        #print(f"layernorm_1d_ var_scaler shape {var_scaler.shape()} H {H} H_ {H_} W {W}")
 
-        constant = float_to_bits(1/W)
-        scaler = (constant >> 16) & 0xFFFF
-        var_scaler_ = tensor.fill_rm(1, 1, roundup32(H), 32, H_, 1, epsilon_, scaler, 0)
-        var_scaler_ = tensor.tilize(var_scaler_)
-
-        profiler.end("___var_scaler_creation")
-        print(f"layernorm_1d_ var_scaler_ shape {var_scaler_.shape()} scaler {scaler} ")
-
-        var_div_n1 = tensor.bcast(var_redW, var_scaler_, BCMUL, BCW)
+        var_div_n1 = tensor.bcast(var_redW, var_scaler, BCMUL, BCW)
         var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
 
         var_sqrt = tensor.sqrt(var_plus_eps)
@@ -188,9 +199,9 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims 
     # m = E[x]
     # var = E[(x-m)^2]
     # result = (x - E[x])/sqrt(var+epsilon)*gamma+beta
-    def layernorm_(x, overrideH = None, refx = None, refgamma = None):
+    def layernorm_(x, var_scaler = None, overrideH = None, refx = None, refgamma = None):
         if num_dims_ == 1:
-            return layernorm_1d_(x, overrideH, refx, refgamma)
+            return layernorm_1d_(x, var_scaler, overrideH, refx, refgamma)
 
         assert(num_dims_ == 2) # Only 1d and 2d are supported at the moment
         return layernorm_2d_(x)

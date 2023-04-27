@@ -13,11 +13,12 @@ import numpy as np
 
 from libs import tt_lib as ttl
 from python_api_testing.models.bert_large_perf.fused_ops.add_and_norm import AddAndNorm
+from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import enable_compile_cache, enable_binary_cache, comp_pcc, comp_allclose
 
 class TtAddAndNormModel(torch.nn.Module):
-    def __init__(self, config, state_dict, device, lnorm_type):
+    def __init__(self, config, state_dict, var_scaler, device, lnorm_type):
         super().__init__()
 
         if lnorm_type == "attention":
@@ -33,7 +34,7 @@ class TtAddAndNormModel(torch.nn.Module):
         else:
             assert False, "Invalid lnorm_type"
 
-        self.add_and_norm = AddAndNorm(gamma, beta, config.layer_norm_eps, config.hidden_size, config.hidden_size, device)
+        self.add_and_norm = AddAndNorm(gamma, beta, config.layer_norm_eps, var_scaler, config.hidden_size, config.hidden_size, device)
 
     def forward(self, a, b):
         return self.add_and_norm(a, b)
@@ -65,13 +66,16 @@ def run_add_and_norm_inference(model_version, batch, seq_len, on_weka, pcc, mode
         model_name = model_version
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
-    tt_add_and_norm_model = TtAddAndNormModel(hugging_face_reference_model.config, hugging_face_reference_model.state_dict(), device, "attention")
+    config = hugging_face_reference_model.config
+    var_scaler = create_var_scaler(seq_len, config.hidden_size, config.layer_norm_eps, device)
+
+    tt_add_and_norm_model = TtAddAndNormModel(config, hugging_face_reference_model.state_dict(), var_scaler, device, "attention")
     pytorch_add_and_norm_model = PytorchAddAndNormModel(hugging_face_reference_model, "attention")
 
     # Prepare input
     torch.manual_seed(0)
-    add_and_norm_inputa = (torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size) * 2) - 1
-    add_and_norm_inputb = (torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size) * 2) - 1
+    add_and_norm_inputa = (torch.rand(batch, 1, seq_len, config.hidden_size) * 2) - 1
+    add_and_norm_inputb = (torch.rand(batch, 1, seq_len, config.hidden_size) * 2) - 1
 
     pytorch_out = pytorch_add_and_norm_model(add_and_norm_inputa, add_and_norm_inputb)
 
