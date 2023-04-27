@@ -153,6 +153,19 @@ class BloomAttention(torch.nn.Module):
         # [batch_size * num_heads, q_length, kv_length]
         # we use `torch.Tensor.baddbmm` instead of `torch.baddbmm` as the latter isn't supported by TorchScript v1.11
 
+        print('PT ALIBI SHAPE ------')
+        print(alibi.shape)
+
+
+        print('ALIBI:')
+        print(alibi.shape)
+
+        print('BATCH1:')
+        print(query_layer.shape)
+
+        print('BATCH2:')
+        print(key_layer.shape)
+
         matmul_result = alibi.baddbmm(
             batch1=query_layer,
             batch2=key_layer,
@@ -285,17 +298,21 @@ class TtBloomAttention(torch.nn.Module):
         p_reshaped_key_layer = bloom_utils.tt2torch_tensor(tt_reshaped_key_layer)
         p_reshaped_query_layer = bloom_utils.tt2torch_tensor(tt_reshaped_query_layer)
 
-        tt_alibi = bloom_utils.torch2tt_tensor(alibi, device)
-        alibi_padded = bloom_utils.tt2torch_tensor(tt_alibi)
-
-        print('ALIBI SHAPE----------------')
-        print(alibi_padded.shape)
-        print('----------------------')
-
         p_reshaped_query_layer_squeezed = p_reshaped_query_layer.squeeze()
         p_reshaped_key_layer_squeezed = p_reshaped_key_layer.squeeze()
 
         _, _, kv_length = p_reshaped_key_layer_squeezed.shape
+
+
+        print('ALIBI:')
+        print(alibi.shape)
+
+        print('BATCH1:')
+        print(p_reshaped_query_layer_squeezed.shape)
+
+        print('BATCH2:')
+        print(p_reshaped_key_layer_squeezed.shape)
+
 
 
         tt_matmul_result = baddbmm.tt_baddbmm(device=device, input=alibi, batch1=p_reshaped_query_layer_squeezed, batch2=p_reshaped_key_layer_squeezed, beta=self.beta, alpha=self.inv_norm_factor)
