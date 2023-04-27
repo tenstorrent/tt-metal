@@ -55,33 +55,33 @@ class TtBertEncoder(torch.nn.Module):
     def forward(self, activation, attention_mask=None):
 
         # MHA - OP1 - OP10 ------------------------------->
-        profiler.start("__mha")
+        #profiler.start("__mha")
         mha_res = self.mha(activation, attention_mask)
-        profiler.end("__mha")
+        #profiler.end("__mha")
         # MHA - OP1 - OP10 <-------------------------------
 
         # attention_output - OP11 ------------------------>
-        profiler.start("__attention_output")
+        #profiler.start("__attention_output")
         mha_out = self.attention_output(mha_res)
-        profiler.end("__attention_output")
+        #profiler.end("__attention_output")
         # attention_output - OP11 <------------------------
 
         # Add + LayerNorm - OP12 ------------------------>
-        profiler.start("__mha_add_and_norm")
+        #profiler.start("__mha_add_and_norm")
         mha_out_add_and_norm = self.mha_add_and_norm(activation, mha_out)
-        profiler.end("__mha_add_and_norm")
+        #profiler.end("__mha_add_and_norm")
         # Add + LayerNorm - OP12 <------------------------
 
         # FFN - OP13 - OP14 ----------------------------->
-        profiler.start("__ffn")
+        #profiler.start("__ffn")
         ffn_out = self.ffn(mha_out_add_and_norm)
-        profiler.end("__ffn")
+        #profiler.end("__ffn")
         # FFN - OP13 - OP14 <-----------------------------
 
         # Add + LayerNorm - OP15 ------------------------>
-        profiler.start("__ffn_out_add_and_norm")
+        #profiler.start("__ffn_out_add_and_norm")
         ffn_out_add_and_norm = self.ffn_add_and_norm(mha_out_add_and_norm, ffn_out)
-        profiler.end("__ffn_out_add_and_norm")
+        #profiler.end("__ffn_out_add_and_norm")
         # Add + LayerNorm - OP15 <------------------------
 
         return ffn_out_add_and_norm
