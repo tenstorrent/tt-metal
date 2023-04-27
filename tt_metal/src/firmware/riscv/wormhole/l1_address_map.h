@@ -1,7 +1,6 @@
 #pragma once
 
-#include <stdint.h>
-
+#include <cstdint>
 namespace l1_mem {
 
 // l1_mem:address_map::TRISC0_BASE
@@ -58,8 +57,14 @@ struct address_map {
 
   static constexpr std::int32_t DEBUG_MAILBOX_BUF_SIZE  = 64; // For each T0/T1/T2/FW
 
-  static constexpr std::int32_t MAX_SIZE = 1499136;
-  static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1 * 1024 * 1024;
+  // Upper 2KB of local space is used as debug buffer
+  static constexpr std::int32_t DEBUG_BUFFER_SIZE  = 2 * 1024;
+  static constexpr std::int32_t TRISC0_DEBUG_BUFFER_BASE  = TRISC0_LOCAL_MEM_BASE + DEBUG_BUFFER_SIZE;
+  static constexpr std::int32_t TRISC1_DEBUG_BUFFER_BASE  = TRISC1_LOCAL_MEM_BASE + DEBUG_BUFFER_SIZE;
+  static constexpr std::int32_t TRISC2_DEBUG_BUFFER_BASE  = TRISC2_LOCAL_MEM_BASE + DEBUG_BUFFER_SIZE;
+
+  static constexpr std::int32_t MAX_SIZE = 1464 * 1024; // 1464 KB
+  static constexpr std::int32_t MAX_L1_LOADING_SIZE = MAX_SIZE;
 
   static constexpr std::int32_t RISC_LOCAL_MEM_BASE = 0xffb00000; // Actaul local memory address as seen from risc firmware
                                                                    // As part of the init risc firmware will copy local memory data from

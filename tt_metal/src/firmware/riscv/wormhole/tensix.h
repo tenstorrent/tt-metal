@@ -16,6 +16,7 @@ typedef std::uint8_t byte;
 #define MAX_PACKERS 4 // number of packers in the design
 
 #define TEST_MAILBOX_ADDRESS      ( 4 )
+#define ENABLE_CORE_MAILBOX      ( 32 )
 #define WALL_CLOCK_MAILBOX_ADDRESS 96
 #define DEBUG_MAILBOX_ADDRESS 112
 #define DEBUG_MAILBOX_SIZE 64

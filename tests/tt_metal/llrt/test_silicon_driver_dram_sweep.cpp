@@ -32,25 +32,45 @@ bool dram_rdwr_check(tt_cluster *cluster, unsigned start_address, std::size_t da
     for (tt_target_dram dram : drams) {
         int device_id, channel, subchannel;
         std::tie(device_id, channel, subchannel) = dram;
-        log_info(tt::LogTest, "Writing to channel {}...", channel);
+        log_debug(tt::LogTest, "Writing to device_id {} channel {} subchannel {}...",
+            device_id,
+            channel,
+            subchannel);
         cluster->write_dram_vec(expected_vec, dram, start_address); // write to address
-        log_info(tt::LogTest, "Wrote to channel {}", channel);
+        log_debug(tt::LogTest, "Done Writing to device_id {} channel {} subchannel {}...",
+            device_id,
+            channel,
+            subchannel);
     }
 
     for (tt_target_dram dram : drams) {
         int device_id, channel, subchannel;
         std::tie(device_id, channel, subchannel) = dram;
+        log_debug(tt::LogTest, "Reading from device_id {} channel {} subchannel {}...",
+            device_id,
+            channel,
+            subchannel);
         cluster->read_dram_vec(actual_vec, dram, start_address, data_size); // read size is in bytes
-        log_info(tt::LogVerif, "expected vec size = {}", expected_vec.size());
-        log_info(tt::LogVerif, "actual vec size   = {}", actual_vec.size());
+        log_debug(tt::LogTest, "Done Reading from device_id {} channel {} subchannel {}...",
+            device_id,
+            channel,
+            subchannel);
+        log_debug(tt::LogVerif, "expected vec size = {}", expected_vec.size());
+        log_debug(tt::LogVerif, "actual vec size   = {}", actual_vec.size());
         bool are_equal = actual_vec == expected_vec;
 
         all_are_equal &= are_equal;
         if (are_equal){
-            log_info(tt::LogVerif, "Channel {} has passed", channel);
+            log_info(tt::LogVerif, "device_id {} channel {} subchannel {} has passed",
+                device_id,
+                channel,
+                subchannel);
         }
         else {
-            log_error(tt::LogVerif, "Channel {} has not passed", channel);
+            log_info(tt::LogVerif, "device_id {} channel {} subchannel {} has not passed",
+                device_id,
+                channel,
+                subchannel);
         }
 
         std::fill(actual_vec.begin(), actual_vec.end(), 0);

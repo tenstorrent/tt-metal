@@ -22,13 +22,12 @@ struct WORMHOLE_DEVICE_DATA {
     };
     const std::vector<uint32_t> T6_X_LOCATIONS = {1, 2, 3, 4, 6, 7, 8, 9};
     const std::vector<uint32_t> T6_Y_LOCATIONS = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11};
+    const std::vector<uint32_t> HARVESTING_NOC_LOCATIONS = {11, 1, 10, 2, 9, 3, 8, 4, 7, 5 };
 
-
-    // TODO: verify the BELOW numbers are coorrect for wormhole - the fields were copied from grayskull
     static constexpr uint32_t STATIC_TLB_SIZE = 1024*1024;
 
     static constexpr tt_xy_pair BROADCAST_LOCATION = {0, 0};
-
+    static constexpr uint32_t BROADCAST_TLB_INDEX = 0;
     static constexpr uint32_t STATIC_TLB_CFG_ADDR = 0x1fc00000;
 
     static constexpr uint32_t TLB_COUNT_1M = 156;
@@ -43,19 +42,28 @@ struct WORMHOLE_DEVICE_DATA {
     static constexpr uint32_t TLB_BASE_INDEX_2M = TLB_COUNT_1M;
     static constexpr uint32_t TLB_BASE_INDEX_16M = TLB_BASE_INDEX_2M + TLB_COUNT_2M;
 
-    static constexpr uint32_t BROADCAST_TLB_INDEX = TLB_BASE_INDEX_16M; // First 16M TLB
-    static constexpr uint32_t DYNAMIC_TLB_BASE_INDEX = BROADCAST_TLB_INDEX + 1;
-    static constexpr uint32_t DYNAMIC_TLB_COUNT = 20 - 3; // 20 - broadcast TLB - internal TLB - kernel TLB
+    static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
+
+    static constexpr uint32_t DYNAMIC_TLB_16M_SIZE = 16 * 1024*1024;
+    static constexpr uint32_t DYNAMIC_TLB_16M_CFG_ADDR = STATIC_TLB_CFG_ADDR + (TLB_BASE_INDEX_16M * 8);
+    static constexpr uint32_t DYNAMIC_TLB_16M_BASE = TLB_BASE_16M;
+
+    static constexpr uint32_t DYNAMIC_TLB_2M_SIZE = 2 * 1024*1024;
+    static constexpr uint32_t DYNAMIC_TLB_2M_CFG_ADDR = STATIC_TLB_CFG_ADDR + (TLB_BASE_INDEX_2M * 8);
+    static constexpr uint32_t DYNAMIC_TLB_2M_BASE = TLB_BASE_2M;
+
+    static constexpr uint32_t DYNAMIC_TLB_1M_SIZE = 1 * 1024*1024;
+    static constexpr uint32_t DYNAMIC_TLB_1M_CFG_ADDR = STATIC_TLB_CFG_ADDR + (TLB_BASE_INDEX_1M * 8);
+    static constexpr uint32_t DYNAMIC_TLB_1M_BASE = TLB_BASE_1M;
+
+    // MEM_*_TLB are for dynamic read/writes to memory, either 16MB (large read/writes) or 2MB (polling). REG_TLB for dynamic writes
+    // to registers.   They are aligned with the kernel driver's WC/UC split.  But kernel driver uses different TLB's for these.
+    static constexpr unsigned int REG_TLB                   = TLB_BASE_INDEX_16M + 18;
+    static constexpr unsigned int MEM_LARGE_WRITE_TLB       = TLB_BASE_INDEX_16M + 17;
+    static constexpr unsigned int MEM_LARGE_READ_TLB        = TLB_BASE_INDEX_16M + 0;
+    static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB  = TLB_BASE_INDEX_2M + 1;
+    static constexpr uint32_t DYNAMIC_TLB_BASE_INDEX = MEM_LARGE_READ_TLB + 1;
     static constexpr uint32_t INTERNAL_TLB_INDEX = DYNAMIC_TLB_BASE_INDEX + DYNAMIC_TLB_COUNT; // pcie_write_xy and similar
-    static constexpr uint32_t DYNAMIC_TLB_SIZE = 16 * 1024*1024;
-    static constexpr uint32_t DYNAMIC_TLB_CFG_ADDR = STATIC_TLB_CFG_ADDR + (BROADCAST_TLB_INDEX * 8);
-    static constexpr uint32_t DYNAMIC_TLB_BASE = 0xB000000;
-
-    // MEM_TLB is a 16MB TLB reserved for dynamic writes to memory. REG_TLB ... for dynamic writes to registers.
-    // They are aligned with the kernel driver's WC/UC split.
-    static constexpr unsigned int MEM_TLB = 17;
-    static constexpr unsigned int REG_TLB = 18;
-
     static constexpr uint32_t DRAM_CHANNEL_0_X = 0;
     static constexpr uint32_t DRAM_CHANNEL_0_Y = 0;
     static constexpr uint32_t DRAM_CHANNEL_0_PEER2PEER_REGION_START = 0x30000000; // This is the last 256MB of DRAM
@@ -72,8 +80,7 @@ struct WORMHOLE_DEVICE_DATA {
     static constexpr uint32_t ARC_CSM_MAILBOX_SIZE_OFFSET = ARC_CSM_OFFSET + 0x784C4;
 
     static constexpr uint32_t ARC_CSM_SPI_TABLE_OFFSET = ARC_CSM_OFFSET + 0x78874;
-    static constexpr uint32_t ARC_CSM_RowHarvesting_OFFSET = ARC_CSM_SPI_TABLE_OFFSET + 376;
-    static constexpr uint32_t ARC_CSM_RowHarvesting_en_OFFSET = ARC_CSM_SPI_TABLE_OFFSET + 380;
+    static constexpr uint32_t ARC_CSM_RowHarvesting_OFFSET = ARC_CSM_OFFSET + 0x78E7C;
 
     static constexpr uint32_t TENSIX_SOFT_RESET_ADDR = 0xFFB121B0;
 
