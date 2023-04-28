@@ -11,11 +11,8 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-template <BroadcastType BType = BroadcastType::NONE, bool transpose_xy = false, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_A_mop_config() {
-
-    static_assert((!(acc_to_dest && transpose_xy)) && "accumulate into dest with transpose xy is not supported!");
-    static_assert((!(transpose_xy && (BType != BroadcastType::NONE))) && "transpose xy with broadcast is not supported!");
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_unpack_A_mop_config(bool transpose_of_faces) {
 
     if constexpr (BType == BroadcastType::COL) {
 #if SKIP_UNP0 == 1
@@ -113,7 +110,7 @@ inline void llk_unpack_A_mop_config() {
         ckernel_unpack_template tmp = ckernel_unpack_template::lB(unpack_srcb, TT_OP_NOP);
         tmp.program(instrn_buffer);
     } else {
-        if constexpr (transpose_xy) {
+        if (transpose_of_faces) {
             static constexpr uint unpack_srca_set_z = TT_OP_SETADCZW(0b001, 0, 0, 0, 1, 0b0001);
 #if SKIP_UNP0 == 1
             static constexpr uint unpack_srca = TT_OP_NOP;
@@ -173,38 +170,34 @@ inline void llk_unpack_A_mop_config() {
     }
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool transpose_xy = false, bool transpose_xy_srca = false, bool acc_to_dest = false, bool is_fp32_dest_acc_en = false>
-inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params) {
-
-    static_assert((!(acc_to_dest && transpose_xy)) && "accumulate into dest with transpose xy is not supported!");
-    static_assert((!(transpose_xy && (BType != BroadcastType::NONE))) && "transpose xy with broadcast is not supported!");
-    static_assert((!(transpose_xy_srca && (BType != BroadcastType::NONE))) && "transpose_xy_srca with broadcast is not supported!");
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, bool is_fp32_dest_acc_en = false>
+inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params, int transpose_xy = 0) {
 
     constexpr bool is_row_pool = false;
     constexpr uint32_t srca_height = 16;
     constexpr uint32_t srcb_height = 16;
 
     configure_unpack_AB(get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand),
-        srca_height, srcb_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en);
+        srca_height, srcb_height, is_row_pool, transpose_xy, is_fp32_dest_acc_en);
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool transpose_xy = false, bool transpose_xy_srca = false, bool acc_to_dest = false, bool is_fp32_dest_acc_en = false>
-inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, bool is_fp32_dest_acc_en = false>
+inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, int within_face_16x16_transpose = 0) {
     const llk_unpack_A_params_t unpack_A_params = {
         .unpA_operand = unpA_operand,
     };
-    llk_unpack_A_hw_configure<BType, transpose_xy, transpose_xy_srca, acc_to_dest, is_fp32_dest_acc_en>(&unpack_A_params);
+    llk_unpack_A_hw_configure<BType, acc_to_dest, is_fp32_dest_acc_en>(&unpack_A_params, within_face_16x16_transpose);
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool transpose_xy = false, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_A_init(const std::uint32_t within_face_16x16_transpose=0) {
-    llk_unpack_A_mop_config<BType, transpose_xy, acc_to_dest, binary_reuse_dest>();
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0) {
+    llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
     TTI_SETADCXX(0b11, FACE_WIDTH*FACE_HEIGHT-1, 0x0);
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool transpose_xy = false, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_A(std::uint32_t operand, std::uint32_t tile_index) {
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_unpack_A(std::uint32_t operand, std::uint32_t tile_index, int transpose_of_faces = 0) {
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
@@ -244,10 +237,12 @@ inline void llk_unpack_A(std::uint32_t operand, std::uint32_t tile_index) {
     }
 
     // Run MOP
-    if constexpr ((BType == BroadcastType::ROW) || (transpose_xy) || ((BType == BroadcastType::COL) && acc_to_dest)) {
+    if constexpr ((BType == BroadcastType::ROW) || ((BType == BroadcastType::COL) && acc_to_dest)) {
         mop_run(0, 2);
     } else if constexpr ((BType == BroadcastType::SCALAR) || (BType == BroadcastType::COL)) {
         mop_run(0, 1);
+    } else if (transpose_of_faces) {
+        mop_run(0, 2);
     } else {
         mop_run(0, 4);
     }

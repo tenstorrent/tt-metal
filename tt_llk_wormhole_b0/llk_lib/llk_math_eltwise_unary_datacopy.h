@@ -99,7 +99,7 @@ inline void eltwise_unary_configure_addrmod() {
     }
 }
 
-template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE, bool transpose_xy = false>
+template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
 inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
     // always move 32x32 tile, packed as 16x16x4
 
@@ -153,13 +153,13 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
     }
 }
 
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool transpose_xy = false>
+template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 // within_face_16x16_transpose is used by unpacker, math does not transpose
-inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t within_face_16x16_transpose=0 /* unused */) {
+inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /* unused */, const std::uint32_t within_face_16x16_transpose=0 /* unused */) {
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type, transpose_xy>(p_mova2d::MOV_8_ROWS, 16);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16);
     } else if constexpr (type == B2D) {
         eltwise_unary_configure_mop<type, src_b_bcast_type, false>(p_movb2d::MOV_4_ROWS, 16);
     } else {
