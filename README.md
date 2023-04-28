@@ -17,8 +17,17 @@ ssh-keygen
 2. Add the key to your Github profile. Please refer to [SSH keys on
    Github](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
 
-3. Clone the repo. If you received pre-provisioned customer-facing machine,
-please skip this step.
+3. If you received a pre-provisioned customer-facing machine,
+enter the repo:
+
+```
+cd tt-metal-user
+```
+
+then skip to step 4. If you do not have a pre-provisioned customer-facing
+machine, please continue with this step to clone the repo.
+
+Clone the repo.
 
 ```
 git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules
