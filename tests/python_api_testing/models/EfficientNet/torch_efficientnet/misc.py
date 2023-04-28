@@ -2,6 +2,7 @@ from typing import Optional, Callable, List, Any, Tuple, Union
 import math
 from functools import partial
 
+from dataclasses import dataclass
 import torch
 import torch.fx
 from torch import nn, Tensor
@@ -292,7 +293,7 @@ class SqueezeExcitation(torch.nn.Module):
     def forward(self, input: Tensor) -> Tensor:
         scale = self._scale(input)
         return scale * input
-from dataclasses import dataclass
+
 @dataclass
 class _MBConvConfig:
     expand_ratio: float
