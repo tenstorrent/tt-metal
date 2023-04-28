@@ -283,7 +283,7 @@ class Profiler():
 
         self.start_times[key] = time.time()
 
-    def end(self, key):
+    def end(self, key, PERF_CNT=1):
         if self.disabled:
             return
 
@@ -295,7 +295,7 @@ class Profiler():
         if key not in self.times:
             self.times[key] = []
 
-        self.times[key].append(diff)
+        self.times[key].append(diff / PERF_CNT)
 
     def get(self, key):
         if key not in self.times:

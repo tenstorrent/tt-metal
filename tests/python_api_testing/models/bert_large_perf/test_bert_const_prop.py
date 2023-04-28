@@ -10,29 +10,34 @@ sys.path.append(f"{f}/../../../..")
 
 import time
 from libs import tt_lib as ttl
-from python_api_testing.models.bert.embeddings import PytorchEmbeddings
-from python_api_testing.models.bert.bert_encoder import TtBertEncoder
-from python_api_testing.models.bert.fused_ops.linear import Linear
+from python_api_testing.models.bert_large_perf.embeddings import PytorchEmbeddings
+from python_api_testing.models.bert_large_perf.bert_encoder import TtBertEncoder
+from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
+from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
 from libs.tt_lib.utils import pad_activation, pad_weight
-from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled, comp_pcc, comp_allclose
+from utility_functions import enable_binary_cache, enable_compile_cache, comp_allclose_and_pcc, comp_pcc, comp_allclose, disable_binary_cache, disable_compile_cache
 from utility_functions import profiler
-from utility_functions import disable_binary_cache, disable_compile_cache
 
 
-class TtBertForQuestionAnswering(torch.nn.Module):
-    def __init__(self, config, hugging_face_reference_model, device):
+class TtBertBatchDram(torch.nn.Module):
+    def __init__(self, config, hugging_face_reference_model, seq_len, device):
         super().__init__()
 
         # NOTE: Once we make embeddings run on device, pass in state dict
         # instead of model itself
         state_dict = hugging_face_reference_model.state_dict()
 
+        # Constant prop -> create_var_scaler
+        var_scaler = create_var_scaler(seq_len, config.hidden_size, config.layer_norm_eps, device)
+
+        self.hidden_states_list = []
+        self.tt_attention_mask_list = []
+
         # So far on CPU until we add embeddings support on device
         self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
         self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
 
-        self.encoders = torch.nn.ModuleList([TtBertEncoder(config, encoder_idx, state_dict, device) for encoder_idx in range(config.num_hidden_layers)])
-        self.device = device
+        self.encoders = torch.nn.ModuleList([TtBertEncoder(config, encoder_idx, state_dict, var_scaler, device) for encoder_idx in range(config.num_hidden_layers)])
 
         num_classes, hidden_size = state_dict["qa_outputs.weight"].shape
 
@@ -44,40 +49,59 @@ class TtBertForQuestionAnswering(torch.nn.Module):
         # QA linear
         self.qa_linear = Linear(hidden_size, 32, weight, bias, device)
 
-    def forward(self, input_ids, attention_mask=None, token_type_ids=None):
-        profiler.start("_calc_embeddings")
-        embeddings = self.embeddings(input_ids, token_type_ids)
+        self.device = device
 
-        if attention_mask is not None:
-            extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
-            extended_attention_mask = torch.clamp(extended_attention_mask, -100000) # Limit neg value that goes into exp
-            extended_attention_mask = pad_activation(extended_attention_mask)
-            tt_attention_mask = ttl.tensor.Tensor(extended_attention_mask.reshape(-1).tolist(), extended_attention_mask.shape, ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
-            tt_attention_mask = tt_attention_mask.to(self.device)
-        else:
-            tt_attention_mask = attention_mask
+    def forward(self, PERF_CNT, input_ids, attention_mask=None, token_type_ids=None):
 
-        # Convert to ll buda tensor
-        pad_embeddings = pad_activation(embeddings)
-        tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
-        tt_embeddings = tt_embeddings.to(self.device)
-        hidden_states = tt_embeddings
-        profiler.end("_calc_embeddings")
+        for i in range(PERF_CNT):
+            profiler.start("_calc_embeddings")
+
+            embeddings = self.embeddings(input_ids, token_type_ids)
+            if attention_mask is not None:
+                extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
+                extended_attention_mask = torch.clamp(extended_attention_mask, -100000) # Limit neg value that goes into exp
+                extended_attention_mask = pad_activation(extended_attention_mask)
+                tt_attention_mask = ttl.tensor.Tensor(extended_attention_mask.reshape(-1).tolist(), extended_attention_mask.shape, ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+                tt_attention_mask = tt_attention_mask.to(self.device)
+            else:
+                tt_attention_mask = attention_mask
+
+            #Add to list mask
+            self.tt_attention_mask_list.append(tt_attention_mask)
+
+            # Convert to ll buda tensor
+            pad_embeddings = pad_activation(embeddings)
+            tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+            tt_embeddings = tt_embeddings.to(self.device)
+            hidden_states = tt_embeddings # pad_embeddings #
+
+            self.hidden_states_list.append(hidden_states)
+            profiler.end("_calc_embeddings")
 
         print(f"Num encoders {len(self.encoders)}")
+        tt_out_list = []
 
-        profiler.start("_run_encoders")
-        for encoder in self.encoders:
-            profiler.start("__one_encoder")
-            hidden_states = encoder(hidden_states, tt_attention_mask)
-            profiler.end("__one_encoder")
-        profiler.end("_run_encoders")
+        for i in range(PERF_CNT):
+            print(f"Running BERT model {i}")
+            profiler.start("_run_encoders")
 
-        profiler.start("_qa_linear")
-        hidden_states = self.qa_linear(hidden_states)
-        profiler.end("_qa_linear")
+            hidden_states = self.hidden_states_list[i]
+            attention_mask = self.tt_attention_mask_list[i]
 
-        return hidden_states
+            for encoder in self.encoders:
+                profiler.start("__one_encoder")
+                hidden_states = encoder(hidden_states, attention_mask)
+                profiler.end("__one_encoder")
+
+            profiler.end("_run_encoders")
+
+            profiler.start("_qa_linear")
+            res = self.qa_linear(hidden_states)
+            profiler.end("_qa_linear")
+
+            tt_out_list.append(res)
+
+        return tt_out_list
 
 
 def model_location_generator_(rel_path):
@@ -107,7 +131,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_face_reference_model.eval()
-    tt_bert_model = TtBertForQuestionAnswering(hugging_face_reference_model.config, hugging_face_reference_model, device)
+    tt_bert_model = TtBertBatchDram(hugging_face_reference_model.config, hugging_face_reference_model, seq_len, device)
 
     profiler.start("processing_of_input")
 
@@ -154,7 +178,11 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     print(f"Running BERT model once to fill caches -> disable profiler")
     profiler.disable()
-    tt_out = tt_bert_model(**bert_input).to(host)
+
+    tt_out_list = tt_bert_model(1, **bert_input)
+
+    # the first inference pass
+    tt_out = tt_out_list[0].to(host)
     tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
 
     print(f"Enable profiler and enable binary and compile cache")
@@ -164,69 +192,70 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
+    print(f"Running BERT model for perf measurement")
+
+    profiler.start("whole_model")
+    tt_out_list = tt_bert_model(PERF_CNT, **bert_input)
+    profiler.end("whole_model", PERF_CNT)
+
+    # output postprocessing
     for i in range(PERF_CNT):
-        print(f"Running BERT model for perf measurement {i}")
+        profiler.start("processing_output_to_string")
 
-        profiler.start("whole_model")
-        tt_out = tt_bert_model(**bert_input)
-        profiler.end("whole_model")
+        tt_out = tt_out_list[i].to(host)
+        tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
 
-    profiler.start("processing_output_to_string")
+        tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
+        tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
 
-    tt_out = tt_out.to(host)
-    tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
+        pt_start_logits = pytorch_out.start_logits.detach()
+        pt_end_logits = pytorch_out.end_logits.detach()
 
-    tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
-    tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
+        passing_start, output = comp_pcc(pt_start_logits, tt_start_logits, pcc)
+        logger.info(f"Start Logits {output}")
+        _, output = comp_allclose(pt_start_logits, tt_start_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
+        logger.info(f"Start Logits {output}")
+        if not passing_start:
+            logger.error(f"Start Logits PCC < {pcc}")
 
-    pt_start_logits = pytorch_out.start_logits.detach()
-    pt_end_logits = pytorch_out.end_logits.detach()
+        passing_end, output = comp_pcc(pt_end_logits, tt_end_logits, pcc)
+        logger.info(f"End Logits {output}")
+        _, output = comp_allclose(pt_end_logits, tt_end_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
+        logger.info(f"End Logits {output}")
+        if not passing_end:
+            logger.error(f"End Logits PCC < {pcc}")
 
-    passing_start, output = comp_pcc(pt_start_logits, tt_start_logits, pcc)
-    logger.info(f"Start Logits {output}")
-    _, output = comp_allclose(pt_start_logits, tt_start_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
-    logger.info(f"Start Logits {output}")
-    if not passing_start:
-        logger.error(f"Start Logits PCC < {pcc}")
+        if real_input:
+            tt_res = {
+                "start": tt_start_logits,
+                "end": tt_end_logits,
+                "example": single_input["example"],
+                **single_input["inputs"],
+            }
 
-    passing_end, output = comp_pcc(pt_end_logits, tt_end_logits, pcc)
-    logger.info(f"End Logits {output}")
-    _, output = comp_allclose(pt_end_logits, tt_end_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
-    logger.info(f"End Logits {output}")
-    if not passing_end:
-        logger.error(f"End Logits PCC < {pcc}")
+            tt_answer = nlp.postprocess([tt_res], **postprocess_params)
+            logger.info(f"TT: {tt_answer}")
 
-    if real_input:
-        tt_res = {
-            "start": tt_start_logits,
-            "end": tt_end_logits,
-            "example": single_input["example"],
-            **single_input["inputs"],
-        }
+            pt_res = {
+                "start": pt_start_logits,
+                "end": pt_end_logits,
+                "example": single_input["example"],
+                **single_input["inputs"],
+            }
 
-        tt_answer = nlp.postprocess([tt_res], **postprocess_params)
-        logger.info(f"TT: {tt_answer}")
+            pt_answer = nlp.postprocess([pt_res], **postprocess_params)
+            logger.info(f"PT: {pt_answer}")
+            logger.info(f"PL: {pl_answer}")
 
-        pt_res = {
-            "start": pt_start_logits,
-            "end": pt_end_logits,
-            "example": single_input["example"],
-            **single_input["inputs"],
-        }
-
-        pt_answer = nlp.postprocess([pt_res], **postprocess_params)
-        logger.info(f"PT: {pt_answer}")
-        logger.info(f"PL: {pl_answer}")
-
-    profiler.end("processing_output_to_string")
+        profiler.end("processing_output_to_string")
 
     ttl.device.CloseDevice(device)
     profiler.print()
 
-    assert profiler.get("whole_model") < 61.0
+    assert profiler.get("whole_model") < 60.0
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
 
-def test_bert_large_loop_the_model():
+def test_bert_constant_prop():
 
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
@@ -245,4 +274,4 @@ def test_bert_large_loop_the_model():
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)
 
 if __name__ == "__main__":
-    test_bert_large_loop_the_model()
+    test_bert_constant_prop()

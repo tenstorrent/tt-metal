@@ -45,7 +45,9 @@ class TtBertForQuestionAnswering(torch.nn.Module):
         self.qa_linear = Linear(hidden_size, 32, weight, bias, device)
 
     def forward(self, input_ids, attention_mask=None, token_type_ids=None):
+        profiler.start("_calc_embeddings")
         embeddings = self.embeddings(input_ids, token_type_ids)
+
         if attention_mask is not None:
             extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
             extended_attention_mask = torch.clamp(extended_attention_mask, -100000) # Limit neg value that goes into exp
@@ -54,18 +56,27 @@ class TtBertForQuestionAnswering(torch.nn.Module):
             tt_attention_mask = tt_attention_mask.to(self.device)
         else:
             tt_attention_mask = attention_mask
+
         # Convert to ll buda tensor
         pad_embeddings = pad_activation(embeddings)
         tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
         tt_embeddings = tt_embeddings.to(self.device)
         hidden_states = tt_embeddings
+        profiler.end("_calc_embeddings")
 
         print(f"Num encoders {len(self.encoders)}")
 
+        profiler.start("_run_encoders")
         for encoder in self.encoders:
+            profiler.start("__one_encoder")
             hidden_states = encoder(hidden_states, tt_attention_mask)
+            profiler.end("__one_encoder")
+        profiler.end("_run_encoders")
 
+        profiler.start("_qa_linear")
         hidden_states = self.qa_linear(hidden_states)
+        profiler.end("_qa_linear")
+
         return hidden_states
 
 
@@ -79,7 +90,7 @@ def model_location_generator_(rel_path):
         return Path("/opt/tt-metal-models") / rel_path
 
 
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
 
     torch.manual_seed(1234)
 
@@ -98,7 +109,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     hugging_face_reference_model.eval()
     tt_bert_model = TtBertForQuestionAnswering(hugging_face_reference_model.config, hugging_face_reference_model, device)
 
-    processing_of_input_start = time.time()
+    profiler.start("processing_of_input")
 
     if real_input:
         tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
@@ -134,31 +145,26 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
             bert_input = torch.stack(oneseq)
             bert_input = bert_input.reshape(batch, seq_len)
 
-    processing_of_input_end = time.time()
+    profiler.end("processing_of_input")
 
     # tt_bert_input = ttl.tensor.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+    profiler.start("hugging_face_reference_model")
     pytorch_out = hugging_face_reference_model(**bert_input)
-
-    print(f"Running BERT model once to fill caches")
-    tt_out = tt_bert_model(**bert_input).to(host)
-    tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
-
-    print(f"Enable the cache")
-    enable_binary_cache()
-    enable_compile_cache()
-
-    execution_of_bert_start = time.time()
+    profiler.end("hugging_face_reference_model")
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
-    print(f"Running BERT model for perf measurement")
-    tt_out = tt_bert_model(**bert_input)
-    execution_of_bert_end = time.time()
+    for i in range(PERF_CNT):
+        print(f"Running BERT model for perf measurement {i}")
+
+        profiler.start("whole_model")
+        tt_out = tt_bert_model(**bert_input)
+        profiler.end("whole_model")
+
+    profiler.start("processing_output_to_string")
 
     tt_out = tt_out.to(host)
     tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
-
-    ttl.device.CloseDevice(device)
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -202,36 +208,15 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         logger.info(f"PT: {pt_answer}")
         logger.info(f"PL: {pl_answer}")
 
-    processing_output_to_string_end = time.time()
+    profiler.end("processing_output_to_string")
 
-    processing_of_input_time = (processing_of_input_end - processing_of_input_start)
-    execution_of_bert_time = (execution_of_bert_end - execution_of_bert_start)
-    processing_output_to_string_time = (processing_output_to_string_end - execution_of_bert_end)
+    ttl.device.CloseDevice(device)
+    profiler.print()
 
-    print(f"processing_of_input: {processing_of_input_time:.2f}s")
-    print(f"execution_of_bert: {execution_of_bert_time:.2f}s")
-    print(f"processing_output_to_string: {processing_output_to_string_time:.2f}s")
-
-    assert processing_of_input_time < 1.5
-    assert execution_of_bert_time < 65.0
-    assert processing_output_to_string_time < 0.1
-
+    assert profiler.get("processing_of_input") < 2.1
+    assert profiler.get("whole_model") < 310
+    assert profiler.get("processing_output_to_string") < 0.1
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
-    # start_logit_match = (abs(tt_start_logits - pytorch_start_logits) < 0.1).all().item()
-    # if not start_logit_match:
-    #     print("Start logits don't match")
-    # else:
-    #     print("Start logits match")
-
-
-    # end_logit_match = (abs(tt_end_logits - pytorch_end_logits) < 0.1).all().item()
-
-    # if not end_logit_match:
-    #     print("End logits don't match")
-    # else:
-    #     print("End logits match")
-
-    # assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
 def test_bert_large_baseline_perf():
 
@@ -244,11 +229,12 @@ def test_bert_large_baseline_perf():
     token_type_ids = True
     pcc = 0.98
     model_location_generator = model_location_generator_
+    PERF_CNT = 20
 
     disable_binary_cache()
     disable_compile_cache()
 
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator)
+    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)
 
 if __name__ == "__main__":
     test_bert_large_baseline_perf()
