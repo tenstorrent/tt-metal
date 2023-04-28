@@ -10,4 +10,4 @@
     - name: Install TT driver
       become: yes
       command:
-        cmd: infra_testing/assets/install_ttkmd_1.14.bash
+        cmd: infra_testing/assets/tt_driver/install_ttkmd_1.14.bash
