@@ -1108,6 +1108,36 @@ def transpose_cn(x, pcie_slot, *args, **kwargs):
 
     return output
 
+def permute(x, pcie_slot, *args, **kwargs):
+    assert "permute_dims" in kwargs
+
+    permute_dims = kwargs["permute_dims"]
+
+    host = ttl.device.GetHost()
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
+    ttl.device.InitializeDevice(device)
+
+    try:
+        t0 = (
+            ttl.tensor.Tensor(
+                x.reshape(-1).tolist(),
+                x.shape,
+                ttl.tensor.DataType.BFLOAT16,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(device)
+        )
+
+        t1 = ttl.tensor.permute(t0, *permute_dims)
+
+        output = torch.Tensor(
+            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
+        ).reshape(t1.shape())
+    finally:
+        ttl.device.CloseDevice(device)
+
+    return output
 
 ################################################
 #################### Tensor ####################

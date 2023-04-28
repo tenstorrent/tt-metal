@@ -74,6 +74,7 @@ TT_DNN_TESTS = [
     "transpose-wh",
     "transpose-hc",
     "transpose-cn",
+    "permute",
 ]
 
 

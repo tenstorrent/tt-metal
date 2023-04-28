@@ -13,6 +13,7 @@
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "tt_dnn/op_library/permute/permute_op.hpp"
 
 #include "tensor/tensor_utils.hpp"
 
@@ -767,6 +768,23 @@ void TensorModule(py::module &m_tensor) {
         +==========+======================+===========+=============+==========+
         | a        | Input tensor         | Tensor    |             | Yes      |
         +----------+----------------------+-----------+-------------+----------+
+    )doc");
+    m_tensor.def("permute", &permute, R"doc(
+        Permutes a given tensor's dimensions with the given order.
+
+        +----------+----------------------+-----------+------------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                        | Required |
+        +==========+======================+===========+====================================+==========+
+        | a        | Input tensor         | Tensor    |                                    | Yes      |
+        +----------+----------------------+-----------+------------------------------------+----------+
+        | N        | Dim to become N      | int       | Unique value between [0, num dims) | Yes      |
+        +----------+----------------------+-----------+------------------------------------+----------+
+        | C        | Dim to become C      | int       | Unique value between [0, num dims) | Yes      |
+        +----------+----------------------+-----------+------------------------------------+----------+
+        | H        | Dim to become H      | int       | Unique value between [0, num dims) | Yes      |
+        +----------+----------------------+-----------+------------------------------------+----------+
+        | W        | Dim to become W      | int       | Unique value between [0, num dims) | Yes      |
+        +----------+----------------------+-----------+------------------------------------+----------+
     )doc");
     m_tensor.def("tilize", &tilize, R"doc(
         Tilizes a given tensor across memory on device.

@@ -1,0 +1,37 @@
+import pytest
+import sys
+import torch
+from pathlib import Path
+from functools import partial
+from itertools import permutations
+
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
+
+from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
+from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+
+params = [pytest.param([[32, 32, 32, 32]], permute_dims, 0) for permute_dims in permutations([0, 1, 2, 3])]
+@pytest.mark.parametrize(
+    "input_shapes, permute_dims, pcie_slot",
+    params
+)
+def test_permute_test(input_shapes, permute_dims, pcie_slot, function_level_defaults):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+        )
+    ]
+    comparison_func = partial(comparison_funcs.comp_equal)
+    run_single_pytorch_test(
+        "permute",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+        {"permute_dims": permute_dims}
+    )

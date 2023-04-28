@@ -144,6 +144,10 @@ op_map = {
         "ttlib_op": ttlib_ops.transpose_cn,
         "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=1),
     },
+    "permute": {
+        "ttlib_op": ttlib_ops.permute,
+        "pytorch_op": pytorch_ops.permute,
+    },
     ################################################
     #################### Tensor ####################
     ################################################

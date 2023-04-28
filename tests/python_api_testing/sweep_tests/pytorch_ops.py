@@ -71,6 +71,10 @@ def flatten(x, *args, **kwargs):
 def transpose(x, dim0=-2, dim1=-1, *args, **kwargs):
     return torch.transpose(x, dim0, dim1)
 
+def permute(x, *args, **kwargs):
+    assert "permute_dims" in kwargs
+    permute_dims = kwargs["permute_dims"]
+    return torch.permute(x, permute_dims)
 
 ################################################
 #################### Tensor ####################
