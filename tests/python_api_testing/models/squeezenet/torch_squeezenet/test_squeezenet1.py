@@ -56,4 +56,4 @@ def test_squeezenet1_inference(fuse_ops, imagenet_sample_input):
 
         assert passing[0], passing[1:]
 
-    logger.info(f"vgg16 PASSED {passing[1]}")
+    logger.info(f"PASSED {passing[1]}")
