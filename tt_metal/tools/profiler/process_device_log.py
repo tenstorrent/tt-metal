@@ -45,15 +45,20 @@ def generate_analysis_table(analysisData, setup):
 
 # Note if multiple instances are present, all are returned space delimited
 # Further analysis has to be done on the excel side
-def return_available_timer(timeseries, desiredTimerID):
-    res = ""
-    for timerID, timestamp,*metaData in timeseries:
-        if timerID == desiredTimerID:
-            if res:
-                res = f"{res} {timestamp}"
-            else:
-                res = f"{timestamp}"
-    return res
+def return_available_timer(risc, coreTimeseries, timerIDLabels):
+    resList = []
+    for desiredTimerID, label in timerIDLabels:
+        res = ""
+        if risc in coreTimeseries.keys():
+            timeseries = coreTimeseries[risc]["timeseries"]
+            for timerID, timestamp,*metaData in timeseries:
+                if timerID == desiredTimerID:
+                    if res:
+                        res = f"{res} {timestamp}"
+                    else:
+                        res = f"{timestamp}"
+        resList.append(res)
+    return resList
 
 
 def print_rearranged_csv(devicesData, setup, freqText = None):
@@ -76,15 +81,8 @@ def print_rearranged_csv(devicesData, setup, freqText = None):
                     core_x, core_y = core
                     timeWriter.writerow(
                         [core_x, core_y]
-                        + [
-                            return_available_timer(deviceData["cores"][core]["riscs"]["BRISC"]["timeseries"], timerIDLabel[0])
-                            for timerIDLabel in timerIDLabels
-                        ]
-                        + [
-                            return_available_timer(deviceData["cores"][core]["riscs"]["NCRISC"]["timeseries"], timerIDLabel[0])
-                            for timerIDLabel in timerIDLabels
-                        ]
-                    )
+                        + return_available_timer("BRISC",deviceData["cores"][core]["riscs"], timerIDLabels)
+                        + return_available_timer("NCRISC",deviceData["cores"][core]["riscs"], timerIDLabels))
 
 def analyze_stats(timerStats, timerStatsCores):
     FW_START_VARIANCE_THRESHOLD = 1e3
