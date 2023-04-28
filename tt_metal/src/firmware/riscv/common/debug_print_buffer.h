@@ -6,9 +6,9 @@ inline uint8_t* get_debug_print_buffer() {
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_NC);
     #elif defined(COMPILE_FOR_BRISC)
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_BR);
-    #elif defined(TRISC_UNPACK)
+    #elif defined(UCK_CHLKC_UNPACK)
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T0);
-    #elif defined(TRISC_MATH)
+    #elif defined(UCK_CHLKC_MATH)
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T1);
     #else
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T2);
