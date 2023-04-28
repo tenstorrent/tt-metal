@@ -1,5 +1,13 @@
 # Getting up and running
 
+0. If you're using a customer-facing cloud machine, SSH into the cloud machine:
+
+```
+ssh user@<external-ip> -p <ssh-port> -L 8888:localhost:8888
+```
+
+The ``-L`` option will be for docs later.
+
 1. Create an SSH key for your machine.
 
 ```
@@ -28,10 +36,16 @@ cd docs
 PORT=<port> make all
 ```
 
+If you're using a customer-facing cloud machine, please omit the ``PORT``
+variable.
+
 6. Navigate to the docs page.
 
 Navigate your web browser to `http://<ip address>:<port>`, where `<ip address>`
 is the IP address of the machine on which you launched the web server. For
 example: `http://10.250.37.37:4242`, for port ``4242``.
+
+If you're using a customer-facing cloud machine, use ``localhost`` for the
+``<ip address>`` and ``8888`` for the ``<port>``.
 
 7. Follow the `Getting Started` instructions on the Documentation page.
