@@ -21,6 +21,7 @@ proc_cmdline = Path("/proc/cmdline")
 sys_kernel = Path("/sys/kernel")
 sys_kernel_mm_hugepages = Path("/sys/kernel/mm/hugepages")
 etc_default_grub = Path("/etc/default/grub")
+etc_default_grub_cloud_vm = Path("/etc/default/grub.d/50-cloudimg-settings.cfg")
 dev_hugepages_1G = Path("/dev/hugepages-1G")
 dev_hugepages = Path("/dev/hugepages")
 grub_d_curtin_settings = Path("/etc/default/grub.d/50-curtin-settings.cfg")
@@ -213,7 +214,7 @@ def get_kernel_cmdline_options():
         yield (key, value)
 
 
-def patch_etc_default_grub():
+def patch_etc_default_grub(is_cloud_vm):
 
     if grub_d_curtin_settings.is_file():
         for line in open(grub_d_curtin_settings):
@@ -223,7 +224,8 @@ def patch_etc_default_grub():
                 )
 
     etc_default_grub_txt = ""
-    for line in open(etc_default_grub):
+    etc_grub_path = etc_default_grub_cloud_vm if is_cloud_vm else etc_default_grub
+    for line in open(etc_grub_path):
         if "GRUB_CMDLINE_LINUX_DEFAULT" in line:
             # Get GRUB_CMDLINE_LINUX_DEFAULT line without hugepages/iommu args
             GRUB_re = re.compile(r'(?<=")(.*?)(?=")')
@@ -250,20 +252,22 @@ def patch_etc_default_grub():
 
     try:
         try:
-            etc_default_grub.unlink()
+            etc_grub_path.unlink()
         except FileNotFoundError:  # unlink(missing_ok=True) available in 3.8
             pass
 
-        etc_default_grub.write_text(etc_default_grub_txt)
+        etc_grub_path.write_text(etc_default_grub_txt)
     except Exception as e:
         raise RuntimeError(
-            f"writing etc default grub failed ({etc_default_grub}).", e
+            f"writing etc default grub failed ({etc_grub_path}).", e
         )
 
     try:
-        subprocess.check_call(["update-grub"])
+        update_grub_cmd = ["update-grub2"] if is_cloud_vm else ["update-grub"]
+
+        subprocess.check_call(update_grub_cmd)
     except Exception as e:
-        raise RuntimeError("failed to run update-grub", e)
+        raise RuntimeError("failed to run update grub cmd", e)
 
 
 # Get the number of TT devices. Number of hugepages will need to match this now.
@@ -377,7 +381,10 @@ def main() -> int:
             print(
                 "/proc/cmdline not satisfactory, updating GRUB_CMDLINE_LINUX_DEFAULT..."
             )
-            patch_etc_default_grub()
+            def get_is_cloud_vm():
+                return etc_default_grub_cloud_vm.is_file()
+            is_cloud_vm = get_is_cloud_vm()
+            patch_etc_default_grub(is_cloud_vm=is_cloud_vm)
             print("=" * 100)
             print(
                 "PLEASE REBOOT AND RESTART THE SCRIPT WITH `sudo -E env PATH=$PATH python3 scripts/hugepagessetup.py enable`"

@@ -61,10 +61,15 @@
       ansible.builtin.copy:
         src: ../scripts/
         dest: "infra_testing/scripts/"
-    - name: Copy driver install script to host
+    - name: Copy assets
       ansible.builtin.copy:
-        src: ../assets/tt_driver/install_ttkmd.bash
-        dest: "infra_testing/scripts/install_ttkmd.bash"
+        src: ../assets/
+        dest: "infra_testing/assets/"
+    - name: Unpack driver tar directly
+      ansible.builtin.unarchive:
+        src: "/home/{{ ansible_user }}/infra_testing/assets/tt_driver/ttkmd_1.14.tar.gz"
+        dest: "/home/{{ ansible_user }}/infra_testing/assets/tt_driver/"
+        remote_src: yes
     - name: Copy flash scripts to host
       ansible.builtin.copy:
         src: ../assets/tt_flash/

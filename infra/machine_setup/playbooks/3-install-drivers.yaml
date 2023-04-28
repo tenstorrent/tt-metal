@@ -5,9 +5,9 @@
     - name: Make TT driver installer executable
       become: yes
       file:
-        path: "infra_testing/scripts/install_ttkmd.bash"
+        path: "infra_testing/assets/tt_driver/install_ttkmd_1.14.bash"
         mode: u+x
     - name: Install TT driver
       become: yes
       command:
-        cmd: infra_testing/scripts/install_ttkmd.bash
+        cmd: infra_testing/assets/install_ttkmd_1.14.bash
