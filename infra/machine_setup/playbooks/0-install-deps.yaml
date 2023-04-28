@@ -70,10 +70,6 @@
         src: "/home/{{ ansible_user }}/infra_testing/assets/tt_driver/ttkmd_1.14.tar.gz"
         dest: "/home/{{ ansible_user }}/infra_testing/assets/tt_driver/"
         remote_src: yes
-    - name: Copy flash scripts to host
-      ansible.builtin.copy:
-        src: ../assets/tt_flash/
-        dest: "infra_testing/scripts/tt_flash"
 
 - name: Install SMI
   hosts: all
