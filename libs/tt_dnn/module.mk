@@ -34,6 +34,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast_padding/bmm_op_multi_core_reuse_mcast_padding.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast_padding_generalized/bmm_op_multi_core_reuse_mcast_padding_generalized.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_generalized_bert_large/bmm_op_multi_core_reuse_generalized_bert_large.cpp \
+	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast_optimized_bert_large/bmm_op_multi_core_reuse_mcast_optimized_bert_large.cpp \
 	libs/tt_dnn/op_library/conv/conv_op.cpp \
 	libs/tt_dnn/op_library/tilize/tilize_op.cpp \
 	libs/tt_dnn/op_library/untilize/untilize_op.cpp \

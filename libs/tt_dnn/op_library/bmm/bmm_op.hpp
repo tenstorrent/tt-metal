@@ -45,6 +45,8 @@ Tensor matmul_multi_core_reuse_mcast_padding_generalized(const Tensor& A, const 
 Tensor bmm_multi_core_reuse_mcast_padding_generalized(const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 Tensor matmul_multi_core_reuse_generalized_bert_large  (const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
 Tensor bmm_multi_core_reuse_generalized_bert_large  (const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
+Tensor matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+// bmm_multi_core_reuse_mcast_optimized_bert_large not used
 
 }  // namespace tt_metal
 
