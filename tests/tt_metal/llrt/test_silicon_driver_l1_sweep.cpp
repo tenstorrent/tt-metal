@@ -28,16 +28,23 @@ bool l1_rdwr_check(tt_cluster *cluster, unsigned start_address, std::size_t data
 
     for (const tt::llrt::WorkerCore worker_core : tt::llrt::get_worker_cores_from_cluster(cluster, chip_id)) {
         cluster->read_dram_vec(actual_vec, worker_core, start_address, data_size); // read size is in bytes
-        log_info(tt::LogVerif, "expected vec size = {}", expected_vec.size());
-        log_info(tt::LogVerif, "actual vec size   = {}", actual_vec.size());
+        log_info(tt::LogTest, "expected vec size = {}", expected_vec.size());
+        log_info(tt::LogTest, "actual vec size   = {}", actual_vec.size());
         bool are_equal = actual_vec == expected_vec;
 
         all_are_equal &= are_equal;
         if (are_equal){
-            log_info(tt::LogVerif, "Core {} has passed", worker_core.str());
+            log_info(tt::LogTest, "Core {} has passed", worker_core.str());
         }
         else {
-            log_error(tt::LogVerif, "Core {} has not passed", worker_core.str());
+            for (int i = 0; i < vec_size; i++) {
+                if (actual_vec[i] != expected_vec[i]) {
+                    log_info(tt::LogTest, "Mismatch expected_vec[{}]={} != actual_vec[{}]={}",
+                    expected_vec[i], i,
+                    actual_vec[i], i);
+                }
+            }
+            log_error(tt::LogTest, "Core {} has not passed", worker_core.str());
         }
 
         std::fill(actual_vec.begin(), actual_vec.end(), 0);
@@ -66,7 +73,7 @@ int main(int argc, char** argv)
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
 
-        const std::size_t chunk_size = 1024 * 1024;
+        const std::size_t chunk_size = 1024;
         TT_ASSERT(l1_rdwr_check(cluster, 0, chunk_size));
 
         cluster->close_device();

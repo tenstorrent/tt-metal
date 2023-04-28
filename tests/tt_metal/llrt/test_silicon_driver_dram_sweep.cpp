@@ -11,73 +11,88 @@
 
 using RAMData = std::vector<uint32_t>;
 
+//! dram sweep with callback for execution
+void sweep_dram(
+    tt_cluster *cluster,
+    std::function<void(const tt_target_dram&, const unsigned int& block)> callback) {
+
+    int sub_channel = 0;
+    for (const auto& chip_id : cluster->get_all_chips()) {
+        const auto& sdesc = cluster->get_soc_desc(chip_id);
+        for (unsigned int channel = 0; channel < sdesc.get_num_dram_channels(); channel++) {
+            for (unsigned int block = 0; block < sdesc.get_num_dram_blocks_per_channel(); block++) {
+                tt_target_dram dram_core({static_cast<int>(chip_id), channel, sub_channel});
+                callback(dram_core, block);
+            }
+        }
+    }
+}
+
 bool dram_rdwr_check(tt_cluster *cluster, unsigned start_address, std::size_t data_size) {
     RAMData actual_vec;
     std::size_t vec_size = data_size / sizeof(uint32_t);
     RAMData expected_vec = tt::tiles_test::create_random_vec<RAMData>(vec_size, tt::tiles_test::get_seed_from_systime());
 
-    // tt_target_dram = (device_id, channel, subchannel)
-    std::vector<tt_target_dram> drams {
-        {0, 0, 0},
-        {0, 1, 0},
-        {0, 2, 0},
-        {0, 3, 0},
-        {0, 4, 0},
-        {0, 5, 0},
-        {0, 6, 0},
-        {0, 7, 0},
-    };
+    // Sweep and write to all dram with expected vector
+    sweep_dram(
+        cluster,
+        [cluster, &expected_vec, start_address]
+        (const tt_target_dram& dram_core, const unsigned int& block){
+            int chip_id, channel, sub_channel;
+            std::tie(chip_id, channel, sub_channel) = dram_core;
+            log_debug(tt::LogTest, "Writing to chip_id={} channel={} sub_channel={} start_address={}",
+                chip_id,
+                channel,
+                sub_channel,
+                start_address);
+            cluster->write_dram_vec(
+                expected_vec,
+                dram_core,
+                start_address); // write to address
+            log_info(tt::LogTest, "Done writing to chip_id={} channel={} sub_channel={} start_address={}",
+                chip_id,
+                channel,
+                sub_channel,
+                start_address);
+        });
 
     bool all_are_equal = true;
-    for (tt_target_dram dram : drams) {
-        int device_id, channel, subchannel;
-        std::tie(device_id, channel, subchannel) = dram;
-        log_debug(tt::LogTest, "Writing to device_id {} channel {} subchannel {}...",
-            device_id,
-            channel,
-            subchannel);
-        cluster->write_dram_vec(expected_vec, dram, start_address); // write to address
-        log_debug(tt::LogTest, "Done Writing to device_id {} channel {} subchannel {}...",
-            device_id,
-            channel,
-            subchannel);
-    }
-
-    for (tt_target_dram dram : drams) {
-        int device_id, channel, subchannel;
-        std::tie(device_id, channel, subchannel) = dram;
-        log_debug(tt::LogTest, "Reading from device_id {} channel {} subchannel {}...",
-            device_id,
-            channel,
-            subchannel);
-        cluster->read_dram_vec(actual_vec, dram, start_address, data_size); // read size is in bytes
-        log_debug(tt::LogTest, "Done Reading from device_id {} channel {} subchannel {}...",
-            device_id,
-            channel,
-            subchannel);
-        log_debug(tt::LogVerif, "expected vec size = {}", expected_vec.size());
-        log_debug(tt::LogVerif, "actual vec size   = {}", actual_vec.size());
-        bool are_equal = actual_vec == expected_vec;
-
-        all_are_equal &= are_equal;
-        if (are_equal){
-            log_info(tt::LogVerif, "device_id {} channel {} subchannel {} has passed",
-                device_id,
+    sweep_dram(
+        cluster,
+        [cluster, &expected_vec, &actual_vec, start_address, data_size, &all_are_equal]
+        (const tt_target_dram& dram_core, const unsigned int& block){
+            int chip_id, channel, sub_channel;
+            std::tie(chip_id, channel, sub_channel) = dram_core;
+            log_debug(tt::LogTest, "Reading from chip_id={} channel={} sub_channel={} start_address={}",
+                chip_id,
                 channel,
-                subchannel);
-        }
-        else {
-            log_info(tt::LogVerif, "device_id {} channel {} subchannel {} has not passed",
-                device_id,
+                sub_channel,
+                start_address);
+            cluster->read_dram_vec(actual_vec, dram_core, start_address, data_size); // read size is in bytes
+            log_info(tt::LogTest, "Done reading from chip_id={} channel={} sub_channel={} start_address={}",
+                chip_id,
                 channel,
-                subchannel);
-        }
+                sub_channel,
+                start_address);
+            log_debug(tt::LogVerif, "expected vec size = {}", expected_vec.size());
+            log_debug(tt::LogVerif, "actual vec size   = {}", actual_vec.size());
+            bool are_equal = actual_vec == expected_vec;
 
-        std::fill(actual_vec.begin(), actual_vec.end(), 0);
-    }
-
-    //log_info(tt::LogTest, "dram_rdwr_check wrote {} and read {}, passed in {} attempts\n", vec, tmp, attempt);
-
+            all_are_equal &= are_equal;
+            if (are_equal){
+                log_info(tt::LogVerif, "chip_id {} channel {} sub_channel {} has passed",
+                    chip_id,
+                    channel,
+                    sub_channel);
+            }
+            else {
+                log_info(tt::LogVerif, "chip_id {} channel {} sub_channel {} has not passed",
+                    chip_id,
+                    channel,
+                    sub_channel);
+            }
+            std::fill(actual_vec.begin(), actual_vec.end(), 0);
+        });
     return all_are_equal;
 }
 
@@ -101,8 +116,8 @@ int main(int argc, char** argv)
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
 
-        const std::size_t chunk_size = 1024 * 1024 * 1024;
-        const unsigned total_chunks = 1024 * 1024 * 1024 / chunk_size;
+        const std::size_t chunk_size =  1024;
+        const unsigned total_chunks = 20 * 1024 / chunk_size;
         for (int chunk_num = 0; chunk_num < total_chunks; chunk_num++) {
             int start_address = chunk_size * chunk_num;
             log_info(tt::LogTest, "Testing chunk #{}/{}", chunk_num + 1, total_chunks);

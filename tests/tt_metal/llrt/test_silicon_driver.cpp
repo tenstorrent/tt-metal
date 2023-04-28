@@ -37,7 +37,7 @@ int main(int argc, char** argv)
     const std::string output_dir = ".";
 
     const TargetDevice target_type = TargetDevice::Silicon;
-    const tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
+    const tt::ARCH arch = tt::ARCH::GRAYSKULL;
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
 
