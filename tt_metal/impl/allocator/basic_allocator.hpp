@@ -49,6 +49,7 @@ class BasicAllocator : public Allocator {
     void clear();
 
    private:
+    static constexpr bool allocate_bottom_up_ = true;
     allocator::Algorithm &allocator_for_dram_channel(int dram_channel) const;
 
     allocator::Algorithm &allocator_for_logical_core(const tt_xy_pair &logical_core) const;

@@ -37,7 +37,7 @@ BasicAllocator::BasicAllocator(const tt_SocDescriptor &soc_desc) : Allocator() {
             allocator::FreeList::SearchPolicy::FIRST
         );
         // Space up to UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
-        allocator->allocate(0, UNRESERVED_BASE);
+        allocator->allocate_at_address(0, UNRESERVED_BASE, this->allocate_bottom_up_);
         this->l1_manager_.insert({logical_core, std::move(allocator)});
     }
 }
@@ -63,11 +63,19 @@ allocator::Algorithm &BasicAllocator::allocator_for_logical_core(const tt_xy_pai
 }
 
 uint32_t BasicAllocator::allocate_dram_buffer(int dram_channel, uint32_t size_bytes) {
-    return this->allocator_for_dram_channel(dram_channel).allocate(size_bytes);
+    auto address = this->allocator_for_dram_channel(dram_channel).allocate(size_bytes, this->allocate_bottom_up_);
+    if (not address.has_value()) {
+        TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for DRAM buffer in channel " + std::to_string(dram_channel));
+    }
+    return address.value();
 }
 
 uint32_t BasicAllocator::allocate_dram_buffer(int dram_channel, uint32_t start_address, uint32_t size_bytes) {
-    return this->allocator_for_dram_channel(dram_channel).allocate(start_address, size_bytes);
+    auto address = this->allocator_for_dram_channel(dram_channel).allocate_at_address(start_address, size_bytes, this->allocate_bottom_up_);
+    if (not address.has_value()) {
+        TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for DRAM buffer in channel " + std::to_string(dram_channel) + " at " + std::to_string(start_address));
+    }
+    return address.value();
 }
 
 uint32_t find_address_of_smallest_chunk(const std::vector<std::pair<uint32_t, uint32_t>> &candidate_addr_ranges) {
@@ -129,11 +137,19 @@ void BasicAllocator::deallocate_dram_buffer(int dram_channel, uint32_t address) 
 }
 
 uint32_t BasicAllocator::allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_bytes) {
-    return this->allocator_for_logical_core(logical_core).allocate(size_bytes);
+    auto address = this->allocator_for_logical_core(logical_core).allocate(size_bytes, this->allocate_bottom_up_);
+    if (not address.has_value()) {
+        TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for l1 buffer on core " + logical_core.str());
+    }
+    return address.value();
 }
 
 uint32_t BasicAllocator::allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes) {
-    return this->allocator_for_logical_core(logical_core).allocate(start_address, size_bytes);
+    auto address = this->allocator_for_logical_core(logical_core).allocate_at_address(start_address, size_bytes, this->allocate_bottom_up_);
+    if (not address.has_value()) {
+        TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for l1 buffer on core " + logical_core.str() + " at " + std::to_string(start_address));
+    }
+    return address.value();
 }
 
 void BasicAllocator::deallocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t address) {
