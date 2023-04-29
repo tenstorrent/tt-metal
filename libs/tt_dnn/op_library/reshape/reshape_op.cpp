@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
+#include "tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 
@@ -10,14 +11,147 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor reshape(Tensor &a, int N, int C, int H, int W) {
+Tensor reshape_tilized(Tensor &a, int N, int C, int H, int W) {
 
-    if (a.layout() == Layout::TILE) {
+    TT_ASSERT(a.layout() == Layout::TILE, "Only tile and row major reshape supported!");
+
+    if (W == a.shape()[3]) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
         a.reshape(N, C, H, W);
         return a;
     }
+
+    tt_metal::Program *program = new tt_metal::Program();
+
+    tt_xy_pair core = {0, 0};
+
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(not a.on_host(), "Operand to eltwise unary needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to eltwise unary needs to be allocated in a buffer on device!");
+
+    uint32_t single_tile_size = 2 * TILE_HW;
+
+    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+
+    TT_ASSERT(a.volume() % TILE_HW == 0);
+    uint32_t num_tiles = a.volume() / TILE_HW;
+
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+
+    // This should allocate a DRAM buffer on the device
+    tt_metal::Device *device = a.device();
+
+    std::array<uint32_t, 4> output_shape = infer_dims_for_reshape(N, C, H, W, a.volume());
+
+    TT_ASSERT(output_shape[2] % TILE_HEIGHT == 0 && output_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) for reshape!");
+    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+
+    tt_metal::Buffer *dst_dram_buffer = output.buffer();
+    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+
+    uint32_t src0_cb_index = 0;
+    uint32_t num_input_tiles = 2;
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        src0_cb_index,
+        core,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        DataFormat::Float16_b
+    );
+
+
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t num_output_tiles = 2;
+    auto cb_output = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        ouput_cb_index,
+        core,
+        num_output_tiles,
+        num_output_tiles * single_tile_size,
+        DataFormat::Float16_b
+    );
+    // no need to create c_in2 buffer since we pass scaler=0 to reader
+
+    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reshape_8bank.cpp",
+        core,
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_1_default);
+
+    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        core,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_0_default);
+
+    vector<uint32_t> compute_kernel_args = {
+        num_tiles, // per_core_block_cnt
+        1 // per_core_block_size
+    };
+    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+        program,
+        "tt_metal/kernels/compute/eltwise_copy.cpp",
+        core,
+        eltwise_unary_args,
+        MathFidelity::HiFi4,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Compile Application
+    ////////////////////////////////////////////////////////////////////////////
+
+    tt_metal::CompileProgram(device, program);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Execute Application
+    ////////////////////////////////////////////////////////////////////////////
+    tt_metal::ConfigureDeviceWithProgram(device, program);
+
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        unary_reader_kernel,
+        core,
+        {src0_dram_buffer->address(),
+        a.shape()[3] / TILE_WIDTH,
+        (uint32_t) output_shape[0],
+        (uint32_t) output_shape[1],
+        (uint32_t) output_shape[2] / TILE_HEIGHT,
+        (uint32_t) output_shape[3] / TILE_WIDTH }
+    );
+
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        unary_writer_kernel,
+        core,
+        {dst_dram_buffer->address(),
+        uint32_t(dram_dst_noc_xy.x),
+        uint32_t(dram_dst_noc_xy.y),
+        num_tiles }
+    );
+
+    tt_metal::LaunchKernels(device, program);
+
+    delete program;
+
+    // output does not hold any data, contains pointer to buffer on device with the data
+    return output;
+}
+
+Tensor reshape_rm(Tensor &a, int N, int C, int H, int W) {
+
 
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 
@@ -183,6 +317,17 @@ Tensor reshape(Tensor &a, int N, int C, int H, int W) {
 
     delete program;
     return output;
+}
+
+Tensor reshape(Tensor &a, int N, int C, int H, int W) {
+    if (a.layout() == Layout::TILE) {
+        return reshape_tilized(a, N, C, H, W);
+    } else if (a.layout() == Layout::ROW_MAJOR) {
+        return reshape_rm(a, N, C, H, W);
+    } else {
+        TT_ASSERT(false, "Unsupported layout for reshape");
+        return a;
+    }
 }
 
 } // namespace tt_metal
