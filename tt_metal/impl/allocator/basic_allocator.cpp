@@ -136,6 +136,22 @@ void BasicAllocator::deallocate_dram_buffer(int dram_channel, uint32_t address) 
     this->allocator_for_dram_channel(dram_channel).deallocate(address);
 }
 
+uint32_t BasicAllocator::allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_bytes) {
+    auto address = this->allocator_for_logical_core(logical_core).allocate(size_bytes, this->allocate_bottom_up_);
+    if (not address.has_value()) {
+        TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for circular buffer on core " + logical_core.str());
+    }
+    return address.value();
+}
+
+uint32_t BasicAllocator::allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes) {
+    auto address = this->allocator_for_logical_core(logical_core).allocate_at_address(start_address, size_bytes, this->allocate_bottom_up_);
+    if (not address.has_value()) {
+        TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for circular buffer on core " + logical_core.str() + " at " + std::to_string(start_address));
+    }
+    return address.value();
+}
+
 uint32_t BasicAllocator::allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_bytes) {
     auto address = this->allocator_for_logical_core(logical_core).allocate(size_bytes, this->allocate_bottom_up_);
     if (not address.has_value()) {
@@ -156,7 +172,7 @@ void BasicAllocator::deallocate_l1_buffer(const tt_xy_pair &logical_core, uint32
     this->allocator_for_logical_core(logical_core).deallocate(address);
 }
 
-uint32_t BasicAllocator::get_address_for_l1_buffers_across_core_range(const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes) const {
+uint32_t BasicAllocator::get_address_for_circular_buffers_across_core_range(const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes) const {
     std::vector<std::pair<uint32_t, uint32_t>> candidate_addr_ranges;
     auto start_core = logical_core_range.first;
     auto end_core = logical_core_range.second;

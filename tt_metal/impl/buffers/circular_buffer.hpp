@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-class CircularBuffer : public L1Buffer {
+class CircularBuffer : public Buffer {
    public:
     CircularBuffer(
         Device *device,
@@ -32,13 +32,32 @@ class CircularBuffer : public L1Buffer {
 
     Buffer *clone();
 
+    tt_xy_pair logical_core() const { return logical_core_; }
+
     uint32_t buffer_index() const { return buffer_index_; }
 
     uint32_t num_tiles() const { return num_tiles_; }
 
     DataFormat data_format() const { return data_format_; }
 
+    tt_xy_pair noc_coordinates() const;
+
    private:
+    void reserve();
+    friend std::vector<CircularBuffer *> CreateCircularBuffers(
+        Program *program,
+        Device *device,
+        uint32_t buffer_index,
+        const CoreRange &core_range,
+        uint32_t num_tiles,
+        uint32_t size_in_bytes,
+        DataFormat data_format
+    );
+
+    void free();
+    friend void DeallocateBuffer(Buffer *buffer);
+
+    tt_xy_pair logical_core_;             // Logical core
     uint32_t buffer_index_;               // A buffer ID unique within a Tensix core (0 to 32)
     uint32_t num_tiles_;                  // Size in tiles
     DataFormat data_format_;              // e.g. fp16, bfp8

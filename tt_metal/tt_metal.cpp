@@ -230,39 +230,6 @@ L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &cor
     return l1_buffer;
 }
 
-std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes, uint32_t address) {
-    std::vector<L1Buffer *> l1_buffers;
-    auto start_core = core_range.first;
-    auto end_core = core_range.second;
-    for (auto x = start_core.x; x <= end_core.x; x++) {
-        for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto logical_core = tt_xy_pair(x, y);
-            L1Buffer *l1_buffer = new L1Buffer(device, logical_core, size_in_bytes, address);
-            program->add_l1_buffer(l1_buffer);
-            l1_buffers.push_back(l1_buffer);
-        }
-    }
-    return l1_buffers;
-}
-
-std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes) {
-    uint32_t l1_address = device->address_for_l1_buffers_across_core_range(core_range, size_in_bytes);
-    std::vector<L1Buffer *> l1_buffers;
-    auto start_core = core_range.first;
-    auto end_core = core_range.second;
-    for (auto x = start_core.x; x <= end_core.x; x++) {
-        for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto logical_core = tt_xy_pair(x, y);
-            L1Buffer *l1_buffer = new L1Buffer(device, logical_core, size_in_bytes, l1_address);
-            // L1 buffers constructed with address don't invoke the allocator, so we need to manually invoke it by reserving space
-            l1_buffer->reserve();
-            program->add_l1_buffer(l1_buffer);
-            l1_buffers.push_back(l1_buffer);
-        }
-    }
-    return l1_buffers;
-}
-
 CircularBuffer *CreateCircularBuffer(
     Program *program,
     Device *device,
@@ -324,7 +291,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format) {
-    uint32_t l1_address = device->address_for_l1_buffers_across_core_range(core_range, size_in_bytes);
+    uint32_t l1_address = device->address_for_circular_buffers_across_core_range(core_range, size_in_bytes);
     std::vector<CircularBuffer *> circular_buffers;
     auto start_core = core_range.first;
     auto end_core = core_range.second;

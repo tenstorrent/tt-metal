@@ -129,6 +129,23 @@ void Device::free_dram_buffer(int dram_channel, uint32_t address) {
     this->allocator_->deallocate_dram_buffer(dram_channel, address);
 }
 
+uint32_t Device::allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes) {
+    if (not cluster_is_initialized()) {
+        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
+    }
+    auto buffer_address = this->allocator_->allocate_circular_buffer(logical_core, size_in_bytes);
+    return buffer_address;
+}
+
+uint32_t Device::allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address) {
+    if (not cluster_is_initialized()) {
+        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
+    }
+    auto buffer_address = this->allocator_->allocate_circular_buffer(logical_core, address, size_in_bytes);
+    TT_ASSERT(buffer_address == address);
+    return buffer_address;
+}
+
 uint32_t Device::allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes) {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
@@ -161,8 +178,8 @@ uint32_t Device::address_for_interleaved_dram_buffer(const std::map<int, uint32_
     return this->allocator_->get_address_for_interleaved_dram_buffer(size_in_bytes_per_bank);
 }
 
-uint32_t Device::address_for_l1_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes) {
-    return this->allocator_->get_address_for_l1_buffers_across_core_range(logical_core_range, size_in_bytes);
+uint32_t Device::address_for_circular_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes) {
+    return this->allocator_->get_address_for_circular_buffers_across_core_range(logical_core_range, size_in_bytes);
 }
 
 }  // namespace tt_metal

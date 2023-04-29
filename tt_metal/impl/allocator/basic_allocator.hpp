@@ -34,11 +34,15 @@ class BasicAllocator : public Allocator {
 
     void deallocate_dram_buffer(int dram_channel, uint32_t address);
 
+    uint32_t allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_bytes);
+
+    uint32_t allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes);
+
     uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_bytes);
 
     uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes);
 
-    uint32_t get_address_for_l1_buffers_across_core_range(const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes) const;
+    uint32_t get_address_for_circular_buffers_across_core_range(const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes) const;
 
     void deallocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t address);
 

@@ -82,16 +82,6 @@ class L1Buffer : public Buffer {
 
    protected:
     void reserve();
-    friend std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes);
-    friend std::vector<CircularBuffer *> CreateCircularBuffers(
-        Program *program,
-        Device *device,
-        uint32_t buffer_index,
-        const CoreRange &core_range,
-        uint32_t num_tiles,
-        uint32_t size_in_bytes,
-        DataFormat data_format
-    );
 
     void free();
     friend void DeallocateBuffer(Buffer *buffer);

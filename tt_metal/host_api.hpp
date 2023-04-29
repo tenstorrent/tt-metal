@@ -459,37 +459,6 @@ L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &cor
 L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes);
 
 /**
- * Creates L1 buffer per core within core range (inclusive). L1 buffers will be at same address on their respective cores. L1 allocator does not track buffers with manually specified addresses.
- * Warning: Do not mix use of this API with L1 buffer creation APIs that are tracked by allocator since there is no gurantee that buffer space will not be overwritten.
- *
- * Return value: std::vector<L1Buffer *>
- *
- * | Argument      | Description                                       | Type       | Valid Range                                            | Required |
- * |---------------|---------------------------------------------------|------------|--------------------------------------------------------|----------|
- * | program       | The program to which buffer will be added to.     | Program *  |                                                        | True     |
- * | device        | The device where the L1 buffer resides.           | Device *   |                                                        | True     |
- * | core_range    | Range of the Tensix co-ordinates where buffer will reside (Logical co-ordinates) | const CoreRange & (std::pair<tt_xy_pair, tt_xy_pair>) | Any logical worker core on Grayskull                   | True     |
- * | size_in_bytes | Size of DRAM buffer in Bytes                      | uint32_t   | DOX-TODO: valid range? 0 to 800 KB ?? (expressed in Bytes) | True     |
- * | address       | Address at which the DRAM buffer will reside      | uint32_t   | DOX-TODO: fix range. 200KB to 1MB ??? (expressed in Bytes) | True     |
- */
-std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes, uint32_t address);
-
-/**
- * Creates L1 buffer per core within core range (inclusive). L1 buffers will be allocated to the same address on their respective cores, an error is returned if this is not possible.
- * Warning: Do not mix use of this API with L1 buffer creation APIs that are not tracked by allocator since there is no gurantee that buffer space will not be overwritten.
- *
- * Return value: std::vector<L1Buffer *>
- *
- * | Argument      | Description                                       | Type       | Valid Range                                            | Required |
- * |---------------|---------------------------------------------------|------------|--------------------------------------------------------|----------|
- * | program       | The program to which buffer will be added to.     | Program *  |                                                        | True     |
- * | device        | The device where the L1 buffer resides.           | Device *   |                                                        | True     |
- * | core_range    | Range of the Tensix co-ordinates where buffer will reside (Logical co-ordinates) | const CoreRange & (std::pair<tt_xy_pair, tt_xy_pair>) | Any logical worker core on Grayskull                   | True     |
- * | size_in_bytes | Size of DRAM buffer in Bytes                      | uint32_t   | DOX-TODO: valid range? 0 to 800 KB ?? (expressed in Bytes) | True     |
- */
-std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes);
-
-/**
  * Creates a Circular Buffer (CBs) in L1 memory at specified address and core and adds it to the program. L1 allocator does not track CBs with manually specified addresses.
  * Warning: Do not mix use of this API with CB creation APIs that are tracked by allocator since there is no gurantee that buffer space will not be overwritten.
  *

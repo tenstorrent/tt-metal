@@ -75,15 +75,17 @@ class Device {
     uint32_t allocate_dram_buffer(int dram_channel, uint32_t size_in_bytes);
     uint32_t allocate_dram_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
     void free_dram_buffer(int dram_channel, uint32_t address);
+    uint32_t allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes);
+    uint32_t allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
     uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes);
     uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
     void free_l1_buffer(const tt_xy_pair &logical_core, uint32_t address);
     uint32_t address_for_interleaved_dram_buffer(const std::map<int, uint32_t> &size_in_bytes_per_bank);
-    uint32_t address_for_l1_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes);
+    uint32_t address_for_circular_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes);
     friend class DramBuffer;
     friend class InterleavedDramBuffer;
+    friend class CircularBuffer;
     friend class L1Buffer;
-    friend std::vector<L1Buffer *> CreateL1Buffers(Program *program, Device *device, const CoreRange &core_range, uint32_t size_in_bytes);
     friend std::vector<CircularBuffer *> CreateCircularBuffers(
         Program *program,
         Device *device,
