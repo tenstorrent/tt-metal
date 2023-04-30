@@ -21,6 +21,7 @@ TT_METAL_TEST_ENTRIES = (
 
     TestEntry("tt_metal/tests/test_datacopy", "test_datacopy"),
     TestEntry("tt_metal/tests/test_datacopy", "test_datacopy_bfp8b"),
+    TestEntry("tt_metal/tests/test_datacopy_output_in_l1", "test_datacopy_output_in_l1"),
     TestEntry("tt_metal/tests/test_dataflow_cb", "test_dataflow_cb"),
     # TestEntry("tt_metal/tests/test_datacopy_multi_core_multi_dram", "test_datacopy_multi_core_multi_dram"),  TODO: pls fix
 
@@ -29,6 +30,7 @@ TT_METAL_TEST_ENTRIES = (
 
     TestEntry("tt_metal/tests/test_matmul_single_tile", "test_matmul_single_tile"),
     TestEntry("tt_metal/tests/test_matmul_single_tile_bfp8b", "test_matmul_single_tile_bfp8b"),
+    TestEntry("tt_metal/tests/test_matmul_single_tile_output_in_l1", "test_matmul_single_tile_output_in_l1"),
     TestEntry("tt_metal/tests/test_matmul_multi_tile", "test_matmul_multi_tile"),
     TestEntry("tt_metal/tests/test_matmul_large_block", "test_matmul_large_block"),
     TestEntry("tt_metal/tests/test_matmul_single_core", "test_matmul_single_core"),
@@ -84,6 +86,7 @@ TT_METAL_TEST_ENTRIES = (
 
     # Allocator Tests
     TestEntry("tt_metal/tests/allocator/test_free_list_allocator_algo", "allocator/test_free_list_allocator_algo"),
+    TestEntry("tt_metal/tests/allocator/test_l1_banking_allocator", "allocator/test_l1_banking_allocator"),
 
     # DTX Tests
     TestEntry("tt_metal/tests/dtx/tensor", "dtx/tensor"),

@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "llrt/tt_cluster.hpp"
 
 namespace tt {
@@ -62,10 +63,10 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize();
-    friend bool InitializeDevice(Device *device);
+    bool initialize(bool enable_l1_banking_allocator=false);
+    friend bool InitializeDevice(Device *device, bool enable_l1_banking_allocator);
     void initialize_cluster();
-    void initialize_allocator();
+    void initialize_allocator(bool enable_l1_banking_allocator=false);
 
     // Puts device into reset
     bool close();

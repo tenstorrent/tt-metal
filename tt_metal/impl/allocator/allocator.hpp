@@ -43,6 +43,17 @@ class Allocator {
     virtual void clear() = 0;
 };
 
+namespace allocator {
+
+uint32_t find_address_of_smallest_chunk(const std::vector<std::pair<uint32_t, uint32_t>> &candidate_addr_ranges);
+
+void populate_candidate_address_ranges(
+    std::vector<std::pair<uint32_t, uint32_t>> &candidate_addr_ranges,
+    const std::vector<std::pair<uint32_t, uint32_t>> &potential_addr_ranges
+);
+
+}  // namespace allocator
+
 }  // namespace tt_metal
 
 }  // namespace tt

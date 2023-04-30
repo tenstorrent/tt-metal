@@ -37,7 +37,7 @@ BasicAllocator::BasicAllocator(const tt_SocDescriptor &soc_desc) : Allocator() {
             allocator::FreeList::SearchPolicy::FIRST
         );
         // Space up to UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
-        allocator->allocate_at_address(0, UNRESERVED_BASE, this->allocate_bottom_up_);
+        allocator->allocate_at_address(0, UNRESERVED_BASE);
         this->l1_manager_.insert({logical_core, std::move(allocator)});
     }
 }
@@ -71,49 +71,11 @@ uint32_t BasicAllocator::allocate_dram_buffer(int dram_channel, uint32_t size_by
 }
 
 uint32_t BasicAllocator::allocate_dram_buffer(int dram_channel, uint32_t start_address, uint32_t size_bytes) {
-    auto address = this->allocator_for_dram_channel(dram_channel).allocate_at_address(start_address, size_bytes, this->allocate_bottom_up_);
+    auto address = this->allocator_for_dram_channel(dram_channel).allocate_at_address(start_address, size_bytes);
     if (not address.has_value()) {
         TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for DRAM buffer in channel " + std::to_string(dram_channel) + " at " + std::to_string(start_address));
     }
     return address.value();
-}
-
-uint32_t find_address_of_smallest_chunk(const std::vector<std::pair<uint32_t, uint32_t>> &candidate_addr_ranges) {
-    uint32_t smallest_chunk = candidate_addr_ranges[0].second - candidate_addr_ranges[0].first;
-    uint32_t address = candidate_addr_ranges[0].first;
-    for (auto candidate_addr_range : candidate_addr_ranges) {
-        uint32_t range_size = candidate_addr_range.second - candidate_addr_range.first;
-        if (range_size < smallest_chunk) {
-            smallest_chunk = range_size;
-            address = candidate_addr_range.first;
-        }
-    }
-    return address;
-}
-
-void populate_candidate_address_ranges(
-    std::vector<std::pair<uint32_t, uint32_t>> &candidate_addr_ranges,
-    const std::vector<std::pair<uint32_t, uint32_t>> &potential_addr_ranges) {
-    if (candidate_addr_ranges.empty()) {
-        candidate_addr_ranges = potential_addr_ranges;
-        return;
-    }
-    int i = 0;
-    int j = 0;
-    std::vector<std::pair<uint32_t, uint32_t>> intersecting_addr_ranges;
-    while (i < candidate_addr_ranges.size() and j < potential_addr_ranges.size()) {
-        uint32_t lower_addr = std::max(candidate_addr_ranges[i].first, potential_addr_ranges[j].first);
-        uint32_t upper_addr = std::min(candidate_addr_ranges[i].second, potential_addr_ranges[j].second);
-        if (lower_addr <= upper_addr) {
-            intersecting_addr_ranges.push_back({lower_addr, upper_addr});
-        }
-        if (candidate_addr_ranges[i].second < potential_addr_ranges[j].second) {
-            i++;
-        } else {
-            j++;
-        }
-    }
-    candidate_addr_ranges = intersecting_addr_ranges;
 }
 
 uint32_t BasicAllocator::get_address_for_interleaved_dram_buffer(const std::map<int, uint32_t> &size_in_bytes_per_bank) const {
@@ -121,7 +83,7 @@ uint32_t BasicAllocator::get_address_for_interleaved_dram_buffer(const std::map<
     uint32_t total_size_bytes = 0;
     for (auto &[dram_channel, required_size_bytes] : size_in_bytes_per_bank) {
         auto potential_addr_ranges = this->allocator_for_dram_channel(dram_channel).available_addresses(required_size_bytes);
-        populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges);
+        allocator::populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges);
         total_size_bytes += required_size_bytes;
     }
 
@@ -129,7 +91,7 @@ uint32_t BasicAllocator::get_address_for_interleaved_dram_buffer(const std::map<
         TT_THROW("Not enough space to hold interleave " + std::to_string(total_size_bytes) + " bytes across DRAM channels");
     }
 
-    return find_address_of_smallest_chunk(candidate_addr_ranges);
+    return allocator::find_address_of_smallest_chunk(candidate_addr_ranges);
 }
 
 void BasicAllocator::deallocate_dram_buffer(int dram_channel, uint32_t address) {
@@ -145,7 +107,7 @@ uint32_t BasicAllocator::allocate_circular_buffer(const tt_xy_pair &logical_core
 }
 
 uint32_t BasicAllocator::allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes) {
-    auto address = this->allocator_for_logical_core(logical_core).allocate_at_address(start_address, size_bytes, this->allocate_bottom_up_);
+    auto address = this->allocator_for_logical_core(logical_core).allocate_at_address(start_address, size_bytes);
     if (not address.has_value()) {
         TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for circular buffer on core " + logical_core.str() + " at " + std::to_string(start_address));
     }
@@ -161,7 +123,7 @@ uint32_t BasicAllocator::allocate_l1_buffer(const tt_xy_pair &logical_core, uint
 }
 
 uint32_t BasicAllocator::allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes) {
-    auto address = this->allocator_for_logical_core(logical_core).allocate_at_address(start_address, size_bytes, this->allocate_bottom_up_);
+    auto address = this->allocator_for_logical_core(logical_core).allocate_at_address(start_address, size_bytes);
     if (not address.has_value()) {
         TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for l1 buffer on core " + logical_core.str() + " at " + std::to_string(start_address));
     }
@@ -180,7 +142,7 @@ uint32_t BasicAllocator::get_address_for_circular_buffers_across_core_range(cons
         for (auto y = start_core.y; y <= end_core.y; y++) {
             auto logical_core = tt_xy_pair(x, y);
             auto potential_addr_ranges = this->allocator_for_logical_core(logical_core).available_addresses(size_in_bytes);
-            populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges);
+            allocator::populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges);
         }
     }
 
@@ -189,7 +151,7 @@ uint32_t BasicAllocator::get_address_for_circular_buffers_across_core_range(cons
             " byte CircularBuffers in cores ranging from " + start_core.str() + " to " + end_core.str());
     }
 
-    return find_address_of_smallest_chunk(candidate_addr_ranges);
+    return allocator::find_address_of_smallest_chunk(candidate_addr_ranges);
 }
 
 void BasicAllocator::clear_dram() {

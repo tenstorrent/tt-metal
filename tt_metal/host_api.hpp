@@ -118,11 +118,12 @@ Device *CreateDevice(tt::ARCH arch, int pcie_slot);
  *
  * Return value: bool
  *
- * | Argument | Description                | Type     | Valid Range | Required |
- * |----------|----------------------------|----------|-------------|----------|
- * | device   | Pointer to a device object | Device * |             | True     |
+ * | Argument                    | Description                                 | Type     | Valid Range | Required |
+ * |-----------------------------|---------------------------------------------|----------|-------------|----------|
+ * | device                      | Pointer to device object                    | Device * |             | Yes      |
+ * | enable_l1_banking_allocator | Whether L1 banking allocator scheme is used | bool     |             | No       |
  */
-bool InitializeDevice(Device *device);
+bool InitializeDevice(Device *device, bool enable_l1_banking_allocator=false);
 
 /**
  * Resets device and closes device

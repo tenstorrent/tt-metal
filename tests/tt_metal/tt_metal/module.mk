@@ -25,6 +25,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/tensors/test_copy_and_move \
 		 tests/tt_metal/tensors/test_host_device_loopback \
 		 tests/tt_metal/allocator/test_free_list_allocator_algo \
+		 tests/tt_metal/allocator/test_l1_banking_allocator \
 		 tests/tt_metal/test_add_two_ints \
 		 tests/tt_metal/test_dram_to_l1_multicast \
 		 tests/tt_metal/test_dram_to_l1_multicast_loopback_src \
@@ -33,6 +34,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_eltwise_binary \
 		 tests/tt_metal/test_matmul_single_tile_bfp8b \
 		 tests/tt_metal/test_matmul_single_tile \
+		 tests/tt_metal/test_matmul_single_tile_output_in_l1 \
 		 tests/tt_metal/test_matmul_multi_tile \
 		 tests/tt_metal/test_matmul_large_block \
 		 tests/tt_metal/test_matmul_single_core \
@@ -43,6 +45,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast \
 		 tests/tt_metal/test_datacopy_bfp8b \
 		 tests/tt_metal/test_datacopy \
+		 tests/tt_metal/test_datacopy_output_in_l1 \
 		 tests/tt_metal/test_dataflow_cb \
 		 tests/tt_metal/test_flatten \
 		 tests/tt_metal/test_transpose_hc \

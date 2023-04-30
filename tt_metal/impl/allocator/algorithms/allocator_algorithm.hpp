@@ -30,7 +30,7 @@ class Algorithm {
     virtual std::optional<uint32_t> allocate(uint32_t size_bytes, bool bottom_up=true) = 0;
 
     // bottom_up=true indicates that allocation grows from address 0
-    virtual std::optional<uint32_t> allocate_at_address(uint32_t start_address, uint32_t size_bytes, bool bottom_up=true) = 0;
+    virtual std::optional<uint32_t> allocate_at_address(uint32_t start_address, uint32_t size_bytes) = 0;
 
     virtual void deallocate(uint32_t address) = 0;
 
