@@ -415,7 +415,9 @@ Tensor bert_large_pre_softmax_bmm(const Tensor& a, const Tensor& b) {
     uint32_t per_core_M = 12;
     uint32_t per_core_N = 12;
     bool fuse_batch = true;
-    return bmm_multi_core_reuse_generalized_bert_large(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    return bmm_multi_core_reuse_optimized_bert_large(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    // Old matmul:
+    // return bmm_multi_core_reuse_generalized_bert_large(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 Tensor bert_large_post_softmax_bmm(const Tensor& a, const Tensor& b) {
@@ -432,7 +434,9 @@ Tensor bert_large_post_softmax_bmm(const Tensor& a, const Tensor& b) {
     uint32_t per_core_M = 12;
     uint32_t per_core_N = 2;
     bool fuse_batch = true;
-    return bmm_multi_core_reuse_generalized_bert_large(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    return bmm_multi_core_reuse_optimized_bert_large(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    // Old matmul:
+    // return bmm_multi_core_reuse_generalized_bert_large(a, b, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 }  // namespace tt_metal
