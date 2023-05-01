@@ -93,9 +93,9 @@ bool parallelize_generic_tensor_slice(DataTransformations * dtx, vector<int> sli
     // Populate the new TransformationNode with the slices
     for (int group_idx=0; group_idx<number_of_groups; group_idx++){
         //                                                                                          SRC                                         DST
-        consumer->groups[group_idx]->tensor_pairs.push_back(new TensorPair(new Tensor({list_of_subtensor_ranges[group_idx][0]},  {list_of_subtensor_ranges[group_idx][1]}),
+        consumer->groups[group_idx]->tensor_pairs.push_back(new TensorPair(new DTXTensor({list_of_subtensor_ranges[group_idx][0]},  {list_of_subtensor_ranges[group_idx][1]}),
                                                                            0,
-                                                                           new Tensor(zeros(rank),  slice_shape)));
+                                                                           new DTXTensor(zeros(rank),  slice_shape)));
         consumer->groups[group_idx]->core = list_of_cores[group_idx];
         consumer->groups[group_idx]->shape = slice_shape;
     }

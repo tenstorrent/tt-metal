@@ -46,31 +46,29 @@ bool collapse_transformations(DataTransformations * dtx) {
                         if (DEBUG) cout << s(12) << "PRODUCER = " << producer_tp->get_string() << endl;
                         if (DEBUG) cout << s(12) << "CONSUMER = " << consumer_tp->get_string() << endl;
 
-                        Tensor * overlap = calculate_tensor_overlap_in_nd(producer_node->groups[producer_group_idx]->tensor_pairs[producer_tp_idx]->dst_tensor, consumer_node->groups[consumer_group_idx]->tensor_pairs[consumer_tp_idx]->src_tensor);
+                        DTXTensor * overlap = calculate_tensor_overlap_in_nd(producer_tp->dst_tensor, consumer_tp->src_tensor);
 
                         if (has_overlap(overlap)) {
 
                             // Part 1: Calculating the new SRC tensor
-                            vector<int> producer_offset = vector_subtraction(producer_node->groups[producer_group_idx]->tensor_pairs[producer_tp_idx]->dst_tensor->str,
-                                                                            producer_node->groups[producer_group_idx]->tensor_pairs[producer_tp_idx]->src_tensor->str);
+                            vector<int> producer_offset = vector_subtraction(producer_tp->dst_tensor->str, producer_tp->src_tensor->str);
                             if (DEBUG) cout << s(12) << "producer_offset = " << v2s(producer_offset) << endl;
 
                             vector<int> new_src_str = vector_subtraction(overlap->str, producer_offset);
                             vector<int> new_src_end = vector_subtraction(overlap->end, producer_offset);
-                            Tensor * new_src = new Tensor(new_src_str, new_src_end);
+                            DTXTensor * new_src = new DTXTensor(new_src_str, new_src_end);
                             if (DEBUG) cout << s(14) << "new_src_tensor = " << new_src->get_string() << endl;
 
 
                             // Part 2: Calculating the new DST tensor
-                            vector<int> consumer_offset = vector_subtraction(consumer_node->groups[consumer_group_idx]->tensor_pairs[consumer_tp_idx]->src_tensor->str,
-                                                                            consumer_node->groups[consumer_group_idx]->tensor_pairs[consumer_tp_idx]->dst_tensor->str);
+                            vector<int> consumer_offset = vector_subtraction(consumer_tp->src_tensor->str, consumer_tp->dst_tensor->str);
                             if (DEBUG) cout << s(12) << "consumer_offset = " << v2s(consumer_offset) << endl;
 
                             vector<int> new_dst_str = vector_subtraction(overlap->str, consumer_offset);
                             vector<int> new_dst_end = vector_subtraction(overlap->end, consumer_offset);
-                            Tensor * new_dst = new Tensor(new_dst_str, new_dst_end);
+                            DTXTensor * new_dst = new DTXTensor(new_dst_str, new_dst_end);
 
-                            int new_src_group = producer_node->groups[producer_group_idx]->tensor_pairs[producer_tp_idx]->src_group;
+                            int new_src_group = producer_tp->src_group;
 
                             // Store results
                             TensorPair * overlap_tp = new TensorPair(new_src,
@@ -108,6 +106,5 @@ bool collapse_transformations(DataTransformations * dtx) {
     */
 
     if (DEBUG) cout << "\n----- End Resolving Transoformations -----\n" << endl;
-
     return true;
 }

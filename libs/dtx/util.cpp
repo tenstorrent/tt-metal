@@ -17,7 +17,7 @@ bool compare_two_vectors_of_ints(vector<int> a, vector<int> b) {
     return true;
 }
 
-bool compare_two_tensors(Tensor * a, Tensor * b) {
+bool compare_two_tensors(DTXTensor * a, DTXTensor * b) {
     if (compare_two_vectors_of_ints(a->str, b->str) && compare_two_vectors_of_ints(a->end, b->end)) return true;
     else return false;
 }
@@ -41,7 +41,7 @@ bool compare_two_groups(TensorPairGroup * a, TensorPairGroup * b) {
 //                      TENSOR OVERLAP
 // ========================================================
 
-bool has_overlap(Tensor * overlap) {
+bool has_overlap(DTXTensor * overlap) {
     bool has_overlap = true;
     for (int i=0; i<overlap->str.size(); i++){
         if (overlap->str[i] == -1) has_overlap = false;
@@ -70,12 +70,12 @@ vector<int> calculate_line_segment_overlap_in_1d(int l1_str, int l1_end, int l2_
         return {l1_str, l2_end};}
 }
 
-Tensor * calculate_tensor_overlap_in_nd(Tensor * t0, Tensor * t1) {
+DTXTensor * calculate_tensor_overlap_in_nd(DTXTensor * t0, DTXTensor * t1) {
     bool DEBUG = false;
     // Tensors must be of the same rank
     int rank = t1->rank;
 
-    Tensor * overlap_nd = new Tensor();
+    DTXTensor * overlap_nd = new DTXTensor();
     bool overlap_nd_exists = true;
 
 

@@ -35,17 +35,17 @@ bool test_util() {
 
 bool test_Tensor_class() {
 
-    Tensor * l1 = new Tensor( {0,0,0}, {1,2,3});
+    DTXTensor * l1 = new DTXTensor( {0,0,0}, {1,2,3});
     l1->print();
 
     return 1;
 }
 
 bool test_TensorPair_class(){
-    TensorPair * tp1 = new TensorPair( new Tensor({0,0,0},{10,10,10}), 3, new Tensor({2,2,2}, {8,8,8}));
+    TensorPair * tp1 = new TensorPair( new DTXTensor({0,0,0},{10,10,10}), 3, new DTXTensor({2,2,2}, {8,8,8}));
     tp1->print_string();
 
-    TensorPair * tp2 = new TensorPair( new Tensor({0,0,0},{10,10,10}), 2, new Tensor({2,2,2}, {8,8,8}));
+    TensorPair * tp2 = new TensorPair( new DTXTensor({0,0,0},{10,10,10}), 2, new DTXTensor({2,2,2}, {8,8,8}));
     tp2->print_string();
 
     return 1;
@@ -59,19 +59,19 @@ bool test_golden_comparisons() {
     cout << "expecting 0, got " << compare_two_vectors_of_ints({1,2,3}, {1,2,4}) << endl;
 
     cout << "\ncompare_two_tensors" << endl;
-    cout << "expecting 1, got " << compare_two_tensors(new Tensor({1}, {2}), new Tensor({1},{2})) << endl;
-    cout << "expecting 0, got " << compare_two_tensors(new Tensor({1}, {2}), new Tensor({1},{3})) << endl;
-    cout << "expecting 0, got " << compare_two_tensors(new Tensor({1}, {2}), new Tensor({1,1},{2,2})) << endl;
+    cout << "expecting 1, got " << compare_two_tensors(new DTXTensor({1}, {2}), new DTXTensor({1},{2})) << endl;
+    cout << "expecting 0, got " << compare_two_tensors(new DTXTensor({1}, {2}), new DTXTensor({1},{3})) << endl;
+    cout << "expecting 0, got " << compare_two_tensors(new DTXTensor({1}, {2}), new DTXTensor({1,1},{2,2})) << endl;
 
     cout << "\ncompare_two_tensor_pairs" << endl;
-    cout << "expecting 1, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2}))           ) << endl;
-    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{9,2}))           ) << endl;
-    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({9},{2}), 0, new Tensor({1,1},{2,2}))           ) << endl;
+    cout << "expecting 1, got " << compare_two_tensor_pairs(new TensorPair(new DTXTensor({1},{2}), 0, new DTXTensor({1,1},{2,2})), new TensorPair(new DTXTensor({1},{2}), 0, new DTXTensor({1,1},{2,2}))           ) << endl;
+    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new DTXTensor({1},{2}), 0, new DTXTensor({1,1},{2,2})), new TensorPair(new DTXTensor({1},{2}), 0, new DTXTensor({1,1},{9,2}))           ) << endl;
+    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new DTXTensor({1},{2}), 0, new DTXTensor({1,1},{2,2})), new TensorPair(new DTXTensor({9},{2}), 0, new DTXTensor({1,1},{2,2}))           ) << endl;
 
 
-    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{9,2})), new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2}))           ) << endl;
-    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({1},{2}), 3, new Tensor({1,1},{2,2}))           ) << endl;
-    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new Tensor({2},{2}), 0, new Tensor({1,1},{2,2})), new TensorPair(new Tensor({1},{2}), 0, new Tensor({1,1},{2,2}))           ) << endl;
+    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new DTXTensor({1},{2}), 0, new DTXTensor({1,1},{9,2})), new TensorPair(new DTXTensor({1},{2}), 0, new DTXTensor({1,1},{2,2}))           ) << endl;
+    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new DTXTensor({1},{2}), 0, new DTXTensor({1,1},{2,2})), new TensorPair(new DTXTensor({1},{2}), 3, new DTXTensor({1,1},{2,2}))           ) << endl;
+    cout << "expecting 0, got " << compare_two_tensor_pairs(new TensorPair(new DTXTensor({2},{2}), 0, new DTXTensor({1,1},{2,2})), new TensorPair(new DTXTensor({1},{2}), 0, new DTXTensor({1,1},{2,2}))           ) << endl;
 
     return true;
 }

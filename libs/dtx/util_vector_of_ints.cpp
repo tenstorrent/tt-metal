@@ -23,6 +23,13 @@ string s(int num_spaces) {
     }
     return out;
 }
+string sp(int num_spaces) {
+    string out;
+    for (int i=0; i<num_spaces; i++) {
+        out.append(" ");
+    }
+    return out;
+}
 
 // ========================================================
 //                      VECTOR OF INTS

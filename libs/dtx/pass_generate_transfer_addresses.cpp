@@ -13,6 +13,8 @@ bool generate_transfer_addresses(DataTransformations * dtx){
     TransformationNode * consumer_node = dtx->transformations[1];
 
     // Loop over all groups
+    // TODO: generalize for groups > 1
+    assert(consumer_node->groups.size() == 1);
     for (TensorPairGroup * consumer_group : consumer_node->groups) {
 
         // Loop over all TensorPairs

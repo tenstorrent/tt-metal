@@ -39,8 +39,8 @@ int main(int argc, char **argv) {
     TransformationNode * node1 = new TransformationNode("transformation", 1);
     node1->groups[0]->shape = {1,1,1,6};
     dtx->transformations.push_back(node1);
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0,0,0,0},  {0,0,0,2}), 0,  new Tensor({0,0,0,3},  {0,0,0,5}))   );
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0,0,0,3},  {0,0,0,5}), 0,  new Tensor({0,0,0,0},  {0,0,0,2}))   );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({0,0,0,0},  {0,0,0,2}), 0,  new DTXTensor({0,0,0,3},  {0,0,0,5}))   );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({0,0,0,3},  {0,0,0,5}), 0,  new DTXTensor({0,0,0,0},  {0,0,0,2}))   );
 
     dtx->print();
     evaluate(a.to_vec(), dtx);

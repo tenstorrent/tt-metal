@@ -68,19 +68,19 @@ bool test_calculate_line_segment_overlap_in_1d() {
     return pass;
 }
 
-bool compare_tensors(Tensor * t0, Tensor * t1) {
+bool compare_tensors(DTXTensor * t0, DTXTensor * t1) {
     bool is_equal = true;
     is_equal &= compare_two_int_vectors(t0->str, t1->str);
     is_equal &= compare_two_int_vectors(t0->end, t1->end);
     return is_equal;
 }
 
-bool run_single_tensor_overlap_test(Tensor * t0, Tensor * t1, Tensor * golden_overlap) {
+bool run_single_tensor_overlap_test(DTXTensor * t0, DTXTensor * t1, DTXTensor * golden_overlap) {
     int DEBUG = false;
     bool pass = true;
 
     if (DEBUG) cout << "\nrun_single_tensor_overlap_test: " << t0->get_string() << " && " << t1->get_string() << endl;
-    Tensor * overlap = calculate_tensor_overlap_in_nd(t0, t1);
+    DTXTensor * overlap = calculate_tensor_overlap_in_nd(t0, t1);
     pass = compare_tensors(overlap, golden_overlap);
     if (DEBUG) cout << "comparing overlaps:  calculated: " << overlap->get_string() << " && golden: " << golden_overlap->get_string() << ", MATCH = " << pass << endl;
     return pass;
@@ -91,9 +91,9 @@ bool test_calculate_nd_tensor_overlap(){
     bool pass = true;
 
     //                                        INPUT TENSOR 1               INPUT TENSOR 2          GOLDEN OVERLAP
-    pass &= run_single_tensor_overlap_test(new Tensor({0,1,2}, {30,31,32}), new Tensor({10,11,12}, {20,21,22}), new Tensor({10,11,12}, {20,21,22}));
-    pass &= run_single_tensor_overlap_test(new Tensor({0,1}, {30,31}),      new Tensor({40,11}, {50,21}),       new Tensor({-1,11}, {-1,21}));
-    pass &= run_single_tensor_overlap_test(new Tensor({0,1}, {30,31}),      new Tensor({10,40}, {20,50}),       new Tensor({10,-1}, {20,-1}));
+    pass &= run_single_tensor_overlap_test(new DTXTensor({0,1,2}, {30,31,32}), new DTXTensor({10,11,12}, {20,21,22}), new DTXTensor({10,11,12}, {20,21,22}));
+    pass &= run_single_tensor_overlap_test(new DTXTensor({0,1}, {30,31}),      new DTXTensor({40,11}, {50,21}),       new DTXTensor({-1,11}, {-1,21}));
+    pass &= run_single_tensor_overlap_test(new DTXTensor({0,1}, {30,31}),      new DTXTensor({10,40}, {20,50}),       new DTXTensor({10,-1}, {20,-1}));
     return pass;
 }
 

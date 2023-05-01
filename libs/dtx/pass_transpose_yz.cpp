@@ -67,9 +67,9 @@ bool transpose_yz(DataTransformations * dtx) {
             dst_end[Y(rank)] = producer_z;
             dst_end[Z(rank)] = producer_y;
 
-            TensorPair * tp = new TensorPair(new Tensor({src_str}, {src_end}),
+            TensorPair * tp = new TensorPair(new DTXTensor({src_str}, {src_end}),
                                             0,
-                                            new Tensor({dst_str}, {dst_end}));
+                                            new DTXTensor({dst_str}, {dst_end}));
             consumer->groups[0]->tensor_pairs.push_back(tp);
 
             if (DEBUG) cout << s(2) << "src = " << v2s(src_str) << "-" << v2s(src_end) << " ==> " << v2s(dst_str) << "-" << v2s(dst_end) << endl;

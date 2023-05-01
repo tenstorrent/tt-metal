@@ -34,8 +34,8 @@ int main(int argc, char **argv) {
         TransformationNode * node1 = new TransformationNode("tx", 1);
         node0->groups[0]->shape = {64};
         node1->groups[0]->shape = {64};
-        node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0}, {31}),  0, new Tensor({32},  {63}))  );
-        node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({32}, {63}),  0, new Tensor({0},  {31}))  );
+        node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({0}, {31}),  0, new DTXTensor({32},  {63}))  );
+        node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({32}, {63}),  0, new DTXTensor({0},  {31}))  );
         DataTransformations * dtx = new DataTransformations();
         dtx->transformations.push_back(node0);
         dtx->transformations.push_back(node1);

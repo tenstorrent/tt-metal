@@ -39,8 +39,8 @@ bool test_GenerateAddresses() {
     node1->groups[0]->shape = {40};
     node1->groups[0]->address = 0;
     node1->groups[0]->core = {5,6};
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 0,  new Tensor({20}, {40}))  );
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 0,  new Tensor({0}, {20}))   );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({0},  {20}), 0,  new DTXTensor({20}, {40}))  );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({20}, {40}), 0,  new DTXTensor({0}, {20}))   );
 
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
@@ -64,12 +64,12 @@ bool run_DTX_reverse_transformations_test_0(int DEBUG) {
 
     // NODE 1:
     node1->groups[0]->shape = {40};
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 1, new Tensor({20}, {40}))  );
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 1, new Tensor({0}, {20}))   );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({0},  {20}), 1, new DTXTensor({20}, {40}))  );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({20}, {40}), 1, new DTXTensor({0}, {20}))   );
 
     node1->groups[1]->shape = {40};
-    node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 0, new Tensor({20}, {40}))  );
-    node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 0,  new Tensor({0}, {20}))   );
+    node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({0},  {20}), 0, new DTXTensor({20}, {40}))  );
+    node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({20}, {40}), 0,  new DTXTensor({0}, {20}))   );
 
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
@@ -81,14 +81,14 @@ bool run_DTX_reverse_transformations_test_0(int DEBUG) {
     // Correctness checking
     TransformationNode * golden = new TransformationNode("golden", 1);
     golden->groups[0]->shape = {40,40};
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {20}, {30}), 1, new Tensor({10}, {20})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 1, new Tensor({30}, {40})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 1, new Tensor({20}, {30})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 1, new Tensor({0 }, {10})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {20}, {30}), 0, new Tensor({10}, {20})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 0, new Tensor({30}, {40})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 0, new Tensor({20}, {30})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 0, new Tensor({0 }, {10})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {20}, {30}), 1, new DTXTensor({10}, {20})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {0 }, {10}), 1, new DTXTensor({30}, {40})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {30}, {40}), 1, new DTXTensor({20}, {30})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {10}, {20}), 1, new DTXTensor({0 }, {10})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {20}, {30}), 0, new DTXTensor({10}, {20})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {0 }, {10}), 0, new DTXTensor({30}, {40})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {30}, {40}), 0, new DTXTensor({20}, {30})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {10}, {20}), 0, new DTXTensor({0 }, {10})));
 
     if (DEBUG) golden->print(0);
 
@@ -111,17 +111,17 @@ bool run_DTX_reverse_transformations_test_1(int DEBUG) {
 
     // NODE 1:
     node1->groups[0]->shape = {20};
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({60}, {70}),  0, new Tensor({0},  {10}))  );
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({70}, {80}),  0, new Tensor({10}, {20}))   );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({60}, {70}),  0, new DTXTensor({0},  {10}))  );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({70}, {80}),  0, new DTXTensor({10}, {20}))   );
 
     // NODE 1:
     node1->groups[1]->shape = {30};
-    node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({130}, {140}), 1, new Tensor({0},  {10}))  );
-    node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new Tensor({140}, {150}), 1, new Tensor({10}, {20}))  );
+    node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({130}, {140}), 1, new DTXTensor({0},  {10}))  );
+    node1->groups[1]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({140}, {150}), 1, new DTXTensor({10}, {20}))  );
 
     node1->groups[2]->shape = {40};
-    node1->groups[2]->tensor_pairs.push_back(  new TensorPair( new Tensor({80},  {90}),  0, new Tensor({0},  {10}))  );
-    node1->groups[2]->tensor_pairs.push_back(  new TensorPair( new Tensor({160}, {170}), 1, new Tensor({10}, {20}))  );
+    node1->groups[2]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({80},  {90}),  0, new DTXTensor({0},  {10}))  );
+    node1->groups[2]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({160}, {170}), 1, new DTXTensor({10}, {20}))  );
 
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
@@ -134,14 +134,14 @@ bool run_DTX_reverse_transformations_test_1(int DEBUG) {
     // Correctness checking
     TransformationNode * golden = new TransformationNode("golden", 1);
     golden->groups[0]->shape = {40,40};
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {20}, {30}), 1, new Tensor({10}, {20})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 1, new Tensor({30}, {40})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 1, new Tensor({20}, {30})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 1, new Tensor({0 }, {10})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {20}, {30}), 0, new Tensor({10}, {20})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 0, new Tensor({30}, {40})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 0, new Tensor({20}, {30})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 0, new Tensor({0 }, {10})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {20}, {30}), 1, new DTXTensor({10}, {20})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {0 }, {10}), 1, new DTXTensor({30}, {40})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {30}, {40}), 1, new DTXTensor({20}, {30})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {10}, {20}), 1, new DTXTensor({0 }, {10})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {20}, {30}), 0, new DTXTensor({10}, {20})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {0 }, {10}), 0, new DTXTensor({30}, {40})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {30}, {40}), 0, new DTXTensor({20}, {30})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {10}, {20}), 0, new DTXTensor({0 }, {10})));
 
     if (DEBUG) golden->print(0);
 
@@ -164,17 +164,17 @@ bool run_DTX_reverse_transformations_test_2(int DEBUG) {
 
     // NODE 1:
     node1->groups[0]->shape = {40};
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({10}, {20}),  0, new Tensor({0},  {10}))  );
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {10}),  0, new Tensor({10}, {20}))   );
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({30}, {40}),  0, new Tensor({20}, {30}))   );
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {30}),  0, new Tensor({30}, {40}))   );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({10}, {20}),  0, new DTXTensor({0},  {10}))  );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({0},  {10}),  0, new DTXTensor({10}, {20}))   );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({30}, {40}),  0, new DTXTensor({20}, {30}))   );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({20}, {30}),  0, new DTXTensor({30}, {40}))   );
 
     // NODE 2:
     node2->groups[0]->shape = {40};
-    node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {30}),  0, new Tensor({0},  {10}))  );
-    node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({30}, {40}),  0, new Tensor({10}, {20}))   );
-    node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {10}),  0, new Tensor({20}, {30}))   );
-    node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({10}, {20}),  0, new Tensor({30}, {40}))   );
+    node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({20}, {30}),  0, new DTXTensor({0},  {10}))  );
+    node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({30}, {40}),  0, new DTXTensor({10}, {20}))   );
+    node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({0},  {10}),  0, new DTXTensor({20}, {30}))   );
+    node2->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({10}, {20}),  0, new DTXTensor({30}, {40}))   );
 
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);
@@ -196,14 +196,14 @@ bool run_DTX_reverse_transformations_test_2(int DEBUG) {
     // Correctness checking
     TransformationNode * golden = new TransformationNode("golden", 1);
     golden->groups[0]->shape = {40,40};
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {20}, {30}), 1, new Tensor({10}, {20})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 1, new Tensor({30}, {40})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 1, new Tensor({20}, {30})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 1, new Tensor({0 }, {10})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {20}, {30}), 0, new Tensor({10}, {20})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {0 }, {10}), 0, new Tensor({30}, {40})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {30}, {40}), 0, new Tensor({20}, {30})));
-    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new Tensor( {10}, {20}), 0, new Tensor({0 }, {10})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {20}, {30}), 1, new DTXTensor({10}, {20})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {0 }, {10}), 1, new DTXTensor({30}, {40})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {30}, {40}), 1, new DTXTensor({20}, {30})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {10}, {20}), 1, new DTXTensor({0 }, {10})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {20}, {30}), 0, new DTXTensor({10}, {20})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {0 }, {10}), 0, new DTXTensor({30}, {40})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {30}, {40}), 0, new DTXTensor({20}, {30})));
+    golden->groups[0]->tensor_pairs.push_back( new TensorPair (new DTXTensor( {10}, {20}), 0, new DTXTensor({0 }, {10})));
 
     if (DEBUG) golden->print(0);
 
@@ -360,8 +360,8 @@ bool test_tensor_evaluate() {
 
     // NODE 1:
     node1->groups[0]->shape = {40};
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({0},  {20}), 1, new Tensor({20}, {40}))  );
-    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new Tensor({20}, {40}), 1, new Tensor({0}, {20}))   );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({0},  {20}), 1, new DTXTensor({20}, {40}))  );
+    node1->groups[0]->tensor_pairs.push_back(  new TensorPair( new DTXTensor({20}, {40}), 1, new DTXTensor({0}, {20}))   );
 
     DataTransformations * dtx = new DataTransformations();
     dtx->transformations.push_back(node0);

@@ -45,8 +45,8 @@ DataTransformations * reverse_transformations(DataTransformations * fw_dtx) {
         for (TensorPairGroup * fwd_consumer_group : fwd_consumer->groups) {
             for (TensorPair * fwd_consumer_tp : fwd_consumer_group->tensor_pairs) {
 
-                Tensor * bck_src_tensor = new Tensor(copy_vector_of_ints(fwd_consumer_tp->dst_tensor->str), copy_vector_of_ints(fwd_consumer_tp->dst_tensor->end));
-                Tensor * bck_dst_tensor = new Tensor(copy_vector_of_ints(fwd_consumer_tp->src_tensor->str), fwd_consumer_tp->src_tensor->end);
+                DTXTensor * bck_src_tensor = new DTXTensor(copy_vector_of_ints(fwd_consumer_tp->dst_tensor->str), copy_vector_of_ints(fwd_consumer_tp->dst_tensor->end));
+                DTXTensor * bck_dst_tensor = new DTXTensor(copy_vector_of_ints(fwd_consumer_tp->src_tensor->str), fwd_consumer_tp->src_tensor->end);
                 int bck_src_group = g;
 
                 TensorPair * bck_tp = new TensorPair(bck_src_tensor, bck_src_group, bck_dst_tensor);
@@ -136,8 +136,8 @@ DataTransformations * reverse_and_combine_transformations(DataTransformations * 
         for (TensorPairGroup * fwd_consumer_group : fwd_consumer->groups) {
             for (TensorPair * fwd_consumer_tp : fwd_consumer_group->tensor_pairs) {
 
-                Tensor * bck_src_tensor = new Tensor(copy_vector_of_ints(fwd_consumer_tp->dst_tensor->str), copy_vector_of_ints(fwd_consumer_tp->dst_tensor->end));
-                Tensor * bck_dst_tensor = new Tensor(copy_vector_of_ints(fwd_consumer_tp->src_tensor->str), fwd_consumer_tp->src_tensor->end);
+                DTXTensor * bck_src_tensor = new DTXTensor(copy_vector_of_ints(fwd_consumer_tp->dst_tensor->str), copy_vector_of_ints(fwd_consumer_tp->dst_tensor->end));
+                DTXTensor * bck_dst_tensor = new DTXTensor(copy_vector_of_ints(fwd_consumer_tp->src_tensor->str), fwd_consumer_tp->src_tensor->end);
                 int bck_src_group = g;
 
                 TensorPair * bck_tp = new TensorPair(bck_src_tensor, bck_src_group, bck_dst_tensor);

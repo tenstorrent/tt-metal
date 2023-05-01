@@ -106,9 +106,9 @@ bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<in
             vector<int> consumer_str = {i, 0, 0};
             vector<int> consumer_end = {i, block_shape[Y(rank)]-1, block_shape[X(rank)]-1};
 
-            TensorPair * tp = new TensorPair(new Tensor({str}, {end}),
+            TensorPair * tp = new TensorPair(new DTXTensor({str}, {end}),
                                             group_idx,
-                                            new Tensor({consumer_str}, {consumer_end}));
+                                            new DTXTensor({consumer_str}, {consumer_end}));
             consumer_group->tensor_pairs.push_back(tp);
 
             if (DEBUG) cout << s(6) << i << ".  " << tp->get_string() << endl;

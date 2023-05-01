@@ -55,9 +55,9 @@ bool convert_tensor_layout_CL1_to_2Dmatrix_conv1x1_s1(DataTransformations * dtx)
             vector<int> consumer_str = {0, consumer_y, consumer_x};
             vector<int> consumer_end = {0, consumer_y, consumer_x + producer_shape[X(rank)]-1};
 
-            TensorPair * tp = new TensorPair(new Tensor({producer_str}, {producer_end}),
+            TensorPair * tp = new TensorPair(new DTXTensor({producer_str}, {producer_end}),
                                             0,
-                                            new Tensor({consumer_str}, {consumer_end}));
+                                            new DTXTensor({consumer_str}, {consumer_end}));
             consumer->groups[0]->tensor_pairs.push_back(tp);
 
             if (DEBUG) cout << s(6) << "src = " << v2s(producer_str) << "-" << v2s(producer_end) << " ==> " << v2s(consumer_str) << "-" << v2s(consumer_end) << endl;

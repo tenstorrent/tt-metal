@@ -22,6 +22,7 @@ using namespace std;
 // ========================================================
 string v2s(vector<int> vector);
 string s(int);
+string sp(int);
 
 // ========================================================
 //                      VECTOR MATH AND MANIPULATION

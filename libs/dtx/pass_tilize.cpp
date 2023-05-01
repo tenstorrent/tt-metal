@@ -101,9 +101,9 @@ bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order) {
             str = vector_multiplication(list_of_counted_dims[i], tile_shape);
             end = vector_addition(str, tile_shape, -1);
 
-            TensorPair * tp = new TensorPair(new Tensor({str}, {end}),
+            TensorPair * tp = new TensorPair(new DTXTensor({str}, {end}),
                                             group_idx,
-                                            new Tensor({consumer_str}, {consumer_end}));
+                                            new DTXTensor({consumer_str}, {consumer_end}));
             consumer_group->tensor_pairs.push_back(tp);
 
             cout << s(6) << i << ".  " << tp->get_string() << endl;

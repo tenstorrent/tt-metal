@@ -30,9 +30,9 @@ bool row_major_memory_store(DataTransformations * dtx) {
             vector<int> consumer_str = {0, 0, consumer_x};
             vector<int> consumer_end = {0, 0, consumer_x + producer_shape[X(rank)]-1};
 
-            TensorPair * tp = new TensorPair(new Tensor({producer_str}, {producer_end}),
+            TensorPair * tp = new TensorPair(new DTXTensor({producer_str}, {producer_end}),
                                             0,
-                                            new Tensor({consumer_str}, {consumer_end}));
+                                            new DTXTensor({consumer_str}, {consumer_end}));
             if (DEBUG) cout << s(6) << i << ".  " << tp->get_string() << endl;
 
             consumer->groups[0]->tensor_pairs.push_back(tp);

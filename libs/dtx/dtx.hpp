@@ -36,19 +36,19 @@ class TensorData {
         void generate_csv(string filename);
 };
 
-class Tensor {
+class DTXTensor {
     public:
         vector<int> str;
         vector<int> end;
         int rank = -1;
 
-        Tensor(vector<int> str, vector<int> end){
+        DTXTensor(vector<int> str, vector<int> end){
             this->str = str;
             this->end = end;
             this->rank = this->str.size();
         }
 
-        Tensor() {
+        DTXTensor() {
             this->rank = 0;
         };
 
@@ -60,17 +60,17 @@ class Tensor {
 
 class TensorPair {
     public:
-        Tensor * src_tensor;    // Tensor range
+        DTXTensor * src_tensor;    // Tensor range
         int src_group;          // ID of the group to which the src_tensor is pointing
-        Tensor * dst_tensor;    // Tensor Range
+        DTXTensor * dst_tensor;    // Tensor Range
 
-        TensorPair(Tensor * src_tensor,  Tensor * dst_tensor) {
+        TensorPair(DTXTensor * src_tensor,  DTXTensor * dst_tensor) {
             this->src_tensor = src_tensor;
             this->src_group = 0;
             this->dst_tensor = dst_tensor;
         }
 
-        TensorPair(Tensor * src_tensor, int src_group, Tensor * dst_tensor) {
+        TensorPair(DTXTensor * src_tensor, int src_group, DTXTensor * dst_tensor) {
             this->src_tensor = src_tensor;
             this->src_group = src_group;
             this->dst_tensor = dst_tensor;
@@ -79,6 +79,14 @@ class TensorPair {
         string get_string();
         string get_short_string();
         void print_string();
+        ~TensorPair() {
+            if(src_tensor) {
+                delete src_tensor;
+            }
+            if(dst_tensor) {
+                delete dst_tensor;
+            }
+        }
 };
 
 class Transfer {
@@ -86,6 +94,7 @@ class Transfer {
     int src_address;
     int dst_address;
     int size;
+    int pad;
     vector<int> src_soc_core;
 
     string get_string();
@@ -103,6 +112,18 @@ class TensorPairGroup {
     int address;                // Address of buffer this is stored in (L1 or DRAM)
     vector<int> core = {-1,-1}; // Tensix core
     int streaming_id;           // The sequence order that's loaded into a CB or Buffer
+    ~TensorPairGroup() {
+        for(auto tp : tensor_pairs) {
+            if(tp)
+                delete tp;
+        }
+        tensor_pairs.clear();
+        for(auto tr : transfers) {
+            if(tr)
+                delete tr;
+        }
+        transfers.clear();
+    }
 };
 
 class TransformationNode {
@@ -126,6 +147,14 @@ class TransformationNode {
     }
 
     void print(int s);
+
+    ~TransformationNode() {
+        for(auto g : groups) {
+            if (g)
+                delete g;
+        }
+        groups.clear();
+    }
 };
 
 
