@@ -21,11 +21,10 @@ void MAIN {
 
     //kernel_profiler::mark_time(7);
     //kernel_profiler::init_profiler();
-    constexpr uint32_t NC = get_compile_time_arg_val(0);
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt = get_compile_time_arg_val(2);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(4);
+    constexpr uint32_t NCHt = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(3);
 
     //UNPACK(( DPRINT << "NC=" << NC << " Ht=" << Ht << " Wt=" << Wt << ENDL() ));
     binary_op_init_common(CB::c_in0, CB::c_in1);
@@ -51,7 +50,7 @@ void MAIN {
     constexpr auto cb_gamma = CB::c_in5;
     constexpr auto cb_beta = CB::c_in6;
     constexpr auto cb_stream = CB::c_intermed5; // stream gamma/beta
-    constexpr auto ndst = 8; // configurable size of DST block, use 1,2 for stress testing
+    constexpr auto ndst = BLOCK_SIZE; // configurable size of DST block, use 1,2 for stress testing
     constexpr auto scaler0 = 0;
     //constexpr auto cb_exps1 = CB::c_intermed4;
 
@@ -67,7 +66,7 @@ void MAIN {
 
     uint32_t nwait_g = 0, nwait_b = 0;
 
-    for (uint32_t nc = 0; nc < NC; nc++) {
+    for (uint32_t nc = 0; nc < NCHt; nc++) {
 
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
@@ -77,7 +76,6 @@ void MAIN {
         //auto h0w032 = SliceRange::h0_w0_32();
         //auto h9w26 = SliceRange{.h0 = 9, .h1 = 10, .hs = 1, .w0 = 26, .w1 = 27, .ws = 1};
         //DPRINT << FIXP() << SETW(4) << SETP(3);
-        for (uint32_t ht = 0; ht < Ht; ++ht) {
             // means = tensor.reduce(x, RSUM, RW, 1.0/W) # -> NCH1
             ACQ();
             cb_reserve_back(cb_ex, 1*onetile);
@@ -92,8 +90,8 @@ void MAIN {
                     //if (ht == 0 && wt == 16) { UNPACK(( { DPRINT  << TSLICE8(cb_in, wt+j, s16) << ENDL(); } )); }
                     //UNPACK(( DPRINT << "wt=" << wt << " j=" << j << ENDL() ));
                     //UNPACK(( { DPRINT << "CB addr=" << HEX() << uint32_t(&cb_read_interface[0]) << ENDL(); } ));
-                    //if (ht == 0 && wt+j == 16) { UNPACK(( { DPRINT  << "x: " << wt+j << ENDL(); } )); }
-                    //if (ht == 0 && wt+j == 16) { UNPACK(( { DPRINT  << TSLICE8(cb_in, wt+j, s16) << ENDL(); } )); }
+                    //if (ht >= 0 && wt+j >= 0) { UNPACK(( { DPRINT  << "x: ht=" << ht << " wt=" << wt+j << ENDL(); } )); }
+                    //if (ht >= 0 && wt+j >= 0) { UNPACK(( { DPRINT  << TSLICE8(cb_in, wt+j, s16) << ENDL(); } )); }
                     reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_in, cb_scaler, wt+j, scaler0, dst0);
                 }
                 // we don't pop cb_in until we compute Ex
@@ -117,6 +115,9 @@ void MAIN {
                         //UNPACK(( { if (ht == 3 && wt+rem == 4) DPRINT  << U32(sizeof(TSLICE32)) << ENDL(); } ));
                         //UNPACK(( { if (ht == 3 && wt+wtr >= 0) DPRINT  << TSLICE8(cb_in, wt+wtr, s16) << ENDL(); } ));
                         //UNPACK(( { if (ht == 3 && wt+rem >= 4) DPRINT  << CB_RD_PTR(cb_in) << ENDL(); } ));
+                        //if (ht >= 0 && wt+wtr >= 0) { UNPACK(( { DPRINT  << "x: ht=" << ht << " wt=" << wt+wtr << ENDL(); } )); }
+                        //if (ht >= 0 && wt+wtr >= 0) { UNPACK(( { DPRINT  << TSLICE8(cb_in, wt+wtr, s16) << ENDL(); } )); }
+                        //UNPACK(( { for(volatile int i = 0; i < 10000000; i++) ; } )) ;
                     sub_tiles_bcast_cols(cb_in, cb_ex, wt+wtr, 0, wtr); // tile *= 1/(sum(exp(x)))
                     pack_tile(wtr, cb_xmm);
                         //PACK(( { if (ht == 3 && wt+wtr >= 4) DPRINT << "xmm[" << ht << "," << wt+wtr << "]" << ENDL(); } ));
@@ -131,7 +132,10 @@ void MAIN {
 
             // compute temp = xmm*xmm = (x-E[x])^2
             mul_tiles_init();
+            nwait = 0;
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+                nwait += ndst;
+                cb_wait_front(cb_xmm, nwait);
                 cb_reserve_back(cb_xmm2, ndst); // can probably use less space for this if we block
                 ACQ();
                 for (uint32_t wtr = 0; wtr<ndst; wtr++) {
@@ -315,10 +319,10 @@ void MAIN {
             }
             cb_pop_front(cb_ex2pe, 1); // 0
             cb_pop_front(cb_xmm, Wt);
-        } // Ht loop
-    } // NC loop
+    } // NCHt loop
     //kernel_profiler::mark_time(8);
     //cb_pop_front(cb_scaler, 1); // optional for correctness
     //cb_pop_front(cb_eps, 1); // optional for correctness
+    //cb_pop_front(cb_col1, 1); // optional for correctness
 }
 }

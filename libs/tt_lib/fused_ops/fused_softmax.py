@@ -43,13 +43,15 @@ def ref_stable_softmax(x):
 if __name__ == "__main__":
     dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
     device.InitializeDevice(dev)
-    #device.StartDebugPrintServer(dev)
+    device.StartDebugPrintServer(dev)
     host = device.GetHost()
     #N, C, H, W = 1, 7, 5*32, 17*32
-    N, C, H, W = 1, 1, 2048, 4*8*32 # W must be a multiple of 8*32
+    test_dims = ((1,1,32,4*8*32), (1, 1, 2048, 4*8*32), (1, 1, 128, 12*32), (1, 1, 32, 7*32))
+    #test_dims = ((1,1,4*32,7*32),)
     torch.manual_seed(123)
-
-    for j in range(0, 1):
+    for nchw in test_dims:
+        (N,C,H,W) = nchw
+        print("NCHW=", nchw)
         x = torch.randn((N,C,H,W)) + 0.01
 
         ref_sm = ref_stable_softmax(x)

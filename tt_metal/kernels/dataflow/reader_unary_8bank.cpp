@@ -66,7 +66,7 @@ void kernel_main() {
         uint32_t gamma_addr = get_arg_val<uint32_t>(11);
         uint32_t num_beta_tiles = get_arg_val<uint32_t>(12);
         uint32_t beta_addr = get_arg_val<uint32_t>(13);
-        DPRINT << "NC ngt=" << num_gamma_tiles << " nbt=" << num_beta_tiles << ENDL();
+        //DPRINT << "NC ngt=" << num_gamma_tiles << " nbt=" << num_beta_tiles << ENDL();
         constexpr uint32_t cb_id_gamma = 5;
         constexpr uint32_t cb_id_beta = 6;
         InterleavedPow2AddrGen addrg {gamma_addr, 8, 3, 11}, addrb {beta_addr, 8, 3, 11};
@@ -91,6 +91,13 @@ void kernel_main() {
     generate_col_ones();
     #endif
 
+    #ifdef TILE_OFFSET
+    uint32_t tile_offset = TILE_OFFSET;
+    #else
+    constexpr uint32_t tile_offset = 0;
+    #endif
+    DPRINT << "Reader Tile offset=" << tile_offset << ENDL();
+
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t i_tile = 0;
@@ -100,7 +107,7 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
             //DPRINT << "L1ADDR=" << l1_write_addr << " " << tile_bytes << ENDL();
         for (uint32_t r = 0; r<rem; r++) {
-            uint64_t src_noc_addr = get_noc_addr(i+r, s); // not contiguous for sequential r, can be banked
+            uint64_t src_noc_addr = get_noc_addr(i+r+tile_offset, s); // not contiguous for sequential r, can be banked
             auto addr = l1_write_addr + (r<<11);
             noc_async_read(src_noc_addr, addr, tile_bytes); // TODO(AP): data type size
             //DPRINT << "  dest_addr=" << addr << ENDL();

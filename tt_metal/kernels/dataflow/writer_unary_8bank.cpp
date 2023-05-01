@@ -1,5 +1,7 @@
 #include "dataflow_api.h"
 
+#include "debug_print.h"
+
 void kernel_main() {
     uint32_t dst_addr  = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(3); // Index 3 to match with regular writer_unary
@@ -10,15 +12,22 @@ void kernel_main() {
     const InterleavedPow2AddrGen s = { dst_addr, 8, 3, 11 };
 
     #if GENERATE_SCALER
-    constexpr uint32_t blk = 8; // needed for correctness of softmax/LN kernels
+    constexpr uint32_t blk = BLOCK_SIZE; // needed for correctness of softmax/LN kernels
     #else
     constexpr uint32_t blk = 1; // needed for correctness of kernels processing single tiles
     #endif
+    #ifdef TILE_OFFSET
+    uint32_t tile_offset = TILE_OFFSET;
+    #else
+    constexpr uint32_t tile_offset = 0;
+    #endif
+    DPRINT << 'W' << tile_offset << ENDL();
+
 
     for (uint32_t i = 0; i<num_tiles; i += blk) {
         cb_wait_front(cb_id_out0, blk);
         for (uint32_t j = 0; j<blk; j++) {
-            uint64_t dst_noc_addr = get_noc_addr(i+j, s);
+            uint64_t dst_noc_addr = get_noc_addr(i+j+tile_offset, s);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out0) + (j<<11);
             noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
         }

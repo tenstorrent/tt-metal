@@ -15,15 +15,13 @@
 namespace NAMESPACE {
 void MAIN {
 
-    uint32_t NC = get_compile_time_arg_val(0);
-    uint32_t Ht = get_compile_time_arg_val(1);
-    uint32_t Wt = get_compile_time_arg_val(2);
+    uint32_t NCHt = get_compile_time_arg_val(0);
+    uint32_t Wt = get_compile_time_arg_val(1);
 
     kernel_profiler::init_profiler();
 
-    //UNPACK(( DPRINT << "NC=" << NC << " Ht=" << Ht << " Wt=" << Wt << ENDL() ));
-
     binary_op_init_common(CB::c_in0, CB::c_in2);
+    UNPACK(( DPRINT << "NCHt=" << NCHt << " Wt=" << Wt << ENDL() ));
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -36,25 +34,26 @@ void MAIN {
     constexpr auto cb_exps = CB::c_intermed0;
     constexpr auto cb_sumexps = CB::c_intermed1;
     constexpr auto cb_recips = CB::c_intermed2;
-    constexpr auto ndst = 8; // configurable size of DST block, use 1,2 for stress testing
-    //constexpr auto cb_exps1 = CB::c_intermed4;
+    constexpr auto ndst = BLOCK_SIZE;
+    constexpr auto cb_in0 = CB::c_in0;
+    constexpr auto cb_out0 = CB::c_out0;
 
     cb_wait_front(cb_scaler, 1); // comes from the reader
             //UNPACK(( { DPRINT  << TSLICE(cb_scaler, 0, 32, 0, 1) << ENDL(); } ));
-    //MATH(( DPRINT << "APPROX=" << U32(APPROX) << ENDL() ));
+            //MATH(( DPRINT << "APPROX=" << U32(APPROX) << ENDL() ));
 
 
-    constexpr uint32_t CO = 1;
+        #if 0
+        // shortcut do-nothing exit
+        for (uint32_t j = 0; j < NCHt*Wt; j++) { cb_wait_front(cb_in0, ndst); cb_pop_front(cb_in0, ndst); cb_reserve_back(cb_out0, ndst); cb_push_back(cb_out0, ndst); }
+        return;
+        #endif
 
-    for (uint32_t nc = 0; nc < NC; nc++) {
-
-        constexpr int onetile = 1;
-        constexpr int dst0 = 0;
+    constexpr int dst0 = 0;
+    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         //auto s8 = SliceRange::hw0_32_8();
         //auto h032 = SliceRange::h0_32_w0();
         //DPRINT << FIXP() << SETW(4) << SETP(3);
-        for (uint32_t ht = 0; ht < Ht; ++ht) {
-
             //kernel_profiler::mark_time(7);
             cb_reserve_back(cb_exps, Wt);
             for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
@@ -146,9 +145,8 @@ void MAIN {
             cb_pop_front(cb_recips, 1);
             cb_pop_front(cb_exps, Wt);
             //kernel_profiler::mark_time(11);
-        }
-    }
+    } // NCHt loop
     //kernel_profiler::mark_time(8);
-    cb_pop_front(cb_scaler, 1); // we don't actually have to do this
+    //cb_pop_front(cb_scaler, 1); // we don't actually have to do this
 }
 }

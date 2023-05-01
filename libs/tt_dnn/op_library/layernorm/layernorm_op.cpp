@@ -2,6 +2,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
+#include "libs/tt_dnn/op_library/work_split.hpp"
 
 #include <iostream>
 
@@ -28,11 +29,10 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
 
     Program *program = new Program();
 
-    tt_xy_pair core = {0, 0};
-
-    // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
-    TT_ASSERT(Wt % 8 == 0 && "Wt must be divisible by the size of block used by the reader and compute kernel.");
+    int block_size = find_max_divisor(Wt, 8);
+    //if (getenv("FORCE_BLOCK_SIZE") != nullptr) block_size = std::stoi( getenv("FORCE_BLOCK_SIZE") );
+    //std::cout << "Block size=" << block_size << std::endl;
 
     uint32_t single_tile_size = 2 * 1024;
 
@@ -56,14 +56,15 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
     auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t  =  64; // space for 32 tiles plus buffering 32 tiles from NC
-    uint32_t out0_t =  64; // output can use less space TODO(AP)
-    uint32_t im0_t  =  64; // buffer for saving xmm
-    uint32_t im3_t  =  64; // buffer for xmm^2
-    uint32_t in5_t  =  32; // buffer for gamma
-    uint32_t in6_t  =  32; // buffer for beta
-    uint32_t im5_t  =  16; // 2*block_size - for buffering to/from *gamma/+beta
-
+    // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
+    // TODO(AP): can also add support for block_size=7 -> 63, 28
+    uint32_t in0_t  =  block_size == 8 ? 64 : 60; // space for 32 tiles plus buffering 32 tiles from NC. For bert we have Wt=12 => block_size=6, so we use 60
+    uint32_t out0_t =  block_size == 8 ? 64 : 60; // output can use less space TODO(AP)
+    uint32_t im0_t  =  block_size == 8 ? 64 : 60; // buffer for saving xmm
+    uint32_t im3_t  =  block_size == 8 ? 64 : 60; // buffer for xmm^2
+    uint32_t in5_t  =  block_size == 8 ? 32 : 30; // buffer for gamma
+    uint32_t in6_t  =  block_size == 8 ? 32 : 30; // buffer for beta
+    uint32_t im5_t  =  2*block_size; // for buffering to/from *gamma/+beta
     uint32_t im4_t  =   8; // 8 just in case, 4 would prob suffice
     uint32_t in4_t  =   2; // ones column mask
     uint32_t im1_t  =   2;
@@ -72,60 +73,92 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
     uint32_t im2_t  =   2; //
 
     TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
-    TT_ASSERT(im0_t % 8 == 0 && "Size of exp Wt storage buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(in0_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(out0_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(im0_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(im3_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(in5_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(in6_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(Wt % block_size == 0);
 
-    // see softmax.cpp for which buffers are needed
-    CreateCircularBuffer( program, device, CB::c_in0,       core, in0_t,  in0_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_out0,      core, out0_t, out0_t*single_tile_size, DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_intermed1, core, im1_t,  im1_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_in2,       core, in2_t,  in2_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_in3,       core, in3_t,  in3_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_in4,       core, in4_t,  in4_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_intermed2, core, im2_t,  im2_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_intermed0, core, im0_t,  im0_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_intermed3, core, im3_t,  im3_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_intermed4, core, im4_t,  im4_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_intermed5, core, im5_t,  im5_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_in5,       core, in5_t,  in5_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffer( program, device, CB::c_in6,       core, in6_t,  in6_t*single_tile_size,  DataFormat::Float16_b );
+    uint32_t NCHt = NC*Ht;
+    CoreGridDesc grid(a.device());
+    uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
+    TT_ASSERT(NCHt % num_cores == 0);
 
-    DataMovementKernel *reader_kernel = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/reader_unary_8bank_ln.cpp", core,
-        DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+    // we are actually splitting blocks of Wt tiles, not tiles, so no checking for bank alignment is needed
+    TilesSplit ts(num_cores, NCHt);
+    auto tpc = ts.get_tpc(); // Wt*tpc per core
+    TT_ASSERT(NCHt % tpc == 0);
 
-    DataMovementKernel *writer_kernel = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/writer_unary_8bank.cpp", core,
-        DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
-    vector<uint32_t> compute_args = { NC, Ht, Wt, num_gamma_tiles>0, num_beta_tiles>0 };
-    ComputeKernelArgs *softmax_args = InitializeCompileTimeComputeKernelArgs(core, compute_args);
+    vector<DataMovementKernel*> readers, writers;
+    readers.reserve(num_cores);
+    writers.reserve(num_cores);
+    for (uint32_t icore = 0; icore < num_cores; icore++) {
+        auto core = grid.wrap_core(icore);
+        CreateCircularBuffer( program, device, CB::c_in0,       core, in0_t,  in0_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_out0,      core, out0_t, out0_t*single_tile_size, DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_intermed1, core, im1_t,  im1_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_in2,       core, in2_t,  in2_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_in3,       core, in3_t,  in3_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_in4,       core, in4_t,  in4_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_intermed2, core, im2_t,  im2_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_intermed0, core, im0_t,  im0_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_intermed3, core, im3_t,  im3_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_intermed4, core, im4_t,  im4_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_intermed5, core, im5_t,  im5_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_in5,       core, in5_t,  in5_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffer( program, device, CB::c_in6,       core, in6_t,  in6_t*single_tile_size,  DataFormat::Float16_b );
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
-    auto eltwise_binary_kernel = CreateComputeKernel(
-        program,
-        "kernels/compute/layernorm.cpp",
-        core,
-        softmax_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
-    );
+        DataMovementKernel *reader_kernel = CreateDataMovementKernel(
+            program, "tt_metal/kernels/dataflow/reader_unary_8bank_ln.cpp", core,
+            DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+
+        DataMovementKernel *writer_kernel = CreateDataMovementKernel(
+            program, "tt_metal/kernels/dataflow/writer_unary_8bank_ln.cpp", core,
+            DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+
+        vector<uint32_t> compute_args = { tpc, Wt, num_gamma_tiles>0, num_beta_tiles>0 };
+        ComputeKernelArgs *softmax_args = InitializeCompileTimeComputeKernelArgs(core, compute_args);
+
+        bool fp32_dest_acc_en = false;
+        bool math_approx_mode = true;
+        auto eltwise_binary_kernel = CreateComputeKernel(
+            program,
+            "kernels/compute/layernorm.cpp",
+            core,
+            softmax_args,
+            MathFidelity::HiFi4,
+            fp32_dest_acc_en,
+            math_approx_mode
+        );
+        eltwise_binary_kernel->add_define("BLOCK_SIZE", block_size);
+        reader_kernel->add_define("BLOCK_SIZE", block_size);
+        writer_kernel->add_define("BLOCK_SIZE", block_size);
+        readers.push_back(reader_kernel);
+        writers.push_back(writer_kernel);
+    }
 
     bool profile = false;
     CompileProgram(device, program, profile);
     ConfigureDeviceWithProgram(device, program);
-    union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler
-    union { float f; uint32_t u; } e; e.f = eps; // epsilon
-    uint32_t gamma_tiles = gamma ? gamma->volume() / TILE_HW : 0;
-    uint32_t beta_tiles = beta ? beta->volume() / TILE_HW : 0;
-    std::cout << "Num gamma=" << num_gamma_tiles << " addr=" << gamma_dram_addr << std::endl;
-    std::cout << "Num beta=" << num_beta_tiles << " addr=" << beta_dram_addr << std::endl;
-    WriteRuntimeArgsToDevice( device, reader_kernel, core,
-        { src0_dram_buffer->address(), 0, 0, num_tensor_tiles, 0, 0, 0, 0, winv.u, e.u, // 0-9
-          num_gamma_tiles, gamma_dram_addr, num_beta_tiles, beta_dram_addr } // 10-13
-    );
-    WriteRuntimeArgsToDevice( device, writer_kernel, core, { dst_dram_buffer->address(), 0, 0, num_tensor_tiles } );
+
+    for (uint32_t icore = 0; icore < num_cores; icore++) {
+        auto core = grid.wrap_core(icore);
+        union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler
+        union { float f; uint32_t u; } e; e.f = eps; // epsilon
+        uint32_t gamma_tiles = gamma ? gamma->volume() / TILE_HW : 0;
+        uint32_t beta_tiles = beta ? beta->volume() / TILE_HW : 0;
+        //std::cout << "Num gamma=" << num_gamma_tiles << " addr=" << gamma_dram_addr << std::endl;
+        //std::cout << "Num beta=" << num_beta_tiles << " addr=" << beta_dram_addr << std::endl;
+        uint32_t tile_offset = tpc*Wt*icore;
+        WriteRuntimeArgsToDevice( device, readers[icore], core,
+            { src0_dram_buffer->address(), 0, 0, tpc*Wt, tile_offset, 0, 0, 0, winv.u, e.u, // 0-9
+            num_gamma_tiles, gamma_dram_addr, num_beta_tiles, beta_dram_addr } // 10-13
+        );
+        WriteRuntimeArgsToDevice( device, writers[icore], core, { dst_dram_buffer->address(), 0, 0, tpc*Wt, tile_offset } );
+    }
     LaunchKernels(device, program);
 
     if (profile)

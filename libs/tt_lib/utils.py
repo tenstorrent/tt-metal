@@ -309,3 +309,34 @@ def roundup32(a):
 def float_to_bits(x):
     s = struct.pack('>f', x)
     return struct.unpack('>l', s)[0]
+
+
+def is_close(a, b, rtol=7e-2, atol=8e-2, max_mag=4.0, max_mag_fraction=0.02):
+    """
+    An improved variant of isclose, taking into account max magnitude in the sum, with logging.
+    """
+    absdiff = (a - b).abs()
+    reldiff1 = (a.abs() / b.abs()) - 1.0
+    reldiff2 = (a.abs() + 1.0) / (b.abs() + 1.0) - 1.0  # in case b.abs() is 0
+    reldiff_or = torch.logical_or(reldiff1.abs() < rtol, reldiff2.abs() < rtol)
+    max_mag_ok = absdiff < max_mag * max_mag_fraction
+
+    or_abs_rel = torch.logical_or(absdiff < atol, reldiff_or)
+    or_abs_rel = torch.logical_or(or_abs_rel, max_mag_ok)
+    debug_index = or_abs_rel.to(torch.int32).argmin().item()
+    if not or_abs_rel.reshape(-1)[debug_index]:
+        print("****   is_close mismatch at index=", debug_index)
+        print(a.reshape(-1)[debug_index])
+        print(b.reshape(-1)[debug_index])
+        print("****    reldiff1=", reldiff1.reshape(-1)[debug_index])
+        print("****    reldiff2=", reldiff2.reshape(-1)[debug_index])
+        print("****    absdiff=", absdiff.reshape(-1)[debug_index])
+        HT = a.shape[-2] // 32
+        WT = a.shape[-1] // 32
+        hwt = debug_index//1024
+        wt = hwt % WT
+        ht = hwt // WT
+        h = (debug_index % 1024) // 32
+        w = (debug_index % 1024) % 32
+        print("****    at ", debug_index, " --- ", "HTWT=", ht, wt, "HW=", h, w)
+    return torch.all(or_abs_rel)
