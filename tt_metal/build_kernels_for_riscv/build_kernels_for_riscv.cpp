@@ -289,9 +289,6 @@ struct CompileContext {
     }
 
     vector<string> get_verilog_cmd(const CompileDefines& defs, const string& thread_name, const string& elfname) {
-        ///home/andrei/git/gp.ai/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objcopy
-        // -O verilog /home/andrei/git/gp.ai//built_kernels/eltwise_binary_writer_unary_8bank_reader_dual_8bank/7036516950107541145/ncrisc/ncrisc.elf
-        // /home/andrei/git/gp.ai//built_kernels/eltwise_binary_writer_unary_8bank_reader_dual_8bank/7036516950107541145/ncrisc/ncrisc.hex.tmp
         string hk = kernel_subdir_ + thread_name;
         string result = objcopy_ + " -O verilog " + hk + elfname + ".elf " + hk + elfname + ".hex.tmp";
         vector<string> results;
@@ -303,7 +300,6 @@ struct CompileContext {
 
     vector<string> get_link_cmd(const CompileDefines& defs, const string& hwthread_name, const vector<string>& obj_names)
     {
-        // /home/andrei/git/gp.ai//src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++
         string linkopts = " -march=rv32i -mabi=ilp32 -m" + get_string_aliased_arch_lowercase(defs.arch) + " -flto -ffast-math -Wl,--gc-sections"
                           " -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--defsym=__firmware_start=0 "
                           " -nostartfiles -g";
@@ -328,6 +324,10 @@ struct CompileContext {
             }
             if (defs.is_brisc()) // TODO(AP): not on ncrisc, why?
                 linkopts += " -fno-tree-loop-distribute-patterns";
+        }
+
+        if (getenv("TT_KERNEL_LINKER_MAP") != nullptr) {
+            linkopts += " -Wl,-Map=" + kernel_subdir_ + hwthread_name + "linker.map";
         }
 
         string hk = string(" ") + kernel_subdir_;
