@@ -172,6 +172,7 @@ Tensor::~Tensor() {
     if (not on_host()) {
         this->free_buffer();
     }
+    tensor_impl::free_data_wrapper(*this);
 }
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {

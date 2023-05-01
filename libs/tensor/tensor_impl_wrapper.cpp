@@ -37,6 +37,16 @@ void initialize_data_wrapper(Tensor &tensor, Initialize init_type) {
     return initialize_data_map.at(tensor.dtype())(tensor, init_type);
 }
 
+void free_data_wrapper(Tensor &tensor) {
+    const static std::map<DataType, std::function<void(Tensor &)>> free_data_map = {
+        {DataType::BFLOAT16, &free_data<bfloat16>},
+        {DataType::FLOAT32, &free_data<float>},
+        {DataType::UINT32, &free_data<uint32_t>},
+        {DataType::BFLOAT8_B, &free_data<float>}
+    };
+    return free_data_map.at(tensor.dtype())(tensor);
+}
+
 Tensor to_host_wrapper(const Tensor &tensor) {
     const static std::map<DataType, std::function<Tensor(const Tensor &)>> to_host_map = {
         {DataType::BFLOAT16, &to_host<bfloat16>},

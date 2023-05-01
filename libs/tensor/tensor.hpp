@@ -55,6 +55,9 @@ namespace tensor_impl {
     void write_data(Tensor &tensor, std::vector<T> &data);
 
     template <typename T>
+    void free_data(Tensor &tensor);
+
+    template <typename T>
     void deepcopy_host_data(const Tensor &src, Tensor &dst);
 
     template <typename T>
@@ -154,7 +157,8 @@ class Tensor {
 
         template <typename T>
         friend void tensor_impl::write_data(Tensor &tensor, std::vector<T> &data);
-
+        template <typename T>
+        friend void tensor_impl::free_data(Tensor &tensor);
         template <typename T>
         friend void tensor_impl::deepcopy_host_data(const Tensor &src, Tensor &dst);
         template <typename T>

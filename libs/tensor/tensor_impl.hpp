@@ -190,6 +190,16 @@ void move_host_data(Tensor &&src, Tensor &dst) {
     src.data_ = nullptr;
 }
 
+template <typename T>
+void free_data(Tensor &src) {
+    if (src.data_ptr() == nullptr) {
+        return;
+    }
+    std::vector<T> *src_data_ptr = reinterpret_cast<std::vector<T>*>(src.data_ptr());
+    delete src_data_ptr;
+    src.data_ = nullptr;
+}
+
 // ======================================================================================
 //                                         Print
 // ======================================================================================
