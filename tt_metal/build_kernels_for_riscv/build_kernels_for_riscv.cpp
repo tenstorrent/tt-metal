@@ -34,6 +34,7 @@ struct CompileDefines {
     bool             profile_kernel         { false };
     vector<uint32_t> compile_time_args;
     string           kernel_inc;
+    ARCH             arch                   { ARCH::GRAYSKULL };
     map<std::string, std::string> kernel_defines;
 
     bool is_trisc() const { return (hwthread >= RISCID::TR0) && (hwthread <= RISCID::TR2); }
@@ -99,26 +100,33 @@ struct CompileContext {
             // TODO(AP): allocating the vec every time is suboptimal
             includes = move(vector<string>({
                 "",
-                "tt_metal/src/ckernels/grayskull/llk_lib/",
-                "tt_metal/src/ckernels/grayskull/common/inc",
+                "tt_metal/src/ckernels/" + get_string_lowercase(defs.arch) + "/llk_lib/",
+                "tt_metal/src/ckernels/" + get_string_lowercase(defs.arch) + "/common/inc",
                 "tt_metal/src/ckernels/sfpi/include",
+                "tt_metal/src/ckernels/sfpi/include/" + get_string_aliased_arch_lowercase(defs.arch),
                 "tt_metal/src/firmware/riscv/common",
-                "tt_metal/src/firmware/riscv/grayskull/noc",
-                "tt_metal/src/firmware/riscv/grayskull",
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/noc",
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch),
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/" + get_string_lowercase(defs.arch) + "_defines",
                 "tt_metal",
-                "build/src/firmware/riscv/grayskull/noc", // TODO(AP): this looks wrong, but nonetheless matches the old makefile for TRISCS
+                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/noc", // TODO(AP): this looks wrong, but nonetheless matches the old makefile for TRISCS
                 "build/src/ckernels/gen/out", // TODO(AP): same as above - point into build where there's no src/
-                "build/src/firmware/riscv/grayskull/"}
-            ));
+                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch),
+                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/" + get_string_lowercase(defs.arch) + "_defines",
+            }));
             includes_abs.push_back(kernel_subdir_);
         } else if (defs.is_brisc()) {
             includes = move(vector<string>({
                 "",
-                "tt_metal/src/ckernels/grayskull/common/inc",
+                "tt_metal/src/ckernels/" + get_string_lowercase(defs.arch) + "/common/inc",
                 "tt_metal/src/ckernels/sfpi/include",
+                "tt_metal/src/ckernels/sfpi/include/" + get_string_aliased_arch_lowercase(defs.arch),
                 "tt_metal/src/firmware/riscv/common",
-                "tt_metal/src/firmware/riscv/grayskull",
-                "tt_metal/src/firmware/riscv/grayskull/noc",
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch),
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/" + get_string_lowercase(defs.arch) + "_defines",
+                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch),
+                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/" + get_string_lowercase(defs.arch) + "_defines",
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/noc",
                 "tt_metal/src/firmware/riscv/targets/ncrisc",
                 "tt_metal"}
             ));
@@ -126,11 +134,13 @@ struct CompileContext {
         } else {
             includes = move(vector<string>({
                 "",
-                "tt_metal/src/ckernels/grayskull/common/inc",
+                "tt_metal/src/ckernels/" + get_string_lowercase(defs.arch) + "/common/inc",
                 "tt_metal/src/ckernels/sfpi/include",
+                "tt_metal/src/ckernels/sfpi/include/" + get_string_aliased_arch_lowercase(defs.arch),
                 "tt_metal/src/firmware/riscv/common",
-                "tt_metal/src/firmware/riscv/grayskull",
-                "tt_metal/src/firmware/riscv/grayskull/noc",
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch),
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/" + get_string_lowercase(defs.arch) + "_defines",
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/noc",
                 "tt_metal/src/firmware/riscv/targets/ncrisc",
                 "tt_metal"}
             ));
@@ -150,9 +160,10 @@ struct CompileContext {
         vector<string> iquote_includes_abs;
         if (defs.is_brisc() || defs.is_ncrisc()) {
             iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/common/");
-            iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/grayskull/");
+            iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/");
+            iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/" + get_string_lowercase(defs.arch) + "_defines/");
             if (!defs.is_ncrisc()) // TODO(AP): cleanup, looks like some quirk of original Makefile
-                iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/grayskull/noc/");
+                iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/noc/");
         }
         for (auto s: iquote_includes_abs)
             result += " -iquote " + home_ + s;
@@ -171,7 +182,7 @@ struct CompileContext {
 
     string generate_gpp_options(const CompileDefines& defs, bool is_asm) {
         string options_string =
-            " -march=rv32i -mabi=ilp32 \"-mgrayskull\" -MD -MP -flto -ffast-math -g -Wall -Werror";
+            " -march=rv32i -mabi=ilp32 \"-m" + get_string_aliased_arch_lowercase(defs.arch) + "\" -MD -MP -flto -ffast-math -g -Wall -Werror";
         if (!is_asm) // TODO(AP): wasn't necessary to split for assembler
             options_string +=
                 " -std=c++17 -Wno-unknown-pragmas -fno-use-cxa-atexit "
@@ -197,6 +208,18 @@ struct CompileContext {
 
     string generate_defines(const CompileDefines& defs) {
         string result = "";
+        string arch_define = "";
+        switch (defs.arch) {
+            case ARCH::GRAYSKULL:
+                arch_define = " -DARCH_GRAYSKULL";
+                break;
+            case ARCH::WORMHOLE:
+            case ARCH::WORMHOLE_B0:
+                arch_define = " -DARCH_WORMHOLE";
+                break;
+            default:
+                break;
+        }
         switch (defs.hwthread) {
             case RISCID::NC:
                 result += " -DCOMPILE_FOR_NCRISC ";
@@ -204,17 +227,17 @@ struct CompileContext {
             case RISCID::TR0:
                 result += " -DUCK_CHLKC_UNPACK ";
                 result += " -DNAMESPACE=chlkc_unpack ";
-                result += " -DARCH_GRAYSKULL";
+                result += arch_define;
             break;
             case RISCID::TR1:
                 result += " -DUCK_CHLKC_MATH ";
                 result += " -DNAMESPACE=chlkc_math ";
-                result += " -DARCH_GRAYSKULL";
+                result += arch_define;
             break;
             case RISCID::TR2:
                 result += " -DUCK_CHLKC_PACK ";
                 result += " -DNAMESPACE=chlkc_pack ";
-                result += " -DARCH_GRAYSKULL";
+                result += arch_define;
             break;
             case RISCID::BR:
                 result += " -DCOMPILE_FOR_BRISC ";
@@ -281,7 +304,7 @@ struct CompileContext {
     vector<string> get_link_cmd(const CompileDefines& defs, const string& hwthread_name, const vector<string>& obj_names)
     {
         // /home/andrei/git/gp.ai//src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++
-        string linkopts = " -march=rv32i -mabi=ilp32 -mgrayskull -flto -ffast-math -Wl,--gc-sections"
+        string linkopts = " -march=rv32i -mabi=ilp32 -m" + get_string_aliased_arch_lowercase(defs.arch) + " -flto -ffast-math -Wl,--gc-sections"
                           " -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--defsym=__firmware_start=0 "
                           " -nostartfiles -g";
         if (defs.is_trisc()) {
@@ -391,6 +414,7 @@ void generate_binary_for_risc(
 
     CompileDefines defs;
     defs.hwthread = risc_id;
+    defs.arch = get_arch_from_string(arch_name);
 
     // Only modifying dataflow paths, we can make a separate
     // isuue for the compute paths
@@ -447,7 +471,7 @@ void generate_binary_for_risc(
         case RISCID::NC:
             ncwds[0] = "tt_metal/src/firmware/riscv/targets/ncrisc";
             ncwds[3] = "tt_metal/src/firmware/riscv/common";
-            ncwds[4] = "tt_metal/src/firmware/riscv/grayskull";
+            ncwds[4] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "";
             ncwds[5] = "tt_metal/src/firmware/riscv/toolchain";
             cpps = move(ncpps); objs = move(nobjs); cwds = move(ncwds);
             objls = move(nobjl);
@@ -455,8 +479,8 @@ void generate_binary_for_risc(
         case RISCID::BR:
             bcwds[0] = "tt_metal/src/firmware/riscv/targets/brisc";
             bcwds[1] = "tt_metal/src/firmware/riscv/common";
-            bcwds[2] = "tt_metal/src/firmware/riscv/grayskull";
-            bcwds[3] = "tt_metal/src/firmware/riscv/grayskull/noc";
+            bcwds[2] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "";
+            bcwds[3] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/noc";
             bcwds[4] = "tt_metal/src/firmware/riscv/toolchain";
             cpps = move(bcpps); objs = move(bobjs); cwds = move(bcwds);
             objls = move(bobjl);
@@ -464,7 +488,7 @@ void generate_binary_for_risc(
         case RISCID::TR0:
         case RISCID::TR1:
         case RISCID::TR2:
-            tcwds[0] = "tt_metal/src/ckernels/grayskull/common";
+            tcwds[0] = "tt_metal/src/ckernels/" + get_string_aliased_arch_lowercase(defs.arch) + "/common";
             tcwds[3] = "tt_metal/src/firmware/riscv/toolchain"; // TODO(AP): refactor
             cpps = move(tcpps); objs = move(tobjs); cwds = move(tcwds);
             objls = move(tobjl);
@@ -932,4 +956,15 @@ void generate_descriptors(
     td.join();
     tm.join();
     ta.join();
+}
+
+//! wormhole/wormhole_b0 are aliased for firmwares...
+// TODO: (kk) remove these exceptions?
+std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::GRAYSKULL: return "grayskull"; break;
+        case tt::ARCH::WORMHOLE: return "wormhole"; break;
+        case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
+        default: return "invalid"; break;
+    }
 }

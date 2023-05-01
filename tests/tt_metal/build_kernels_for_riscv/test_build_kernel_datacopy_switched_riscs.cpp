@@ -6,6 +6,7 @@
 int main(int argc, char* argv[]) {
 
     std::string root_dir = tt::utils::get_root_dir();
+    std::string arch_name = tt::utils::get_env_arch_name();
 
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("unary","datacopy_op_switched_riscs");
@@ -36,7 +37,7 @@ int main(int argc, char* argv[]) {
 
     // by default the NOCS for br=0, nc=1
     generate_binaries_params_t params = {.br_noc_index = 1, .nc_noc_index = 0, .compute_kernel_compile_time_args = compute_kernel_args};
-    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
+    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, arch_name, params);
 
     return 0;
 }

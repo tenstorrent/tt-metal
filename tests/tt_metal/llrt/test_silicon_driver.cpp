@@ -9,23 +9,18 @@
 
 bool dram_rdwr_check(tt_cluster *cluster) {
     std::vector<uint32_t> tmp;
-    //std::vector<uint32_t> vec = {(uint32_t)tt_rnd_int(std::numeric_limits<int>::min(), std::numeric_limits<int>::max())};
     std::vector<uint32_t> vec = {10}; // single int for now
 
-    // tt_target_dram = (device_id, channel, subchannel)
     tt_target_dram dram = {0, 0, 0};
     int address = 1024;
 
     cluster->write_dram_vec(vec, dram, address); // write to address
     cluster->read_dram_vec(tmp, dram, address, vec.size() * sizeof(uint32_t)); // read size is in bytes
 
-    log_info(tt::LogVerif, "vec size = {}", vec.size());
-    log_info(tt::LogVerif, "tmp size = {}", tmp.size());
-    log_info(tt::LogVerif, "Wrote vec[0] = {}", vec[0]);
-    log_info(tt::LogVerif, "Read tmp[0] = {}", tmp[0]);
-
-    // FIXME: this doesn't work?
-    //log_info(tt::LogTest, "dram_rdwr_check wrote {} and read {}, passed in {} attempts\n", vec, tmp, attempt);
+    log_info(tt::LogTest, "vec size = {}", vec.size());
+    log_info(tt::LogTest, "tmp size = {}", tmp.size());
+    log_info(tt::LogTest, "Wrote vec[0] = {}", vec[0]);
+    log_info(tt::LogTest, "Read tmp[0] = {}", tmp[0]);
 
     return vec[0] == tmp[0];
 }
@@ -33,13 +28,20 @@ bool dram_rdwr_check(tt_cluster *cluster) {
 int main(int argc, char** argv)
 {
     bool pass = true;
-
     const std::string output_dir = ".";
 
-    const TargetDevice target_type = TargetDevice::Silicon;
-    const tt::ARCH arch = tt::ARCH::GRAYSKULL;
-    const std::string sdesc_file = get_soc_description_file(arch, target_type);
+    std::vector<std::string> input_args(argv, argv + argc);
+    string arch_name = "";
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+    }
 
+    const TargetDevice target_type = TargetDevice::Silicon;
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+    const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {
         tt_device_params default_params;

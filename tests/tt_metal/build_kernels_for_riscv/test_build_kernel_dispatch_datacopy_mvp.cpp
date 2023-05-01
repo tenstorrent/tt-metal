@@ -3,6 +3,7 @@
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 
 void compile_datacopy_kernel(std::string root_dir) {
+    std::string arch_name = tt::utils::get_env_arch_name();
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("unary","datacopy_op_dispatch");
     std::string out_dir_path = root_dir + "/built_kernels/" + build_kernel_for_riscv_options.name;
@@ -35,10 +36,11 @@ void compile_datacopy_kernel(std::string root_dir) {
 
     // generate binaries
     generate_binaries_params_t params = {.compute_kernel_compile_time_args = compute_kernel_args};
-    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
+    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, arch_name, params);
 }
 
 void compile_dispatch_kernel(std::string root_dir) {
+    std::string arch_name = tt::utils::get_env_arch_name();
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("unary", "dispatch");
     std::string out_dir_path = root_dir + "/built_kernels/" + build_kernel_for_riscv_options.name;
@@ -55,7 +57,7 @@ void compile_dispatch_kernel(std::string root_dir) {
     build_kernel_for_riscv_options.brisc_defines = brisc_defines;
 
     // generate binaries
-    generate_binary_for_risc(RISCID::BR, &build_kernel_for_riscv_options, out_dir_path, "grayskull");
+    generate_binary_for_risc(RISCID::BR, &build_kernel_for_riscv_options, out_dir_path, arch_name);
 }
 
 int main(int argc, char* argv[]) {

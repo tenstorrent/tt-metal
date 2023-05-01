@@ -18,6 +18,7 @@ struct hlk_args_t {
 int main(int argc, char* argv[]) {
 
     std::string root_dir = tt::utils::get_root_dir();
+    std::string arch_name = tt::utils::get_env_arch_name();
 
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("dummy_type","blank_op");
@@ -35,7 +36,7 @@ int main(int argc, char* argv[]) {
 
 
     generate_binaries_params_t params;
-    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params);
+    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, arch_name, params);
 
     return 0;
 }

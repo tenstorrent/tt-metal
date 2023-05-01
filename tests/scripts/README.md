@@ -43,7 +43,7 @@ then specific ones.
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.LLRT)
 
-    timeout, skip_driver_tests, = get_llrt_arguments_from_cmdline_args(cmdline_args)
+    timeout, short_driver_tests, = get_llrt_arguments_from_cmdline_args(cmdline_args)
 ```
 
 3) Now these arguments can be used anywhere you'd like.

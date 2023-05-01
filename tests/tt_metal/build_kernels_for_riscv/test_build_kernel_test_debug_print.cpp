@@ -17,6 +17,7 @@ struct hlk_args_t {
 int main(int argc, char* argv[]) {
 
     std::string root_dir = tt::utils::get_root_dir();
+    std::string arch_name = tt::utils::get_env_arch_name();
 
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("unary", "test_debug_print_op");

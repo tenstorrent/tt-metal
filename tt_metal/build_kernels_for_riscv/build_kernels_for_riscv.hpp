@@ -87,3 +87,5 @@ void generate_binaries_for_triscs(
 
 void generate_descriptors(
     tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir);
+
+std::string get_string_aliased_arch_lowercase(tt::ARCH arch);

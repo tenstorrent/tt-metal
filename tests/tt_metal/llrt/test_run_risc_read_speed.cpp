@@ -80,41 +80,35 @@ bool run_risc_read_speed(tt_cluster *cluster, int chip_id, const tt_xy_pair& cor
 
 int main(int argc, char** argv)
 {
-    log_info(tt::LogTest, "num cmd line args: {}",argc);
-    TT_ASSERT(argc == 1 || argc == 6);
+    bool pass = true;
 
+    std::vector<std::string> input_args(argv, argv + argc);
+    string arch_name = "";
     std::uint32_t buffer_size;
     std::uint32_t num_repetitions;
     std::uint32_t transaction_size;
     std::uint32_t src_noc_x;
     std::uint32_t src_noc_y;
-
-    if (argc == 1) {
-        // defaults
-        log_info(tt::LogTest, "Using default test arguments");
-        buffer_size = 400 * 1024;
-        num_repetitions = 10000;
-        transaction_size = 512;
-        // remote L1
-        src_noc_x = 1;
-        src_noc_y = 1;
-        // DRAM
-        //src_noc_x = 1;
-        //src_noc_y = 0;
-
-    } else {
-        buffer_size = std::stoi(argv[1]);
-        num_repetitions = std::stoi(argv[2]);
-        transaction_size = std::stoi(argv[3]);
-        src_noc_x = std::stoi(argv[4]);
-        src_noc_y = std::stoi(argv[5]);
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+        std::tie(buffer_size, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--buffer-size", 400*1024);
+        std::tie(num_repetitions, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-repetitions", 10000);
+        std::tie(transaction_size, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--transaction-size", 512);
+        std::tie(src_noc_x, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--src-noc-x", 1);
+        std::tie(src_noc_y, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--src-noc-y", 1);
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
     }
     log_info(tt::LogTest, "Test arguments: buffer_size = {}, num_repetitions = {}, transaction_size = {}, src_noc_x = {}, src_noc_y = {}", buffer_size, num_repetitions, transaction_size, src_noc_x, src_noc_y);
 
-    bool pass = true;
-
     const TargetDevice target_type = TargetDevice::Silicon;
-    const tt::ARCH arch = tt::ARCH::GRAYSKULL;
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
 

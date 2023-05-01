@@ -14,6 +14,12 @@ SILICON_DRIVER_TEST_ENTRIES = (
     TestEntry("llrt/tests/test_silicon_driver_l1_sweep", "test_silicon_driver_l1_sweep"),
 )
 
+SHORT_SILICON_DRIVER_TEST_ENTRIES = (
+    TestEntry("llrt/tests/test_silicon_driver", "test_silicon_driver"),
+    TestEntry("llrt/tests/test_silicon_driver_dram_sweep", "test_silicon_driver_dram_sweep", "--short"),
+    TestEntry("llrt/tests/test_silicon_driver_l1_sweep", "test_silicon_driver_l1_sweep", "--short"),
+)
+
 LLRT_TEST_ENTRIES = (
     TestEntry("llrt/tests/test_run_risc_read_speed", "test_run_risc_read_speed"),
     TestEntry("llrt/tests/test_run_risc_write_speed", "test_run_risc_write_speed"),
@@ -51,18 +57,18 @@ def run_llrt_tests(llrt_test_entries, timeout):
     return dict(test_and_status_entries)
 
 
-def get_llrt_test_entries(skip_driver_tests):
+def get_llrt_test_entries(short_driver_tests):
     return list(
-        chain.from_iterable([LLRT_TEST_ENTRIES, tuple() if skip_driver_tests else SILICON_DRIVER_TEST_ENTRIES])
+        chain.from_iterable([LLRT_TEST_ENTRIES, SHORT_SILICON_DRIVER_TEST_ENTRIES if short_driver_tests else SILICON_DRIVER_TEST_ENTRIES])
     )
 
 
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.LLRT)
 
-    timeout, skip_driver_tests, = get_llrt_arguments_from_cmdline_args(cmdline_args)
+    timeout, short_driver_tests, = get_llrt_arguments_from_cmdline_args(cmdline_args)
 
-    llrt_test_entries = get_llrt_test_entries(skip_driver_tests=skip_driver_tests)
+    llrt_test_entries = get_llrt_test_entries(short_driver_tests=short_driver_tests)
 
     test_report = run_llrt_tests(llrt_test_entries, timeout)
 

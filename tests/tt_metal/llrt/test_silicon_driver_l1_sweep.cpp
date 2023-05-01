@@ -40,8 +40,8 @@ bool l1_rdwr_check(tt_cluster *cluster, unsigned start_address, std::size_t data
             for (int i = 0; i < vec_size; i++) {
                 if (actual_vec[i] != expected_vec[i]) {
                     log_info(tt::LogTest, "Mismatch expected_vec[{}]={} != actual_vec[{}]={}",
-                    expected_vec[i], i,
-                    actual_vec[i], i);
+                    i, expected_vec[i],
+                    i, actual_vec[i]);
                 }
             }
             log_error(tt::LogTest, "Core {} has not passed", worker_core.str());
@@ -59,8 +59,20 @@ int main(int argc, char** argv)
 
     const std::string output_dir = ".";
 
+    std::vector<std::string> input_args(argv, argv + argc);
+    bool short_mode = false;
+    string arch_name = "";
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+        std::tie(short_mode, input_args) =
+            test_args::has_command_option_and_remaining_args(input_args, "--short");
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+    }
+
     const TargetDevice target_type = TargetDevice::Silicon;
-    const tt::ARCH arch = tt::ARCH::GRAYSKULL;
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
 
@@ -73,7 +85,10 @@ int main(int argc, char** argv)
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
 
-        const std::size_t chunk_size = 1024;
+        std::size_t chunk_size = 256 * 1024;
+        if (short_mode) {
+            chunk_size =  1024;
+        }
         TT_ASSERT(l1_rdwr_check(cluster, 0, chunk_size));
 
         cluster->close_device();

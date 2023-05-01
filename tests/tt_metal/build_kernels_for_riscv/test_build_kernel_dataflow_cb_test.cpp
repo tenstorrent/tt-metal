@@ -11,6 +11,7 @@ namespace fs = std::filesystem;
 int main(int argc, char* argv[]) {
 
     std::string root_dir = tt::utils::get_root_dir();
+    std::string arch_name = tt::utils::get_env_arch_name();
 
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("test","dataflow_cb_test");
@@ -39,8 +40,8 @@ int main(int argc, char* argv[]) {
     fs::create_directories(out_dir_path);
     generate_data_format_descriptors(&build_kernel_for_riscv_options, out_dir_path);
 
-    generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, "grayskull", 1, {8, 4});
-    generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, "grayskull", 0, {8, 2});
+    generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, arch_name, 1, {8, 4});
+    generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, arch_name, 0, {8, 2});
 
     return 0;
 }

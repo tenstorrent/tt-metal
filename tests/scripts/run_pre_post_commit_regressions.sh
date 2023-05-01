@@ -16,8 +16,7 @@ cd $TT_METAL_HOME
 
 export PYTHONPATH=$TT_METAL_HOME
 
-env python tests/scripts/run_build_kernels_for_riscv.py -j 16
-env python tests/scripts/run_llrt.py --skip-driver-tests
-env ./build/test/llrt/test_silicon_driver
+env ARCH_NAME=grayskull python tests/scripts/run_build_kernels_for_riscv.py -j 16
+env python tests/scripts/run_llrt.py --short-driver-tests
 
 ./tests/scripts/run_python_api_unit_tests.sh

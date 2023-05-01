@@ -102,8 +102,20 @@ int main(int argc, char** argv)
 
     const std::string output_dir = ".";
 
+    std::vector<std::string> input_args(argv, argv + argc);
+    bool short_mode = false;
+    string arch_name = "";
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+        std::tie(short_mode, input_args) =
+            test_args::has_command_option_and_remaining_args(input_args, "--short");
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+    }
+
     const TargetDevice target_type = TargetDevice::Silicon;
-    const tt::ARCH arch = tt::ARCH::GRAYSKULL;
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
 
@@ -116,8 +128,13 @@ int main(int argc, char** argv)
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
 
-        const std::size_t chunk_size =  1024;
-        const unsigned total_chunks = 20 * 1024 / chunk_size;
+        std::size_t chunk_size =  1024 * 1024 * 1024;
+        unsigned total_chunks = 1024 * 1024 * 1024 / chunk_size;
+        if (short_mode) {
+            chunk_size =  1024;
+            total_chunks = 20 * 1024 / chunk_size;
+        }
+
         for (int chunk_num = 0; chunk_num < total_chunks; chunk_num++) {
             int start_address = chunk_size * chunk_num;
             log_info(tt::LogTest, "Testing chunk #{}/{}", chunk_num + 1, total_chunks);
