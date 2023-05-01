@@ -96,7 +96,7 @@ void kernel_main() {
     #else
     constexpr uint32_t tile_offset = 0;
     #endif
-    DPRINT << "Reader Tile offset=" << tile_offset << ENDL();
+    //DPRINT << "Reader Tile offset=" << tile_offset << ENDL();
 
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
@@ -113,8 +113,6 @@ void kernel_main() {
             //DPRINT << "  dest_addr=" << addr << ENDL();
         }
         noc_async_read_barrier();
-                //DPRINT << "  pushing rem=" << rem << ENDL();
-                //for (volatile uint32_t i = 0; i < 1000*1024*1024; i++);
         cb_push_back(cb_id_in0, rem);
 
         #if GAMMA_BETA // TODO(AP): refactor

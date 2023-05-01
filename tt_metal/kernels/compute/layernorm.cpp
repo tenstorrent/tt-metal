@@ -61,8 +61,8 @@ void MAIN {
             //UNPACK(( { DPRINT  << "====== Wt=" << Wt << ENDL(); } ));
 
     constexpr int cb_im_or_out = (do_gamma|do_beta) ? cb_stream : CB::c_out0;
-    UNPACK(( DPRINT << "TR Gamma = " << do_gamma << " beta=" << do_beta << ENDL() ));
-    UNPACK(( DPRINT << "cb out id=" << cb_im_or_out << ENDL() ));
+    //UNPACK(( DPRINT << "TR Gamma = " << do_gamma << " beta=" << do_beta << ENDL() ));
+    //UNPACK(( DPRINT << "cb out id=" << cb_im_or_out << ENDL() ));
 
     uint32_t nwait_g = 0, nwait_b = 0;
 
@@ -161,7 +161,6 @@ void MAIN {
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
                 // reduce
                 for (uint32_t wtr = 0; wtr<ndst; wtr++)
-                    //reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_xmm2, cb_scaler, wtr, scaler0, dst0);
                     reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_xmm2, cb_scaler, wt+wtr, scaler0, dst0);
             }
             cb_pop_front(cb_xmm2, Wt);
@@ -320,7 +319,6 @@ void MAIN {
             cb_pop_front(cb_ex2pe, 1); // 0
             cb_pop_front(cb_xmm, Wt);
     } // NCHt loop
-    //kernel_profiler::mark_time(8);
     //cb_pop_front(cb_scaler, 1); // optional for correctness
     //cb_pop_front(cb_eps, 1); // optional for correctness
     //cb_pop_front(cb_col1, 1); // optional for correctness

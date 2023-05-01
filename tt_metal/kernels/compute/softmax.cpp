@@ -21,12 +21,10 @@ void MAIN {
     kernel_profiler::init_profiler();
 
     binary_op_init_common(CB::c_in0, CB::c_in2);
-    UNPACK(( DPRINT << "NCHt=" << NCHt << " Wt=" << Wt << ENDL() ));
+    //UNPACK(( DPRINT << "NCHt=" << NCHt << " Wt=" << Wt << ENDL() ));
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
-    // TODO(AP): check that if DST is indeed zeroed by release_dst (and initially), we can use it as zeroes
-
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
@@ -41,13 +39,6 @@ void MAIN {
     cb_wait_front(cb_scaler, 1); // comes from the reader
             //UNPACK(( { DPRINT  << TSLICE(cb_scaler, 0, 32, 0, 1) << ENDL(); } ));
             //MATH(( DPRINT << "APPROX=" << U32(APPROX) << ENDL() ));
-
-
-        #if 0
-        // shortcut do-nothing exit
-        for (uint32_t j = 0; j < NCHt*Wt; j++) { cb_wait_front(cb_in0, ndst); cb_pop_front(cb_in0, ndst); cb_reserve_back(cb_out0, ndst); cb_push_back(cb_out0, ndst); }
-        return;
-        #endif
 
     constexpr int dst0 = 0;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -118,8 +109,6 @@ void MAIN {
             release_dst(DstMode::Half);
             cb_wait_front(cb_recips, 1); // will reuse Wt times for bcast
 
-            //kernel_profiler::mark_time(10);
-
             // now cb_sumexps has exp tiles, need to multiply by our DST[2]
             // by now we already did a cumulative wait for Wt tiles in cb_exps
             mul_bcast_cols_init_short();
@@ -146,7 +135,6 @@ void MAIN {
             cb_pop_front(cb_exps, Wt);
             //kernel_profiler::mark_time(11);
     } // NCHt loop
-    //kernel_profiler::mark_time(8);
     //cb_pop_front(cb_scaler, 1); // we don't actually have to do this
 }
 }

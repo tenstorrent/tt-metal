@@ -21,7 +21,7 @@ void kernel_main() {
     #else
     constexpr uint32_t tile_offset = 0;
     #endif
-    DPRINT << 'W' << tile_offset << ENDL();
+    //DPRINT << 'W' << '_' << tile_offset << ENDL();
 
 
     for (uint32_t i = 0; i<num_tiles; i += blk) {
