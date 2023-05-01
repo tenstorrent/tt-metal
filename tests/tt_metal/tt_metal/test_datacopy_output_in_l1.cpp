@@ -31,8 +31,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
-        bool enable_l1_banking_allocator = true;
-        pass &= tt_metal::InitializeDevice(device, enable_l1_banking_allocator);
+        pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

@@ -67,7 +67,9 @@ Device *CreateDevice(tt::ARCH arch, int pcie_slot) {
     return new Device(arch, pcie_slot);
 }
 
-bool InitializeDevice(Device *device, bool enable_l1_banking_allocator) { return device->initialize(enable_l1_banking_allocator); }
+bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
+    return device->initialize(memory_allocator);
+}
 
 bool CloseDevice(Device *device) { return device->close(); }
 

@@ -10,6 +10,7 @@
 #include "tools/profiler/profiler.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/registers.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/interleaved_buffer.hpp"
@@ -118,12 +119,12 @@ Device *CreateDevice(tt::ARCH arch, int pcie_slot);
  *
  * Return value: bool
  *
- * | Argument                    | Description                                 | Type     | Valid Range | Required |
- * |-----------------------------|---------------------------------------------|----------|-------------|----------|
- * | device                      | Pointer to device object                    | Device * |             | Yes      |
- * | enable_l1_banking_allocator | Whether L1 banking allocator scheme is used | bool     |             | No       |
+ * | Argument                    | Description                                 | Type                 | Valid Range         | Required |
+ * |-----------------------------|---------------------------------------------|----------------------|---------------------|----------|
+ * | device                      | Pointer to device object                    | Device *             |                     | Yes      |
+ * | memory_allocator            | Type of memory allocator scheme to use      | MemoryAllocator enum | BASIC or L1_BANKING | No       |
  */
-bool InitializeDevice(Device *device, bool enable_l1_banking_allocator=false);
+bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator = MemoryAllocator::BASIC);
 
 /**
  * Resets device and closes device

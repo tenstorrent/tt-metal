@@ -10,6 +10,11 @@ namespace tt {
 
 namespace tt_metal {
 
+enum class MemoryAllocator {
+    BASIC = 0,
+    L1_BANKING = 1,
+};
+
 class Allocator {
    public:
     Allocator() {}

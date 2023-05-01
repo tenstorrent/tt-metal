@@ -20,19 +20,26 @@ void Device::initialize_cluster() {
     llrt::assert_reset_for_all_chips(cluster_);
 }
 
-void Device::initialize_allocator(bool enable_l1_banking_allocator) {
+void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
     TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
     auto soc_desc = this->cluster_->get_soc_desc(this->pcie_slot_);
-    if (enable_l1_banking_allocator) {
-        this->allocator_ = std::make_unique<L1BankingAllocator>(soc_desc);
-    } else {
-        this->allocator_ = std::make_unique<BasicAllocator>(soc_desc);
+    switch (memory_allocator) {
+        case MemoryAllocator::BASIC: {
+            this->allocator_ = std::make_unique<BasicAllocator>(soc_desc);
+        }
+        break;
+        case MemoryAllocator::L1_BANKING: {
+            this->allocator_ = std::make_unique<L1BankingAllocator>(soc_desc);
+        }
+        break;
+        default:
+            TT_ASSERT(false && "Unsupported memory allocator");
     }
 }
 
-bool Device::initialize(bool enable_l1_banking_allocator) {
+bool Device::initialize(const MemoryAllocator &memory_allocator) {
     this->initialize_cluster();
-    this->initialize_allocator(enable_l1_banking_allocator);
+    this->initialize_allocator(memory_allocator);
     this->closed_ = false;
     return true;
 }

@@ -63,10 +63,10 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(bool enable_l1_banking_allocator=false);
-    friend bool InitializeDevice(Device *device, bool enable_l1_banking_allocator);
+    bool initialize(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC);
+    friend bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator);
     void initialize_cluster();
-    void initialize_allocator(bool enable_l1_banking_allocator=false);
+    void initialize_allocator(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC);
 
     // Puts device into reset
     bool close();
