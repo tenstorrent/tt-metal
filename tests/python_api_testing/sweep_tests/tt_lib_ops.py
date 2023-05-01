@@ -1112,6 +1112,38 @@ def permute(x, pcie_slot, *args, **kwargs):
     return output
 
 
+def reshape(x, pcie_slot, *args, **kwargs):
+    assert "reshape_dims" in kwargs
+
+    reshape_dims = kwargs["reshape_dims"]
+
+    host = ttl.device.GetHost()
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
+    ttl.device.InitializeDevice(device)
+
+    try:
+        t0 = (
+            ttl.tensor.Tensor(
+                x.reshape(-1).tolist(),
+                x.shape,
+                ttl.tensor.DataType.BFLOAT16,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(device)
+        )
+
+        t1 = ttl.tensor.reshape(t0, *reshape_dims)
+
+        output = torch.Tensor(
+            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
+        ).reshape(t1.shape())
+    finally:
+        ttl.device.CloseDevice(device)
+
+    return output
+
+
 ################################################
 #################### Tensor ####################
 ################################################

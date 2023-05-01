@@ -78,6 +78,12 @@ def permute(x, *args, **kwargs):
     return torch.permute(x, permute_dims)
 
 
+def reshape(x, *args, **kwargs):
+    assert "reshape_dims" in kwargs
+    reshape_dims = kwargs["reshape_dims"]
+    return torch.reshape(x, reshape_dims)
+
+
 ################################################
 #################### Tensor ####################
 ################################################

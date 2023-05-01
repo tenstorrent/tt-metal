@@ -143,6 +143,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.permute,
         "pytorch_op": pytorch_ops.permute,
     },
+    "reshape": {
+        "tt_lib_op": tt_lib_ops.reshape,
+        "pytorch_op": pytorch_ops.reshape,
+    },
     ################################################
     #################### Tensor ####################
     ################################################

@@ -1,6 +1,7 @@
 import torch
 import random
 from itertools import permutations
+from functools import lru_cache
 
 # torch.testing.get_all_dtypes()
 supported_dtypes = {
@@ -213,3 +214,35 @@ def gen_permute_args(input_shapes):
         if input_shapes[0][permute_dims[2]] % 32 == 0
         and input_shapes[0][permute_dims[3]] % 32 == 0
     ]
+
+
+@lru_cache(maxsize=5000)
+def _get_factors(i, s):
+    factors = []
+    for j in range(s, i + 1, s):
+        if i % j == 0:
+            factors.append(j)
+    return factors
+
+
+@lru_cache(maxsize=5000)
+def _gen_reshape_args_from_volume(volume):
+    shapes = []
+    for w in _get_factors(volume, 32):
+        v = volume // w
+        for h in _get_factors(v, 32):
+            v2 = v // h
+            for c in _get_factors(v2, 1):
+                b = v2 // c
+                shapes.append({"reshape_dims": [b, c, h, w]})
+    return shapes
+
+
+def gen_reshape_args(input_shapes):
+    vol = (
+        input_shapes[0][0]
+        * input_shapes[0][1]
+        * input_shapes[0][2]
+        * input_shapes[0][3]
+    )
+    return _gen_reshape_args_from_volume(vol)
