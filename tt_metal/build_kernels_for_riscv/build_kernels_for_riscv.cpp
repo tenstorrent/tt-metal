@@ -488,7 +488,7 @@ void generate_binary_for_risc(
         case RISCID::TR0:
         case RISCID::TR1:
         case RISCID::TR2:
-            tcwds[0] = "tt_metal/src/ckernels/" + get_string_aliased_arch_lowercase(defs.arch) + "/common";
+            tcwds[0] = "tt_metal/src/ckernels/" + get_string_lowercase(defs.arch) + "/common";
             tcwds[3] = "tt_metal/src/firmware/riscv/toolchain"; // TODO(AP): refactor
             cpps = move(tcpps); objs = move(tobjs); cwds = move(tcwds);
             objls = move(tobjl);

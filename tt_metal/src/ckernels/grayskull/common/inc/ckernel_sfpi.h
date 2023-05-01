@@ -1418,9 +1418,8 @@ sfpi_test_noinline void test11()
     TTI_SFPLOADI(0, SFPLOADI_MOD0_USHORT, 0xFF20); // Mulitply by 0.0, add 0.25
     TTI_SFPLOADI(1, SFPLOADI_MOD0_USHORT, 0x2010); // Mulitply by 0.25, add 0.5
     vUInt l0b, l1b;
-    LRegAssigner lra;
-    l0b = lra.assign(LRegs::LReg0);
-    l1b = lra.assign(LRegs::LReg0);
+    l0b = l_reg[LRegs::LReg0];
+    l1b = l_reg[LRegs::LReg0];
 
     v_if(dst_reg[0] == 7.0F) {
         // Use L0
@@ -1557,15 +1556,14 @@ sfpi_test_noinline void test12(int imm)
     // Need to use the semaphores to get TRISC to run ahead for non-imm loads
 
     v_if(dst_reg[0] == 16.0F) {
-        // imm store, non-imm load
-        vFloat a = 120.0F;
+        // imm store, imm load
+        vFloat a = 110.0F;
 
         TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_3);
         TTI_SEMWAIT(p_stall::STALL_MATH, p_stall::SEMAPHORE_3, p_stall::STALL_ON_ZERO);
 
         dst_reg[12] = a;
-        __builtin_rvtt_sfpnop(); // XXXXXX remove me when compiler is fixed
-        a = dst_reg[imm - 23];
+        a = dst_reg[12];
 
         semaphore_post(3);
 
@@ -1574,24 +1572,13 @@ sfpi_test_noinline void test12(int imm)
     v_endif;
 
     v_if(dst_reg[0] == 17.0F) {
-        // non-imm store, imm load
-        vFloat a = 130.0F;
-        dst_reg[imm - 23] = a;
-        __builtin_rvtt_sfpnop(); // XXXXXX remove me when compiler is fixed
-        a = dst_reg[12];
-        dst_reg[12] = a + 1.0F;
-    }
-    v_endif;
-
-    v_if(dst_reg[0] == 18.0F) {
-        // non-imm store, non-imm load
-        vFloat a = 140.0F;
+        // imm store, non-imm load
+        vFloat a = 120.0F;
 
         TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_3);
         TTI_SEMWAIT(p_stall::STALL_MATH, p_stall::SEMAPHORE_3, p_stall::STALL_ON_ZERO);
 
-        dst_reg[imm - 23] = a;
-        __builtin_rvtt_sfpnop(); // XXXXXX remove me when compiler is fixed
+        dst_reg[12] = a;
         a = dst_reg[imm - 23];
 
         semaphore_post(3);
@@ -1600,11 +1587,43 @@ sfpi_test_noinline void test12(int imm)
     }
     v_endif;
 
+    v_if(dst_reg[0] == 18.0F) {
+        // non-imm store, imm load
+        vFloat a = 130.0F;
+
+        TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_3);
+        TTI_SEMWAIT(p_stall::STALL_MATH, p_stall::SEMAPHORE_3, p_stall::STALL_ON_ZERO);
+
+        dst_reg[imm - 23] = a;
+        a = dst_reg[12];
+
+        semaphore_post(3);
+
+        dst_reg[12] = a + 1.0F;
+    }
+    v_endif;
+
     v_if(dst_reg[0] == 19.0F) {
+        // non-imm store, non-imm load
+        vFloat a = 140.0F;
+
+        TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_3);
+        TTI_SEMWAIT(p_stall::STALL_MATH, p_stall::SEMAPHORE_3, p_stall::STALL_ON_ZERO);
+
+        dst_reg[imm - 23] = a;
+        a = dst_reg[imm - 23];
+
+        semaphore_post(3);
+
+        dst_reg[12] = a + 1.0F;
+    }
+    v_endif;
+
+    v_if(dst_reg[0] == 20.0F) {
         vFloat a = 3.0F;
         a *= static_cast<float>(imm); // SFPADDI
         dst_reg[12] = a;
-    } v_elseif(dst_reg[0] == 20.0F) {
+    } v_elseif(dst_reg[0] == 21.0F) {
         vFloat a = 3.0F;
         a *= static_cast<float>(-imm); // SFPADDI
         dst_reg[12] = a;
@@ -1626,11 +1645,12 @@ sfpi_test_noinline void test12(int imm)
     // [13] = -1.625
     // [14] = 30.0F
     // [15] = -1.0
-    // [16] = 121.0F
-    // [17] = 131.0F
-    // [18] = 141.0F
-    // [19] = 105.0F
-    // [20] = -105.0F
+    // [16] = 111.0F
+    // [17] = 121.0F
+    // [18] = 131.0F
+    // [19] = 141.0F
+    // [20] = 105.0F
+    // [21] = -105.0F
 
     copy_result_to_dreg0(12);
 }

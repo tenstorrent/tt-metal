@@ -42,7 +42,7 @@ ifeq ("$(ARCH_NAME)", "wormhole_b0")
   DEVICE_INCLUDES += -I$(TT_METAL_HOME)/src/firmware/riscv/wormhole
   DEVICE_INCLUDES += -I$(TT_METAL_HOME)/src/firmware/riscv/wormhole/wormhole_b0_defines
 else
-  DEVICE_INCLUDES += -I$(TT_METAL_HOME)/src/firmware/riscv/$(ARCH_NAME)
+  DEVICE_INCLUDES += -I$(TT_METAL_HOME)/src/firmware/riscv/grayskull
 endif
 
 ifeq ("$(ARCH_NAME)", "wormhole")

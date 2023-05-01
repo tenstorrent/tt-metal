@@ -1047,6 +1047,40 @@ inline void calculate_cosine()
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void relu_max(uint uint_threshold)
+{
+    vFloat threshold = s2vFloat16(uint_threshold, s2vFloat16::fp16a);
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat a = dst_reg[0];
+        v_if(a > threshold) {
+            a = threshold;
+        }
+        v_endif;
+        v_if(a < 0.0f) {
+            a = 0.0f;
+        }
+        v_endif;
+        dst_reg[0] = a;
+        dst_reg++;
+    }
+}
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void relu_min(uint uint_threshold)
+{
+    vFloat threshold = s2vFloat16(uint_threshold, s2vFloat16::fp16a);
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat a = dst_reg[0];
+        v_if(a < threshold) {
+            a = 0.0f;
+        }
+        v_endif;
+        dst_reg[0] = a;
+        dst_reg++;
+    }
+}
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM = 0, int ITERATIONS = 4>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
@@ -1123,6 +1157,12 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::cosine) {
         calculate_cosine<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::relu_min) {
+        relu_min<APPROXIMATION_MODE, ITERATIONS>(param0);
+    }
+    else if constexpr (operation == SfpuType::relu_max) {
+        relu_max<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
 }
 

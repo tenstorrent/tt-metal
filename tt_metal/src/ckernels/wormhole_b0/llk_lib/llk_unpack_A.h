@@ -1,4 +1,4 @@
-
+#pragma once
 #include "llk_io_unpack.h"
 #include "llk_param_structs.h"
 #include "llk_unpack_common.h"
@@ -201,7 +201,7 @@ inline void llk_unpack_A_init(const std::uint32_t within_face_16x16_transpose=0)
 template <BroadcastType BType = BroadcastType::NONE, bool transpose_xy = false, bool acc_to_dest = false>
 inline void llk_unpack_A(std::uint32_t operand, std::uint32_t tile_index) {
     std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
+    std::uint32_t base_address = cb_read_interface[input].fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
     std::uint32_t address = base_address + offset_address;
 

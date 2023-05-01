@@ -305,6 +305,55 @@ namespace ckernel::unpacker
       reset_config_context();
    }
 
+   inline uint32_t cfg_rmw_mmio_rd_tensix_wr(uint addr, uint shamt,  uint mask, uint new_val, uint rmw_val) {
+      // Write only to the needed data bits
+      new_val <<= shamt;
+      new_val &= mask;
+      rmw_val &= ~mask;
+
+      // Or new data bits
+      rmw_val |= new_val;
+
+      TT_SETDMAREG(0, (rmw_val & 0xffff), 0, LO_16(p_gpr_unpack::TMP0));
+      TT_SETDMAREG(0, ((rmw_val >> 16) & 0xffff), 0, HI_16(p_gpr_unpack::TMP0));
+
+      TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, addr);
+      TTI_NOP;TTI_NOP;
+
+      return rmw_val;
+   }
+
+   inline void reconfig_unpacker_data_format(const uint src_operand_id, const uint32_t tile_addr, const uint32_t out_df_addr) {
+
+      //volatile uint *cfg = get_cfg_pointer();
+      // Set first 32 bites of tile descriptor, only need data format change
+      unpack_tile_descriptor_u tile_descriptor = {0};
+
+      tile_descriptor.f.in_data_format  = (uint) unpack_src_format[src_operand_id];
+      tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
+      tile_descriptor.f.x_dim        = 256;
+
+      TT_SETDMAREG(0, (tile_descriptor.val[0] & 0xffff), 0, LO_16(p_gpr_unpack::TMP0));
+      TT_SETDMAREG(0, ((tile_descriptor.val[0] >> 16) & 0xffff), 0, HI_16(p_gpr_unpack::TMP0));
+      TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, tile_addr);
+      TTI_NOP;TTI_NOP;
+
+      // Set first 32 bites of tile unpacker config, only need data format change
+      unpack_config_u config = {0};
+
+      config.f.out_data_format = unpack_dst_format[src_operand_id];
+      config.f.throttle_mode = 2;
+
+      //cfg[out_df_addr]=config.val[0];
+      TT_SETDMAREG(0, (config.val[0] & 0xffff), 0, LO_16(p_gpr_unpack::TMP0));
+      TT_SETDMAREG(0, ((config.val[0] >> 16) & 0xffff), 0, HI_16(p_gpr_unpack::TMP0));
+      TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, out_df_addr);
+      TTI_NOP;TTI_NOP;
+
+      // Clear context ID
+      //reset_config_context();
+    }
+
    inline uint32_t get_operand_id(uint32_t operand)
    {
       return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;

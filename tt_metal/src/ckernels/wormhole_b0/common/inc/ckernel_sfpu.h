@@ -104,12 +104,13 @@ inline void init_dropout_seed(uint16_t p2){
 
     FWLOG1("calculate_dropout() -- calculated seed:%x", per_tensix_input_seed);
 
-    LRegAssigner lra;
-    vInt result = lra.assign(LRegs::LReg3);
+    vInt result = l_reg[LRegs::LReg3];
 
     vInt tmp = vConstTileId << 10;
     vInt ptis = per_tensix_input_seed;
     result = ~(tmp & ptis) & (tmp | ptis);
+
+    l_reg[LRegs::LReg3] = result;
 }
 
 template <bool APPROXIMATION_MODE>
@@ -169,6 +170,18 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
     uint imm0;
     uint imm1;
     uint imm2;
+    uint imm0_high;
+    uint imm0_low;
+    uint imm1_high;
+    uint imm1_low;
+    uint imm2_high;
+    uint imm2_low;
+    uint imm3_high;
+    uint imm3_low;
+    uint imm4_high;
+    uint imm4_low;
+    uint imm5_high;
+    uint imm5_low;
     switch (operation) {
     case SfpuType::tanh:
     case SfpuType::tanh_derivative:
@@ -188,10 +201,50 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
         TTI_SFPLOADI(2, 2, imm2);
         break;
     case SfpuType::gelu_derivative:
-        imm0 = 0x28FF;
-        imm1 = (APPROXIMATION_MODE)? 0x313C : 0x3020;
-        TTI_SFPLOADI(0, 2, imm0);
-        TTI_SFPLOADI(1, 2, imm1);
+        if constexpr (APPROXIMATION_MODE) {
+            // Using a 6 piece LUT to calculate and model gelu_derivative directly
+            // x <= 0.5 --> 0.8x + 0.5
+            // x <= 1.0 --> 0.4x + 0.7
+            // x <= 1.5 --> 0.1x + 0.99
+            // x <= 2.0 --> -0.09x + 1.27
+            // x <= 3.0 --> -0.075x + 1.235
+            // x >  3.0 --> 1.0
+            // imm0[15:0] = A0=0.8    = 0x3A66 -- imm0[31:16] = A1=0.4   = 0x3666
+            imm0_high = 0x3666;
+            imm0_low  = 0x3A66;
+            // imm1[15:0] = A2=0.1    = 0x2E66 -- imm1[31:16] = A3=-0.09 = 0xADC3
+            imm1_high = 0xADC3;
+            imm1_low  = 0x2E66;
+            // imm2[15:0] = A4=-0.075 = 0xACCD -- imm2[31:16] = A5=0     = 0x7C00
+            imm2_high = 0x7C00;
+            imm2_low  = 0xACCD;
+            // imm3[15:0] = B0=0.5    = 0x3800 -- imm3[31:16] = B1=0.7   = 0x399A
+            imm3_high = 0x399A;
+            imm3_low  = 0x3800;
+            // imm4[15:0] = B2=0.99   = 0x3BEC -- imm4[31:16] = B3=1.27  = 0x3D14
+            imm4_high = 0x3D14;
+            imm4_low  = 0x3BEC;
+            // imm5[15:0] = B4=1.235  = 0x3CF1 -- imm5[31:16] = B5=1.0   = 0x3C00
+            imm5_high = 0x3C00;
+            imm5_low  = 0x3CF1;
+            TTI_SFPLOADI(0, 10, imm0_low);
+            TTI_SFPLOADI(0,  8, imm0_high);
+            TTI_SFPLOADI(1, 10, imm1_low);
+            TTI_SFPLOADI(1,  8, imm1_high);
+            TTI_SFPLOADI(2, 10, imm2_low);
+            TTI_SFPLOADI(2,  8, imm2_high);
+            TTI_SFPLOADI(4, 10, imm3_low);
+            TTI_SFPLOADI(4,  8, imm3_high);
+            TTI_SFPLOADI(5, 10, imm4_low);
+            TTI_SFPLOADI(5,  8, imm4_high);
+            TTI_SFPLOADI(6, 10, imm5_low);
+            TTI_SFPLOADI(6,  8, imm5_high);
+        } else {
+            imm0 = 0x28FF;
+            imm1 = 0x3020;
+            TTI_SFPLOADI(0, 2, imm0);
+            TTI_SFPLOADI(1, 2, imm1);
+        }
         break;
     case SfpuType::gelu:
         imm0 = 0x18FF;
@@ -252,7 +305,7 @@ sfpi_inline vFloat calculate_exponential_body(vFloat in)
 template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN>
 void calculate_cube(uint16_t exp_base_scale_factor = 0)
 {
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
 
         TTI_SFPLOAD(p_sfpu::LREG3, 0, 0); // load from dest
@@ -266,11 +319,11 @@ void calculate_cube(uint16_t exp_base_scale_factor = 0)
 }
 */
 
-template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN>
+template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN, int ITERATIONS>
 void calculate_exponential(uint16_t exp_base_scale_factor = 0)
 {
     // Unroll 8 best for approx, unroll 0 for precise, compiler figures this out
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
         if constexpr(SCALE_EN){
@@ -336,17 +389,16 @@ inline vFloat calculate_gelu_core(vFloat in)
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_gelu()
 {
-    LRegAssigner lra;
-    vUInt l0 = lra.assign(LRegs::LReg0);
-    vUInt l1 = lra.assign(LRegs::LReg1);
-    vUInt l2 = lra.assign(LRegs::LReg2);
+    vUInt l0 = l_reg[LRegs::LReg0];
+    vUInt l1 = l_reg[LRegs::LReg1];
+    vUInt l2 = l_reg[LRegs::LReg2];
     vFloat half = 0.5f;
 
     #pragma GCC unroll 8
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
         vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
@@ -359,18 +411,21 @@ inline void calculate_gelu()
 
         dst_reg++;
     }
+
+    l_reg[LRegs::LReg0] = l0;
+    l_reg[LRegs::LReg1] = l1;
+    l_reg[LRegs::LReg2] = l2;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sigmoid()
 {
-    LRegAssigner lra;
-    vUInt l0 = lra.assign(LRegs::LReg0);
-    vUInt l1 = lra.assign(LRegs::LReg1);
-    vUInt l2 = lra.assign(LRegs::LReg2);
+    vUInt l0 = l_reg[LRegs::LReg0];
+    vUInt l1 = l_reg[LRegs::LReg1];
+    vUInt l2 = l_reg[LRegs::LReg2];
 
     #pragma GCC unroll 8
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
 
@@ -378,19 +433,22 @@ inline void calculate_sigmoid()
 
         dst_reg++;
     }
+
+    l_reg[LRegs::LReg0] = l0;
+    l_reg[LRegs::LReg1] = l1;
+    l_reg[LRegs::LReg2] = l2;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_tanh()
 {
     // SFPU microcode
-    LRegAssigner lra;
-    vUInt l0 = lra.assign(LRegs::LReg0);
-    vUInt l1 = lra.assign(LRegs::LReg1);
-    vUInt l2 = lra.assign(LRegs::LReg2);
+    vUInt l0 = l_reg[LRegs::LReg0];
+    vUInt l1 = l_reg[LRegs::LReg1];
+    vUInt l2 = l_reg[LRegs::LReg2];
 
     #pragma GCC unroll 8
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
         val = lut(val, l0, l1, l2);
@@ -398,9 +456,13 @@ inline void calculate_tanh()
 
         dst_reg++;
     }
+
+    l_reg[LRegs::LReg0] = l0;
+    l_reg[LRegs::LReg1] = l1;
+    l_reg[LRegs::LReg2] = l2;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_hardtanh(uint param0, uint param1, uint param2)
 {
     // All params are in FP16_B format
@@ -413,7 +475,7 @@ inline void calculate_hardtanh(uint param0, uint param1, uint param2)
     vFloat p2 = s2vFloat16(param2);
     // SFPU microcode
     #pragma GCC unroll 0
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
 
@@ -437,16 +499,15 @@ inline void calculate_hardtanh(uint param0, uint param1, uint param2)
     }
 }
 
-template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH>
+template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH, int ITERATIONS>
 inline void calculate_tanh_derivative()
 {
-    LRegAssigner lra;
-    vUInt l0 = lra.assign(LRegs::LReg0);
-    vUInt l1 = lra.assign(LRegs::LReg1);
-    vUInt l2 = lra.assign(LRegs::LReg2);
+    vUInt l0 = l_reg[LRegs::LReg0];
+    vUInt l1 = l_reg[LRegs::LReg1];
+    vUInt l2 = l_reg[LRegs::LReg2];
 
     // tanh'(x) = 1 - (tanh(x))^2
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
 
@@ -459,44 +520,82 @@ inline void calculate_tanh_derivative()
 
         dst_reg++;
     }
+
+    l_reg[LRegs::LReg0] = l0;
+    l_reg[LRegs::LReg1] = l1;
+    l_reg[LRegs::LReg2] = l2;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_gelu_derivative()
 {
-    constexpr uint imm2 = 0xFF10;
+    if constexpr (APPROXIMATION_MODE) {
+        constexpr int lut_mode = 1; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
 
-    LRegAssigner lra;
-    vUInt l0 = lra.assign(LRegs::LReg0);
-    vUInt l1 = lra.assign(LRegs::LReg1);
+        vUInt l0 = l_reg[LRegs::LReg0];
+        vUInt l1 = l_reg[LRegs::LReg1];
+        vUInt l2 = l_reg[LRegs::LReg2];
+        vUInt l4 = l_reg[LRegs::LReg4];
+        vUInt l5 = l_reg[LRegs::LReg5];
+        vUInt l6 = l_reg[LRegs::LReg6];
 
-    // SFPU microcode:
-    #pragma GCC unroll 0
-    for (int d = 0; d < 8; d++)
-    {
-        vFloat in = dst_reg[0];
-        vFloat neg_half_sq_in = in * in * -0.5f;
+        // SFPU microcode:
+        #pragma GCC unroll 0
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            vFloat val = dst_reg[0];
+            val = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
+            v_if (val < 0.0F) {
+                val = val + 1.0f;
+            }
+            v_endif;
+            dst_reg[0] = val;
+            dst_reg++;
 
-        // exp = e^(val)
-        vFloat exp = calculate_exponential_body<false>(neg_half_sq_in);
+        }
 
-        // exp = exp * 1/sqrt(2*pi)
-        vFloat partial = exp * in * s2vFloat16b(0.3989423F);
+        l_reg[LRegs::LReg0] = l0;
+        l_reg[LRegs::LReg1] = l1;
+        l_reg[LRegs::LReg2] = l2;
+        l_reg[LRegs::LReg4] = l4;
+        l_reg[LRegs::LReg5] = l5;
+        l_reg[LRegs::LReg6] = l6;
+    } else {
+        constexpr uint imm2 = 0xFF10;
 
-        vFloat result = calculate_gelu_core<true>(in);
+        vUInt l0 = l_reg[LRegs::LReg0];
+        vUInt l1 = l_reg[LRegs::LReg1];
 
-        result = lut(result, l0, l1, imm2);
+        // SFPU microcode:
+        #pragma GCC unroll 0
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            vFloat in = dst_reg[0];
+            vFloat neg_half_sq_in = in * in * -0.5f;
 
-        dst_reg[0] = partial + result + 0.5f;
+            // exp = e^(val)
+            vFloat exp = calculate_exponential_body<false>(neg_half_sq_in);
 
-        dst_reg++;
+            // exp = exp * 1/sqrt(2*pi)
+            vFloat partial = exp * in * s2vFloat16b(0.3989423F);
+
+            vFloat result = calculate_gelu_core<true>(in);
+
+            result = lut(result, l0, l1, imm2);
+
+            dst_reg[0] = partial + result + 0.5f;
+            dst_reg++;
+        }
+
+        l_reg[LRegs::LReg0] = l0;
+        l_reg[LRegs::LReg1] = l1;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_reciprocal()
 {
-    #pragma GCC unroll 2
+    #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
@@ -514,11 +613,11 @@ inline void calculate_reciprocal()
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, int RECIPROCAL_ITERATIONS=2>
+template <bool APPROXIMATION_MODE, int ITERATIONS, int RECIPROCAL_ITERATIONS>
 inline void calculate_sqrt()
 {
     #pragma GCC unroll 8
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
 
@@ -560,7 +659,7 @@ inline void calculate_sqrt()
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_dropout(uint prob, uint scale)
 {
     // SFPU microcode
@@ -568,11 +667,10 @@ inline void calculate_dropout(uint prob, uint scale)
     FWLOG1("calculate_dropout() -- prob:%x", prob);
     FWLOG1("calculate_dropout() -- scale:%x", scale);
 
-    LRegAssigner lra;
-    vUInt rand = lra.assign(LRegs::LReg3);
+    vUInt rand = l_reg[LRegs::LReg3];
 
     #pragma GCC unroll 0
-    for (int d = 0; d < 8; d++) {
+    for (int d = 0; d < ITERATIONS; d++) {
         ////////////////////////
         // Scale samples
         ///////////////////////
@@ -600,16 +698,18 @@ inline void calculate_dropout(uint prob, uint scale)
 
         dst_reg++;
     }
+
+    l_reg[LRegs::LReg3] = rand;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_lrelu(uint slope)
 {
     // SFPU microcode
     vFloat s = s2vFloat16b(slope);
 
     #pragma GCC unroll 0
-    for (int d = 0; d < 8; d++) {
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
 
         v_if (v < 0.0f) {
@@ -623,10 +723,10 @@ inline void calculate_lrelu(uint slope)
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_power(uint exponent)
 {
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
         vFloat result = in * in;
@@ -640,26 +740,21 @@ inline void calculate_power(uint exponent)
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void calculate_multiply()
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_square()
 {
-    for (int d = 0; d < 8; d++)
+    #pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_WRCFG(p_gpr_math::DEST_OP0_BASE, 0, DEST_REGW_BASE_Base_ADDR32);
-        TTI_SFPNOP;
-        TTI_SFPLOAD(2, 0, ADDR_MOD_3, 0);	// load from dest
+        vFloat in = dst_reg[0];
+        vFloat result = in * in;
 
-        TTI_WRCFG(p_gpr_math::DEST_OP1_BASE, 0, DEST_REGW_BASE_Base_ADDR32);
-        TTI_SFPNOP;
-        TTI_SFPLOAD(3, 0, ADDR_MOD_3, 0);	// load from dest
+        dst_reg[0] = result;
 
-        TTI_SFPMUL(2, 3, p_sfpu::LCONST_0, 1, 0); //lreg1 = x^2
-        TTI_SFPNOP;
-
-        TTI_SFPSTORE(1, 0, ADDR_MOD_3, 0);
-        TTI_INCRWC(0, 2, 0, 0);
+        dst_reg++;
     }
 }
+
 template <bool HAS_BASE_SCALING>
 sfpi_inline void calculate_log_body(const uint log_base_scale_factor)
 {
@@ -696,7 +791,7 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor)
     }
     v_endif;
 
-    vFloat expf = int2float(exp, 0);
+    vFloat expf = int32_to_float(exp, 0);
     vFloat vConstLn2 = vConstFloatPrgm0;
     vFloat result = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
 
@@ -715,11 +810,11 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor)
     dst_reg[0] = result;
 }
 
-template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING>
+template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>
 inline void calculate_log(uint log_base_scale_factor)
 {
-    #pragma GCC unroll 4
-    for(int d = 0; d < 8; d++){
+    #pragma GCC unroll 8
+    for(int d = 0; d < ITERATIONS; d++){
         calculate_log_body<HAS_BASE_SCALING>(log_base_scale_factor);
         dst_reg++;
     }
@@ -733,7 +828,7 @@ sfpi_inline void calculate_comp_init_flag(bool check, vFloat& flag1, vFloat& fla
     }
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE>
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS>
 inline void calculate_comp(uint exponent_size_8)
 {
     //invert output and use same comparison check
@@ -753,7 +848,7 @@ inline void calculate_comp(uint exponent_size_8)
     constexpr bool check_zero = (COMP_MODE == SfpuType::equal_zero) || (COMP_MODE == SfpuType::not_equal_zero);
     constexpr bool second_check = (COMP_MODE == SfpuType::less_than_equal_zero) || (COMP_MODE == SfpuType::greater_than_zero);
 
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0];
         vFloat flag1, flag2;
@@ -808,7 +903,7 @@ inline void calculate_comp(uint exponent_size_8)
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_clamp(uint param0, uint param1, uint param2)
 {
     // All params are in FP16 format
@@ -822,7 +917,7 @@ inline void calculate_clamp(uint param0, uint param1, uint param2)
     vFloat min = s2vFloat16(param0, format);
     vFloat max = s2vFloat16(param1, format);
     #pragma GCC unroll 0
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
 
@@ -839,11 +934,11 @@ inline void calculate_clamp(uint param0, uint param1, uint param2)
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_abs()
 {
     // SFPU microcode
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0];
         dst_reg[0] = sfpi::abs(v);
@@ -851,12 +946,13 @@ inline void calculate_abs()
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sign(uint exponent_size_8)
 {
     // All params are in FP16 format
     // uint format = 1;
-    for (int d = 0; d < 8; d++)
+    #pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0];
         dst_reg[0] = vConst1;
@@ -876,56 +972,209 @@ inline void calculate_sign(uint exponent_size_8)
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_max()
+{
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat a = dst_reg[0];
+        vFloat b = dst_reg[32];
+        v_if(a < b) {
+            dst_reg[0] = b;
+        }
+        v_endif;
+
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE>
+sfpi_inline vFloat sfpu_sine_maclaurin_series(vFloat val)
+{
+    // Good for [-pi:pi]
+    // Mclauren series = x - x^3/3! + x^5/5! - x^7/7! + x^9/9! - x^11/11!
+    vFloat tmp = val;
+    // x
+    vFloat output = tmp;
+    // x^3/3!
+    tmp = tmp*val*val;
+    output += -0.166666666*tmp;
+    // x^5/5!
+    tmp = tmp*val*val;
+    output +=  0.0083333333*tmp;
+    // x^7/7!
+    tmp = tmp*val*val;
+    output += -0.0001984126*tmp;
+    if constexpr (not APPROXIMATION_MODE) {
+        // x^9/9!
+        tmp = tmp*val*val;
+        output +=  0.0000027557*tmp;
+        // x^11/11!
+        tmp = tmp*val*val;
+        output += -0.00000002505*tmp;
+    }
+
+    // Write out output
+    return output;
+}
+template <bool APPROXIMATION_MODE>
+sfpi_inline vFloat sfpu_cosine_maclaurin_series(vFloat val)
+{
+    // Good for [-pi:pi]
+    // Mclauren series = 1 - x^2/2! + x^4/4! - x^6/6! + x^8/8! - x^10/10! + x^12/12!
+    // 1
+    vFloat output = 1.0f;
+    // x^2/2!
+    vFloat tmp = val*val;
+    output += -0.5*tmp;
+    // x^4/4!
+    tmp = tmp*val*val;
+    output +=  0.0416666666*tmp;
+    // x^6/6!
+    tmp = tmp*val*val;
+    output += -0.0013888888*tmp;
+    if constexpr (not APPROXIMATION_MODE) {
+        // x^8/8!
+        tmp = tmp*val*val;
+        output +=  0.0000248015*tmp;
+        // x^10/10!
+        tmp = tmp*val*val;
+        output += -0.0000002755*tmp;
+    }
+
+    // Write out output
+    return output;
+}
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_sine()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat v = dst_reg[0];
+        v = 0.318309886183791f*v; // *1/pi to get number of pi rads.
+        vInt whole_v = float_to_int16(v);
+        vFloat whole_v_float = int32_to_float(whole_v, 0);
+        v = v - whole_v_float;
+        v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
+        v = sfpu_sine_maclaurin_series<APPROXIMATION_MODE>(v);
+        whole_v = whole_v & 0x1;
+        v_if(whole_v != 0) {
+            // odd so flip the sign
+            v *= -1;
+        }
+        v_endif;
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_cosine()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat v = dst_reg[0];
+        v = 0.318309886183791f*v; // *1/pi to get number of pi rads.
+        vInt whole_v = float_to_int16(v);
+        vFloat whole_v_float = int32_to_float(whole_v, 0);
+        v = v - whole_v_float;
+        v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
+        v = sfpu_cosine_maclaurin_series<APPROXIMATION_MODE>(v);
+        whole_v = whole_v & 0x1;
+        v_if(whole_v != 0) {
+            // odd so flip the sign
+            v *= -1;
+        }
+        v_endif;
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void relu_max(uint uint_threshold)
+{
+    vFloat threshold = s2vFloat16(uint_threshold, s2vFloat16::fp16a);
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat a = dst_reg[0];
+        v_if(a > threshold) {
+            a = threshold;
+        }
+        v_endif;
+        v_if(a < 0.0f) {
+            a = 0.0f;
+        }
+        v_endif;
+        dst_reg[0] = a;
+        dst_reg++;
+    }
+}
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void relu_min(uint uint_threshold)
+{
+    vFloat threshold = s2vFloat16(uint_threshold, s2vFloat16::fp16a);
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat a = dst_reg[0];
+        v_if(a < threshold) {
+            a = 0.0f;
+        }
+        v_endif;
+        dst_reg[0] = a;
+        dst_reg++;
+    }
+}
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int ITERATIONS=8>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
     if constexpr (operation == SfpuType::exponential) {
-        calculate_exponential<APPROXIMATION_MODE, APPROXIMATION_MODE, false>(param0);
+        calculate_exponential<APPROXIMATION_MODE, APPROXIMATION_MODE, false, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::exp_with_base) {
-        calculate_exponential<APPROXIMATION_MODE, false, true>(param0);
+        calculate_exponential<APPROXIMATION_MODE, false, true, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::tanh) {
-        calculate_tanh<APPROXIMATION_MODE>();
+        calculate_tanh<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::hardtanh) {
-        calculate_hardtanh<APPROXIMATION_MODE>(param0, param1, param2);
+        calculate_hardtanh<APPROXIMATION_MODE, ITERATIONS>(param0, param1, param2);
     }
     else if constexpr (operation == SfpuType::gelu) {
-        calculate_gelu<APPROXIMATION_MODE>();
+        calculate_gelu<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::reciprocal) {
         calculate_reciprocal<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::sigmoid) {
-        calculate_sigmoid<APPROXIMATION_MODE>();
+        calculate_sigmoid<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::sqrt) {
         calculate_sqrt<APPROXIMATION_MODE, ITERATIONS, 2>();
     }
     else if constexpr (operation == SfpuType::tanh_derivative) {
-        calculate_tanh_derivative<APPROXIMATION_MODE, SfpuType_PARAM>();
+        calculate_tanh_derivative<APPROXIMATION_MODE, SfpuType_PARAM, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::lrelu) {
-        calculate_lrelu<APPROXIMATION_MODE>(param0);
+        calculate_lrelu<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::dropout) {
-        calculate_dropout<APPROXIMATION_MODE>(param0, param1);
+        calculate_dropout<APPROXIMATION_MODE, ITERATIONS>(param0, param1);
     }
     else if constexpr (operation == SfpuType::power) {
-        calculate_power<APPROXIMATION_MODE>(param0);
+        calculate_power<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
-    else if constexpr (operation == SfpuType::multiply) {
-        calculate_multiply<APPROXIMATION_MODE>();
+    else if constexpr (operation == SfpuType::square) {
+        calculate_square<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::log) {
-        calculate_log<APPROXIMATION_MODE, false>(param0);
+        calculate_log<APPROXIMATION_MODE, false, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::log_with_base) {
-        calculate_log<APPROXIMATION_MODE, true>(param0);
+        calculate_log<APPROXIMATION_MODE, true, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::gelu_derivative) {
-        calculate_gelu_derivative<APPROXIMATION_MODE>();
+        calculate_gelu_derivative<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr ((operation == SfpuType::equal_zero) ||
                        (operation == SfpuType::not_equal_zero) ||
@@ -933,16 +1182,31 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
                        (operation == SfpuType::greater_than_equal_zero) ||
                        (operation == SfpuType::less_than_equal_zero) ||
                        (operation == SfpuType::greater_than_zero)) {
-        calculate_comp<APPROXIMATION_MODE, operation>(param5);
+        calculate_comp<APPROXIMATION_MODE, operation, ITERATIONS>(param5);
     }
     else if constexpr (operation == SfpuType::clamp) {
-        calculate_clamp<APPROXIMATION_MODE>(param0, param1, param2);
+        calculate_clamp<APPROXIMATION_MODE, ITERATIONS>(param0, param1, param2);
     }
     else if constexpr (operation == SfpuType::abs) {
-        calculate_abs<APPROXIMATION_MODE>();
+        calculate_abs<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::sign) {
-        calculate_sign<APPROXIMATION_MODE>(param5);
+        calculate_sign<APPROXIMATION_MODE, ITERATIONS>(param5);
+    }
+    else if constexpr (operation == SfpuType::max) {
+        calculate_max<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::sine) {
+        calculate_sine<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::cosine) {
+        calculate_cosine<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::relu_min) {
+        relu_min<APPROXIMATION_MODE, ITERATIONS>(param0);
+    }
+    else if constexpr (operation == SfpuType::relu_max) {
+        relu_max<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
 }
 

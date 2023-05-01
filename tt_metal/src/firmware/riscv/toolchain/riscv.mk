@@ -111,8 +111,9 @@ ifeq ("$(ARCH_NAME)", "wormhole_b0")
   INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole/noc"
   INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole/wormhole_b0_defines"
 else
-  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/$(ARCH_NAME)"
-  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/$(ARCH_NAME)/noc"
+  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/grayskull/grayskull_defines"
+  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/grayskull"
+  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/grayskull/noc"
 endif
 
 ifeq ("$(ARCH_NAME)", "wormhole")

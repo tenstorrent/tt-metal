@@ -1,4 +1,4 @@
-
+#pragma once
 #include "llk_param_structs.h"
 
 #include "ckernel_include.h"

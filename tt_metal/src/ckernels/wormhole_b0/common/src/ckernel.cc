@@ -1,7 +1,4 @@
-
 #include "ckernel.h"
-#include "ckernel_addr_map.h"
-#include "ckernel_pcbuf.h"
 #include "fw_debug.h"
 #include "ckernel_main.h"
 #include "ckernel_globals.h"
@@ -11,6 +8,8 @@
 #include "ckernel_perf_unpack_pack.h"
 #include "ckernel_perf_math.h"
 #endif
+
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace ckernel
 {
@@ -36,6 +35,8 @@ uint32_t dbg_event_end __attribute__((section(".bss"))) = 0;
 volatile uint16_t *debug_mailbox_base = nullptr;
 uint8_t mailbox_index = 0;
 uint8_t mailbox_end = 32;
+uint32_t op_info_offset = 0;
+volatile uint8_t *debug_buffer = nullptr;
 
 #ifdef PERF_DUMP
 uint32_t perf_index __attribute__((section(".bss"))) = 0;
@@ -105,6 +106,20 @@ inline void allocate_debug_mailbox_buffer() {
    }
    debug_mailbox_base = reinterpret_cast<volatile uint16_t *>(debug_mailbox_addr);
    clear_mailbox_values();
+
+}
+
+inline void allocate_debug_buffer() {
+   std::int32_t debug_buffer_addr;
+   if ((uint32_t)__firmware_start == (uint32_t)l1_mem::address_map::TRISC0_BASE) {
+      debug_buffer_addr = l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE;
+   } else if ((uint32_t) __firmware_start == (uint32_t)l1_mem::address_map::TRISC1_BASE) {
+      debug_buffer_addr = l1_mem::address_map::TRISC1_DEBUG_BUFFER_BASE;
+   } else {
+      debug_buffer_addr = l1_mem::address_map::TRISC2_DEBUG_BUFFER_BASE;
+   }
+   debug_buffer = reinterpret_cast<volatile uint8_t *>(debug_buffer_addr);
+   debug_buffer[l1_mem::address_map::DEBUG_BUFFER_SIZE-1]=0x0;
 }
 
 } // namespace ckernel
@@ -135,11 +150,25 @@ using namespace ckernel;
 
 int main(int argc, char *argv[])
 {
+    kernel_profiler::init_profiler();
+
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+  kernel_profiler::mark_time(CC_MAIN_START);
+#endif
     FWEVENT("Launching proudction env kernels");
 
     // Initialize GPRs to all 0s
     for (int i = 0; i < 64; i++)
         regfile[i] = 0;
+
+    // Init L1 buffer with 1.0f (used for reduce max)
+    union {
+        float f;
+        uint32_t u;
+    } f2u = {.f = 1.0f};
+
+    for (uint i = 0; i < 16; i++) l1_buffer[i] = f2u.u;  // Load const into L1 buffer
+
 
     reset_cfg_state_id();
 
@@ -152,6 +181,7 @@ int main(int argc, char *argv[])
     }
 
     allocate_debug_mailbox_buffer();
+    allocate_debug_buffer();
 
 #ifdef PERF_DUMP
     allocate_perf_buffer();
@@ -162,7 +192,13 @@ int main(int argc, char *argv[])
 
     //while (ready_for_next_epoch())
     {
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+  kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
+#endif
         run_kernel();
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+  kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+#endif
     }
 
     // Signal completion
@@ -175,4 +211,7 @@ int main(int argc, char *argv[])
 #endif
     trisc_l1_mailbox_write(KERNEL_COMPLETE);
 
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+  kernel_profiler::mark_time(CC_MAIN_END);
+#endif
 }

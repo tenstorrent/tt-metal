@@ -1,7 +1,6 @@
 
 #include "llk_io_unpack.h"
 #include "llk_param_structs.h"
-#include "llk_unpack_common.h"
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -84,7 +83,7 @@ inline void llk_unpack_reduce_init() {
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce(std::uint32_t operand, std::uint32_t tile_index) {
     std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
+    std::uint32_t base_address = cb_read_interface[input].fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
     std::uint32_t address = base_address + offset_address;
 

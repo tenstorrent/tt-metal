@@ -6,22 +6,16 @@
 #include "cpack_common.h"
 #include "llk_param_structs.h"
 
+#include "hostdevcommon/common_runtime_address_map.h"
+
+
 using namespace ckernel;
 using namespace ckernel::packer;
 
-#ifdef PERF_DUMP
-#include "ckernel_perf_api.h"
-#endif
 
 // wait until math is done and has produced something to pack
 inline void llk_packer_wait_for_math_done() {
-#ifdef PERF_DUMP
-    if constexpr (MATH_PACK_DECOUPLE == 0) {
-        TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
-    }
-#else
     TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
-#endif
 }
 
 // Tell math that it can write again
@@ -35,12 +29,6 @@ inline void llk_packer_set_math_semaphore() {
 // Clear dest
 template <DstSync Dst, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_dest_section_done() {
-#ifdef PERF_DUMP
-    if constexpr (MATH_PACK_DECOUPLE) {
-        return;
-    }
-#endif
-
     constexpr bool clear_dest = (Dst != DstSync::SyncTile16);
 
     if constexpr (clear_dest){
@@ -150,4 +138,17 @@ inline void llk_pack_release_tile(std::uint32_t operand) {
     if constexpr (mail2pack) {
        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
     }
+}
+
+inline void llk_pack_relu_config(std::uint32_t config) {
+    ReluType mode = (config&0xf) == 0 ? ReluType::NO_RELU : ((config&0xf) == 3 ? ReluType::MAX_THRESHOLD_RELU : ReluType::MIN_THRESHOLD_RELU);
+    uint32_t threshold = (config>>16) << STACC_RELU_ReluThreshold_SHAMT;
+    TTI_SETDMAREG(0, 0, 0, LO_16(p_gpr_pack::TMP0));
+    TTI_SETDMAREG(0,((uint32_t)mode), 0, HI_16(p_gpr_pack::TMP0));
+    TTI_SETDMAREG(0, threshold, 0, LO_16(p_gpr_pack::TMP1));
+    TTI_SETDMAREG(0, 0, 0, HI_16(p_gpr_pack::TMP1));
+	TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, STACC_RELU_ApplyRelu_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP1,  p_cfg::WRCFG_32b, STACC_RELU_ReluThreshold_ADDR32);
+    TTI_NOP; TTI_NOP;
 }

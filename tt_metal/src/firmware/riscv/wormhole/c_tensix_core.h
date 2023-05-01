@@ -69,7 +69,7 @@ public:
 
     //static void ex_sync_kernel(vptr_mailbox mailbox) { ::ex_sync_kernel(mailbox); }
     //static void ex_sync_instrn(vptr_uint instrn_buf, vptr_mailbox mailbox) { ::ex_sync_instrn(instrn_buf, mailbox); }
-    static void ex_stallwait(vptr_uint instrn_buf, uint wait_res, uint stall_res ) { :: ex_stallwait(wait_res, stall_res, instrn_buf); }
+
     static void ex_setc16(uint addr, uint val, vptr_uint instrn_buf) { ::ex_setc16(addr, val, instrn_buf); }
     static void ex_instrn_wrcfg(uint gpr, uint cfg_addr, vptr_uint instrn_buf) { ::ex_instrn_wrcfg(gpr, cfg_addr, instrn_buf); }
     static void ex_instrn_rdcfg(uint gpr, uint cfg_addr, vptr_uint instrn_buf) { ::ex_instrn_rdcfg(gpr, cfg_addr, instrn_buf); }

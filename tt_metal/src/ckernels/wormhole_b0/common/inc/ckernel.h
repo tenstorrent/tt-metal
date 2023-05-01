@@ -26,11 +26,20 @@
 #include "ckernel_include.h"
 #include "fw_debug.h"
 #include "tensix.h"
+#include "l1_address_map.h"
+#include "eth_l1_address_map.h"
+#include "noc_overlay_parameters.h"
+#include "stream_io_map.h"
+#include <l1_address_map.h>
+#include "hostdevcommon/common_runtime_address_map.h"
 // #include <cstring>
-#include "perf_lib/scratch_api.h"
+//#include "perf_lib/scratch_api.h" // not used unless perf dump enabled?
+
 
 namespace ckernel
 {
+
+#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_ ## arg_idx
 
 constexpr uint PACK_FLUSH_COUNTERS = // counters flush
     (1 << PACK_COUNTERS_SEC2_pack_per_xy_plane_SHAMT) |
@@ -50,6 +59,7 @@ extern volatile uint *mailbox_base[4];
 extern volatile uint *dbg_event_scratch;
 extern volatile uint* trisc_l1_mailbox;
 extern volatile uint local_mem_barrier;
+extern volatile uint8_t *debug_buffer;
 
 extern uint32_t cfg_state_id;
 extern uint32_t dest_offset_id;
@@ -59,6 +69,8 @@ extern uint32_t dbg_event_end;
 extern volatile uint16_t *debug_mailbox_base;
 extern uint8_t mailbox_index;
 extern uint8_t mailbox_end;
+extern uint32_t op_info_offset;
+
 // Internal scope to namespace methods only (C++ does not allow namespace private ownership)
 namespace internal {
 }
@@ -430,6 +442,47 @@ inline void record_mailbox_value_with_index(uint8_t index, uint16_t event_value)
 inline void clear_mailbox_values(uint16_t value = 0) {
   for (int i = 0; i < mailbox_end; i++)
     debug_mailbox_base[i] = value;
+}
+
+inline void debug_dump(uint8_t *data, uint32_t byte_size) {
+  for (uint32_t i = 0; i < byte_size; i++) {
+    if ((((uint32_t) debug_buffer)&(l1_mem::address_map::DEBUG_BUFFER_SIZE-1)) ==
+         l1_mem::address_map::DEBUG_BUFFER_SIZE-1) {
+       *(debug_buffer) = 0xff; //overflow detected
+    } else {
+       *debug_buffer = data[i];
+       debug_buffer++;
+    }
+  }
+}
+
+inline void llk_get_next_op_info(tt::op_info_t& op_info_struct) {
+
+    uint32_t* op_info_ptr = reinterpret_cast<uint32_t*>(OP_INFO_BASE_ADDR + op_info_offset);
+    static constexpr uint32_t op_info_num_items = 7;
+
+    volatile uint32_t* op_info_struct_ptr = reinterpret_cast<volatile uint32_t*>(&op_info_struct);
+    for (uint32_t i = 0; i < op_info_num_items; i++) {
+        op_info_struct_ptr[i] = op_info_ptr[i];
+    }
+    op_info_offset += 28;
+
+    if (op_info_offset == OP_INFO_SIZE) {
+        op_info_offset = 0; // In case we go out of bounds
+    }
+}
+
+inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsigned int b)
+{
+  unsigned int r = 0;
+  while (a)
+    {
+      if (a & 1)
+        r += b;
+      a >>= 1;
+      b <<= 1;
+    }
+  return r;
 }
 
 }

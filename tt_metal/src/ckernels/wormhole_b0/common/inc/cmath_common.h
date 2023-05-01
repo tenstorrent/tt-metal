@@ -2,7 +2,6 @@
 
 //#include "kernel_types.h"
 #include "ckernel.h"
-#include "ckernel_noc.h"
 #include "ckernel_template.h"
 #include "ckernel_sfpu.h"
 #include "ckernel_globals.h"

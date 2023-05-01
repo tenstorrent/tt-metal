@@ -38,7 +38,6 @@ INCLUDES = \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/llk_lib/ \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/ \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/noc \
-	-I$(TT_METAL_HOME)/perf_lib/ \
 	-I$(CKERNEL_INC_DIR)/gen/out # needed for ckernel_ops.h
 
 DISABLE_FWLOG ?= 1

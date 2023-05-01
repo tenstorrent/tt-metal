@@ -1545,9 +1545,8 @@ sfpi_test_noinline void test11()
         TTI_SFPLOADI(0, SFPLOADI_MOD0_USHORT, 0xFF20); // Mulitply by 0.0, add 0.25
         TTI_SFPLOADI(1, SFPLOADI_MOD0_USHORT, 0x2010); // Mulitply by 0.25, add 0.5
         vUInt l0b, l1b;
-        LRegAssigner lra;
-        l0b = lra.assign(LRegs::LReg0);
-        l1b = lra.assign(LRegs::LReg0);
+        l0b = l_reg[LRegs::LReg0];
+        l1b = l_reg[LRegs::LReg1];
 
         v_if(dst_reg[0] == 7.0F) {
             // Use L0
@@ -2766,54 +2765,54 @@ void test16()
 
     // These are really crappy "touch" tests
     v_if (dst_reg[0] == 8.0F) {
-        dst_reg[16] = int2float(0xABBAAB);
+        dst_reg[16] = int32_to_float(0xABBAAB);
     }
     v_endif;
     v_if (dst_reg[0] == 9.0F) {
-        dst_reg[16] = int2float(0xABBAAB, 0);
+        dst_reg[16] = int32_to_float(0xABBAAB, 0);
     }
     v_endif;
 
     v_if (dst_reg[0] == 10.0F) {
-        dst_reg[16] = float2fp16a(1.32332);
+        dst_reg[16] = float_to_fp16a(1.32332);
     }
     v_endif;
     v_if (dst_reg[0] == 11.0F) {
-        dst_reg[16] = float2fp16b(1.32332);
+        dst_reg[16] = float_to_fp16b(1.32332);
     }
     v_endif;
     v_if (dst_reg[0] == 12.0F) {
-        set_expected_result(16, 48.0f, 24, float2uint8(23.3));
+        set_expected_result(16, 48.0f, 24, float_to_uint8(23.3));
     }
     v_endif;
     v_if (dst_reg[0] == 13.0F) {
-        set_expected_result(16, 64.0f, 24, float2int8(23.3));
+        set_expected_result(16, 64.0f, 24, float_to_int8(23.3));
     }
     v_endif;
     v_if (dst_reg[0] == 14.0F) {
         vUInt descale = 8;
-        set_expected_result(16, 80.0f, 0xeb, int322uint8(0xea00, descale));
+        set_expected_result(16, 80.0f, 0xeb, int32_to_uint8(0xea00, descale));
     }
     v_endif;
     v_if (dst_reg[0] == 15.0F) {
-        set_expected_result(16, 96.0f, 0xf, int322uint8(0xea0, 8));
+        set_expected_result(16, 96.0f, 0xf, int32_to_uint8(0xea0, 8));
     }
     v_endif;
     v_if (dst_reg[0] == 16.0F) {
         vUInt descale = 8;
-        set_expected_result(16, 112.0f, 0xf, int322int8(0xea0, descale));
+        set_expected_result(16, 112.0f, 0xf, int32_to_int8(0xea0, descale));
     }
     v_endif;
     v_if (dst_reg[0] == 17.0F) {
-        set_expected_result(16, 128.0f, 0xf, int322int8(0xea0, 8));
+        set_expected_result(16, 128.0f, 0xf, int32_to_int8(0xea0, 8));
     }
     v_endif;
     v_if (dst_reg[0] == 18.0F) {
-        set_expected_result(16, 130.0f, 0x7eb1, float2int16(32432.0f));
+        set_expected_result(16, 130.0f, 0x7eb1, float_to_int16(32432.0f));
     }
     v_endif;
     v_if (dst_reg[0] == 19.0F) {
-        set_expected_result(16, 132.0f, 0x7eb1, float2uint16(32432.0f));
+        set_expected_result(16, 132.0f, 0x7eb1, float_to_uint16(32432.0f));
     }
     v_endif;
 

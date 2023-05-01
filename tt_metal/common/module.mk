@@ -8,7 +8,7 @@ ifeq ("$(ARCH_NAME)", "wormhole_b0")
   COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/device/wormhole/.
 else
   COMMON_INCLUDES+= -Isrc/firmware/riscv/$(ARCH_NAME)
-  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/device/grayskull/.
+  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/device/$(ARCH_NAME)/.
 endif
 
 ifeq ("$(ARCH_NAME)", "wormhole")

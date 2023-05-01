@@ -103,6 +103,12 @@ enum SfpuType
   dropout,
   abs,
   sign,
+  square,
+  max,
+  sine,
+  cosine,
+  relu_min,
+  relu_max,
   unused
 };
 

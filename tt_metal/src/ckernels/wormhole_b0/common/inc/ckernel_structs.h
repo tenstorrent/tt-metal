@@ -1,5 +1,8 @@
 #pragma once
 
+#include "circular_buffer.h"
+#include "kernels/hostdevcommon/kernel_structs.h"
+
 namespace ckernel
 {
 

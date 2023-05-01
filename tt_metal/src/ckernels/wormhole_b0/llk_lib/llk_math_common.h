@@ -8,6 +8,7 @@
 #include "ckernel_perf_api.h"
 #endif
 
+#include "hostdevcommon/common_runtime_address_map.h"
 using namespace ckernel::math;
 
 template <DstSync Dst>
