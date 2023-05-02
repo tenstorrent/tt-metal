@@ -4,7 +4,7 @@ from .layernorm import Layernorm
 def AddAndNorm(gamma: tensor.Tensor, beta: tensor.Tensor, epsilon, H, W, device):
     """
     Returns a function that performs Eltwise-binary add two
-    ``ttlib.tensor.Tensor`` s and then LayerNorm the result.
+    ``tt_lib.tensor.Tensor`` s and then LayerNorm the result.
     """
 
     layernorm = Layernorm(gamma, beta, epsilon, H, W, device, 1)

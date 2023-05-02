@@ -635,6 +635,26 @@ void TensorModule(py::module &m_tensor) {
                 shape = tt_tensor.shape()
 
         )doc")
+        .def("on_host", [](const Tensor &self) {
+            return self.on_host();
+        }, R"doc(
+            Check if the tensor is on host
+
+            .. code-block:: python
+
+                on_host = tt_tensor.on_host()
+
+        )doc")
+        .def("device", [](const Tensor &self) {
+            return self.device();
+        }, R"doc(
+            Get the device of the tensor.
+
+            .. code-block:: python
+
+                device = tt_tensor.device()
+
+        )doc")
         .def("data", [](const Tensor &self) {
             std::vector<uint32_t> empty_vec;
             TT_ASSERT(self.data_ptr() != nullptr);
@@ -686,7 +706,17 @@ void TensorModule(py::module &m_tensor) {
 
                 buffer_type = tt_tensor.buffer_type()
 
-        )doc");
+        )doc")
+        .def("dtype", [](const Tensor &self) {
+            return self.dtype();
+        }, R"doc(
+            Get dtype of TT Tensor.
+
+            .. code-block:: python
+
+                dtype = tt_tensor.dtype()
+
+        )doc");;
 
     // *** eltwise binary ***
     m_tensor.def("add", &add, R"doc(
@@ -1315,6 +1345,10 @@ void DeviceModule(py::module &m_device) {
         +==================+========================+=======================+=============+==========+
         | device           | TT Device to use       | tt_lib.device.Device  |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
+    )doc");
+
+    m_device.def("GetDefaultDevice", &AutoPad::GetDefaultDevice, R"doc(
+        Gets the default device to use for ops when inputs aren't on device.
     )doc");
 
     m_device.def("StartDebugPrintServer", &StartDebugPrintServer);

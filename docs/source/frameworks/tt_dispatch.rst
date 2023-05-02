@@ -58,6 +58,7 @@ The following example shows how to create, initialize, and close TT accelerator 
 
 .. autofunction:: tt_lib.device.SetDefaultDevice
 
+.. autofunction:: tt_lib.device.GetDefaultDevice
 
 
 

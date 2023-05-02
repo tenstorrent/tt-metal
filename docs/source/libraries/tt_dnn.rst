@@ -154,3 +154,40 @@ Other Operations
 .. autofunction:: tt_lib.tensor.tilize_conv_activation
 
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
+
+
+Fallback Operations
+-------------------
+
+Operations that currently aren't supported on hardware have a fallback
+implementation using Pytorch.
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.full
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.reshape
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.chunk
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.conv2d
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.group_norm
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.layer_norm
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.pad
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.repeat_interleave
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.concat
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.sigmoid
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.silu
+
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.softmax
+
+.. autoclass:: tt_lib.fallback_ops.fallback_ops.Conv2d
+
+.. autoclass:: tt_lib.fallback_ops.fallback_ops.GroupNorm
+
+.. autoclass:: tt_lib.fallback_ops.fallback_ops.LayerNorm

@@ -8,7 +8,7 @@ from ..utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list
 
 def softmax(x: tensor.Tensor, stable=False):
     """
-    Performs Softmax on a ``ttlib.tensor.Tensor``.
+    Performs Softmax on a ``tt_lib.tensor.Tensor``.
     """
 
     RMAX = tensor.ReduceOpMath.MAX

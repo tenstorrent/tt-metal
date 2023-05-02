@@ -58,7 +58,7 @@ Tensor API
 ==========
 
 .. autoclass:: tt_lib.tensor.Tensor
-    :members: to, data, layout, print, pretty_print, shape, pad, unpad, pad_to_tile, unpad_from_tile
+    :members: to, data, on_host, device, layout, dtype, print, pretty_print, shape, pad, unpad, pad_to_tile, unpad_from_tile
     :special-members: __init__
 
 MemoryConfig
