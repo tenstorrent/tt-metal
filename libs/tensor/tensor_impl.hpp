@@ -501,7 +501,9 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
 
 template <typename T>
 inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
-    TT_ASSERT(tensor.layout() != target_layout && "Cannot convert to target layout same as it is the same the current layout.");
+    if(tensor.layout() == target_layout) {
+        return Tensor(tensor);
+    }
     auto data = *reinterpret_cast<std::vector<T>*>(tensor.data_ptr());
     switch (tensor.layout()) {
         case Layout::ROW_MAJOR:
