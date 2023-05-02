@@ -16,7 +16,7 @@ from diffusers import StableDiffusionPipeline
 from typing import Optional
 from libs import tt_lib as ttl
 from utility_functions import pad_weight, tilize_to_list, print_diff_argmax, torch_to_tt_tensor, tt_to_torch_tensor
-from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc
+
 
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from python_api_testing.fused_ops.softmax import softmax as TtSoftmax
@@ -63,6 +63,7 @@ class TtCrossAttention(nn.Module):
         self.upcast_softmax = upcast_softmax
         self.device = device
         self.host = host
+
         self.scale = dim_head**-0.5
 
         self.heads = heads
@@ -80,24 +81,21 @@ class TtCrossAttention(nn.Module):
         else:
             self.torch_group_norm = None
 
+        # if cross_attention_norm:
+        #     self.norm_cross = nn.LayerNorm(cross_attention_dim)
+
         qweights = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_q.weight"]))
         qbias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_q.bias"])) if bias else None
         self.to_q = TtLinear(query_dim, inner_dim, qweights, qbias, self.device)
-
         # self.to_q = nn.Linear(query_dim, inner_dim, bias=bias)
+
         kweights = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_k.weight"]))
+        print("kweight", state_dict[f"{base_address}.to_k.weight"].shape)
         kbias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_k.bias"])) if bias else None
 
-        if cross_attention_dim == (None, ):
-
-            s_ = state_dict[f"{base_address}.to_k.weight"].shape
-            s_ = s_[0] * s_[1]
-            cross_attention_dim = s_ // inner_dim
-
-        self.to_k = TtLinear(cross_attention_dim, inner_dim, kweights, kbias, self.device) # TODO: THIS IS WHERE ERROR IS HAPPENING
-        # assert False, state_dict[f"{base_address}.to_k.weight"].shape
-
+        self.to_k = TtLinear(cross_attention_dim, inner_dim, kweights, kbias, self.device)
         # self.to_k = nn.Linear(cross_attention_dim, inner_dim, bias=bias)
+
         vweights = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_v.weight"]))
         vbias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_v.bias"])) if bias else None
         self.to_v = TtLinear(cross_attention_dim, inner_dim, vweights, vbias, self.device)
@@ -108,13 +106,21 @@ class TtCrossAttention(nn.Module):
             add_k_proj_bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_k_proj.bias"])) if bias else None
             self.add_k_proj_weights = TtLinear(added_kv_proj_dim, cross_attention_dim, add_k_proj_weights, add_k_proj_bias, self.device)
             # self.add_k_proj = nn.Linear(added_kv_proj_dim, cross_attention_dim)
+
             add_v_proj_weights = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_v_proj.weight"]))
             add_v_proj_bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_v_proj.bias"]))
             self.add_v_proj = TtLinear(cross_attention_dim, inner_dim, add_v_proj_weights, add_v_proj_bias, self.device)
             # self.add_v_proj = nn.Linear(added_kv_proj_dim, cross_attention_dim)
 
-        self.to_out = nn.ModuleList([])
-        self.to_out.append(nn.Linear(inner_dim, query_dim))
+        # self.to_out = nn.ModuleList([])
+        print("linear dims", inner_dim, query_dim)
+
+        to_out0_weight = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_out.0.weight"]))
+        to_out0_bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_out.0.bias"]))
+        self.to_out = TtLinear(inner_dim, query_dim, to_out0_weight, to_out0_bias, self.device)
+        # self.to_out.append(self.to_out0)
+        # self.to_out.append(nn.Linear(inner_dim, query_dim))
+
         # self.to_out.append(nn.Dropout(dropout))
 
         # processor = CrossAttnProcessor()
@@ -168,27 +174,29 @@ class TtCrossAttention(nn.Module):
 
     def head_to_batch_dim(self, tensor):
         # used
+        # TODO: ops; permute and reshape
         head_size = self.heads
         _, batch_size, seq_len, dim = tensor.shape()
-        tensor = ttl.tensor.reshape(tensor, batch_size, seq_len, head_size, dim // head_size)
-
-
+        # tensor = ttl.tensor.reshape(tensor, batch_size, seq_len, head_size, dim // head_size)
         tensor = tt_to_torch_tensor(tensor, self.host)
+        tensor = torch.reshape(tensor, (batch_size, seq_len, head_size, dim // head_size))
+        # tensor = tt_to_torch_tensor(tensor, self.host)
         tensor = tensor.permute(0, 2, 1, 3).reshape(batch_size * head_size, seq_len, dim // head_size)
         tensor = torch_to_tt_tensor(tensor, self.device)
-
+        print(tensor.shape(), "line 177 in head to batch dim")
         return tensor
 
     def get_attention_scores(self, query, key, attention_mask=None):
-        # used
-        dtype = query.dtype
+
+        # dtype = query.dtype
         # if self.upcast_attention:
         #     query = query.float()
         #     key = key.float()
         # TODO: Aaron
         t_key = ttl.tensor.transpose(key)
-        temp = tll.tensor.bmm(query, t_key)
+        temp = ttl.tensor.bmm(query, t_key)
         scale_tensor = torch.full(temp.shape(), self.scale)
+        scale_tensor = torch_to_tt_tensor(scale_tensor, self.device)
         attention_scores = ttl.tensor.mul(scale_tensor, temp)
         # attention_scores = torch.baddbmm(
         #     torch.empty(query.shape[0], query.shape[1], key.shape[1], dtype=query.dtype, device=query.device),
@@ -226,7 +234,7 @@ class TtCrossAttention(nn.Module):
             #     attention_mask = torch.concat([attention_mask, padding], dim=2)
             # else:
             attention_mask = tt_to_torch_tensor(attention_mask, self.host)
-            attention_mask = F.pad(attention_mask, (0, target_length), value=0.0)
+            attention_mask = F.pad(attention_mask, (0, target_length), value=0.0) # TODO: MISSING OP
             attention_mask = attention_mask.repeat_interleave(head_size, dim=0)
             attention_mask = torch_to_tt_tensor(attention_mask, self.device)
 
@@ -241,83 +249,20 @@ def CrossAttnProcessor(attn: TtCrossAttention, hidden_states, encoder_hidden_sta
     query = attn.head_to_batch_dim(query)
 
     encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
+    # encoder_hidden_states: [1, 2, 64, 1280]
     key = attn.to_k(encoder_hidden_states)
     value = attn.to_v(encoder_hidden_states)
     key = attn.head_to_batch_dim(key)
     value = attn.head_to_batch_dim(value)
 
     attention_probs = attn.get_attention_scores(query, key, attention_mask)
-    hidden_states = ttl.bmm(attention_probs, value)
+    hidden_states = ttl.tensor.bmm(attention_probs, value)
     hidden_states = attn.batch_to_head_dim(hidden_states)
 
     # linear proj
-    hidden_states = attn.to_out[0](hidden_states)
+    # hidden_states = attn.to_out[0](hidden_states)
+    hidden_states = attn.to_out(hidden_states)
     # dropout
-    hidden_states = attn.to_out[1](hidden_states)
+    # hidden_states = attn.to_out[1](hidden_states)
 
     return hidden_states
-
-
-def run_cross_attention_inference(device):
-    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
-    unet = pipe.unet
-    unet.eval()
-    state_dict = unet.state_dict()
-    cross_attn = pipe.unet.mid_block.attentions[0].transformer_blocks[0].attn1
-    print(cross_attn)
-
-    dim = 1280
-    dropout = 0
-    heads = 8
-    bias=False
-    cross_attention_dim = None,
-    upcast_attention = False
-
-    input_shape  = [2, 64, 1280]
-
-    input = torch.randn(input_shape) * 0.01
-    torch_out = cross_attn(input)
-    input_shape  = [1, 2, 64, 1280]
-    tt_input = torch_to_tt_tensor(input, device)
-
-    # query_dim: int,
-    #     cross_attention_dim: Optional[int] = None,
-    #     heads: int = 8,
-    #     dim_head: int = 64,
-    #     dropout: float = 0.0,
-    #     bias=False,
-    #     upcast_attention: bool = False,
-    #     upcast_softmax: bool = False,
-    #     added_kv_proj_dim: Optional[int] = None,
-    #     norm_num_groups: Optional[int] = None,
-    #     processor: Optional["AttnProcessor"] = None,
-    #     device=None,
-    #     host=None,
-    #     state_dict=None,
-    #     base_address="mid_block.attentions.0.transformer_blocks.0.attn1",
-
-    tt_cross_attn = TtCrossAttention(query_dim=dim,
-                                    heads = heads,
-                                    bias=False,
-                                    cross_attention_dim=cross_attention_dim,
-                                    upcast_attention=upcast_attention,
-                                    state_dict=state_dict,
-                                    device=device,
-                                    host=host,)
-
-    tt_out = tt_cross_attn(tt_input)
-    tt_out = tt_to_torch_tensor(tt_out, host)
-
-    print_diff_argmax(tt_out, torch_out)
-    print(comp_allclose_and_pcc(torch_out, tt_out))
-    print("cross attention executed successfully")
-
-
-
-if __name__ == "__main__":
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-    run_cross_attention_inference(device)
-    ttl.device.CloseDevice(device)
