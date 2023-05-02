@@ -41,6 +41,16 @@ TEST_FIELDNAMES = {
         "test_output",
         "pass/fail",
     ],
+    "reshape": [
+        "test_name",
+        "input_shapes",
+        "reshape_dims",
+        "data_seed",
+        "env_vars",
+        "status",
+        "test_output",
+        "pass/fail",
+    ],
 }
 
 
@@ -313,4 +323,3 @@ def shapes_and_datagen(shape_dict, datagen_dict):
 
         else:
             raise NotImplementedError("Method {method} is not a valid choice")
-
