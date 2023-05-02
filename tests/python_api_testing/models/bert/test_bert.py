@@ -99,27 +99,30 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
         context = batch * ["Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."]
         question = batch * ["What discipline did Winkelmann create?"]
-        bert_input = tokenizer.batch_encode_plus(zip(question, context), max_length=seq_len, padding="max_length", truncation=True, return_tensors="pt")
+        bert_input = tokenizer.batch_encode_plus(zip(question, context), max_length=seq_len, padding="max_length", truncation=True, return_attention_mask=attention_mask, return_token_type_ids=token_type_ids, return_tensors="pt")
         nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
-        pl_answer = nlp(question = question[0], context=context[0])
+        pl_answer = nlp(question=question, context=context)
+
         preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
         preprocess_params["max_seq_len"] = seq_len
-        input_q = {"context": context[0], "question": question[0]}
+        input_q = {"context": context, "question": question}
         examples = nlp._args_parser(input_q)
-        model_input = next(nlp.preprocess(examples[0], **preprocess_params))
-        single_input = {
-            "data": (
-                model_input["input_ids"],
-                model_input["attention_mask"] if attention_mask else None,
-                model_input["token_type_ids"] if token_type_ids else None
-            ),
-            "example": model_input["example"],
-            "inputs": model_input,
-        }
-        bert_input = {}
-        bert_input["input_ids"] = single_input["data"][0]
-        bert_input["attention_mask"] = single_input["data"][1]
-        bert_input["token_type_ids"] = single_input["data"][2]
+
+
+        single_inputs = []
+        for i in range(batch):
+            model_input = next(nlp.preprocess(examples[0][i], **preprocess_params))
+            single_input = {
+                "data": (
+                    model_input["input_ids"],
+                    model_input["attention_mask"] if attention_mask else None,
+                    model_input["token_type_ids"] if token_type_ids else None
+                ),
+                "example": model_input["example"],
+                "inputs": model_input,
+            }
+            single_inputs.append(single_input)
+
     else:
         if 1:
             bert_input = torch.arange(seq_len*batch).reshape(batch, seq_len)
@@ -130,10 +133,14 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
             bert_input = bert_input.reshape(batch, seq_len)
 
     # tt_bert_input = ttl.tensor.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
-    pytorch_out = hugging_face_reference_model(**bert_input)
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
-    tt_out = tt_bert_model(**bert_input).to(host)
+    if real_input:
+        pytorch_out = hugging_face_reference_model(**bert_input)
+        tt_out = tt_bert_model(**bert_input).to(host)
+    else:
+        pytorch_out = hugging_face_reference_model(bert_input)
+        tt_out = tt_bert_model(bert_input).to(host)
     tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
 
     ttl.device.CloseDevice(device)
@@ -159,26 +166,27 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         logger.error(f"End Logits PCC < {pcc}")
 
     if real_input:
-        tt_res = {
-            "start": tt_start_logits,
-            "end": tt_end_logits,
-            "example": single_input["example"],
-            **single_input["inputs"],
-        }
+        for i in range(batch):
+            tt_res = {
+                "start": tt_start_logits[i],
+                "end": tt_end_logits[i],
+                "example": single_inputs[i]["example"],
+                **single_inputs[i]["inputs"],
+            }
 
-        tt_answer = nlp.postprocess([tt_res], **postprocess_params)
-        logger.info(f"TT: {tt_answer}")
+            tt_answer = nlp.postprocess([tt_res], **postprocess_params)
+            logger.info(f"TT: {tt_answer}")
 
-        pt_res = {
-            "start": pt_start_logits,
-            "end": pt_end_logits,
-            "example": single_input["example"],
-            **single_input["inputs"],
-        }
+            pt_res = {
+                "start": pt_start_logits[i],
+                "end": pt_end_logits[i],
+                "example": single_inputs[i]["example"],
+                **single_inputs[i]["inputs"],
+            }
 
-        pt_answer = nlp.postprocess([pt_res], **postprocess_params)
-        logger.info(f"PT: {pt_answer}")
-        logger.info(f"PL: {pl_answer}")
+            pt_answer = nlp.postprocess([pt_res], **postprocess_params)
+            logger.info(f"PT: {pt_answer}")
+            logger.info(f"PL: {pl_answer}")
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
     # start_logit_match = (abs(tt_start_logits - pytorch_start_logits) < 0.1).all().item()
     # if not start_logit_match:
