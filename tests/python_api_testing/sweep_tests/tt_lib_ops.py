@@ -6,35 +6,6 @@ from tt_lib.utils import pad_weight
 ################################################
 #################### TT-DNN ####################
 ################################################
-def datacopy(x, pcie_slot, *args, **kwargs):
-    # TODO: Add actual datacopy once tensor op implementation is added
-    ttl_tensor_dtype = kwargs.get("dtype", ttl.tensor.DataType.BFLOAT16)
-
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
-
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl_tensor_dtype,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-
-        output = torch.Tensor(
-            t0.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t0.shape())
-    finally:
-        ttl.device.CloseDevice(device)
-
-    return output
-
-
 def eltwise_exp(x, pcie_slot, *args, **kwargs):
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
@@ -1108,6 +1079,7 @@ def transpose_cn(x, pcie_slot, *args, **kwargs):
 
     return output
 
+
 def permute(x, pcie_slot, *args, **kwargs):
     assert "permute_dims" in kwargs
 
@@ -1139,9 +1111,38 @@ def permute(x, pcie_slot, *args, **kwargs):
 
     return output
 
+
 ################################################
 #################### Tensor ####################
 ################################################
+def datacopy(x, pcie_slot, *args, **kwargs):
+    ttl_tensor_dtype = kwargs.get("dtype", ttl.tensor.DataType.BFLOAT16)
+
+    host = ttl.device.GetHost()
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
+    ttl.device.InitializeDevice(device)
+
+    try:
+        t0 = (
+            ttl.tensor.Tensor(
+                x.reshape(-1).tolist(),
+                x.shape,
+                ttl_tensor_dtype,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(device)
+        )
+
+        output = torch.Tensor(
+            t0.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
+        ).reshape(t0.shape())
+    finally:
+        ttl.device.CloseDevice(device)
+
+    return output
+
+
 def pad(x, pcie_slot, *args, **kwargs):
     assert "output_tensor_shape" in kwargs
     assert "input_tensor_start" in kwargs

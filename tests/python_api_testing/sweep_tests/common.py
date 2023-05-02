@@ -4,7 +4,7 @@ from itertools import product
 from functools import partial
 from loguru import logger
 
-from python_api_testing.sweep_tests import generation_funcs, ttlib_ops
+from python_api_testing.sweep_tests import generation_funcs
 
 
 TEST_FIELDNAMES = {
@@ -31,54 +31,17 @@ TEST_FIELDNAMES = {
         "test_output",
         "pass/fail",
     ],
+    "permute": [
+        "test_name",
+        "input_shapes",
+        "permute_dims",
+        "data_seed",
+        "env_vars",
+        "status",
+        "test_output",
+        "pass/fail",
+    ],
 }
-
-
-TT_DNN_TESTS = [
-    # Sanity
-    "datacopy",
-    # Eltwise unary
-    "eltwise-exp",
-    "eltwise-recip",
-    "eltwise-sqrt",
-    "eltwise-gelu",
-    "eltwise-relu",
-    "eltwise-sigmoid",
-    "eltwise-log",
-    "eltwise-tanh",
-    # Eltwise binary
-    "eltwise-add",
-    "eltwise-sub",
-    "eltwise-mul",
-    # Matmul
-    "matmul",
-    "bmm",
-    # Broadcast
-    "bcast-add-h",
-    "bcast-add-w",
-    "bcast-add-hw",
-    "bcast-sub-h",
-    "bcast-sub-w",
-    "bcast-sub-hw",
-    "bcast-mul-h",
-    "bcast-mul-w",
-    "bcast-mul-hw",
-    # Reduce
-    "reduce-max-h",
-    "reduce-max-w",
-    "reduce-max-hw",
-    "reduce-sum-h",
-    "reduce-sum-w",
-    "reduce-sum-hw",
-    # Transpose
-    "transpose-wh",
-    "transpose-hc",
-    "transpose-cn",
-    "permute",
-]
-
-
-TT_TENSOR_TESTS = ["pad", "unpad"]
 
 
 def get_test_fieldnames(test_name):
@@ -97,7 +60,7 @@ def get_test_fieldnames(test_name):
 
 
 def run_tt_lib_test(
-    ttlib_op,
+    tt_lib_op,
     pytorch_op,
     input_shapes,
     data_gen_funcs,
@@ -105,54 +68,6 @@ def run_tt_lib_test(
     pcie_slot,
     test_args,
 ):
-    # Add test specific args
-    ################################################
-    #################### Tensor ####################
-    ################################################
-    if ttlib_op == ttlib_ops.pad:
-        assert len(input_shapes) == 1
-        assert len(input_shapes[0]) == 4
-
-        pad_sizes = (64, 64, 64, 64)
-        output_tensor_shape = [
-            random.randint(input_shapes[0][i], input_shapes[0][i] + pad_sizes[i])
-            for i in range(4)
-        ]
-        input_tensor_start = [
-            random.randint(0, output_tensor_shape[i] - input_shapes[0][i])
-            for i in range(4)
-        ]
-        pad_value = random.uniform(-100, 100)
-        # Cast to bfloat16 then back to float for exact match
-        pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
-
-        test_args.update(
-            {
-                "output_tensor_shape": output_tensor_shape,
-                "input_tensor_start": input_tensor_start,
-                "pad_value": pad_value,
-            }
-        )
-
-    elif ttlib_op == ttlib_ops.unpad:
-        assert len(input_shapes) == 1
-        assert len(input_shapes[0]) == 4
-
-        output_tensor_start = [
-            random.randint(0, input_shapes[0][i] - 1) for i in range(4)
-        ]
-        output_tensor_end = [
-            random.randint(output_tensor_start[i], input_shapes[0][i] - 1)
-            for i in range(4)
-        ]
-
-        test_args.update(
-            {
-                "output_tensor_start": output_tensor_start,
-                "output_tensor_end": output_tensor_end,
-            }
-        )
-
     logger.info(f"Running with args: {test_args}")
 
     tensor_inputs = []
@@ -161,7 +76,7 @@ def run_tt_lib_test(
         tensor_input = data_gen_func(input_shape)
         tensor_inputs.append(tensor_input)
 
-    ttlib_out = ttlib_op(*tensor_inputs, pcie_slot, **test_args)
+    ttlib_out = tt_lib_op(*tensor_inputs, pcie_slot, **test_args)
     pytorch_out = pytorch_op(*tensor_inputs, **test_args)
 
     result, output = output_comparison_func(pytorch_out, ttlib_out)
@@ -193,86 +108,21 @@ def run_test_and_save_results(
         # test_args is a dict of specific args required by ops to run
         return test_pass, test_status, test_output, test_result, test_args
 
-    if test_name in TT_DNN_TESTS:
-        test_pass, test_status, test_output, test_result, _ = _try_except_wrapper(
-            run_tt_lib_test, *run_test_args
-        )
-        results_csv_writer.writerow(
-            {
-                "test_name": test_name,
-                "input_shapes": input_shapes,
-                "data_seed": data_seed,
-                "env_vars": env_vars,
-                "status": test_status,
-                "test_output": test_output,
-                "pass/fail": test_result,
-            }
-        )
-
-    elif test_name in TT_TENSOR_TESTS:
-        if test_name == "pad":
-            (
-                test_pass,
-                test_status,
-                test_output,
-                test_result,
-                test_args,
-            ) = _try_except_wrapper(run_tt_lib_test, *run_test_args)
-            results_csv_writer.writerow(
-                {
-                    "test_name": test_name,
-                    "input_shapes": input_shapes,
-                    "output_tensor_shape": test_args["output_tensor_shape"],
-                    "input_tensor_start": test_args["input_tensor_start"],
-                    "pad_value": test_args["pad_value"],
-                    "data_seed": data_seed,
-                    "env_vars": env_vars,
-                    "status": test_status,
-                    "test_output": test_output,
-                    "pass/fail": test_result,
-                }
-            )
-
-        elif test_name == "unpad":
-            (
-                test_pass,
-                test_status,
-                test_output,
-                test_result,
-                test_args,
-            ) = _try_except_wrapper(
-                run_tt_lib_test,
-                *run_test_args,
-            )
-            results_csv_writer.writerow(
-                {
-                    "test_name": test_name,
-                    "input_shapes": input_shapes,
-                    "output_tensor_start": test_args["output_tensor_start"],
-                    "output_tensor_end": test_args["output_tensor_end"],
-                    "data_seed": data_seed,
-                    "env_vars": env_vars,
-                    "status": test_status,
-                    "test_output": test_output,
-                    "pass/fail": test_result,
-                }
-            )
-
-        else:
-            test_pass, test_status, test_output, test_result, _ = _try_except_wrapper(
-                run_tt_lib_test, *run_test_args
-            )
-            results_csv_writer.writerow(
-                {
-                    "test_name": test_name,
-                    "input_shapes": input_shapes,
-                    "data_seed": data_seed,
-                    "env_vars": env_vars,
-                    "status": test_status,
-                    "test_output": test_output,
-                    "pass/fail": test_result,
-                }
-            )
+    test_pass, test_status, test_output, test_result, test_args = _try_except_wrapper(
+        run_tt_lib_test, *run_test_args
+    )
+    results_csv_writer.writerow(
+        {
+            "test_name": test_name,
+            "input_shapes": input_shapes,
+            **test_args,
+            "data_seed": data_seed,
+            "env_vars": env_vars,
+            "status": test_status,
+            "test_output": test_output,
+            "pass/fail": test_result,
+        }
+    )
 
     return test_pass
 

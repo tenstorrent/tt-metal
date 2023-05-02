@@ -32,4 +32,5 @@ def test_run_unpad_test(input_shapes, pcie_slot):
         datagen_func,
         comparison_func,
         pcie_slot,
+        generation_funcs.gen_unpad_args(input_shapes)[0],
     )

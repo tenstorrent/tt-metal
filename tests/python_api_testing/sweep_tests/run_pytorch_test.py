@@ -13,7 +13,7 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
 
-from python_api_testing.sweep_tests import comparison_funcs
+from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 
 from python_api_testing.sweep_tests.common import (
     get_test_fieldnames,
@@ -91,6 +91,9 @@ def run_pytorch_test(args):
         comparison_func = partial(
             getattr(comparison_funcs, comparison_dict["function"]), **comparison_args
         )
+        test_args_gen = getattr(
+            generation_funcs, test_config.get("args-gen", "gen_default_args")
+        )
 
         # Optional test args for dtype, etc...
         test_args = test_config.get("args", {})
@@ -111,32 +114,38 @@ def run_pytorch_test(args):
             for input_shapes, datagen_funcs in shapes_and_datagen(
                 shape_dict, datagen_dict
             ):
-                data_seed = int(time.time())
-                torch.manual_seed(data_seed)
+                for generated_test_args in test_args_gen(input_shapes):
+                    generated_test_args.update(
+                        test_args
+                    )  # specified test args overrides generated test args
+                    data_seed = int(time.time())
+                    torch.manual_seed(data_seed)
 
-                logger.info(f"Running with shape: {input_shapes} and seed: {data_seed}")
-                test_pass = run_test_and_save_results(
-                    results_csv_writer,
-                    test_name,
-                    input_shapes,
-                    data_seed,
-                    env_dict,
-                    op_map[test_name]["ttlib_op"],
-                    op_map[test_name]["pytorch_op"],
-                    input_shapes,
-                    datagen_funcs,
-                    comparison_func,
-                    pcie_slot,
-                    test_args,
-                )
-                results_csv.flush()
-
-                # Check if test passed
-                if args.run_tests_for_ci and not test_pass:
-                    logger.error(
-                        f"{test_name} test failed with input shape {input_shapes}."
+                    logger.info(
+                        f"Running with shape: {input_shapes} and seed: {data_seed}"
                     )
-                    sys.exit(1)
+                    test_pass = run_test_and_save_results(
+                        results_csv_writer,
+                        test_name,
+                        input_shapes,
+                        data_seed,
+                        env_dict,
+                        op_map[test_name]["tt_lib_op"],
+                        op_map[test_name]["pytorch_op"],
+                        input_shapes,
+                        datagen_funcs,
+                        comparison_func,
+                        pcie_slot,
+                        generated_test_args,
+                    )
+                    results_csv.flush()
+
+                    # Check if test passed
+                    if args.run_tests_for_ci and not test_pass:
+                        logger.error(
+                            f"{test_name} test failed with input shape {input_shapes}."
+                        )
+                        sys.exit(1)
 
         # Unset env variables
         for key, value in old_env_dict.items():

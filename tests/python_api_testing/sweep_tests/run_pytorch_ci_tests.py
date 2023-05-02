@@ -15,8 +15,6 @@ from python_api_testing.sweep_tests.op_map import op_map
 
 from python_api_testing.sweep_tests.common import (
     run_tt_lib_test,
-    TT_DNN_TESTS,
-    TT_TENSOR_TESTS,
 )
 
 
@@ -29,7 +27,7 @@ def run_single_pytorch_test(
     test_args={},
     env="",
 ):
-    assert test_name in TT_DNN_TESTS or test_name in TT_TENSOR_TESTS
+    assert test_name in op_map.keys()
 
     default_env_dict = {"TT_PCI_DMA_BUF_SIZE": "1048576"}
     # Get env variables from CLI
@@ -59,7 +57,7 @@ def run_single_pytorch_test(
     ################# RUN TEST #################
     logger.info(f"Running with shape: {input_shapes} on device: {pcie_slot}")
     test_pass, test_output, test_args = run_tt_lib_test(
-        op_map[test_name]["ttlib_op"],
+        op_map[test_name]["tt_lib_op"],
         op_map[test_name]["pytorch_op"],
         input_shapes,
         datagen_funcs,

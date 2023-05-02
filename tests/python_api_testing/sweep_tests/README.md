@@ -1,9 +1,9 @@
 # PyTorch Sweep Tests
-This project contains infra for running sweep tests for ops in `gp.ai`.
+This project contains infra for running sweep tests for ops in `tt_lib`.
 
 ## Description
-Sweep tests are used to compare and validate `ttlib` ops against a PyTorch golden. It mainly consists of two parts:
-- A `run_test` function that runs an op through `ttlib` and `pytorch` and compares the results.
+Sweep tests are used to compare and validate `tt_lib` ops against a PyTorch golden. It mainly consists of two parts:
+- A `run_test` function that runs an op through `tt_lib` and `pytorch` and compares the results.
 - A lightweight wrapper around `run_test` that can perform sweeps of tests (mostly across a range of input shapes) and dump the results to output CSV's.
 
 ## Setup
@@ -49,7 +49,7 @@ test-list:
     output-file: eltwise_add_sweep.csv
 ```
 
-- _eltwise-add_: Maps to `ttlib` and `pytorch` ops in `python_api_testing/sweep_tests/op_map.py`
+- _eltwise-add_: Maps to `tt_lib` and `pytorch` ops in `python_api_testing/sweep_tests/op_map.py`
 - _shape_ and _datagen_: Passed verbatim as dictionaries to `shapes_and_datagen` function in `python_api_testing/sweep_tests/common.py`.
   - This function is a generator that yields a matching list of shapes and datagen functions to sweep over for the test. The datagen function is mapped to functions in `python_api_testing/sweep_tests/generation_funcs.py` and used for populating the shapes with input data.
   - In general, a sweep is performed across the start and end shapes. Take a look at the code for how these fields are handled, but at a high-level:

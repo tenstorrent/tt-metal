@@ -490,3 +490,19 @@ test-list:
     comparison:
       function: comp_equal
     output-file: all_op_parallelization_sweep.csv
+  permute:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[32, 32, 96, 96]] # Single core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      dtype: bfloat16
+      args:
+        low: -100
+        high: 100
+    args-gen: gen_permute_args
+    comparison:
+      function: comp_equal
+    output-file: all_op_parallelization_sweep.csv

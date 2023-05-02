@@ -13,6 +13,7 @@ test-list:
       args:
         low: -100
         high: 100
+    args-gen: gen_pad_args
     comparison:
       function: comp_equal
     output-file: pad_sweep.csv

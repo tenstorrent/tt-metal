@@ -1,4 +1,6 @@
 import torch
+import random
+from itertools import permutations
 
 # torch.testing.get_all_dtypes()
 supported_dtypes = {
@@ -148,3 +150,66 @@ def gen_arange(size):
 
 def gen_identity(size):
     return torch.eye(size[0], size[1])
+
+
+###################################################
+#################### test_args ####################
+###################################################
+
+
+def gen_default_args(input_shapes):
+    return [{}]
+
+
+def gen_pad_args(input_shapes):
+    assert len(input_shapes) == 1
+    assert len(input_shapes[0]) == 4
+    test_args = {}
+
+    pad_sizes = (64, 64, 64, 64)
+    output_tensor_shape = [
+        random.randint(input_shapes[0][i], input_shapes[0][i] + pad_sizes[i])
+        for i in range(4)
+    ]
+    input_tensor_start = [
+        random.randint(0, output_tensor_shape[i] - input_shapes[0][i]) for i in range(4)
+    ]
+    pad_value = random.uniform(-100, 100)
+    # Cast to bfloat16 then back to float for exact match
+    pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
+
+    test_args.update(
+        {
+            "output_tensor_shape": output_tensor_shape,
+            "input_tensor_start": input_tensor_start,
+            "pad_value": pad_value,
+        }
+    )
+    return [test_args]
+
+
+def gen_unpad_args(input_shapes):
+    assert len(input_shapes) == 1
+    assert len(input_shapes[0]) == 4
+    test_args = {}
+    output_tensor_start = [random.randint(0, input_shapes[0][i] - 1) for i in range(4)]
+    output_tensor_end = [
+        random.randint(output_tensor_start[i], input_shapes[0][i] - 1) for i in range(4)
+    ]
+
+    test_args.update(
+        {
+            "output_tensor_start": output_tensor_start,
+            "output_tensor_end": output_tensor_end,
+        }
+    )
+    return [test_args]
+
+
+def gen_permute_args(input_shapes):
+    return [
+        {"permute_dims": permute_dims}
+        for permute_dims in permutations([0, 1, 2, 3])
+        if input_shapes[0][permute_dims[2]] % 32 == 0
+        and input_shapes[0][permute_dims[3]] % 32 == 0
+    ]
