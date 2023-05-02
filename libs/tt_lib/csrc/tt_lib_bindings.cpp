@@ -16,6 +16,7 @@
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
+#include "tt_dnn/op_library/auto_pad.hpp"
 #include "tensor/tensor_utils.hpp"
 
 #include "tt_lib_bindings.hpp"
@@ -1303,6 +1304,16 @@ void DeviceModule(py::module &m_device) {
         | Argument         | Description            | Data type             | Valid range | Required |
         +==================+========================+=======================+=============+==========+
         | device           | TT Device to close     | tt_lib.device.Device  |             | Yes      |
+        +------------------+------------------------+-----------------------+-------------+----------+
+    )doc");
+
+    m_device.def("SetDefaultDevice", &AutoPad::SetDefaultDevice, R"doc(
+        Sets the default device to use for ops when inputs aren't on device.
+
+        +------------------+------------------------+-----------------------+-------------+----------+
+        | Argument         | Description            | Data type             | Valid range | Required |
+        +==================+========================+=======================+=============+==========+
+        | device           | TT Device to use       | tt_lib.device.Device  |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 

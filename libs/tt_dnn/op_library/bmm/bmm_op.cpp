@@ -3,6 +3,8 @@
 #include "tt_metal/host_api.hpp"
 #include "common/constants.hpp"
 
+#include "tt_dnn/op_library/auto_pad.hpp"
+
 using namespace tt::constants;
 
 vector<uint32_t> _get_prime_factors(uint32_t n) {
@@ -253,7 +255,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor matmul(const Tensor& a, const Tensor& b) {
+Tensor matmul_(const Tensor& a, const Tensor& b) {
     switch (bmm_op_utils::get_parallelization_strategy(a, b)){
         case BmmOpParallelizationStrategy::MULTI_CORE:
             return matmul_multi_core(a, b);
@@ -282,7 +284,46 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
     }
 }
 
-Tensor bmm(const Tensor& a, const Tensor& b) {
+Tensor matmul(const Tensor& a, const Tensor& b) {
+
+    Device * device;
+
+    if (a.on_host() && b.on_host()) {
+        device = AutoPad::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else if (!a.on_host()){
+        device = a.device();
+    } else {
+        device = b.device();
+    }
+
+    TT_ASSERT(a.shape()[3] == b.shape()[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_ASSERT(b.shape()[0]*b.shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
+
+    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape());
+    auto b_pad_shape = AutoPad::pad_to_tile_shape(b.shape());
+    auto out_shape = a.shape();
+    out_shape[3] = b.shape()[3];
+    auto no_pad_a = AutoPad::check_input_tensor_format(a, a_pad_shape);
+    auto no_pad_b = AutoPad::check_input_tensor_format(b, b_pad_shape);
+    if (no_pad_a && no_pad_b) {
+        return matmul_(a, b);
+    } else if (no_pad_a) {
+        auto output = matmul_(a, AutoPad::format_input_tensor(b, device, b_pad_shape, 0));
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
+    } else if (no_pad_b) {
+        auto output = matmul_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), b);
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
+    } else {
+        auto output = matmul_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), AutoPad::format_input_tensor(b, device, b_pad_shape, 0));
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
+    }
+}
+
+Tensor bmm_(const Tensor& a, const Tensor& b) {
     switch (bmm_op_utils::get_parallelization_strategy(a, b)){
         case BmmOpParallelizationStrategy::MULTI_CORE:
             return bmm_multi_core(a, b);
@@ -308,6 +349,47 @@ Tensor bmm(const Tensor& a, const Tensor& b) {
         case BmmOpParallelizationStrategy::SINGLE_CORE:
         default:
             return bmm_single_core(a, b);
+    }
+}
+
+Tensor bmm(const Tensor& a, const Tensor& b) {
+
+    Device * device;
+
+    if (a.on_host() && b.on_host()) {
+        device = AutoPad::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else if (!a.on_host()){
+        device = a.device();
+    } else {
+        device = b.device();
+    }
+
+    TT_ASSERT(a.shape()[3] == b.shape()[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_ASSERT(a.shape()[1] == b.shape()[1] && a.shape()[0] == b.shape()[0]
+        && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
+
+    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape());
+    auto b_pad_shape = AutoPad::pad_to_tile_shape(b.shape());
+    auto out_shape = a.shape();
+    out_shape[3] = b.shape()[3];
+
+    auto no_pad_a = AutoPad::check_input_tensor_format(a, a_pad_shape);
+    auto no_pad_b = AutoPad::check_input_tensor_format(b, b_pad_shape);
+    if (no_pad_a && no_pad_b) {
+        return bmm_(a, b);
+    } else if (no_pad_a) {
+        auto output = bmm_(a, AutoPad::format_input_tensor(b, device, b_pad_shape, 0));
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
+    } else if (no_pad_b) {
+        auto output = bmm_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), b);
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
+    } else {
+        auto output = bmm_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), AutoPad::format_input_tensor(b, device, b_pad_shape, 0));
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
     }
 }
 

@@ -1,6 +1,7 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
+#include "tt_dnn/op_library/auto_pad.hpp"
 
 using namespace tt::constants;
 
@@ -49,8 +50,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
-
+Tensor eltwise_unary_(const Tensor &a, UnaryOpType::Enum op_type) {
     switch (eltwise_unary_op_utils::get_parallelization_strategy(a)){
         case UnaryOpParallelizationStrategy::MULTI_CORE:
             return eltwise_unary_multi_core(a, op_type);
@@ -58,6 +58,31 @@ Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
         case UnaryOpParallelizationStrategy::SINGLE_CORE:
         default:
             return eltwise_unary_single_core(a, op_type);
+    }
+
+}
+
+
+Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
+
+    Device * device;
+
+    // Get the device
+    if (a.on_host()) {
+        device = AutoPad::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else {
+        device = a.device();
+    }
+
+    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape());
+    auto out_shape = a.shape();
+    if (AutoPad::check_input_tensor_format(a, a_pad_shape)) {
+        return eltwise_unary_(a, op_type);
+    } else {
+        auto output = eltwise_unary_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), op_type);
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
     }
 
 }

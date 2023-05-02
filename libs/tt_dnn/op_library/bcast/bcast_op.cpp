@@ -1,6 +1,7 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_dnn/op_library/auto_pad.hpp"
 
 #include "constants.hpp"
 
@@ -83,8 +84,7 @@ namespace tt {
 
 namespace tt_metal {
 
-
-Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
+Tensor bcast_(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
     const auto ashape = a.shape();
     const auto bshape = b.shape();
     u32 N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
@@ -118,6 +118,55 @@ Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, Bca
         case BcastOpParallelizationStrategy::SINGLE_CORE:
         default:
             return bcast_single_core(a, b, bcast_math, bcast_dim);
+    }
+}
+
+Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
+
+    Device * device;
+
+    // Get the device
+    if (a.on_host() && b.on_host()) {
+        device = AutoPad::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else if (!a.on_host()){
+        device = a.device();
+    } else {
+        device = b.device();
+    }
+
+    if (bcast_dim == BcastOpDim::W)
+        TT_ASSERT(a.shape()[2] == b.shape()[2]);
+    else if (bcast_dim == BcastOpDim::H)
+        TT_ASSERT(a.shape()[3] == b.shape()[3]);
+
+
+    u32 N  = a.shape()[0], C  = a.shape()[1];
+    u32 bN = b.shape()[0], bC = b.shape()[1];
+
+
+    TT_ASSERT((bN*bC == 1 || (bN == N && bC == C)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
+
+    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape());
+    auto b_pad_shape = AutoPad::pad_to_tile_shape(b.shape());
+    auto out_shape = a.shape();
+
+    auto no_pad_a = AutoPad::check_input_tensor_format(a, a_pad_shape);
+    auto no_pad_b = AutoPad::check_input_tensor_format(b, b_pad_shape);
+    if (no_pad_a && no_pad_b) {
+        return bcast_(a, b, bcast_math, bcast_dim);
+    } else if (no_pad_a) {
+        auto output = bcast_(a, AutoPad::format_input_tensor(b, device, b_pad_shape, 0), bcast_math, bcast_dim);
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
+    } else if (no_pad_b) {
+        auto output = bcast_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), b, bcast_math, bcast_dim);
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
+    } else {
+        auto output = bcast_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), AutoPad::format_input_tensor(b, device, b_pad_shape, 0), bcast_math, bcast_dim);
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
     }
 }
 

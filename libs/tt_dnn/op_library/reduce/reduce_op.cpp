@@ -1,6 +1,8 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
+#include "tt_dnn/op_library/auto_pad.hpp"
+#include <limits>
 
 using namespace tt::constants;
 
@@ -53,7 +55,7 @@ ReduceOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor 
 namespace tt {
 namespace tt_metal {
 
-Tensor reduce (const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
+Tensor reduce_ (const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
 
     switch (reduce_op_utils::get_parallelization_strategy(a, reduce_dim)){
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
@@ -65,6 +67,47 @@ Tensor reduce (const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum 
         case ReduceOpParallelizationStrategy::SINGLE_CORE:
         default:
             return reduce_single_core(a, reduce_op, reduce_dim, scaler);
+    }
+
+}
+
+
+Tensor reduce (const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
+
+    Device * device;
+
+    // Get the device
+    if (a.on_host()) {
+        device = AutoPad::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else {
+        device = a.device();
+    }
+
+    // Convert tensor back to original
+    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape());
+    auto out_shape = a.shape();
+    switch (reduce_dim){
+        case ReduceOpDim::H:
+            out_shape[2] = 32;
+            break;
+        case ReduceOpDim::W:
+            out_shape[3] = 32;
+            break;
+        case ReduceOpDim::HW:
+            out_shape[2] = 32;
+            out_shape[3] = 32;
+            break;
+
+    }
+
+    if (AutoPad::check_input_tensor_format(a, a_pad_shape)) {
+        return reduce_(a, reduce_op, reduce_dim, scaler);
+    } else {
+        auto output = reduce_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), reduce_op, reduce_dim, scaler);
+        AutoPad::format_output_tensor(a, output, out_shape, device);
+        return output;
+
     }
 
 }

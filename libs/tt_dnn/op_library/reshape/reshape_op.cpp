@@ -4,6 +4,7 @@
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
 #include "tensor/tensor_utils.hpp"
+#include "tt_dnn/op_library/auto_pad.hpp"
 
 using namespace tt::constants;
 
@@ -11,16 +12,9 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor reshape_tilized(Tensor &a, int N, int C, int H, int W) {
+Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
 
     TT_ASSERT(a.layout() == Layout::TILE, "Only tile and row major reshape supported!");
-
-    if (W == a.shape()[3]) {
-        // Don't need to do a check here to see the H and W both divisible by 32
-        // since handled within the tensor reshape method
-        a.reshape(N, C, H, W);
-        return a;
-    }
 
     tt_metal::Program *program = new tt_metal::Program();
 
@@ -150,17 +144,13 @@ Tensor reshape_tilized(Tensor &a, int N, int C, int H, int W) {
     return output;
 }
 
-Tensor reshape_rm(Tensor &a, int N, int C, int H, int W) {
+Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
 
 
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 
     // Reshape for row major data requires rebanking if and only if the last
     // dimension is changed. W dictates the stick size in DRAM banks
-    if (W == a.shape()[3]) {
-        a.reshape(N, C, H, W);
-        return a;
-    }
 
     TT_ASSERT(N != -1 and C != -1 and H != -1 and W != -1, "-1 reshape not yet supported for rebanking row major reshape");
 
@@ -319,15 +309,48 @@ Tensor reshape_rm(Tensor &a, int N, int C, int H, int W) {
     return output;
 }
 
-Tensor reshape(Tensor &a, int N, int C, int H, int W) {
+Tensor reshape_(const Tensor &a, int N, int C, int H, int W) {
     if (a.layout() == Layout::TILE) {
         return reshape_tilized(a, N, C, H, W);
     } else if (a.layout() == Layout::ROW_MAJOR) {
         return reshape_rm(a, N, C, H, W);
     } else {
         TT_ASSERT(false, "Unsupported layout for reshape");
+    }
+    return a;
+}
+
+Tensor reshape(Tensor &a, int N, int C, int H, int W) {
+
+    if (
+        ((a.layout() == Layout::TILE or a.layout() == Layout::ROW_MAJOR) && W == a.shape()[3]) ||
+        ((a.layout() == Layout::CHANNELS_LAST) && C == a.shape()[1])
+    ) {
+        // Don't need to do a check here to see the H and W both divisible by 32
+        // since handled within the tensor reshape method
+        a.reshape(N, C, H, W);
         return a;
     }
+
+    Device * device;
+
+    // Get the device
+    if (a.on_host()) {
+        device = AutoPad::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else {
+        device = a.device();
+    }
+
+    if (a.on_host()) {
+        auto output = reshape_(a.to(device), N, C, H, W);
+        // Convert tensor back to original
+        AutoPad::format_output_tensor(a, output, infer_dims_for_reshape(N, C, H, W, a.volume()), device);
+        return output;
+    } else {
+        return reshape_(a, N, C, H, W);
+    }
+
 }
 
 } // namespace tt_metal
