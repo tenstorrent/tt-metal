@@ -303,6 +303,11 @@ struct p_elwise
     constexpr static uint SRCB_BCAST_COL    = 0x1;
     constexpr static uint SRCB_BCAST_ROW    = 0x2;
     constexpr static uint SRCB_BCAST_ALL    = 0x3;
+
+    constexpr static uint CLR_A      = 0x1;
+    constexpr static uint CLR_B      = 0x2;
+    constexpr static uint CLR_AB     = 0x3;
+
 };
 
 struct p_sfpu

@@ -109,24 +109,36 @@ inline void llk_unpack_A_mop_config(bool transpose_of_faces) {
         tmp.program(instrn_buffer);
     } else {
         if (transpose_of_faces) {
-            static constexpr uint unpack_srca_set_z = TT_OP_SETADCZW(0b001, 0, 0, 0, 1, 0b0001);
-#if SKIP_UNP0 == 1
-            static constexpr uint unpack_srca = TT_OP_NOP;
-#else
-            static constexpr uint unpack_srca =
-                TT_OP_UNPACR(SrcA, 0b01000010, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
+            constexpr uint replay_buf_len = 7;
+
+            #if SKIP_UNP0 == 1
+                TTI_REPLAY(0, 1, 0, 1);
+                TTI_NOP;
+            #else
+                TTI_REPLAY(0, replay_buf_len, 0, 1);
+
+                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
+                TTI_UNPACR(SrcA, 0b01000010, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
+                TTI_UNPACR(SrcA, 0b01000010, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_SETADCZW(0b001, 0, 0, 0, 1, 0b0001);
+            #endif    
+
             ckernel_unpack_template tmp = ckernel_unpack_template(
                 false,  // src B
-                true,   // halo - just used for 4 unpacks
-                unpack_srca,
-                unpack_srca,
-                unpack_srca_set_z,
-                TT_OP_NOP,
+                false,  // halo - just used for 4 unpacks
+                TT_OP_REPLAY(0, replay_buf_len, 0, 0),
+                0,
+                0,
+                0,
                 0,
                 0,
                 0);
+    
             tmp.program(instrn_buffer);
+
         } else {
             if constexpr (acc_to_dest) {
 #if SKIP_UNP0 == 1
@@ -157,13 +169,30 @@ inline void llk_unpack_A_mop_config(bool transpose_of_faces) {
                    0);
                tmp.program(instrn_buffer);
             } else {
-#if SKIP_UNP0 == 1
-                static constexpr uint unpack_srca = TT_OP_NOP;
-#else
-                static constexpr uint unpack_srca =
-                    TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
-                ckernel_unpack_template tmp = ckernel_unpack_template::lA(unpack_srca);
+                constexpr uint replay_buf_len = 3;
+
+                #if SKIP_UNP0 == 1
+                    TTI_REPLAY(0, 1, 0, 1);
+                    TTI_NOP;
+                #else
+                    TTI_REPLAY(0, replay_buf_len, 0, 1);
+                    
+                    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
+                    TTI_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                #endif    
+
+                ckernel_unpack_template tmp = ckernel_unpack_template(
+                    false,  // src B
+                    false,  // halo - just used for 4 unpacks
+                    TT_OP_REPLAY(0, replay_buf_len, 0, 0),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0);
+        
                 tmp.program(instrn_buffer);
             }
         }

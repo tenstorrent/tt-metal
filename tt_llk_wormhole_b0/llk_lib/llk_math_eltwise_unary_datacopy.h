@@ -107,8 +107,10 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
         uint addr_mod = (rows_per_inst == p_mova2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
         uint innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
         uint outerloop = 4;
-        ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(0, 0, addr_mod, rows_per_inst, 0));
-        tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_A));
+
+        //use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode
+        ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
+        tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
         tmp.program(instrn_buffer);
     } else if constexpr (type == B2D) {
         uint addr_mod = (rows_per_inst == p_movb2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
