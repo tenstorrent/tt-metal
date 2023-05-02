@@ -11,8 +11,8 @@ import numpy as np
 import torch.nn as nn
 
 from typing import Optional
-from diffusers import StableDiffusionPipeline
 
+from libs.tt_lib.fallback_ops import fallback_ops
 from libs import tt_lib as ttl
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from utility_functions import pad_weight, tilize_to_list, torch_to_tt_tensor, tt_to_torch_tensor
@@ -47,16 +47,15 @@ class TtGEGLU(nn.Module):
     def forward(self, hidden_states):
         hidden_states = self.proj(hidden_states)
 
-        hidden_states = tt_to_torch_tensor(hidden_states, host)
-        hidden_states, gate = hidden_states.chunk(2, dim=-1)
+        hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
 
-        hidden_states = torch_to_tt_tensor(hidden_states, device)
-        gate = torch_to_tt_tensor(gate, device)
+        # hidden_states = tt_to_torch_tensor(hidden_states, self.host)
+        # hidden_states, gate = hidden_states.chunk(2, dim=-1)
+        # hidden_states = torch_to_tt_tensor(hidden_states, self.device)
+        # gate = torch_to_tt_tensor(gate, self.device)
 
         act = self.gelu(gate)
         return ttl.tensor.mul(hidden_states, act)
-        # return hidden_states * self.gelu(gate)
-
 
 
 class TtFeedForward(nn.Module):
