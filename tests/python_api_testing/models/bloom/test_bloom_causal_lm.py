@@ -59,9 +59,9 @@ def run_bloom_causal_lm_test(device):
     print(pcc_message)
 
     if does_pass:
-        logger.info("bloom_model: Passed!")
+        logger.info("bloom_causal_lm: Passed!")
     else:
-        logger.warning("bloom_model: Failed!")
+        logger.warning("bloom_causal_lm: Failed!")
     assert does_pass
 
 def test_bloom_causal_lm():

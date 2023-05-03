@@ -199,6 +199,9 @@ class BloomAttention(torch.nn.Module):
         # change view [batch_size, num_heads, q_length, head_dim]
         context_layer = merge_heads(context_layer, self.num_heads, self.head_dim)
 
+        print('SHAPE-------')
+        print(context_layer.shape)
+
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
         if self.pretraining_tp > 1 and self.slow_but_exact:
             slices = self.hidden_size / self.pretraining_tp
@@ -344,8 +347,14 @@ class TtBloomAttention(torch.nn.Module):
         #tt_context_layer = ttm.tensor.matmul(tt_attention_probs_reshaped, tt_reshaped_value_layer)
 
         # change view [batch_size, num_heads, q_length, head_dim]
+        print('SHAPE-------')
+        print(pt_context_layer.shape)
+        pt_context_layer = pt_context_layer.squeeze(0)
 
-        merged_context_layer = bloom_attention_merge_heads.tt_merge_heads(pt_context_layer.squeeze(), self.num_heads, self.hidden_size, self.num_heads, device)
+        context_layer = merge_heads(pt_context_layer, self.num_heads, self.head_dim)
+
+        merged_context_layer = bloom_utils.torch2tt_tensor(context_layer, device)
+        #merged_context_layer = bloom_attention_merge_heads.tt_merge_heads(pt_context_layer.squeeze(), self.num_heads, self.hidden_size, self.num_heads, device)
 
         output_tensor = self.dense(merged_context_layer)
 
