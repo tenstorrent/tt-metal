@@ -2,6 +2,8 @@
 
 #include "llk_3c.h"
 
+
+
 inline void tilize_activation(uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb)
 {
     tilize_init_short(in0_cb, in0_block_w);
@@ -17,6 +19,7 @@ inline void tilize_activation(uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t
     }
 
     tilize_uninit();
+
 }
 
 inline void reblock_and_untilize(
@@ -78,13 +81,16 @@ void MAIN {
 
     uint32_t in0_block_w = get_compile_time_arg_val(0); // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1); // outer row block size (in inner row blocks)
-    uint32_t in0_block_num_tiles = get_compile_time_arg_val(2); // out_subblock_h*in0_block_w*in0_num_subblocks;
+    uint32_t in0_block_num_tiles =  get_compile_time_arg_val(2); // out_subblock_h*in0_block_w*in0_num_subblocks;
     uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
-     uint32_t in0_subblock_h = get_compile_time_arg_val(4);
+    uint32_t in0_subblock_h = get_compile_time_arg_val(4);
     uint32_t in1_num_subblocks = get_compile_time_arg_val(5); // outer column block size (in inner column blocks)
     uint32_t in1_block_num_tiles = get_compile_time_arg_val(6); //out_subblock_w*in0_block_w* in1_num_subblocks;
     uint32_t in1_per_core_w = get_compile_time_arg_val(7); // out_subblock_w*in1_num_subblocks
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(8);  // outer inner dim (in inner dim blocks)
+
+    // If I don't make this volatile, causes code size for TRISC2 to be too large if num_blocks > 1
+    volatile uint32_t num_blocks = get_compile_time_arg_val(8);  // outer inner dim (in inner dim blocks)
+
     uint32_t out_subblock_h = get_compile_time_arg_val(9); // inner row block size in tiles
     uint32_t out_subblock_w = get_compile_time_arg_val(10); // inner column block size in tiles
     uint32_t out_subblock_num_tiles = get_compile_time_arg_val(11); // out_subblock_h * out_subblock_w;
@@ -92,12 +98,12 @@ void MAIN {
     uint32_t out_block_w = in1_per_core_w;
 
     // If true, this assumes data coming in RM
-    constexpr bool tilize_in = get_compile_time_arg_val(12);
+    bool tilize_in = get_compile_time_arg_val(12);
 
     // If true, this assumes consumer wants data RM
-    constexpr bool untilize_out = get_compile_time_arg_val(13);
+    bool untilize_out = get_compile_time_arg_val(13);
 
-    constexpr bool spill = num_blocks > 1;
+    bool spill = num_blocks > 1;
 
     bool enable_reload = false;
 
@@ -125,12 +131,11 @@ void MAIN {
     uint32_t untilize_mode_reblock_cb                 = CB::c_intermed3;
     uint32_t out0_cb                                  = CB::c_out0;
 
-    volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
     mm_init();
     for(uint32_t block = 0; block < num_blocks; block++)
     {
         bool last_out = block == (num_blocks-1);
-        if constexpr (tilize_in) {
+        if  (tilize_in) {
             tilize_activation(in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
             mm_init_short();
             cb_wait_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
@@ -165,7 +170,7 @@ void MAIN {
                         for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                             int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                             int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                            if constexpr (tilize_in) {
+                            if  (tilize_in) {
                                 matmul_tiles(tilize_mode_tilized_in0_cb, CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
                             } else {
                                 matmul_tiles(in0_cb, CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
@@ -178,7 +183,7 @@ void MAIN {
                 }
 
                 if (last_out) {
-                    if constexpr (not untilize_out) {
+                    if  (not untilize_out) {
                         pack_matmul_subblock(out0_cb, out_subblock_num_tiles);
                     } else {
                         pack_matmul_subblock(untilize_mode_final_matmul_partials_cb, out_subblock_num_tiles);
@@ -192,7 +197,7 @@ void MAIN {
                 in1_index_subblock_offset += out_subblock_w;
             }
 
-            if constexpr (untilize_out) {
+            if (untilize_out) {
                 if (last_out) {
                     reblock_and_untilize(
                         in1_num_subblocks,
@@ -211,9 +216,9 @@ void MAIN {
             in0_index_subblock_offset += in0_subblock_num_tiles;
         }
 
-        if constexpr (spill) enable_reload = true;
+        if  (spill) enable_reload = true;
 
-        if constexpr (tilize_in) {
+        if  (tilize_in) {
             cb_pop_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
         } else {
             cb_pop_front(in0_cb, in0_block_num_tiles);
