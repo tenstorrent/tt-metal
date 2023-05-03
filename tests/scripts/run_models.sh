@@ -40,6 +40,7 @@ env pytest tests/python_api_testing/models/whisper -k whisper_encoder
 env pytest tests/python_api_testing/models/whisper -k whisper_decoder
 env pytest tests/python_api_testing/models/whisper -k whisper_model
 env pytest tests/python_api_testing/models/whisper -k whisper_for_audio_classification
+env pytest tests/python_api_testing/models/whisper -k whisper_for_conditional_generation
 
 env pytest tests/python_api_testing/models/LeNet -k LeNet
 env pytest tests/python_api_testing/models/ConvNet_MNIST -k  mnist

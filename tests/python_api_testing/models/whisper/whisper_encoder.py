@@ -221,10 +221,9 @@ class TtWhisperEncoder(nn.Module):
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
 
-        H_hidden_states = 1500 #hidden_states.shape()[-2]
+        H_hidden_states = 1500
         hidden_states = self.layer_norm(hidden_states, overrideH=H_hidden_states)
 
-        # if self.config.architectures[0] == "WhisperForAudioClassification":
         """Unpad output tensor"""
         input_tensors_shape = hidden_states.shape()
         input_tensors_shape[-2] = 1500

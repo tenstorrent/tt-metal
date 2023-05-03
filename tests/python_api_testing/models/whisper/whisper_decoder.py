@@ -14,6 +14,7 @@ import numpy as np
 from dataclasses import dataclass
 
 import random
+from loguru import logger
 from typing import Optional, Tuple, Union
 
 from transformers import WhisperConfig
@@ -298,8 +299,34 @@ class TtWhisperDecoder(nn.Module):
             output_tensor_shape[-2] = 1504
             encoder_hidden_states = create_padded_tensor(encoder_hidden_states.shape(), encoder_hidden_states, output_tensor_shape, pad_value=0.0, device=self.device)
 
-        hidden_states = torch2tt_tensor(hidden_states, self.device)
-        attention_mask = torch2tt_tensor(attention_mask, self.device)
+        padded_hidden_states = False
+        if hidden_states.size(-2) % 32 != 0:
+            padded_hidden_states = True
+
+            output_tensor_shape = list(hidden_states.size())
+            logger.info(f"Padding Decoder hidden states tensor")
+
+            shape_before_pad = list(hidden_states.size())
+            while len(output_tensor_shape) < 4:
+                output_tensor_shape.insert(0,1)
+            output_tensor_shape[-2] = 32
+            hidden_states = create_padded_tensor(list(hidden_states.size()), hidden_states, output_tensor_shape, pad_value=0.0, device=self.device)
+        else:
+            hidden_states = torch2tt_tensor(hidden_states, self.device)
+
+        if attention_mask is not None:
+            if attention_mask.size(-2) % 32 != 0 and attention_mask.size(-1) % 32 != 0:
+                logger.info(f"Padding Decoder attention mask tensor")
+                output_tensor_shape = list(attention_mask.size())
+
+                while len(output_tensor_shape) < 4:
+                    output_tensor_shape.insert(0,1)
+                output_tensor_shape[-2] = 32
+                output_tensor_shape[-1] = 32
+                attention_mask = create_padded_tensor(list(attention_mask.size()), attention_mask, output_tensor_shape, pad_value=0, device=self.device)
+
+            else:
+                attention_mask = torch2tt_tensor(attention_mask, self.device)
 
         # TODO: Dropout not supported for not
         #hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -359,21 +386,6 @@ class TtWhisperDecoder(nn.Module):
                 )
 
             else:
-                """
-                DecoderLayer input args
-                        hidden_states: ttm.tensor.Tensor,
-                        attention_mask: Optional[ttm.tensor.Tensor] = None,
-                        encoder_hidden_states: Optional[ttm.tensor.Tensor] = None,
-                        encoder_attention_mask: Optional[ttm.tensor.Tensor] = None,
-
-                        layer_head_mask: Optional[torch.Tensor] = None,
-                        cross_attn_layer_head_mask: Optional[ttm.tensor.Tensor] = None,
-                        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-
-                        output_attentions: Optional[bool] = False,
-                        use_cache: Optional[bool] = True,
-                """
-
                 layer_outputs = decoder_layer(
                     hidden_states = hidden_states,
                     attention_mask=attention_mask,
@@ -386,7 +398,6 @@ class TtWhisperDecoder(nn.Module):
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                 )
-
             hidden_states = layer_outputs[0]
 
             if use_cache:
@@ -400,6 +411,11 @@ class TtWhisperDecoder(nn.Module):
 
         H_hidden_states = hidden_states.shape()[-2]
         hidden_states = self.layer_norm(hidden_states,overrideH=H_hidden_states)
+
+        if padded_hidden_states:
+            # Unpad hidden states tensor to original size
+            input_tensors_shape = [1, *shape_before_pad]
+            hidden_states = create_unpadded_tensor(hidden_states, input_tensors_shape)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:

@@ -130,6 +130,7 @@ class TtWhisperDecoderLayer(nn.Module):
         residual = hidden_states
 
         H_hidden_states = hidden_states.shape()[-2]
+
         hidden_states = self.self_attn_layer_norm(hidden_states,overrideH=H_hidden_states)
 
         # Self Attention
@@ -157,10 +158,8 @@ class TtWhisperDecoderLayer(nn.Module):
             residual = hidden_states
             H_hidden_states = hidden_states.shape()[-2]
             hidden_states = self.encoder_attn_layer_norm(hidden_states,overrideH=H_hidden_states)
-
             # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple
             cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
-
             hidden_states, cross_attn_weights, cross_attn_present_key_value = self.encoder_attn(
                 hidden_states=hidden_states,
                 key_value_states=encoder_hidden_states,
@@ -169,7 +168,6 @@ class TtWhisperDecoderLayer(nn.Module):
                 past_key_value=cross_attn_past_key_value,
                 output_attentions=output_attentions,
             )
-
             # TODO: When implement training
             # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 

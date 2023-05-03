@@ -46,6 +46,8 @@ class TtWhisperForAudioClassification(nn.Module):
         self.device = device
         self.config = config
 
+        self.add_padding = True
+
         self.encoder = TtWhisperEncoder(
             state_dict=state_dict,
             base_address="encoder",
@@ -172,9 +174,6 @@ class TtWhisperForAudioClassification(nn.Module):
             output_tensor_shape[-2] = 1504
             hidden_states = create_padded_tensor(input_tensors_shape, hidden_states, output_tensor_shape, pad_value=0, device=self.device)
 
-        # # return hidden_states
-        # print(hidden_states.shape())
-        # hidden_states = torch.Tensor(hidden_states.data()).reshape(hidden_states.shape())
         """ Apply Linear layer"""
         hidden_states = self.projector(hidden_states)
 
@@ -191,7 +190,7 @@ class TtWhisperForAudioClassification(nn.Module):
         torch_pooled_output = torch_hidden_states.mean(dim=-2)
         # If something changes these dimension -2 should always work
 
-        """ Apply classifier layer """
+        """ Apply classifier layer in torch bc we input shape 1,num_of_classes """
 
         logits = self.classifier(torch_pooled_output)
         loss = None

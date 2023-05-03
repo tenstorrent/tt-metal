@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 import random
 from typing import Optional, Tuple, Union
+from loguru import logger
 
 from transformers import WhisperConfig
 
@@ -179,6 +180,7 @@ class TtWhisperModel(nn.Module):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if encoder_outputs is None:
+            logger.info("Running whisper encoder")
             input_features = self._mask_input_features(input_features, attention_mask=attention_mask)
 
             encoder_outputs = self.encoder(
@@ -197,6 +199,7 @@ class TtWhisperModel(nn.Module):
             )
 
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
+        logger.info("Running whisper decoder")
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
             attention_mask=decoder_attention_mask,
