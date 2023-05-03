@@ -46,7 +46,7 @@ class Device {
 
     tt_cluster *cluster() const;  // Need to access cluster in llrt APIs
 
-    int num_dram_banks() const;
+    int num_dram_channels() const;
 
     uint32_t l1_size() const;
 

@@ -67,7 +67,7 @@ tt_cluster *Device::cluster() const {
     return cluster_;
 }
 
-int Device::num_dram_banks() const {
+int Device::num_dram_channels() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }

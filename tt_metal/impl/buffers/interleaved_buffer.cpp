@@ -10,11 +10,11 @@ std::map<int, uint32_t> get_size_per_bank(Device *device, int num_bank_units, in
     std::map<int, uint32_t> size_per_bank;
 
     uint32_t total_size = num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry;
-    int num_equally_distributed_units = num_bank_units / device->num_dram_banks();
-    int remaining_units_after_equally_distributing = num_bank_units % device->num_dram_banks();
+    int num_equally_distributed_units = num_bank_units / device->num_dram_channels();
+    int remaining_units_after_equally_distributing = num_bank_units % device->num_dram_channels();
 
     uint32_t total_allocated = 0;
-    for (int dram_bank = 0; dram_bank < device->num_dram_banks(); dram_bank++) {
+    for (int dram_bank = 0; dram_bank < device->num_dram_channels(); dram_bank++) {
         int num_units_in_bank = num_equally_distributed_units;
         if (remaining_units_after_equally_distributing > 0) {
             num_units_in_bank += 1;
@@ -86,7 +86,7 @@ tt_xy_pair InterleavedDramBuffer::noc_coordinates(int dram_channel) const {
 
 std::vector<tt_xy_pair> InterleavedDramBuffer::interleaved_noc_coordinates() const {
     std::vector<tt_xy_pair> dram_noc_coordinates;
-    for (int dram_bank = 0; dram_bank < this->device_->num_dram_banks(); dram_bank++) {
+    for (int dram_bank = 0; dram_bank < this->device_->num_dram_channels(); dram_bank++) {
         if (this->bank_to_buffer_.find(dram_bank) != this->bank_to_buffer_.end()) {
             dram_noc_coordinates.push_back(this->bank_to_buffer_.at(dram_bank)->noc_coordinates());
         }

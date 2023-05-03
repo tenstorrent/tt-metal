@@ -861,7 +861,7 @@ bool ReadFromDeviceDRAMChannelsInterleaved(
         }
 
         dram_channel++;
-        if (dram_channel == device->num_dram_banks()) {
+        if (dram_channel == device->num_dram_channels()) {
             dram_channel = 0;
             dram_addr += bank_unit_size;
         }
@@ -892,7 +892,7 @@ bool WriteToDeviceDRAMChannelsInterleaved(
         pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_channel, bank_unit, dram_addr);
 
         dram_channel++;
-        if (dram_channel == device->num_dram_banks()) {
+        if (dram_channel == device->num_dram_channels()) {
             dram_channel = 0;
             dram_addr += num_entries_per_bank_unit * num_bytes_per_entry;
         }
