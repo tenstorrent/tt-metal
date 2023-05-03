@@ -186,7 +186,8 @@ namespace ckernel::unpacker
      uint srcb_face_height=16,
      bool row_pool=false,
      bool transpose_xy_srca_en=false,
-     bool is_fp32_dest_acc_en=false)
+     bool is_fp32_dest_acc_en=false,
+     bool srnd_fpu_en = false)
    {
       // Check that unpacker is done (all contexts freed up) before starting hw configuration
       wait_for_idle();	     
@@ -236,6 +237,8 @@ namespace ckernel::unpacker
       constexpr uint mask1 = ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK | ALU_ACC_CTRL_Fp32_enabled_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_FORMAT_SPEC_REG0_SrcA_MASK;
 
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, mask1>(alu_payload.val);
+
+      cfg_reg_rmw_tensix<ALU_ROUNDING_MODE_Fpu_srnd_en_RMW>(srnd_fpu_en);
 
       t6_mutex_release(mutex::REG_RMW);
 
