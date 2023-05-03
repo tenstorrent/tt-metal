@@ -26,15 +26,30 @@
       ansible.builtin.assert:
         that:
           - "tt_dev_stat.stat.exists == true"
+    - name: Copy hugepages rc to remote rc.local
+      become: yes
+      ansible.builtin.copy:
+        src: "infra_testing/scripts/rc.local"
+        dest: /etc/rc.local
+        remote_src: yes
+    - name: Make rc.local executable
+      become: yes
+      file:
+        path: /etc/rc.local
+        mode: u+x
+    - name: Enable rc.local
+      become: yes
+      ansible.builtin.systemd:
+        name: rc-local.service
+        state: started
+        daemon_reload: true
+      async: 450
+      poll: 5
     - name: Execute script to enable
       become: yes
       shell:
         chdir: "infra_testing/scripts/"
-        cmd: "python3 setup_hugepages.py enable"
+        cmd: "python3 setup_hugepages.py first_pass"
       environment:
         PATH: "{{ lookup('ansible.builtin.env', 'PATH', default=Undefined) }}"
       register: run_hugepages_enable_output
-    - name: Execute hugepages check
-      shell:
-        chdir: "infra_testing/scripts/"
-        cmd: "python3 setup_hugepages.py check"

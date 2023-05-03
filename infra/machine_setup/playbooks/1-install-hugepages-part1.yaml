@@ -26,23 +26,6 @@
       ansible.builtin.assert:
         that:
           - "tt_dev_stat.stat.exists == true"
-    - name: Get number of devices
-      ansible.builtin.shell:
-        cmd: "echo $(($(ls -al /dev/tenstorrent/ | wc -l) - 3))"
-      args:
-        executable: /bin/bash
-      register: num_devices_output
-    - name: Print number of devices
-      debug:
-        msg: "{{ num_devices_output.stdout }}"
-    - name: Record number of devices
-      shell:
-        cmd: "echo {{ num_devices_output.stdout }} > infra_testing/devices"
-    - name: Put appropriate number of hugepages
-      become: yes
-      shell:
-        cmd: "cat infra_testing/devices | sudo tee /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
-      register: run_hugepages_enable_output
     - name: Execute script to enable
       become: yes
       shell:

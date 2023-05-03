@@ -1,0 +1,5 @@
+#!/bin/bash
+sleep 30
+num_devices=$(($(ls -al /dev/tenstorrent/ | wc -l) - 3))
+echo $num_devices > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
+exit 0
