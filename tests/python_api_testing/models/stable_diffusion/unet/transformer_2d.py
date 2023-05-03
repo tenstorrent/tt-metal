@@ -9,24 +9,18 @@ sys.path.append(f"{f}/../../../../..")
 
 
 import torch.nn as nn
-import torch.nn.functional as F
 import torch
+from diffusers import StableDiffusionPipeline
 from typing import Optional
 
 from libs import tt_lib as ttl
-from utility_functions import print_diff_argmax, torch_to_tt_tensor, tt_to_torch_tensor
-from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc
-
+from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc
 from python_api_testing.fused_ops.silu import SiLU as TtSiLU
-
 from python_api_testing.models.stable_diffusion.residual_block import TtResnetBlock2D
 from python_api_testing.models.stable_diffusion.attention_block import TtAttentionBlock
 from python_api_testing.models.stable_diffusion.cross_attention import TtCrossAttention
-
 from python_api_testing.models.stable_diffusion.fused_ops.feedforward import TtFeedForward
 from python_api_testing.models.stable_diffusion.unet.unet_2d_blocks import TtUNetMidBlock2D, TtUpDecoderBlock2D
-
-from diffusers import StableDiffusionPipeline
 
 
 
@@ -208,8 +202,11 @@ class TtBasicTransformerBlock(nn.Module):
         hidden_states = ttl.tensor.add(attn_output, hidden_states)
 
         if self.attn2 is not None:
+            # norm_hidden_states = (
+            #     self.norm2(hidden_states, timestep) if self.use_ada_layer_norm else self.norm2(hidden_states)
+            # )
             norm_hidden_states = (
-                self.norm2(hidden_states, timestep) if self.use_ada_layer_norm else self.norm2(hidden_states)
+                self.torch_norm2(hidden_states, timestep) if self.use_ada_layer_norm else self.torch_norm2(hidden_states)
             )
 
             # 2. Cross-Attention
@@ -237,6 +234,19 @@ class TtBasicTransformerBlock(nn.Module):
         hidden_states = ttl.tensor.add(ff_output, hidden_states)
         return hidden_states
 
+
+
+
+
+########################################################################################################################################################################
+########################################################################################################################################################################
+########################################################################################################################################################################
+########################################################################################################################################################################
+#################################################################### transformer model #################################################################################
+########################################################################################################################################################################
+########################################################################################################################################################################
+########################################################################################################################################################################
+########################################################################################################################################################################
 
 
 class TtTransformer2DModel(nn.Module):
@@ -441,107 +451,3 @@ class TtTransformer2DModel(nn.Module):
             return (output,)
 
         # return Transformer2DModelOutput(sample=output)
-
-
-
-def run_transformer_inference(device):
-    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
-    unet = pipe.unet
-    unet.eval()
-    state_dict = unet.state_dict()
-    transformer = pipe.unet.down_blocks[0].attentions[0]
-    base_address = "down_blocks.0.attentions.0"
-    # print(transformer)
-    # prompt = "something"
-
-    # pipe(prompt, num_inference_steps=1)
-    # assert False
-    in_channels = 320
-    num_attention_heads = 8
-    attention_head_dim = 40
-    cross_attention_dim = 768
-
-
-    input_shape  = [2, 320, 64, 64]
-    # D = 77 # manually padded to 96
-    D = 96
-    encoder_hidden_states_shape  = [1, 2, D, 768]
-    input = torch.randn(input_shape) * 0.01
-    encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
-    torch_out = transformer(input, encoder_hidden_states.squeeze(0))
-
-
-    tt_input = torch_to_tt_tensor(input, device)
-    tt_encoder_hidden_states = torch_to_tt_tensor(encoder_hidden_states, device)
-
-    tt_basic_transformer = TtTransformer2DModel(
-        in_channels = in_channels,
-        num_attention_heads = num_attention_heads,
-        attention_head_dim = attention_head_dim,
-        cross_attention_dim = cross_attention_dim,
-        device=device,
-        host=host,
-        state_dict=state_dict,
-        base_address=base_address,)
-
-    tt_out = tt_basic_transformer(tt_input, tt_encoder_hidden_states)
-    tt_out = tt_to_torch_tensor(tt_out, host)
-
-    print_diff_argmax(tt_out, torch_out)
-    print(comp_allclose_and_pcc(torch_out, tt_out))
-    print("transformer executed successfully")
-
-
-def run_basic_transformer_inference(device):
-    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
-    unet = pipe.unet
-    unet.eval()
-    state_dict = unet.state_dict()
-    basic_transformer = pipe.unet.mid_block.attentions[0].transformer_blocks[0]
-
-    dim = 1280
-    dropout = 0
-    heads = 8
-    bias=False
-    cross_attention_dim = None,
-    upcast_attention = False
-
-    input_shape  = [1, 2, 256, 1280]
-    # D = 77 # manually padded to 96
-    D = 96
-    encoder_hidden_states_shape  = [1, 2, D, 768]
-    input = torch.randn(input_shape) * 0.01
-    encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
-    torch_out = basic_transformer(input.squeeze(0), encoder_hidden_states.squeeze(0))
-
-
-    tt_input = torch_to_tt_tensor(input, device)
-    tt_encoder_hidden_states = torch_to_tt_tensor(encoder_hidden_states, device)
-
-    tt_basic_transformer = TtBasicTransformerBlock(
-        dim = 1280,
-        num_attention_heads = 8,
-        attention_head_dim = 8,
-        cross_attention_dim = 768,
-        device=device,
-        host=host,
-        state_dict=state_dict,
-        base_address="mid_block.attentions.0.transformer_blocks.0",)
-
-    tt_out = tt_basic_transformer(tt_input, tt_encoder_hidden_states)
-    tt_out = tt_to_torch_tensor(tt_out, host)
-
-    print_diff_argmax(tt_out, torch_out)
-    print(comp_allclose_and_pcc(torch_out, tt_out))
-    print("basic transformer executed successfully")
-
-
-
-if __name__ == "__main__":
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-    run_basic_transformer_inference(device)
-    run_transformer_inference(device)
-    ttl.device.CloseDevice(device)

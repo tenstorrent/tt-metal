@@ -294,6 +294,23 @@ def tt_to_torch_tensor(tt_tensor, host):
     py_tensor = torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
     return py_tensor
 
+def torch_to_tt_tensor_rm(py_tensor, device):
+    shape = list(py_tensor.size())
+    while len(shape) < 4:
+        shape.insert(0, 1)
+
+    tt_tensor = (
+        ttl.tensor.Tensor(
+            py_tensor.reshape(-1).tolist(), # PyTorch tensor flatten into a list of floats
+            shape,               # shape of TT Tensor that will be created
+            ttl.tensor.DataType.BFLOAT16, # data type that will be used in created TT Tensor
+            ttl.tensor.Layout.ROW_MAJOR,  # memory layout that will be used in created TT Tensor
+        )
+        .to(device)                         # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
+    )
+
+    return tt_tensor
+
 def torch_to_tt_tensor(py_tensor, device):
     shape = list(py_tensor.size())
     while len(shape) < 4:

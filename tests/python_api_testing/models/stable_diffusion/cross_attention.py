@@ -15,7 +15,9 @@ from diffusers import StableDiffusionPipeline
 
 from typing import Optional
 from libs import tt_lib as ttl
-from utility_functions import pad_weight, tilize_to_list, print_diff_argmax, torch_to_tt_tensor, tt_to_torch_tensor
+from libs.tt_lib.fallback_ops import fallback_ops
+
+from utility_functions import pad_weight, tilize_to_list, print_diff_argmax, torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
 
 
 from python_api_testing.fused_ops.linear import Linear as TtLinear
@@ -75,9 +77,10 @@ class TtCrossAttention(nn.Module):
         self.added_kv_proj_dim = added_kv_proj_dim
 
         if norm_num_groups is not None:
-            self.torch_group_norm = nn.GroupNorm(num_channels=inner_dim, num_groups=norm_num_groups, eps=1e-5, affine=True)
-            self.torch_group_norm.weight = nn.Parameter(state_dict[f"{base_address}.torch_group_norm.weight"])
-            self.torch_group_norm.bias = nn.Parameter(state_dict[f"{base_address}.torch_group_norm.bias"])
+            # self.torch_group_norm = nn.GroupNorm(num_channels=inner_dim, num_groups=norm_num_groups, eps=1e-5, affine=True)
+            self.torch_group_norm_weight = nn.Parameter(state_dict[f"{base_address}.torch_group_norm.weight"])
+            self.torch_group_norm_bias = nn.Parameter(state_dict[f"{base_address}.torch_group_norm.bias"])
+            self.torch_group_norm = fallback_ops.GroupNorm(self.torch_group_norm_weight, self.torch_group_norm_bias, num_channels=inner_dim, num_groups=norm_num_groups, eps=1e-5, affine=True)
         else:
             self.torch_group_norm = None
 
@@ -161,42 +164,51 @@ class TtCrossAttention(nn.Module):
         # )
 
     def batch_to_head_dim(self, tensor):
-        # used
+        # head_size = self.heads
+        # batch_size, seq_len, dim = tensor.shape
+        # tensor = tensor.reshape(batch_size // head_size, head_size, seq_len, dim)
+        # tensor = tensor.permute(0, 2, 1, 3).reshape(batch_size // head_size, seq_len, dim * head_size)
+        # return tensor
+
+        # TODO: reshape and permute
         head_size = self.heads
         _, batch_size, seq_len, dim = tensor.shape()
         tensor = ttl.tensor.reshape(tensor, batch_size // head_size, head_size, seq_len, dim)
-
-        tensor = tt_to_torch_tensor(tensor, self.host)
-        tensor = tensor.permute(0, 2, 1, 3).reshape(batch_size // head_size, seq_len, dim * head_size)
-        tensor = torch_to_tt_tensor(tensor, self.device)
-
+        tensor = ttl.tensor.permute(tensor, 0, 2, 1, 3)
+        tensor = fallback_ops.reshape(tensor, 1, batch_size // head_size, seq_len, dim * head_size)
         return tensor
 
     def head_to_batch_dim(self, tensor):
-        # used
-        # TODO: ops; permute and reshape
+        # head_size = self.heads
+        # batch_size, seq_len, dim = tensor.shape
+        # tensor = tensor.reshape(batch_size, seq_len, head_size, dim // head_size)
+        # tensor = tensor.permute(0, 2, 1, 3).reshape(batch_size * head_size, seq_len, dim // head_size)
+        # return tensor
+
         head_size = self.heads
         _, batch_size, seq_len, dim = tensor.shape()
-        # tensor = ttl.tensor.reshape(tensor, batch_size, seq_len, head_size, dim // head_size)
-        tensor = tt_to_torch_tensor(tensor, self.host)
-        tensor = torch.reshape(tensor, (batch_size, seq_len, head_size, dim // head_size))
-        # tensor = tt_to_torch_tensor(tensor, self.host)
-        tensor = tensor.permute(0, 2, 1, 3).reshape(batch_size * head_size, seq_len, dim // head_size)
-        tensor = torch_to_tt_tensor(tensor, self.device)
-        print(tensor.shape(), "line 177 in head to batch dim")
+        tensor = fallback_ops.reshape(tensor, batch_size, seq_len, head_size, dim // head_size)
+        tensor = ttl.tensor.permute(tensor, 0, 2, 1, 3)
+        tensor = fallback_ops.reshape(tensor, 1, batch_size * head_size, seq_len, dim // head_size)
         return tensor
 
     def get_attention_scores(self, query, key, attention_mask=None):
-
-        # dtype = query.dtype
-        # if self.upcast_attention:
-        #     query = query.float()
-        #     key = key.float()
-        # TODO: Aaron
         t_key = ttl.tensor.transpose(key)
         temp = ttl.tensor.bmm(query, t_key)
-        scale_tensor = torch.full(temp.shape(), self.scale)
-        scale_tensor = torch_to_tt_tensor(scale_tensor, self.device)
+
+        _encoded_val = torch.tensor(self.scale, dtype=torch.bfloat16)
+        _encoded_val = _encoded_val.view(torch.int16).item()
+
+        scale_tensor = ttl.tensor.fill_rm(temp.shape()[0],
+                                        temp.shape()[1],
+                                        temp.shape()[2],
+                                        temp.shape()[3],
+                                        0,
+                                        0,
+                                        temp,
+                                        _encoded_val,
+                                        _encoded_val)
+
         attention_scores = ttl.tensor.mul(scale_tensor, temp)
         # attention_scores = torch.baddbmm(
         #     torch.empty(query.shape[0], query.shape[1], key.shape[1], dtype=query.dtype, device=query.device),
@@ -220,12 +232,12 @@ class TtCrossAttention(nn.Module):
         return attention_probs
 
     def prepare_attention_mask(self, attention_mask, target_length):
-        # used
         head_size = self.heads
         if attention_mask is None:
             return attention_mask
 
         if attention_mask.shape[-1] != target_length:
+            assert False, "this section was not supposed to be triggered!"
             # if attention_mask.device.type == "mps":
             #     # HACK: MPS: Does not support padding by greater than dimension of input tensor.
             #     # Instead, we can manually construct the padding tensor.
@@ -233,10 +245,11 @@ class TtCrossAttention(nn.Module):
             #     padding = torch.zeros(padding_shape, device=attention_mask.device)
             #     attention_mask = torch.concat([attention_mask, padding], dim=2)
             # else:
-            attention_mask = tt_to_torch_tensor(attention_mask, self.host)
-            attention_mask = F.pad(attention_mask, (0, target_length), value=0.0) # TODO: MISSING OP
-            attention_mask = attention_mask.repeat_interleave(head_size, dim=0)
-            attention_mask = torch_to_tt_tensor(attention_mask, self.device)
+
+            # attention_mask = tt_to_torch_tensor(attention_mask, self.host)
+            # attention_mask = F.pad(attention_mask, (0, target_length), value=0.0)
+            # attention_mask = attention_mask.repeat_interleave(head_size, dim=0)
+            # attention_mask = torch_to_tt_tensor(attention_mask, self.device)
 
         return attention_mask
 
