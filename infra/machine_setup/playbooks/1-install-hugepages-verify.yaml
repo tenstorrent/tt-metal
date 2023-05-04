@@ -26,14 +26,7 @@
       ansible.builtin.assert:
         that:
           - "tt_dev_stat.stat.exists == true"
-    - name: Wait for settings to appear
-      ansible.builtin.pause:
-        minutes: 3
-    - name: Execute script to enable
-      become: yes
+    - name: Execute hugepages check
       shell:
         chdir: "infra_testing/scripts/"
-        cmd: "python3 setup_hugepages.py enable"
-      environment:
-        PATH: "{{ lookup('ansible.builtin.env', 'PATH', default=Undefined) }}"
-      register: run_hugepages_enable_output
+        cmd: "python3 setup_hugepages.py check"
