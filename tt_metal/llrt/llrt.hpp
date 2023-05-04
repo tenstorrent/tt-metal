@@ -82,10 +82,7 @@ using CircularBufferConfigVec = std::vector<uint32_t>;
 
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
-vector<uint32_t> get_risc_binary(string path, uint32_t id, bool id_is_trisc = false);
-inline vector<uint32_t> get_trisc_binary(string path, uint32_t trisc_id) {
-    return get_risc_binary(path, trisc_id, true);
-}
+ll_api::memory get_risc_binary(string path);
 
 // TODO: de-asserting reset properly
 //  this deasserts reset for all BRISCs (on all devices, all cores), but not other RISC processors (NCRISC, TRISC)

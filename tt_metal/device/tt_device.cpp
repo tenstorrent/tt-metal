@@ -67,13 +67,26 @@ bool tt_device::stop(){
     // To be redefined with each derived device type
     return true;
 }
+
 void tt_device::write_vector(std::vector<std::uint32_t> &mem_vector, tt_cxy_pair target, std::uint32_t address, bool host_resident, bool small_access, chip_id_t src_device_id)
+{
+     // To be redefined with each derived device type
+     assert(false && "Should not be here");
+}
+
+void tt_device::write_vector(const std::uint32_t *mem_ptr, uint32_t len, tt_cxy_pair target, std::uint32_t address, bool host_resident, bool small_access, chip_id_t src_device_id)
 {
     // To be redefined with each derived device type
     assert(false && "Should not be here");
 }
 
 void tt_device::read_vector(std::vector<std::uint32_t> &mem_vector, tt_cxy_pair target, std::uint32_t address, std::uint32_t size_in_bytes, bool host_resident, bool small_access, chip_id_t src_device_id)
+{
+    // To be redefined with each derived device type
+    assert(false && "Should not be here");
+}
+
+void tt_device::read_vector(std::uint32_t *mem_ptr, tt_cxy_pair target, std::uint32_t address, std::uint32_t size_in_bytes, bool host_resident, bool small_access, chip_id_t src_device_id)
 {
     // To be redefined with each derived device type
     assert(false && "Should not be here");
@@ -110,6 +123,7 @@ bool tt_device::test_write_read(tt_cxy_pair target)
     this->write_vector(test_vector1, target, 512 * 1024);
     this->write_vector(test_vector2, target, 512 * 1024 + 120);
     std::vector<uint32_t> read_data;
+    read_data.resize(30);
     this->read_vector(read_data, target, 512 * 1024, 240);
     bool result = true;
     for (int i = 0; i < test_vector1.size(); i++) {

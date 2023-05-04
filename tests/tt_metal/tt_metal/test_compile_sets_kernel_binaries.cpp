@@ -12,17 +12,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-std::vector<uint32_t> align_vec_to_32B(const std::vector<uint32_t> &vec) {
-    std::vector<uint32_t> aligned_vec = vec;
-    uint32_t vec_size_bytes = vec.size() * sizeof(uint32_t);
-    const static uint32_t alignment = 32;
-    size_t num_pad_elements = (alignment - vec_size_bytes % alignment)/sizeof(uint32_t);
-    if (num_pad_elements > 0) {
-        aligned_vec.resize(vec.size() + num_pad_elements, 0);
-    }
-    return aligned_vec;
-}
-
 int main(int argc, char **argv) {
     bool pass = true;
 
@@ -128,9 +117,9 @@ int main(int argc, char **argv) {
 
         int num_compiles = 3;
         // kernel->binaries() returns 32B aligned binaries
-        std::vector<std::vector<uint32_t>> compute_binaries;
-        std::vector<std::vector<uint32_t>> brisc_binaries;
-        std::vector<std::vector<uint32_t>> ncrisc_binaries;
+        std::vector<ll_api::memory> compute_binaries;
+        std::vector<ll_api::memory> brisc_binaries;
+        std::vector<ll_api::memory> ncrisc_binaries;
         for (int i = 0; i < num_compiles; i++) {
             pass &= tt_metal::CompileProgram(device, program);
             if (i == 0) {
@@ -146,15 +135,15 @@ int main(int argc, char **argv) {
                 TT_ASSERT(kernel_group.riscv_1->binaries() == ncrisc_binaries);
             }
             std::string brisc_hex_path = kernel_group.riscv_0->binary_path(core) + "/brisc/brisc.hex";
-            std::vector<uint32_t> brisc_binary = align_vec_to_32B(llrt::get_risc_binary(brisc_hex_path, 0, false));
+            ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path);
             TT_ASSERT(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
             std::string ncrisc_hex_path = kernel_group.riscv_1->binary_path(core) + "/ncrisc/ncrisc.hex";
-            std::vector<uint32_t> ncrisc_binary = align_vec_to_32B(llrt::get_risc_binary(ncrisc_hex_path, 1, false));
+            ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path);
             TT_ASSERT(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
                 std::string trisc_hex_path = kernel_group.compute->binary_path(core) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                std::vector<uint32_t> trisc_binary = align_vec_to_32B(llrt::get_risc_binary(trisc_hex_path, trisc_id, true));
+                ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path);
                 TT_ASSERT(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
             }
         }

@@ -129,7 +129,7 @@ void tt_VersimDevice::assert_risc_reset() {
   std::cout << "Assert riscv reset" << std::endl;
   versim::assert_riscv_reset(*versim);
 }
-
+// TODO(pgk): move these to ptrs instead of vectors
 void tt_VersimDevice::write_vector(std::vector<uint32_t> &mem_vector, tt_cxy_pair target, std::uint32_t address, bool host_resident, bool small_access, chip_id_t src_device_id) {
   // std::cout << "Versim Device: Write vector at target core " << target.str() << ", address: " << std::hex << address << std::dec << std::endl;
   DEBUG_LOG("Versim Device (" << get_sim_time(*versim) << "): Write vector at target core " << target.str() << ", address: " << std::hex << address << std::dec);

@@ -157,7 +157,7 @@ void l1_to_ncrisc_iram_copy() {
     // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
     tdma_xmov(
         TDMA_MOVER0,
-        (MEM_NCRISC_FIRMWARE_BASE) >> 4,
+        (MEM_NCRISC_INIT_IRAM_L1_BASE) >> 4,
         (0x4 << 12),
         (MEM_NCRISC_IRAM_SIZE) >> 4,
         XMOV_L1_TO_L0);

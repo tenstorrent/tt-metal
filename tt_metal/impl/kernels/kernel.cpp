@@ -43,7 +43,7 @@ std::string Kernel::binary_path(const CoreCoord &logical_core) const {
     return binary_path_.at(logical_core);
 }
 
-std::vector<std::vector<uint32_t>> const &Kernel::binaries() const {
+std::vector<ll_api::memory> const &Kernel::binaries() const {
     const static std::map<KernelType, int> kernel_type_to_expected_num_binaries = {
         {KernelType::Compute, 3},
         {KernelType::DataMovement, 1}
@@ -80,26 +80,15 @@ size_t Kernel::define_args_hash(const CoreCoord& logical_core) const {
     return KernelDefinesHash{logical_core}(defines_);
 }
 
-void align_binary_to_32B(std::vector<uint32_t> &binary) {
-    uint32_t binary_size_bytes = binary.size() * sizeof(uint32_t);
-    const static uint32_t alignment = 32;
-    size_t num_pad_elements = (alignment - binary_size_bytes % alignment)/sizeof(uint32_t);
-    if (num_pad_elements > 0) {
-        binary.resize(binary.size() + num_pad_elements, 0);
-    }
-}
-
 void Kernel::set_binaries(const std::string &binary_path) {
-    std::vector<std::vector<uint32_t>> binaries;
+    std::vector<ll_api::memory> binaries;
     switch (this->kernel_type_) {
         case KernelType::Compute: {
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
                 std::string hex_path = binary_path + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                bool id_is_trisc = true;
-                std::vector<uint32_t> hex_vec = llrt::get_risc_binary(hex_path, trisc_id, id_is_trisc);
-                align_binary_to_32B(hex_vec);
-                binaries.push_back(hex_vec);
+                ll_api::memory binary_mem = llrt::get_risc_binary(hex_path);
+                binaries.push_back(binary_mem);
             }
         }
         break;
@@ -122,10 +111,8 @@ void Kernel::set_binaries(const std::string &binary_path) {
                 default:
                     TT_ASSERT(false, "Unsupported data movement processor!");
             }
-            bool id_is_trisc = false;
-            std::vector<uint32_t> hex_vec = llrt::get_risc_binary(binary_path + binary_path_suffix, riscv_id, id_is_trisc);
-            align_binary_to_32B(hex_vec);
-            binaries.push_back(hex_vec);
+            ll_api::memory binary_mem = llrt::get_risc_binary(binary_path + binary_path_suffix);
+            binaries.push_back(binary_mem);
         }
         break;
         default:

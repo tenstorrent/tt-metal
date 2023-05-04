@@ -88,14 +88,16 @@ struct tt_cluster
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions);
 
     uint32_t reserve_non_mmio_block(bool reserve, tt_cxy_pair core, uint64_t address);
-    void write_to_non_mmio_device(vector<uint32_t> &mem_vector, tt_cxy_pair core, uint64_t address);
-    void read_from_non_mmio_device(vector<uint32_t> &mem_vector, tt_cxy_pair core, uint64_t address, uint32_t size_in_bytes);
+    void write_to_non_mmio_device(const uint32_t *mem_ptr, uint32_t len, tt_cxy_pair core, uint64_t address);
+    void read_from_non_mmio_device(uint32_t *mem_ptr, tt_cxy_pair core, uint64_t address, uint32_t size_in_bytes);
 
     void write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false);
     void read_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, uint32_t size, bool small_access = false);
 
     void write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, bool small_access = false);
+    void write_dram_vec(const uint32_t *mem_ptr, uint32_t len, tt_cxy_pair dram_core, uint64_t addr, bool small_access = false);
     void read_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, uint32_t size, bool small_access = false);
+    void read_dram_vec(uint32_t *mem_ptr, tt_cxy_pair dram_core, uint64_t addr, uint32_t size, bool small_access = false);
 
     void write_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, chip_id_t src_device_id);
     void read_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, uint32_t size, chip_id_t src_device_id);
