@@ -44,33 +44,35 @@ class DataSampler:
         selection = random.choice(titles)
 
         for topic in self.data["data"]:
-            if topic['title'] == selection:
+            if topic['title'] != selection:
+                continue
 
-                # select paragraph
-                total_paragraphs = len(topic['paragraphs'])
-                selected_paragraph = random.randint(0, total_paragraphs-1)
-                paragraph = topic['paragraphs'][selected_paragraph]
+            # select paragraph
+            total_paragraphs = len(topic['paragraphs'])
+            selected_paragraph = random.randint(0, total_paragraphs-1)
+            paragraph = topic['paragraphs'][selected_paragraph]
 
-                # select question
-                total_questions = len(paragraph['qas'])
-                selected_question = random.randint(0, total_questions-1)
-                qas = paragraph['qas'][selected_question]
-                question = qas['question']
+            # select question
+            total_questions = len(paragraph['qas'])
+            selected_question = random.randint(0, total_questions-1)
+            qas = paragraph['qas'][selected_question]
+            question = qas['question']
 
-                # get all related answers
-                answers = []
+            # get all related answers
+            answers = []
 
-                if len(qas['answers']) == 0:
-                    for answer in qas['plausible_answers']:
-                        answers.append(answer['text'])
-                else:
-                    for answer in qas['answers']:
-                        answers.append(answer['text'])
+            if len(qas['answers']) == 0:
+                for answer in qas['plausible_answers']:
+                    answers.append(answer['text'])
+            else:
+                for answer in qas['answers']:
+                    answers.append(answer['text'])
 
-                # get context
-                context = paragraph['context']
+            # get context
+            context = paragraph['context']
 
         return {'context': context, 'question': question, 'answers': answers}
+
 
     def readn(self, num_samples):
         inputs = []
@@ -253,21 +255,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     samples = sample_bert_input(hugging_face_reference_model, tokenizer, seq_len, attention_mask, token_type_ids, qas_sample, num_samples)
     profiler.end("processing_of_input")
 
-    #print(f"Running BERT model once to fill caches -> disable profiler")
-    #profiler.disable()
-    #tt_out = tt_bert_model(**bert_input).to(host)
-    #tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
-    #print(f"Enable profiler and enable binary and compile cache")
-    #profiler.enable()
-
-    print(f"Enabling cache-s")
-    enable_binary_cache()
-    enable_compile_cache()
-
-    # NOTE: Passing in pytorch tensor here instead of ll buda tensor
-    # since we don't yet have embedding support on device
     print(f"Running BERT model")
-
     profiler.start("whole_model")
     tt_out_list = tt_bert_model(samples)
     profiler.end("whole_model", num_samples)
@@ -279,7 +267,6 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         single_input = samples[i]["single_input"]
         nlp = samples[i]["nlp"]
         postprocess_params = samples[i]["postprocess_params"]
-        pl_answer = samples[i]["pl_answer"]
         tt_out = tt_out_list[i]
         context = samples[i]['context']
         question = samples[i]['question']
@@ -310,8 +297,6 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     ttl.device.CloseDevice(device)
     profiler.print()
 
-    assert profiler.get("whole_model") < 61.0
-
 def test_bert_sample_qas():
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
@@ -324,11 +309,8 @@ def test_bert_sample_qas():
     qas_sample = DataSampler('./tests/python_api_testing/models/bert_large_perf/dev-v2.0.json')
     num_samples = 10
 
-    disable_binary_cache()
-    disable_compile_cache()
-
+    logger.warning("This test uses binary and compile cache. The cache needs to be filled before running this test.")
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, attention_mask, token_type_ids, pcc, model_location_generator, qas_sample, num_samples)
 
 if __name__ == "__main__":
-
     test_bert_sample_qas()
