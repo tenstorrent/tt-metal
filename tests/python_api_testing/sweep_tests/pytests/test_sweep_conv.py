@@ -4,12 +4,12 @@ import sys
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../../..")
+sys.path.append(f"{f}/../../..")
 
 import numpy as np
 
-from libs import tt_lib as ttl
-from libs.tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, convert_weights_2d_matrix
+import tt_lib as ttl
+from tt_lib.utils import _nearest_32
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from python_api_testing.conv.pytorch_conv_tb import TestLevel, generate_conv_tb_with_pytorch_golden, generate_conv_tb
 
@@ -95,7 +95,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     print("Output pcc=", output_pcc)
     return passing_pcc
 
-def test_sweep_conv():
+def test_sweep_conv_tt():
     test_bench = generate_conv_tb()
     pytorch_conv_golden_tb = generate_conv_tb_with_pytorch_golden(test_bench)
     passing = True

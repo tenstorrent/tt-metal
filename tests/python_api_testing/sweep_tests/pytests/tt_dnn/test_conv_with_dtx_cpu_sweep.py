@@ -7,9 +7,8 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../../..")
 
 import numpy as np
-
-from libs import tt_lib as ttl
-from libs.tt_lib.utils import blocked_mm_with_conv_act, tilize_to_list, tilize, untilize, channels_last, _nearest_32, convert_weights_2d_matrix
+import tt_lib as ttl
+from tt_lib.utils import blocked_mm_with_conv_act, _nearest_32
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from python_api_testing.conv.pytorch_conv_tb import TestLevel, generate_conv_tb_with_pytorch_golden, generate_conv_tb
 
