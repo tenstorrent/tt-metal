@@ -7,7 +7,7 @@
 
 #include "common/bfloat16.hpp"
 #include "common/logger.hpp"
-#include "device/grayskull/device_data.hpp"
+#include "device_data.hpp"
 #include "dispatch_data_structures.hpp"
 #include "llrt.hpp"
 #include "tensix.h"

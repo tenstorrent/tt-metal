@@ -7,8 +7,9 @@
 #ifdef ARCH_WORMHOLE
 #error "CANNOT INCLUDE GRAYSKULL AND WORMHOLE."
 #endif
+#ifndef ARCH_GRAYSKULL
 #define ARCH_GRAYSKULL
-
+#endif
 struct GRAYSKULL_DEVICE_DATA {
     const std::vector<tt_xy_pair> DRAM_LOCATIONS = { {1, 6}, {4, 6}, {7, 6}, {10, 6}, {1, 0}, {4, 0}, {7, 0}, {10, 0} };
     const std::vector<tt_xy_pair> ARC_LOCATIONS = { {0, 2} };

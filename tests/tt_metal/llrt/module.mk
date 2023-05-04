@@ -25,7 +25,7 @@ LLRT_TESTS += tests/llrt/test_silicon_driver \
 
 LLRT_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(LLRT_TESTS:tests%=%)))
 
-LLRT_TEST_INCLUDES = $(TEST_INCLUDES) $(LLRT_INCLUDES) -Itt_gdb
+LLRT_TEST_INCLUDES = $(TEST_INCLUDES) $(LLRT_INCLUDES) -Itt_gdb -I$(TT_METAL_HOME)/tt_metal/device/${ARCH_NAME}
 LLRT_TESTS_LDFLAGS = -lllrt -ltt_gdb -lprofiler -ldevice -lcommon -lstdc++fs -pthread -lyaml-cpp
 
 LLRT_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(LLRT_TESTS_SRCS:.cpp=.o))

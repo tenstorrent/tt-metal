@@ -143,6 +143,12 @@ void tt_cluster::open_device(
     const std::string &sdesc_path,
     const std::string &ndesc_path,
     const bool &skip_driver_allocs) {
+#ifdef ARCH_GRAYSKULL
+    tt::log_assert(arch == tt::ARCH::GRAYSKULL, "Arch={} doesn't match compile-time build for GRAYSKULL", get_string(arch));
+#endif
+#ifdef ARCH_WORMHOLE
+    tt::log_assert((arch == tt::ARCH::WORMHOLE_B0) || (arch == tt::ARCH::WORMHOLE), "Arch={} doesn't match compile-time build for WORMHOLE", get_string(arch));
+#endif
     target_device_ids = target_devices;
 
     if (!std::filesystem::is_directory(sdesc_path)) {

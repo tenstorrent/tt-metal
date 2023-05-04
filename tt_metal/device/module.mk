@@ -24,7 +24,7 @@ DEVICE_DEPS = $(addprefix $(OBJDIR)/, $(DEVICE_SRCS:.cpp=.d))
 
 DEVICE_INCLUDES=      	\
   -DFMT_HEADER_ONLY     \
-  $(COMMON_INCLUDES) \
+  $(COMMON_INCLUDES)    \
   -I$(TT_METAL_HOME)/tt_metal/third_party/fmt
 
 ifeq ($(DISABLE_VERSIM_BUILD),1)
