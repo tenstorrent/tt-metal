@@ -866,14 +866,15 @@ void DeviceModule(py::module &m_device) {
     m_device.def("InitializeDevice", &InitializeDevice, py::arg().noconvert(), py::arg("memory_allocator") = tt::tt_metal::MemoryAllocator::BASIC, R"doc(
         Initialize instance of TT accelerator device.
 
-        +-----------------------------+---------------------------------------------+-------------------------------+-------------------------------------------+----------+
-        | Argument                    | Description                                 | Data type                     | Valid range                               | Required |
-        +=============================+=============================================+===============================+===========================================+==========+
-        | device                      | Device to initialize                        | tt_lib.device.Device          |                                           | Yes      |
-        +-----------------------------+---------------------------------------------+-------------------------------+-------------------------------------------+----------+
-        | memory_allocator            | Type of memory allocator scheme to use      | tt_lib.device.MemoryAllocator | tt_lib.device.MemoryAllocator.BASIC       | No       |
-        |                             |                                             |                               | tt_lib.device.MemoryAllocator.L1_BANKING  |
-        +-----------------------------+---------------------------------------------+-------------------------------+-------------------------------------------+----------+
+        +-------------------+--------------------------------------------------------+----------------------------------+-------------------------------------------+----------+
+        |  Argument         |                 Description                            |       Data type                  |           Valid range                     | Required |
+        +===================+========================================================+==================================+============================================+=========+
+        | device            | Device to initialize                                   | tt_lib.device.Device             |                                           | Yes      |
+        +-------------------+--------------------------------------------------------+----------------------------------+-------------------------------------------+----------+
+        | memory_allocator  | Type of memory allocator scheme to use                 | tt_lib.device.MemoryAllocator    | tt_lib.device.MemoryAllocator.BASIC       | No       |
+        |                   |                                                        |                                  |                                           |          |
+        |                   |                                                        |                                  | tt_lib.device.MemoryAllocator.L1_BANKING  |          |
+        +-------------------+--------------------------------------------------------+----------------------------------+-------------------------------------------+----------+
     )doc");
     m_device.def("CloseDevice", &CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.

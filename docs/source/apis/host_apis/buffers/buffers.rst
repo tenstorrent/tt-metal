@@ -6,4 +6,5 @@ Buffers
   CreateDramBuffer
   CreateL1Buffer
   CreateInterleavedDramBuffer
+  CreateSemaphores
   DeallocateBuffer

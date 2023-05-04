@@ -83,6 +83,7 @@ DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const tt_xy_
 }
 
 DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const CoreRange &core_range, const std::vector<uint32_t> &compile_time_args) {
+    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
     CoreBlocks core_blocks = {core_range};
     DataMovementKernelArgs *kernel_args = new DataMovementKernelArgs(core_blocks, {compile_time_args});
     return kernel_args;
@@ -99,6 +100,7 @@ ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const tt_xy_pair &logi
 }
 
 ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreRange &core_range, const vector<uint32_t> &compile_time_args) {
+    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
     CoreBlocks core_blocks = {core_range};
     ComputeKernelArgs *kernel_args = new ComputeKernelArgs(core_blocks, {compile_time_args});
     return kernel_args;
@@ -159,6 +161,7 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementKernelArgs *kernel_args,
     DataMovementProcessor processor_type,
     NOC noc) {
+    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, kernel_args, processor_type, noc);
     program->add_kernel(kernel);
     return kernel;
@@ -170,6 +173,7 @@ DataMovementKernel *CreateDataMovementKernel(
     const CoreRange &core_range,
     DataMovementProcessor processor_type,
     NOC noc) {
+    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
     auto kernel_args = new DataMovementKernelArgs();
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, kernel_args, processor_type, noc);
     program->add_kernel(kernel);
@@ -184,6 +188,7 @@ ComputeKernel *CreateComputeKernel(
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
+    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
     ComputeKernel *kernel = new ComputeKernel(
         file_name,
         core_range,
@@ -273,6 +278,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
     std::vector<CircularBuffer *> circular_buffers;
     auto start_core = core_range.first;
     auto end_core = core_range.second;
+    TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
             auto core = tt_xy_pair(x, y);
@@ -297,6 +303,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
     std::vector<CircularBuffer *> circular_buffers;
     auto start_core = core_range.first;
     auto end_core = core_range.second;
+    TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
             auto logical_core = tt_xy_pair(x, y);
@@ -309,6 +316,34 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
         }
     }
     return circular_buffers;
+}
+
+std::vector<Semaphore *> CreateSemaphores(Program *program, Device *device, const CoreRange &core_range, uint32_t initial_value) {
+    std::vector<Semaphore *> semaphores;
+    auto start_core = core_range.first;
+    auto end_core = core_range.second;
+    auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
+    TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
+    uint32_t address = -1;
+    for (auto x = start_core.x; x <= end_core.x; x++) {
+        for (auto y = start_core.y; y <= end_core.y; y++) {
+            auto logical_core = tt_xy_pair(x, y);
+            auto semaphores_on_core = program->semaphores_on_core(logical_core);
+            if (semaphores_on_core.size() == NUM_SEMAPHORES) {
+                TT_THROW("Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" + std::to_string(NUM_SEMAPHORES) + ") reached!");
+            }
+            uint32_t addr = semaphores_on_core.empty() ? SEMAPHORE_BASE : semaphores_on_core.back()->address() + size_per_semaphore;
+            if (address == -1) {
+                address = addr;
+            } else {
+                TT_ASSERT(addr == address);
+            }
+            Semaphore *semaphore = new Semaphore(device, logical_core, address, initial_value);
+            program->add_semaphore(semaphore);
+            semaphores.push_back(semaphore);
+        }
+    }
+    return semaphores;
 }
 
 void DeallocateBuffer(Buffer *buffer) {
@@ -631,6 +666,11 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program) {
         } // PROF_END("CBS")
 
         llrt::write_circular_buffer_config_vector_to_core(cluster, pcie_slot, worker_core, circular_buffer_config_vec); // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
+
+        auto semaphores_on_core = program->semaphores_on_core(logical_core);
+        for (auto semaphore : semaphores_on_core) {
+            llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, {semaphore->initial_value()}, semaphore->address());
+        }
     }
 
     // Load blank kernel to all riscs of all cores excluding those in worker_cores
@@ -650,6 +690,7 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 }
 
 bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args) {
+    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
     CoreBlocks core_blocks = {core_range};
     return WriteRuntimeArgsToDevice(device, kernel, core_blocks, {runtime_args});
 }
@@ -667,6 +708,7 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
             [device, kernel, runtime_args](CoreRange core_range) {
                 auto start_core = core_range.first;
                 auto end_core = core_range.second;
+                TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
                 for (auto x = start_core.x; x <= end_core.x; x++) {
                     for (auto y = start_core.y; y <= end_core.y; y++) {
                         auto core_in_range = tt_xy_pair(x, y);

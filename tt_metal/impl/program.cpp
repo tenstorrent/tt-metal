@@ -118,6 +118,13 @@ std::vector<L1Buffer *> Program::l1_buffers_on_core(const tt_xy_pair &core) cons
     return l1_buffers_on_core;
 }
 
+std::vector<Semaphore *> Program::semaphores_on_core(const tt_xy_pair &core) const {
+    if (this->logical_core_to_semaphores_.find(core) == this->logical_core_to_semaphores_.end()) {
+        return {};
+    }
+    return this->logical_core_to_semaphores_.at(core);
+}
+
 std::vector<tt_xy_pair> Program::logical_cores() const {
     std::vector<tt_xy_pair> cores_in_program;
     std::set<tt_xy_pair> unique_cores;

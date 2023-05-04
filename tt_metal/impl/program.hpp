@@ -2,6 +2,7 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 
@@ -39,6 +40,8 @@ class Program {
 
     std::vector<L1Buffer *> l1_buffers_on_core(const tt_xy_pair &core) const;
 
+    std::vector<Semaphore *> semaphores_on_core(const tt_xy_pair &core) const;
+
     std::vector<tt_xy_pair> logical_cores() const;
 
     std::string core_to_op(const tt_xy_pair &core) const;
@@ -49,6 +52,7 @@ class Program {
     std::vector<Kernel *> kernels_;
     std::vector<CircularBuffer *> circular_buffers_;
     std::vector<L1Buffer *> l1_buffers_;
+    std::unordered_map<tt_xy_pair, std::vector<Semaphore *>> logical_core_to_semaphores_;
 
     friend DataMovementKernel *CreateDataMovementKernel(
         Program *program,
@@ -139,11 +143,15 @@ class Program {
         uint32_t size_in_bytes,
         DataFormat data_format);
 
+    friend std::vector<Semaphore *> CreateSemaphores(Program *program, Device *device, const CoreRange &core_range, uint32_t initial_value);
+
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
 
     void add_l1_buffer(L1Buffer *buffer) { l1_buffers_.push_back(buffer); }
 
     void add_circular_buffer(CircularBuffer *circular_buffer) { circular_buffers_.push_back(circular_buffer); }
+
+    void add_semaphore(Semaphore *semaphore) { logical_core_to_semaphores_[semaphore->logical_core()].push_back(semaphore); }
 };
 
 }  // namespace tt_metal

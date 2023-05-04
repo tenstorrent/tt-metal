@@ -14,6 +14,7 @@
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/interleaved_buffer.hpp"
+#include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/host.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
@@ -563,6 +564,20 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format);
+
+/**
+ * Initializes semaphore on all cores within core range (inclusive). Each core can have up to four 32B semaphores.
+ *
+ * Return value: std::vector<Semaphore *>
+ *
+ * | Argument      | Description                                          | Type                                                  | Valid Range                                              | Required |
+ * |---------------|------------------------------------------------------|-------------------------------------------------------|----------------------------------------------------------|----------|
+ * | program       | The program to which semaphore will be added to      | Program *                                             |                                                          | Yes      |
+ * | device        | The device where the semaphore resides               | Device *                                              |                                                          | Yes      |
+ * | core_range    | Range of the Tensix co-ordinates using the semaphore | const CoreRange & (std::pair<tt_xy_pair, tt_xy_pair>) | Pair of logical coords where first coord <= second coord | Yes      |
+ * | initial_value | Initial value of the semaphore                       | uint32_t                                              |                                                          | Yes      |
+ */
+std::vector<Semaphore *> CreateSemaphores(Program *program, Device *device, const CoreRange &core_range, uint32_t initial_value);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.
