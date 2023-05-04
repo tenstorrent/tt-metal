@@ -758,7 +758,6 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("bert_large_post_softmax_bmm", &bert_large_post_softmax_bmm, R"doc(
         Perform a bert_large_post_softmax_bmm batched matmul ``A x B`` with two tensors.
     )doc");
-    m_tensor.def("conv_fits_on_single_core", &conv_fits_on_single_core);
     m_tensor.def("compute_conv_op_block_info", &compute_conv_op_block_info);
     // broadcast math
     m_tensor.def("bcast", &bcast, R"doc(

@@ -64,32 +64,32 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     assert(conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE)
     A_cl_data = A_cl.data()
     # Call DTX pass to transform A
-    matrix_activation_h = (int) (_nearest_32(OH*OW) / 32)
-    matrix_weight_w = (int) (_nearest_32(K) / 32)
-    matrix_activation_w = (int) (_nearest_32(C*R*S)/32)
-    (num_blocks,_,_,report_string) = ttl.tensor.compute_conv_op_block_info(matrix_activation_h, matrix_activation_w, matrix_weight_w)
-    if report_string != "pass":
-        print(report_string)
-        assert False
+    matrix_activation_h_tiles = (int) (_nearest_32(OH*OW) / 32)
+    matrix_weight_w_tiles = (int) (_nearest_32(K) / 32)
+    matrix_activation_w_tiles = (int) (_nearest_32(C*R*S)/32)
+    # hardcode num of blocks
+    num_blocks_in0_w = matrix_activation_w_tiles
+    num_blocks_in0_h = matrix_activation_h_tiles
+    num_blocks_in1_w = matrix_weight_w_tiles
+    in0_block_h = 1
+    in0_block_w = 1
+    in1_block_w = 1
     dim_order = [0,1,2]
-    assert _nearest_32(C*R*S) % num_blocks == 0
-    block_width = (int) (_nearest_32(C*R*S)/num_blocks)
-    block_shape_yx = [_nearest_32(OH*OW), block_width]
-    mm_input_shape = [num_blocks, _nearest_32(OH*OW), block_width]
-    mm_weight_shape = [num_blocks, block_width, _nearest_32(K)]
+    in0_block_width_datums = (int) (_nearest_32(C*R*S)/num_blocks_in0_w)
+    in0_block_height_datums = (int) (_nearest_32(OH*OW)/num_blocks_in0_h)
+    block_shape_yx = [in0_block_height_datums, in0_block_width_datums]
     address_map = ttl.dtx.generate_address_map(ttl.dtx.conv_transform([C,H,W], [R,S,stride_h,stride_w,pad_h,pad_w], (dim_order,block_shape_yx)))
 
     B_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(B_)
-    B_rm = B_tiled_.to(ttl.tensor.Layout.ROW_MAJOR)
-    assert(B_rm.shape() == [1, 1, _nearest_32(C*R*S), _nearest_32(K)])
-    B_data = B_rm.data()
-    B_pytorch_tensor = torch.tensor(B_data).reshape(mm_weight_shape)
+    B_tiled_data = B_tiled_.data()
+    in1_block_h = in0_block_w
+    in1_tile_stride_h = matrix_weight_w_tiles
+    in1_block_stride_h = matrix_weight_w_tiles * in1_block_h
+    in1_block_stride_w = in1_block_w
 
-
-    # Run pytorch matmul
-    print("matmul weight shape - " + str(B_pytorch_tensor.shape))
-    #out_pytorch = torch.matmul(A_transformed_pytorch_tensor, B_pytorch_tensor).reshape(mm_output_shape)
-    out_pytorch = blocked_mm_with_conv_act(A_cl_data, B_pytorch_tensor, mm_output_shape, address_map, num_blocks, _nearest_32(OH*OW), block_width)
+    # Run host side CPU function
+    out_pytorch = blocked_mm_with_conv_act(A_cl_data, B_tiled_data, address_map, num_blocks_in0_h, num_blocks_in0_w,
+                                    num_blocks_in1_w, in0_block_h, in0_block_w, in1_block_w, in1_tile_stride_h, in1_block_stride_h, in1_block_stride_w)
     assert(list(out_pytorch.shape) == mm_output_shape)
     out_pytorch = out_pytorch[:, :, 0 : (OH * OW), 0 : K]
 

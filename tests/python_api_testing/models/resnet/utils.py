@@ -102,20 +102,10 @@ def can_run_conv_on_device(act_shape, conv_params):
     [N,C,H,W] = act_shape
     print("Conv with following parameters -")
     print("K="+str(K)+" C="+str(C)+" H="+str(H)+" W="+str(W)+" R="+str(R)+" S="+str(S)+" U="+str(U)+" V="+str(V)+" PH="+str(P_H)+" PW="+str(P_W))
-    #if(H==14):
-    #    return False
-    assert (H - R + 2 * P_H) >= 1 and (W - S + 2 * P_W) >= 1
-    OH = ((int) ((H - R + 2 * P_H) / U)) + 1
-    OW = ((int) ((W - S + 2 * P_W) / V)) + 1
-    matrix_activation_h = (int) (nearest_32(OH*OW) / 32)
-    matrix_weight_w = (int) (nearest_32(K) / 32)
-    matrix_activation_w = (int) (nearest_32(C*R*S)/32)
-
-    (fits,report_string) = ttl.tensor.conv_fits_on_single_core(act_shape, [K,C,R,S], conv_params[2:])
-    if not fits:
-        print(report_string)
+    if ((H == 56 and U == 1) or C == 3):
         return False
     return True
+
 def run_conv_on_tt_device(x: torch.Tensor, conv_on_tt, conv_params, device, host):
     K, C, R, S, U, V, P_H, P_W = [conv_params[i] for i in range(8)]
     [N,C,H,W] = x.shape

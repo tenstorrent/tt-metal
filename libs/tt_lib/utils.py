@@ -310,47 +310,98 @@ def float_to_bits(x):
     s = struct.pack('>f', x)
     return struct.unpack('>l', s)[0]
 
-def read_conv_act_into_mm_act(conv_act, address_map, num_blocks, block_h, block_w):
-    block_size = block_h*block_w
-    mm_act_shape = [num_blocks,block_size]
-    block_size = block_h*block_w
-    mm_act = torch.zeros(mm_act_shape, dtype=torch.bfloat16).float()
-    index = 0
-    for b in range(num_blocks):
-        # read conv activation into mm activation block
-        r_size = 0
-        while(r_size != block_size):
-            src_address = address_map[index]
-            dst_address = address_map[index+1]
-            read_size = address_map[index+2]
-            pad = address_map[index+3]
-            for s in range(read_size):
-                assert(dst_address+s < block_size)
-                if pad:
-                    mm_act[b][dst_address+s] = 0
-                else:
-                    assert(src_address+s < len(conv_act))
-                    mm_act[b][dst_address+s] = conv_act[src_address+s]
-            r_size += read_size
-            index += 4
-    mm_act = mm_act.reshape([num_blocks,block_h,block_w])
-    return mm_act
+def read_conv_act_into_mm_act_block(conv_act, in0_address_map_index, address_map, in0_block_h, in0_block_w):
+    mm_act_block_shape = [1,1,in0_block_h*32, in0_block_w*32]
+    mm_act_block_size = in0_block_h*in0_block_w*1024
+    mm_act_block = torch.zeros(mm_act_block_size, dtype=torch.bfloat16).float()
+    total_read_size = 0
+    num_reads = 0
+    while(total_read_size != mm_act_block_size):
+        src_address = address_map[in0_address_map_index]
+        dst_address = address_map[in0_address_map_index+1]
+        read_size = address_map[in0_address_map_index+2]
+        pad = address_map[in0_address_map_index+3]
+        for s in range(read_size):
+            assert(dst_address+s < mm_act_block_size)
+            if pad:
+                mm_act_block[dst_address+s] = 0
+            else:
+                assert(src_address+s < len(conv_act))
+                mm_act_block[dst_address+s] = conv_act[src_address+s]
+        total_read_size += read_size
+        in0_address_map_index += 4
+        num_reads += 1
+    return (mm_act_block.reshape(mm_act_block_shape), in0_address_map_index)
 
-def blocked_mm_with_conv_act(conv_act, mm_weight, mm_output_shape, address_map, num_blocks, block_h, block_w):
-    assert len(mm_output_shape) == 4
-    assert len(mm_weight.shape) == 3
-    assert mm_output_shape[3] == mm_weight.shape[2]
-    ret_shape = mm_output_shape
-    ret = torch.zeros(ret_shape, dtype=torch.bfloat16).float()
-    mm_act_shape = [1,block_h,block_w]
-    block_size = block_h*block_w
-    mm_act = read_conv_act_into_mm_act(conv_act, address_map, num_blocks, block_h, block_w)
-    assert len(mm_act.shape) == 3
-    index = 0
-    for b in range(num_blocks):
-        for oh in range(ret_shape[2]):
-            for ow in range(ret_shape[3]):
-                ret[0][0][oh][ow] += torch.dot(mm_act[b,oh,:].reshape(-1), mm_weight[b,:,ow].reshape(-1))
+def read_conv_weight_into_mm_act_block(mm_weight, in1_row_start_tile_id,
+                                        in1_current_block_start_tile_id, in1_tile_stride_h,
+                                        in1_block_stride_h, in1_block_h, in1_block_w):
+    mm_weight_block_shape = [1,1,in1_block_h*32, in1_block_w*32]
+    mm_weight_block_size = in1_block_h*in1_block_w*1024
+    mm_weight_block = torch.zeros(mm_weight_block_size, dtype=torch.bfloat16).float()
+    dst_address = 0
+    for weight_tile_h in range(in1_block_h):
+        in1_tile_id = in1_row_start_tile_id
+        for weight_tile_w in range(in1_block_w):
+            src_address = in1_tile_id * 1024; # Tile size = 1024
+            for s in range(1024):
+                assert(src_address+s < len(mm_weight))
+                assert(dst_address+s < mm_weight_block_size)
+                mm_weight_block[dst_address+s] = mm_weight[src_address+s]
+            in1_tile_id += 1
+            dst_address += 1024
+        in1_row_start_tile_id += in1_tile_stride_h
+    in1_current_block_start_tile_id += in1_block_stride_h
+    return (mm_weight_block.reshape(mm_weight_block_shape), in1_row_start_tile_id, in1_current_block_start_tile_id)
+
+def blocked_mm_with_conv_act(conv_act,
+                            mm_weight,
+                            address_map,
+                            num_blocks_in0_h,
+                            num_blocks_in0_w,
+                            num_blocks_in1_w,
+                            in0_block_h,
+                            in0_block_w,
+                            in1_block_w,
+                            in1_tile_stride_h,
+                            in1_block_stride_h,
+                            in1_block_stride_w):
+    # in0 refers to conv activation tensor
+    # in1 refers to conv weight tensor
+    mm_output_shape = [1,1,num_blocks_in0_h*in0_block_h*32,num_blocks_in1_w*in1_block_w*32]
+    ret = torch.zeros(mm_output_shape, dtype=torch.bfloat16).float()
+    mm_output_block_shape = [1,1,in0_block_h*32, in1_block_w*32]
+    in0_address_map_start_block_index = 0
+    in0_address_map_index = 0
+    in1_block_h = in0_block_w
+    for block_in0_h in range(num_blocks_in0_h):
+        # Reset in1 (weight) to the starting tile in this column
+        in1_start_tile_id = 0
+        in0_address_map_start_block_index = in0_address_map_index
+        for block_in1_w in range(num_blocks_in1_w):
+            in1_current_block_start_tile_id = in1_start_tile_id
+            # Reset in0 (activation) to starting block in this row
+            in0_address_map_index = in0_address_map_start_block_index
+            output_block = torch.zeros(mm_output_block_shape, dtype=torch.bfloat16).float()
+            for block_in0_w in range(num_blocks_in0_w):
+                in1_row_start_tile_id = in1_current_block_start_tile_id
+                (mm_act_block, in0_address_map_index) = read_conv_act_into_mm_act_block(conv_act, in0_address_map_index,
+                                                    address_map, in0_block_h, in0_block_w)
+                (mm_weight_block, in1_row_start_tile_id, in1_current_block_start_tile_id) = read_conv_weight_into_mm_act_block(mm_weight, in1_row_start_tile_id,
+                                                    in1_current_block_start_tile_id, in1_tile_stride_h,
+                                                    in1_block_stride_h, in1_block_h, in1_block_w)
+                # Untilize weight block (this CPU reference does matmul on untilized blocks)
+                mm_weight_block = untilize(mm_weight_block)
+                for out_h_block in range(in0_block_h*32):
+                    for out_w_block in range(in1_block_w*32):
+                        output_block[0][0][out_h_block][out_w_block] += torch.dot(mm_act_block[0,0,out_h_block,:].reshape(-1), mm_weight_block[0,0,:,out_w_block].reshape(-1))
+            in1_start_tile_id += in1_block_stride_w
+            start_oh = block_in0_h * in0_block_h * 32
+            start_ow = block_in1_w * in1_block_w * 32
+            end_oh = start_oh + (in0_block_h * 32)
+            end_ow = start_ow + (in1_block_w * 32)
+            ret[0,0,start_oh:end_oh,start_ow:end_ow] = output_block
+
     return ret
 
 
