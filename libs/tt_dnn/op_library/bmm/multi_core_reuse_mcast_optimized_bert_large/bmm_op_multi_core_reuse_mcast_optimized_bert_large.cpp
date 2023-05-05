@@ -113,10 +113,10 @@ tt_metal::Program * create_program_mcast_in0_in1(
     */
 
     // Mcast args
-    auto in0_mcast_sender_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, 0);
-    auto in0_mcast_receiver_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, 0);
-    auto in1_mcast_sender_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, 0);
-    auto in1_mcast_receiver_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, 0);
+    auto in0_mcast_sender_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, INVALID);
 
     // Address should be same across all cores
     auto in0_mcast_sender_semaphore = in0_mcast_sender_semaphore_vec[0];
@@ -454,10 +454,6 @@ tt_metal::Program * create_program_mcast_in0_in1(
                 cb_output->address(),
                 cb_data_format
             );
-
-            std::vector<uint32_t> invalid = {INVALID};
-            tt_metal::WriteToDeviceL1(device, core, invalid, in0_mcast_sender_semaphore->address());
-            tt_metal::WriteToDeviceL1(device, core, invalid, in1_mcast_sender_semaphore->address());
 
             tt_xy_pair left_core    = {(std::size_t) start_core_x, (std::size_t) core.y};
             tt_xy_pair left_core_plus_one    = {(std::size_t) start_core_x + 1, (std::size_t) core.y};
