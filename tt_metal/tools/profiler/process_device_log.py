@@ -9,7 +9,6 @@ from datetime import datetime
 
 import plotly.graph_objects as go
 from dash import Dash, dcc, html, Input, Output
-from rich import print
 import pandas as pd
 import numpy as np
 import seaborn as sns
