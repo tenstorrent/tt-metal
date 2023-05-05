@@ -22,8 +22,8 @@ from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pc
 from upsample_nearest2d import TtUpsampleNearest2d
 
 
-class TtUpsample2d(nn.Module):
-    def __init__(self, channels, state_dict, use_conv=False, use_conv_transpose=False, out_channels=None, name="conv", base_address="up_blocks.0.upsamplers.0"):
+class TtUpsample2D(nn.Module):
+    def __init__(self, channels, out_channels, use_conv, use_conv_transpose, name, state_dict, base_address):
         super().__init__()
         assert not use_conv_transpose, "StableDiffusion's Unet does not use convTranspose, so leaving it out"
         self.in_channels = channels
@@ -78,7 +78,8 @@ def run_upsample2d_inference(device, host):
 
     tt_input = torch_to_tt_tensor(input, device)
 
-    tt_up = TtUpsample2d(channels=in_channels, out_channels=out_channels, use_conv=True, state_dict=state_dict)
+    tt_up = TtUpsample2D(channels=in_channels, out_channels=out_channels, use_conv=True,use_conv_transpose=False, name="conv",
+                         state_dict=state_dict, base_address="up_blocks.0.upsamplers.0")
     tt_out = tt_up(tt_input)
     tt_out = tt_to_torch_tensor(tt_out, host)
     print('tt_out size:', tt_out.shape)

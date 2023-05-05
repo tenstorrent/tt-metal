@@ -31,10 +31,8 @@ class TtDownsample2D(nn.Module):
         padding:
     """
 
-    def __init__(self, channels, use_conv=False, out_channels=None, padding=1, name="conv", device=None, host=None, base_address='down_blocks.0.downsamplers.0', state_dict=None):
+    def __init__(self, channels, use_conv=False, out_channels=None, padding=1, name="conv", base_address='down_blocks.0.downsamplers.0', state_dict=None):
         super().__init__()
-        self.device = device
-        self.host=host
         self.base_address = base_address
         self.state_dict=state_dict
         self.in_channels = channels
@@ -48,7 +46,6 @@ class TtDownsample2D(nn.Module):
             conv_weight = self.state_dict[f"{base_address}.conv.weight"]
             conv_bias = self.state_dict[f"{base_address}.conv.bias"]
             conv = fallback_ops.Conv2d(conv_weight, conv_bias, self.in_channels, self.out_channels, kernel_size=3, stride=stride, padding=padding)
-            # conv = nn.Conv2d(self.in_channels, self.out_channels, 3, stride=stride, padding=padding)
 
         else:
             assert self.in_channels == self.out_channels
