@@ -137,6 +137,7 @@ constexpr inline uint32_t packed_buffer_size_bytes<bfloat8_b>(uint32_t volume_un
 // ======================================================================================
 template <typename T>
 inline std::vector<T> convert_layout_row_major_to_tile(const std::array<uint32_t, 4> &shape, const std::vector<T>& data_to_convert) {
+    TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Unsupported shape for tensor conversion");
     std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
     return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
 }
