@@ -48,9 +48,11 @@ CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
 // TODO: these should be constexpr compile-time init'd, but it doesn't work on BRISC yet
 uint32_t dram_bank_to_noc_x[NUM_DRAM_BANKS];
 uint32_t dram_bank_to_noc_y[NUM_DRAM_BANKS];
+uint32_t dram_bank_to_noc_xy[NUM_DRAM_BANKS];
 
 uint32_t l1_bank_to_noc_x[NUM_L1_BANKS];
 uint32_t l1_bank_to_noc_y[NUM_L1_BANKS];
+uint32_t l1_bank_to_noc_xy[NUM_L1_BANKS];
 
 int32_t l1_bank_to_l1_offset[NUM_L1_BANKS];
 
@@ -110,6 +112,15 @@ void init_dram_bank_to_noc_coord_lookup_tables() {
 
     dram_bank_to_noc_y[0] = dram_bank_to_noc_y[2] = dram_bank_to_noc_y[4] = dram_bank_to_noc_y[6] = 0;
     dram_bank_to_noc_y[1] = dram_bank_to_noc_y[3] = dram_bank_to_noc_y[5] = dram_bank_to_noc_y[7] = 6;
+
+    dram_bank_to_noc_xy[0] = (NOC_Y(0) << NOC_ADDR_NODE_ID_BITS) | NOC_X(1);
+    dram_bank_to_noc_xy[1] = (NOC_Y(6) << NOC_ADDR_NODE_ID_BITS) | NOC_X(1);
+    dram_bank_to_noc_xy[2] = (NOC_Y(0) << NOC_ADDR_NODE_ID_BITS) | NOC_X(4);
+    dram_bank_to_noc_xy[3] = (NOC_Y(6) << NOC_ADDR_NODE_ID_BITS) | NOC_X(4);
+    dram_bank_to_noc_xy[4] = (NOC_Y(0) << NOC_ADDR_NODE_ID_BITS) | NOC_X(7);
+    dram_bank_to_noc_xy[5] = (NOC_Y(6) << NOC_ADDR_NODE_ID_BITS) | NOC_X(7);
+    dram_bank_to_noc_xy[6] = (NOC_Y(0) << NOC_ADDR_NODE_ID_BITS) | NOC_X(10);
+    dram_bank_to_noc_xy[7] = (NOC_Y(6) << NOC_ADDR_NODE_ID_BITS) | NOC_X(10);
 }
 
 void init_l1_bank_to_noc_coord_lookup_tables() {
@@ -120,6 +131,7 @@ void init_l1_bank_to_noc_coord_lookup_tables() {
         for (uint32_t x = 1; x < 13; x++) {
             l1_bank_to_noc_x[id] = x;
             l1_bank_to_noc_y[id] = y;
+            l1_bank_to_noc_xy[id] = (NOC_Y(y) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
             l1_bank_to_l1_offset[id] = 0;
             id++;
         }
@@ -131,11 +143,13 @@ void init_l1_bank_to_noc_coord_lookup_tables() {
         // DPRINT << "ID: " << id << ", NOCX: " << x << ", NOCY: " << 12 << ENDL();
         l1_bank_to_noc_x[id] = x;
         l1_bank_to_noc_y[id] = 11;
+        l1_bank_to_noc_xy[id] = (NOC_Y(11) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
         l1_bank_to_l1_offset[id] = -512 * 1024; // Bank 0 of storage core allocated top down from 512KB
         id++;
         // DPRINT << "ID: " << id << ", NOCX: " << x << ", NOCY: " << 12 << ENDL();
         l1_bank_to_noc_x[id] = x;
         l1_bank_to_noc_y[id] = 11;
+        l1_bank_to_noc_xy[id] = (NOC_Y(11) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
         l1_bank_to_l1_offset[id] = 0; // Bank 1 of storage core allocated top down from 1MB, like all other worker cores
         id++;
     }
@@ -215,6 +229,15 @@ constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((256>>4)+(64>>4));
         default: return ((1024>>4)+(64>>4));
+    };
+}
+
+inline __attribute__((always_inline))
+constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
+    switch (format&0x1F) {
+        case ((uint8_t)DataFormat::Bfp8_b): return ((index<<10)+(index<<6));
+        //Keep default as Bfp8?
+        default: return ((index<<10)+(index<<6));
     };
 }
 
@@ -564,6 +587,63 @@ struct InterleavedPow2AddrGen {
 };
 
 template <bool DRAM>
+struct InterleavedAddrGenFast {
+    uint32_t bank_base_address; // Base address for the whole tensor.
+    uint32_t page_size; // Num bytes in bank unit.
+    DataFormat data_format; // Dataformat
+
+    FORCE_INLINE
+    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0) const {
+        uint32_t addr;
+        uint32_t noc_x;
+        uint32_t noc_y;
+        if constexpr (DRAM) {
+            uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
+            addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) + this->bank_base_address + offset;
+            noc_x = dram_bank_to_noc_x[bank_id];
+            noc_y = dram_bank_to_noc_y[bank_id];
+        } else {
+            uint32_t bank_id = id & (NUM_L1_BANKS - 1);
+            addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) + this->bank_base_address + offset;
+            addr += l1_bank_to_l1_offset[bank_id];
+            noc_x = l1_bank_to_noc_x[bank_id];
+            noc_y = l1_bank_to_noc_y[bank_id];
+        }
+
+        uint64_t noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
+        return noc_addr;
+    }
+
+    FORCE_INLINE
+    void noc_async_read_tile(const uint32_t id, uint32_t dest_addr, const uint32_t offset = 0) const {
+        uint32_t src_addr;
+        uint32_t src_noc_xy;
+
+        if constexpr (DRAM) {
+            uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
+            src_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) + this->bank_base_address + offset;
+            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+        } else {
+            uint32_t bank_id = id & (NUM_L1_BANKS - 1);
+            src_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) + this->bank_base_address + offset;
+            src_addr += l1_bank_to_l1_offset[bank_id];
+            src_noc_xy = l1_bank_to_noc_xy[bank_id];
+        }
+
+        while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));
+
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr); // dst_addr
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_noc_xy);
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, this->page_size); // len_bytes
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        noc_reads_num_issued[loading_noc] += 1;
+    }
+
+};
+
+
+template <bool DRAM>
 FORCE_INLINE
 std::uint64_t get_noc_addr(
     const uint32_t id, const InterleavedAddrGen<DRAM> &s, uint32_t offset = 0) {
@@ -598,6 +678,24 @@ std::uint64_t get_noc_addr(
 
     // DPRINT << s.bank_base_address << ',' << ' ' << uint(DRAM) << ENDL();
     return s.get_noc_addr(id);
+}
+
+template <bool DRAM>
+FORCE_INLINE
+std::uint64_t get_noc_addr(
+    const uint32_t id, const InterleavedAddrGenFast<DRAM>& s, uint32_t offset = 0) {
+    /*
+        Alternative API for getting the noc address when we are reading using a swizzled
+        layout. This version assumes bank unit size can be arbitrary size. Use
+        get_noc_addr(const uint32_t id, InterleavedPow2AddrGen s) for optimized algorithm in which stick size
+        is a power of 2.
+
+        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
+        bank for this unit of data.
+
+        InterleavedAddrGen: Check struct for attribute definitions.
+    */
+    return s.get_noc_addr(id, offset);
 }
 
 FORCE_INLINE
@@ -637,6 +735,18 @@ void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr,
                                         size);
 }
 
+/**
+ * Fill me in
+ */
+template <bool DRAM>
+FORCE_INLINE
+void noc_async_read_tile(const uint32_t id, const InterleavedAddrGenFast<DRAM>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0) {
+    /*
+        Read requests - use static VC
+        Read responses - assigned VCs dynamically
+    */
+    s.noc_async_read_tile(id, dst_local_l1_addr, offset);
+}
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the
  * Tensix core executing this function call. The destination is specified using

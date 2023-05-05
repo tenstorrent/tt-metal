@@ -87,13 +87,15 @@ void kernel_main() {
         .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGen<false> s1 = {
+    const InterleavedAddrGenFast<false> s1 = {
         .bank_base_address = in1_tensor_addr,
-        .page_size = single_tile_size_bytes
+        .page_size = single_tile_size_bytes,
+        .data_format = DataFormat::Bfp8_b
     };
-    const InterleavedAddrGen<false> s = {
+    const InterleavedAddrGenFast<false> s = {
         .bank_base_address = out_tensor_addr,
-        .page_size = single_tile_size_bytes
+        .page_size = single_tile_size_bytes,
+        .data_format = DataFormat::Bfp8_b
     };
     #endif
 
@@ -108,8 +110,7 @@ void kernel_main() {
             for(uint32_t h = 0; h < in1_block_h; h++) {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                 for(uint32_t w = 0; w < in1_block_w; w++) {
-                    uint64_t in1_tile_noc_addr = get_noc_addr(in1_tensor_tile_id, s1);
-                    noc_async_read(in1_tile_noc_addr, l1_write_addr_in1, single_tile_size_bytes);
+                    noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
                     l1_write_addr_in1 += single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
                 }

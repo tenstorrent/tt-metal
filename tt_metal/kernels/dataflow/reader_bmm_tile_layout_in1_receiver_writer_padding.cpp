@@ -80,16 +80,13 @@ void kernel_main() {
     constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen<false> s = {
         .bank_base_address = out_tensor_addr,
-
-
         .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGen<false> s = {
+    const InterleavedAddrGenFast<false> s = {
         .bank_base_address = out_tensor_addr,
-
-
-        .page_size = single_tile_size_bytes
+        .page_size = single_tile_size_bytes,
+        .data_format = DataFormat::Bfp8_b
     };
     #endif
 
