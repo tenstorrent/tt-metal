@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <vector>
-#include <unordered_map>
+#include <map>
 #include <variant>
 #include <memory>
 
@@ -37,7 +37,7 @@ class L1BankingAllocator : public Allocator {
 
     uint32_t allocate_dram_buffer(int dram_channel, uint32_t start_address, uint32_t size_bytes);
 
-    uint32_t get_address_for_interleaved_dram_buffer(const std::map<int, uint32_t> &size_in_bytes_per_bank) const;
+    std::vector<DramBankAddrPair> allocate_interleaved_dram_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
 
     void deallocate_dram_buffer(int dram_channel, uint32_t address);
 
@@ -48,6 +48,8 @@ class L1BankingAllocator : public Allocator {
     uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_bytes);
 
     uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes);
+
+    std::vector<L1BankAddrPair> allocate_interleaved_l1_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
 
     uint32_t get_address_for_circular_buffers_across_core_range(const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes) const;
 
@@ -95,10 +97,11 @@ class L1BankingAllocator : public Allocator {
 
     Bank &bank_for_logical_core(const tt_xy_pair &logical_core, uint32_t absolute_address) const;
 
-    std::unordered_map<int, std::unique_ptr<allocator::Algorithm>> dram_manager_;
+    std::map<int, std::unique_ptr<allocator::Algorithm>> dram_manager_;
 
-    std::unordered_map<tt_xy_pair, UniqueBank> compute_and_storage_cores_l1_manager_;
-    std::unordered_map<tt_xy_pair, UniqueBanks> storage_cores_l1_manager_;
+    tt_xy_pair logical_grid_size_;
+    std::map<tt_xy_pair, UniqueBank> compute_and_storage_cores_l1_manager_;
+    std::map<tt_xy_pair, UniqueBanks> storage_cores_l1_manager_;
 };
 
 }  // namespace tt_metal

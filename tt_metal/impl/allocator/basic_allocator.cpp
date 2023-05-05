@@ -8,7 +8,7 @@ namespace tt {
 
 namespace tt_metal {
 
-BasicAllocator::BasicAllocator(const tt_SocDescriptor &soc_desc) : Allocator() {
+BasicAllocator::BasicAllocator(const tt_SocDescriptor &soc_desc) : logical_grid_size_(soc_desc.worker_grid_size), Allocator() {
     constexpr static uint32_t min_allocation_size_bytes = 32;
     // DRAM -> L1 and L1 -> DRAM transfers need to have 32B alignment, which means:
     // DRAM_buffer_addr % 32 == L1_buffer_addr % 32, or
@@ -78,20 +78,50 @@ uint32_t BasicAllocator::allocate_dram_buffer(int dram_channel, uint32_t start_a
     return address.value();
 }
 
-uint32_t BasicAllocator::get_address_for_interleaved_dram_buffer(const std::map<int, uint32_t> &size_in_bytes_per_bank) const {
+// std::vector<DramBankAddrPair> get_size_per_dram_channel() {
+
+// }
+
+std::vector<DramBankAddrPair> BasicAllocator::allocate_interleaved_dram_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
+    int num_dram_banks = this->dram_manager_.size(); // this allocation scheme has 1 bank per DRAM channel
+    int num_equally_distributed_units = num_bank_units / num_dram_banks;
+    int remaining_units_after_equally_distributing = num_bank_units % num_dram_banks;
+    uint32_t total_size_bytes = num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry;
+
+    uint32_t total_accounted = 0;
+    std::vector<DramBankAddrPair> channel_to_size;
     std::vector<std::pair<uint32_t, uint32_t>> candidate_addr_ranges;
-    uint32_t total_size_bytes = 0;
-    for (auto &[dram_channel, required_size_bytes] : size_in_bytes_per_bank) {
-        auto potential_addr_ranges = this->allocator_for_dram_channel(dram_channel).available_addresses(required_size_bytes);
+    for (int bank_index = 0; bank_index < num_dram_banks; bank_index++) {
+        int num_units_in_bank = num_equally_distributed_units;
+        if (remaining_units_after_equally_distributing > 0) {
+            num_units_in_bank += 1;
+            remaining_units_after_equally_distributing -= 1;
+        }
+        uint32_t buffer_size = num_units_in_bank * (num_entries_per_bank_unit * num_bytes_per_entry);
+        int dram_channel = bank_index;
+        DramBank bank = {.channel=dram_channel, .offset_bytes=0};
+        channel_to_size.push_back({bank, buffer_size});
+        auto potential_addr_ranges = this->allocator_for_dram_channel(dram_channel).available_addresses(buffer_size);
         allocator::populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges);
-        total_size_bytes += required_size_bytes;
+        total_accounted += buffer_size;
+        if (total_accounted == total_size_bytes) {
+            break;
+        }
     }
 
     if (candidate_addr_ranges.empty()) {
         TT_THROW("Not enough space to hold interleave " + std::to_string(total_size_bytes) + " bytes across DRAM channels");
     }
 
-    return allocator::find_address_of_smallest_chunk(candidate_addr_ranges);
+    auto address = allocator::find_address_of_smallest_chunk(candidate_addr_ranges);
+
+    std::vector<DramBankAddrPair> bank_to_address;
+    for (auto &[bank, buffer_size] : channel_to_size) {
+        this->allocate_dram_buffer(bank.channel, address, buffer_size);
+        bank_to_address.push_back({bank, address});
+    }
+
+    return bank_to_address;
 }
 
 void BasicAllocator::deallocate_dram_buffer(int dram_channel, uint32_t address) {
@@ -132,6 +162,49 @@ uint32_t BasicAllocator::allocate_l1_buffer(const tt_xy_pair &logical_core, uint
 
 void BasicAllocator::deallocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t address) {
     this->allocator_for_logical_core(logical_core).deallocate(address);
+}
+
+std::vector<L1BankAddrPair> BasicAllocator::allocate_interleaved_l1_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
+    int num_l1_banks = this->l1_manager_.size(); // this allocation scheme has 1 bank per core
+    int num_equally_distributed_units = num_bank_units / num_l1_banks;
+    int remaining_units_after_equally_distributing = num_bank_units % num_l1_banks;
+    uint32_t total_size_bytes = num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry;
+
+    uint32_t total_accounted = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> candidate_addr_ranges;
+
+    std::vector<L1BankAddrPair> bank_to_size;
+    for (uint32_t x = 0; x < this->logical_grid_size_.x; x++) {
+        for (uint32_t y = 0; y < this->logical_grid_size_.y; y++) {
+            tt_xy_pair logical_core = {x, y};
+            int num_units_in_bank = num_equally_distributed_units;
+            if (remaining_units_after_equally_distributing > 0) {
+                num_units_in_bank += 1;
+                remaining_units_after_equally_distributing -= 1;
+            }
+            uint32_t buffer_size = num_units_in_bank * (num_entries_per_bank_unit * num_bytes_per_entry);
+            L1Bank bank = {.logical_core=logical_core, .offset_bytes=0};
+            bank_to_size.push_back({bank, buffer_size});
+            auto potential_addr_ranges = this->allocator_for_logical_core(logical_core).available_addresses(buffer_size);
+            allocator::populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges);
+            total_accounted += buffer_size;
+            if (total_accounted == total_size_bytes) { break; }
+        }
+        if (total_accounted == total_size_bytes) { break; }
+    }
+
+    if (candidate_addr_ranges.empty()) {
+        TT_THROW("Not enough space to hold interleave " + std::to_string(total_size_bytes) + " bytes across cores");
+    }
+
+    auto address = allocator::find_address_of_smallest_chunk(candidate_addr_ranges);
+
+    std::vector<L1BankAddrPair> bank_to_address;
+    for (auto &[bank, buffer_size] : bank_to_size) {
+        this->allocate_l1_buffer(bank.logical_core, address, buffer_size);
+        bank_to_address.push_back({bank, address});
+    }
+    return bank_to_address;
 }
 
 uint32_t BasicAllocator::get_address_for_circular_buffers_across_core_range(const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes) const {

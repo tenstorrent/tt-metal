@@ -6,7 +6,7 @@
 
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/host.hpp"
-#include "tt_metal/impl/buffers/interleaved_buffer.hpp"
+#include "tt_metal/impl/buffers/interleaved_dram_buffer.hpp"
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "common/bfloat16.hpp"

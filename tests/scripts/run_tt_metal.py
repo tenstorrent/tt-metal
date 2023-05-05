@@ -59,6 +59,7 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_unpack_tilize", "test_unpack_tilize"),
     TestEntry("tt_metal/tests/test_unpack_untilize", "test_unpack_untilize"),
     TestEntry("tt_metal/tests/test_interleaved_layouts", "test_interleaved_layouts"),
+    TestEntry("tt_metal/tests/test_interleaved_l1_buffer", "test_interleaved_l1_buffer"),
     TestEntry("tt_metal/tests/test_dram_copy_sticks_multi_core", "test_dram_copy_sticks_multi_core"),
     TestEntry("tt_metal/tests/test_untilize_eltwise_binary", "test_untilize_eltwise_binary"),
     TestEntry("tt_metal/tests/test_dtx_tilized_row_to_col_major", "test_dtx_tilized_row_to_col_major"),

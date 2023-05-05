@@ -225,6 +225,11 @@ InterleavedDramBuffer *CreateInterleavedDramBuffer(Device *device, int num_bank_
     return interleaved_buffer;
 }
 
+InterleavedL1Buffer *CreateInterleavedL1Buffer(Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
+    InterleavedL1Buffer *interleaved_buffer = new InterleavedL1Buffer(device, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    return interleaved_buffer;
+}
+
 L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address) {
     L1Buffer *l1_buffer = new L1Buffer(device, core, size_in_bytes, address);
     program->add_l1_buffer(l1_buffer);
@@ -958,6 +963,92 @@ bool WriteToDeviceDRAMChannelsInterleavedTiles(
             tile, tt_target_dram{device->pcie_slot(), dram_channel, 0}, dst_address);
     }
     return true;
+}
+
+void ReadFromDeviceDRAMChannelsInterleaved(InterleavedDramBuffer *buffer, std::vector<uint32_t> &host_buffer) {
+    uint32_t bank_unit_size = buffer->bank_unit_size();
+    TT_ASSERT(buffer->size() % bank_unit_size == 0);
+    uint32_t num_bank_units = buffer->size() / bank_unit_size;
+
+    int bank_index = 0;
+    for (int bank_unit_index = 0; bank_unit_index < num_bank_units; bank_unit_index++) {
+        auto dram_bank = buffer->bank(bank_index);
+        auto absolute_address = buffer->address_of_bank_unit(bank_index, bank_unit_index);
+        std::vector<uint32_t> bank_unit;
+        tt_metal::ReadFromDeviceDRAMChannel(buffer->device(), dram_bank.channel, absolute_address, bank_unit, bank_unit_size);
+
+        // Copy bank unit into vector
+        for (uint32_t el: bank_unit) {
+            host_buffer.push_back(el);
+        }
+
+        bank_index = (bank_index + 1) %  buffer->num_banks();
+    }
+}
+
+void WriteToDeviceDRAMChannelsInterleaved(InterleavedDramBuffer *buffer, std::vector<uint32_t> &host_buffer) {
+    uint32_t bank_unit_size = buffer->bank_unit_size();
+    TT_ASSERT(buffer->size() % bank_unit_size == 0);
+    uint32_t num_bank_units = buffer->size() / bank_unit_size;
+    uint32_t num_entries_per_bank_unit = buffer->num_entries_per_bank_unit();
+
+    int bank_index = 0;
+    int data_index = 0;
+    for (int bank_unit_index = 0; bank_unit_index < num_bank_units; bank_unit_index++) {
+        auto dram_bank = buffer->bank(bank_index);
+        auto absolute_address = buffer->address_of_bank_unit(bank_index, bank_unit_index);
+        std::vector<uint32_t> bank_unit;
+        bank_unit.insert(bank_unit.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_bank_unit);
+
+        tt_metal::WriteToDeviceDRAMChannel(buffer->device(), dram_bank.channel, bank_unit, absolute_address);
+
+        bank_index = (bank_index + 1) %  buffer->num_banks();
+        data_index += num_entries_per_bank_unit;
+    }
+}
+
+void ReadFromDeviceL1Interleaved(InterleavedL1Buffer *buffer, std::vector<uint32_t> &host_buffer) {
+    uint32_t bank_unit_size = buffer->bank_unit_size();
+    TT_ASSERT(buffer->size() % bank_unit_size == 0);
+    uint32_t num_bank_units = buffer->size() / bank_unit_size;
+
+    int bank_index = 0;
+    for (int bank_unit_index = 0; bank_unit_index < num_bank_units; bank_unit_index++) {
+        auto l1_bank = buffer->bank(bank_index);
+        auto absolute_address = buffer->address_of_bank_unit(bank_index, bank_unit_index);
+
+        std::vector<uint32_t> bank_unit;
+        tt_metal::ReadFromDeviceL1(buffer->device(), l1_bank.logical_core, absolute_address, bank_unit, bank_unit_size);
+
+        // Copy bank unit into vector
+        for (uint32_t el: bank_unit) {
+            host_buffer.push_back(el);
+        }
+
+        bank_index = (bank_index + 1) %  buffer->num_banks();
+    }
+}
+
+void WriteToDeviceL1Interleaved(InterleavedL1Buffer *buffer, std::vector<uint32_t> &host_buffer) {
+    auto bank_unit_size = buffer->bank_unit_size();
+    TT_ASSERT(buffer->size() % bank_unit_size == 0);
+    auto num_bank_units = buffer->size() / bank_unit_size;
+    auto num_entries_per_bank_unit = buffer->num_entries_per_bank_unit();
+
+    int bank_index = 0;
+    int data_index = 0;
+    for (int bank_unit_index = 0; bank_unit_index < num_bank_units; bank_unit_index++) {
+        auto l1_bank = buffer->bank(bank_index);
+        auto absolute_address = buffer->address_of_bank_unit(bank_index, bank_unit_index);
+
+        std::vector<uint32_t> bank_unit;
+        bank_unit.insert(bank_unit.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_bank_unit);
+
+        tt_metal::WriteToDeviceL1(buffer->device(), l1_bank.logical_core, bank_unit, absolute_address);
+
+        bank_index = (bank_index + 1) %  buffer->num_banks();
+        data_index += num_entries_per_bank_unit;
+    }
 }
 
 bool WriteToDeviceL1(

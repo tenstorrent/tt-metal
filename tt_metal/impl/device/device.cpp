@@ -35,6 +35,7 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
         default:
             TT_ASSERT(false && "Unsupported memory allocator");
     }
+    this->allocator_scheme_ = memory_allocator;
 }
 
 bool Device::initialize(const MemoryAllocator &memory_allocator) {
@@ -186,8 +187,12 @@ void Device::free_l1_buffer(const tt_xy_pair &logical_core, uint32_t address) {
     this->allocator_->deallocate_l1_buffer(logical_core, address);
 }
 
-uint32_t Device::address_for_interleaved_dram_buffer(const std::map<int, uint32_t> &size_in_bytes_per_bank) {
-    return this->allocator_->get_address_for_interleaved_dram_buffer(size_in_bytes_per_bank);
+std::vector<DramBankAddrPair> Device::allocate_interleaved_dram_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
+    return this->allocator_->allocate_interleaved_dram_buffer(num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+}
+
+std::vector<L1BankAddrPair> Device::allocate_interleaved_l1_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
+    return this->allocator_->allocate_interleaved_l1_buffer(num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
 }
 
 uint32_t Device::address_for_circular_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes) {

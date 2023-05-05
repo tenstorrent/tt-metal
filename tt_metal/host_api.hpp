@@ -13,7 +13,8 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/interleaved_buffer.hpp"
+#include "tt_metal/impl/buffers/interleaved_dram_buffer.hpp"
+#include "tt_metal/impl/buffers/interleaved_l1_buffer.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/host.hpp"
@@ -412,8 +413,8 @@ DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_
 DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes);
 
 /**
-*  InterleavedDramBuffers hold multiple DRAM buffers across all DRAM channels on a device to store interleaved data.
-*  All DRAM buffers will be allocated to the same address in their respective channel, an error is returned if this is not possible.
+*  InterleavedDramBuffers allocates space across all DRAM banks on a device to store interleaved data.
+*  Allocations are done at the same address in their respective channel, an error is returned if this is not possible.
 *
 *  Return value: InterleavedDramBuffer *
 *
@@ -425,6 +426,25 @@ DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_
 *  | num_bytes_per_entry       | Size of single entry in DRAM bank in bytes                                                                           | int      |             | Yes      |
 */
 InterleavedDramBuffer *CreateInterleavedDramBuffer(
+    Device *device,
+    int num_bank_units,
+    int num_entries_per_bank_unit,
+    int num_bytes_per_entry);
+
+/**
+*  InterleavedL1Buffers allocates space across all L1 banks on a device to store interleaved data.
+*  Allocations are done at the same address in their respective channel, an error is returned if this is not possible.
+*
+*  Return value: InterleavedDramBuffer *
+*
+*  | Argument                  | Description                                                                                                          | Type     | Valid Range | Required |
+*  |---------------------------|----------------------------------------------------------------------------------------------------------------------|----------|-------------|----------|
+*  | device                    | The device where the DRAM buffer is created                                                                          | Device * |             | Yes      |
+*  | num_bank_units            | Single bank unit is stored and read at a given time, unit can be tile, stick, etc                                    | int      |             | Yes      |
+*  | num_entries_per_bank_unit | Number of entries in single unit, e.g. tile has 512 entries because a single tile has 1024 values packed as uint32_t | int      |             | Yes      |
+*  | num_bytes_per_entry       | Size of single entry in DRAM bank in bytes                                                                           | int      |             | Yes      |
+*/
+InterleavedL1Buffer *CreateInterleavedL1Buffer(
     Device *device,
     int num_bank_units,
     int num_entries_per_bank_unit,
@@ -718,6 +738,14 @@ bool WriteToDeviceDRAMChannelsInterleavedTiles(
     Device *device,
     std::vector<uint32_t> &host_buffer,
     uint32_t dram_address);
+
+void ReadFromDeviceDRAMChannelsInterleaved(InterleavedDramBuffer *buffer, std::vector<uint32_t> &host_buffer);
+
+void WriteToDeviceDRAMChannelsInterleaved(InterleavedDramBuffer *buffer, std::vector<uint32_t> &host_buffer);
+
+void ReadFromDeviceL1Interleaved(InterleavedL1Buffer *buffer, std::vector<uint32_t> &host_buffer);
+
+void WriteToDeviceL1Interleaved(InterleavedL1Buffer *buffer, std::vector<uint32_t> &host_buffer);
 
 /**
  * Copy data from a host buffer into an L1 buffer. (Note: Current Can not be a CircularBuffer.)

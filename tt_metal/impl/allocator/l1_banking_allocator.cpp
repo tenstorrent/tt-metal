@@ -8,7 +8,7 @@ namespace tt {
 
 namespace tt_metal {
 
-L1BankingAllocator::L1BankingAllocator(const tt_SocDescriptor &soc_desc) : Allocator() {
+L1BankingAllocator::L1BankingAllocator(const tt_SocDescriptor &soc_desc) : logical_grid_size_(soc_desc.worker_grid_size), Allocator() {
     this->init_dram_manager(soc_desc);
     this->init_compute_and_storage_cores_l1_manager(soc_desc);
     this->init_storage_cores_l1_manager(soc_desc);
@@ -136,20 +136,45 @@ uint32_t L1BankingAllocator::allocate_dram_buffer(int dram_channel, uint32_t sta
     return address.value();
 }
 
-uint32_t L1BankingAllocator::get_address_for_interleaved_dram_buffer(const std::map<int, uint32_t> &size_in_bytes_per_bank) const {
+std::vector<DramBankAddrPair> L1BankingAllocator::allocate_interleaved_dram_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
+    int num_dram_banks = this->dram_manager_.size(); // this allocation scheme has 1 bank per DRAM channel
+    int num_equally_distributed_units = num_bank_units / num_dram_banks;
+    int remaining_units_after_equally_distributing = num_bank_units % num_dram_banks;
+
+    uint32_t total_size_bytes = num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry;
+    uint32_t total_accounted = 0;
+    std::vector<DramBankAddrPair> channel_to_size;
     std::vector<std::pair<uint32_t, uint32_t>> candidate_addr_ranges;
-    uint32_t total_size_bytes = 0;
-    for (auto &[dram_channel, required_size_bytes] : size_in_bytes_per_bank) {
-        auto potential_addr_ranges = this->allocator_for_dram_channel(dram_channel).available_addresses(required_size_bytes);
+    for (int bank_index = 0; bank_index < num_dram_banks; bank_index++) {
+        int num_units_in_bank = num_equally_distributed_units;
+        if (remaining_units_after_equally_distributing > 0) {
+            num_units_in_bank += 1;
+            remaining_units_after_equally_distributing -= 1;
+        }
+        uint32_t buffer_size = num_units_in_bank * (num_entries_per_bank_unit * num_bytes_per_entry);
+        int dram_channel = bank_index;
+        DramBank bank = {.channel=dram_channel, .offset_bytes=0};
+        channel_to_size.push_back({bank, buffer_size});
+        auto potential_addr_ranges = this->allocator_for_dram_channel(dram_channel).available_addresses(buffer_size);
         allocator::populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges);
-        total_size_bytes += required_size_bytes;
+        total_accounted += buffer_size;
+        if (total_accounted == total_size_bytes) {
+            break;
+        }
     }
 
     if (candidate_addr_ranges.empty()) {
         TT_THROW("Not enough space to hold interleave " + std::to_string(total_size_bytes) + " bytes across DRAM channels");
     }
 
-    return allocator::find_address_of_smallest_chunk(candidate_addr_ranges);
+    auto address = allocator::find_address_of_smallest_chunk(candidate_addr_ranges);
+
+    std::vector<DramBankAddrPair> bank_to_address;
+    for (auto &[bank, buffer_size] : channel_to_size) {
+        this->allocate_dram_buffer(bank.channel, address, buffer_size);
+        bank_to_address.push_back({bank, address});
+    }
+    return bank_to_address;
 }
 
 void L1BankingAllocator::deallocate_dram_buffer(int dram_channel, uint32_t address) {
@@ -206,7 +231,8 @@ uint32_t L1BankingAllocator::allocate_l1_buffer(const tt_xy_pair &logical_core, 
 
 uint32_t L1BankingAllocator::allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes) {
     auto &storage_bank = this->bank_for_logical_core(logical_core, start_address);
-    auto address = storage_bank.allocator_algo->allocate_at_address(start_address, size_bytes);
+    auto bank_address = start_address - storage_bank.offset_bytes;
+    auto address = storage_bank.allocator_algo->allocate_at_address(bank_address, size_bytes);
     if (not address.has_value()) {
         TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for l1 buffer on core " + logical_core.str() + " at " + std::to_string(start_address));
     }
@@ -225,6 +251,93 @@ void L1BankingAllocator::deallocate_l1_buffer(const tt_xy_pair &logical_core, ui
     auto &bank = this->bank_for_logical_core(logical_core, address);
     auto relative_address = address - bank.offset_bytes;
     bank.allocator_algo->deallocate(relative_address);
+}
+
+std::vector<L1BankAddrPair> L1BankingAllocator::allocate_interleaved_l1_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
+    uint32_t total_size_bytes = num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry;
+
+    int num_l1_banks = this->compute_and_storage_cores_l1_manager_.size() + (this->storage_cores_l1_manager_.size() * this->num_banks_per_storage_core_);
+    int num_equally_distributed_units = num_bank_units / num_l1_banks;
+    int remaining_units_after_equally_distributing = num_bank_units % num_l1_banks;
+
+    uint32_t total_accounted = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> candidate_addr_ranges;
+
+    std::vector<L1BankAddrPair> bank_to_size;
+
+    auto filter_addresses = [this](const std::pair<uint32_t, uint32_t> &range){
+        return range.first >= this-> storage_core_bank_size_bytes_ and range.second >= this->storage_core_bank_size_bytes_;
+    };
+
+    for (uint32_t x = 0; x < this->logical_grid_size_.x; x++) {
+        for (uint32_t y = 0; y < this->logical_grid_size_.y; y++) {
+            tt_xy_pair logical_core = {x, y};
+            if (this->is_compute_and_storage_core(logical_core)) {
+                auto &bank = this->bank_for_logical_compute_and_storage_core(logical_core);
+                int num_units_in_bank = num_equally_distributed_units;
+                if (remaining_units_after_equally_distributing > 0) {
+                    num_units_in_bank += 1;
+                    remaining_units_after_equally_distributing -= 1;
+                }
+                uint32_t buffer_size = num_units_in_bank * (num_entries_per_bank_unit * num_bytes_per_entry);
+                L1Bank l1_bank = {.logical_core=logical_core, .offset_bytes=bank.offset_bytes};
+                bank_to_size.push_back({l1_bank, buffer_size});
+                auto potential_addr_ranges = bank.allocator_algo->available_addresses(buffer_size);
+                for (auto &addr_range : potential_addr_ranges) {
+                    if (addr_range.first <= this->storage_core_bank_size_bytes_ and this->storage_core_bank_size_bytes_ <= addr_range.second) {
+                        addr_range.first = this->storage_core_bank_size_bytes_;
+                    }
+                }
+                allocator::populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges, filter_addresses);
+                total_accounted += buffer_size;
+                if (total_accounted == total_size_bytes) { break; }
+            } else if (this->is_storage_only_core(logical_core)) {
+                auto &banks = this->banks_for_storage_only_cores(logical_core);
+                for (auto &bank : banks) {
+                    int num_units_in_bank = num_equally_distributed_units;
+                    if (remaining_units_after_equally_distributing > 0) {
+                        num_units_in_bank += 1;
+                        remaining_units_after_equally_distributing -= 1;
+                    }
+                    uint32_t buffer_size = num_units_in_bank * (num_entries_per_bank_unit * num_bytes_per_entry);
+                    L1Bank l1_bank = {.logical_core=logical_core, .offset_bytes=bank->offset_bytes};
+                    bank_to_size.push_back({l1_bank, buffer_size});
+                    auto potential_addr_ranges = bank->allocator_algo->available_addresses(buffer_size);
+                    uint32_t offset = bank->offset_bytes == 0 ? banks.back()->offset_bytes : bank->offset_bytes;
+                    for (auto &addr_range : potential_addr_ranges) {
+                        addr_range.first = addr_range.first + offset;
+                        addr_range.second = addr_range.second + offset;
+                    }
+                    allocator::populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges);
+                    total_accounted += buffer_size;
+                    if (total_accounted == total_size_bytes) { break; }
+                }
+            }
+        }
+        if (total_accounted == total_size_bytes) { break; }
+    }
+
+    if (candidate_addr_ranges.empty()) {
+        TT_THROW("Not enough space to hold interleave " + std::to_string(total_size_bytes) + " bytes across cores");
+    }
+
+    auto address = allocator::find_max_address(candidate_addr_ranges);
+
+    std::vector<L1BankAddrPair> bank_to_address; // holds starting address relative to the bank
+    for (auto &[l1_bank, buffer_size] : bank_to_size) {
+        auto logical_core = l1_bank.logical_core;
+        auto bank_offset_bytes = l1_bank.offset_bytes;
+        uint32_t relative_address = address;
+        if (this->is_storage_only_core(logical_core)) {
+            uint32_t relative_offset = bank_offset_bytes == 0 ? this->storage_cores_l1_manager_.at(logical_core).back()->offset_bytes : bank_offset_bytes;
+            relative_address = relative_address - relative_offset;
+        }
+        uint32_t absolute_address = relative_address + bank_offset_bytes;
+        this->allocate_l1_buffer(logical_core, absolute_address, buffer_size);
+        bank_to_address.push_back({l1_bank, relative_address});
+    }
+
+    return bank_to_address;
 }
 
 uint32_t L1BankingAllocator::get_address_for_circular_buffers_across_core_range(const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes) const {

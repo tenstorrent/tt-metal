@@ -17,33 +17,30 @@ class InterleavedDramBuffer : public Buffer {
 
     Buffer *clone();
 
-    // Size in bytes of buffer in given DRAM channel
-    uint32_t buffer_size(int dram_channel) const;
+    int bank_unit_size() const { return this->num_entries_per_bank_unit_ * this->num_bytes_per_entry_; }
 
-    // NoC coordinates of DRAM channel 0
+    int num_entries_per_bank_unit() const { return this->num_entries_per_bank_unit_; }
+
+    // DRAM channel of first bank holding the data
+    int dram_channel() const;
+
+    // NoC coordinates of first bank holding the data
     tt_xy_pair noc_coordinates() const;
 
-    // NoC coordinates of given DRAM channel
-    tt_xy_pair noc_coordinates(int dram_channel) const;
+    int num_banks() const { return this->dram_bank_to_relative_address_.size(); }
 
-    std::vector<tt_xy_pair> interleaved_noc_coordinates() const;
+    DramBank bank(int bank_index) const;
+
+    uint32_t address_of_bank_unit(int bank_index, int bank_unit_index) const;
 
    private:
-    InterleavedDramBuffer(
-        Device *device,
-        int num_bank_units,
-        int num_entries_per_bank_unit,
-        int num_bytes_per_entry,
-        const std::map<int, DramBuffer *> &bank_to_buffer
-    );
-
     void free();
     friend void DeallocateBuffer(Buffer *buffer);
 
     int num_bank_units_;
     int num_entries_per_bank_unit_;
     int num_bytes_per_entry_;
-    std::map<int, DramBuffer *> bank_to_buffer_;
+    std::vector<DramBankAddrPair> dram_bank_to_relative_address_;
 };
 
 }  // namespace tt_metal

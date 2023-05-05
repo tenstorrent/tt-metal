@@ -17,7 +17,7 @@ class Algorithm {
 
     virtual ~Algorithm() {}
 
-    uint32_t align(uint32_t address) {
+    uint32_t align(uint32_t address) const {
         uint32_t factor = (address + alignment_ - 1) / alignment_;
         return factor * alignment_;
     }

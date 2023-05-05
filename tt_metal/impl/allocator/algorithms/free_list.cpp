@@ -27,11 +27,13 @@ bool FreeList::is_allocated(const Block *block) const {
 }
 
 std::vector<std::pair<uint32_t, uint32_t>> FreeList::available_addresses(uint32_t size_bytes) const {
+    uint32_t alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
+    alloc_size = this->align(alloc_size);
     std::vector<std::pair<uint32_t, uint32_t>> addresses;
     FreeList::Block *curr_block = this->free_block_head_;
     while (curr_block != nullptr) {
-        if (curr_block->size >= size_bytes) {
-            uint32_t end_range = (curr_block->address + curr_block->size) - size_bytes;
+        if (curr_block->size >= alloc_size) {
+            uint32_t end_range = (curr_block->address + curr_block->size) - alloc_size;
             addresses.push_back({curr_block->address, end_range});
         }
         curr_block = curr_block->next_free;

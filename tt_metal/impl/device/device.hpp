@@ -29,7 +29,7 @@ class Device {
    public:
 
     friend void tt_gdb(Device* device, int chip_id, const vector<tt_xy_pair> cores, vector<string> ops);
-    Device(tt::ARCH arch, int pcie_slot) : arch_(arch), cluster_(nullptr), pcie_slot_(pcie_slot), closed_(false) {}
+    Device(tt::ARCH arch, int pcie_slot) : arch_(arch), cluster_(nullptr), pcie_slot_(pcie_slot), closed_(false), allocator_scheme_(MemoryAllocator::BASIC) {}
 
     ~Device();
 
@@ -43,6 +43,8 @@ class Device {
     tt::ARCH arch() const { return arch_; }
 
     int pcie_slot() const { return pcie_slot_; }
+
+    MemoryAllocator allocator_scheme() const { return this->allocator_scheme_; }
 
     tt_cluster *cluster() const;  // Need to access cluster in llrt APIs
 
@@ -81,12 +83,14 @@ class Device {
     uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes);
     uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
     void free_l1_buffer(const tt_xy_pair &logical_core, uint32_t address);
-    uint32_t address_for_interleaved_dram_buffer(const std::map<int, uint32_t> &size_in_bytes_per_bank);
+    std::vector<DramBankAddrPair> allocate_interleaved_dram_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
+    std::vector<L1BankAddrPair> allocate_interleaved_l1_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
     uint32_t address_for_circular_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes);
     friend class DramBuffer;
     friend class InterleavedDramBuffer;
     friend class CircularBuffer;
     friend class L1Buffer;
+    friend class InterleavedL1Buffer;
     friend std::vector<CircularBuffer *> CreateCircularBuffers(
         Program *program,
         Device *device,
@@ -102,6 +106,7 @@ class Device {
     tt_cluster *cluster_;
     int pcie_slot_;
     std::unique_ptr<Allocator> allocator_;
+    MemoryAllocator allocator_scheme_;
     bool closed_;
 };
 
