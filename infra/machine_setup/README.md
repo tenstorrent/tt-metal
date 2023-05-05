@@ -26,18 +26,33 @@ given that ``machines`` is a text file with each IP separated by a newline.
 cat machines | xargs -n 1 -I{} ssh-copy-id <user>@{}
 ```
 
-Then create an inventory file with ``ansible_user`` set for all IPs in the
+## Machine setup
+
+Create an inventory file with the following entries set for all IPs in the
 ``inventories`` directory.
 
-Install the dependencies, hugepages, and check for the entries in the
-inventory.
+* ``ansible_user``
+* ``arch`` (ex. ``gs``, ``wh`` etc.)
+
+Then, run the Ansible playbooks:
 
 ```
-ansible-playbook -i inventory/<INV_FILE> playbooks/0-install-deps.yaml -K --ask-pass
-ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages.yaml -K --ask-pass
-ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml -K --ask-pass
-ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages.yaml -K --ask-pass
+ansible-playbook -i inventory/<INV_FILE> playbooks/0-install-deps.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/3-install-drivers.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/4-install-flash.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages-part1.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages-part2.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages-verify.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/5-verify-hw.yaml
 ```
 
 **NOTE**: You can add ``--forks <number-of-forks>`` to speed up the Ansible
 calls.
+
+**NOTE**: You can use the options ``-K``, ``--ask-pass``, and ``--extra-vars
+'ansible_become_pass=<ansible become password>'`` as part of your options to
+help with authentication.
