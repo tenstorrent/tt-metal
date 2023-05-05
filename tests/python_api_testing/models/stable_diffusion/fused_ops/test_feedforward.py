@@ -37,6 +37,7 @@ def test_feedforward_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
 
     # setup tt model

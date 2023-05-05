@@ -17,12 +17,12 @@ from typing import Optional
 from libs import tt_lib as ttl
 from libs.tt_lib.fallback_ops import fallback_ops
 
-from utility_functions import pad_weight, tilize_to_list, print_diff_argmax, torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
-
+from utility_functions import pad_weight, tilize_to_list, torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
 
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from python_api_testing.fused_ops.softmax import softmax as TtSoftmax
 
+from python_api_testing.models.stable_diffusion.utils import make_linear
 
 
 class TtCrossAttention(nn.Module):
@@ -85,42 +85,73 @@ class TtCrossAttention(nn.Module):
             self.torch_group_norm = None
 
         # if cross_attention_norm:
+        #     assert False, "cross attention norm is triggered"
         #     self.norm_cross = nn.LayerNorm(cross_attention_dim)
 
-        qweights = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_q.weight"]))
-        qbias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_q.bias"])) if bias else None
-        self.to_q = TtLinear(query_dim, inner_dim, qweights, qbias, self.device)
+        qweights = state_dict[f"{base_address}.to_q.weight"]
+        qbias = state_dict[f"{base_address}.to_q.bias"] if bias else None
+        self.to_q = make_linear(in_features=query_dim, out_features=inner_dim, weights=qweights, bias=qbias, device=self.device)
+        # qweights = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_q.weight"]))
+        # qbias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_q.bias"])) if bias else None
+        # self.to_q = TtLinear(query_dim, inner_dim, qweights, qbias, self.device)
         # self.to_q = nn.Linear(query_dim, inner_dim, bias=bias)
+        # qweights = torch_to_tt_tensor_rm(qweights, self.device, shape=[1, 1, inner_dim, query_dim])
+        # qbias = torch_to_tt_tensor_rm(qbias, self.device) if bias else None
+        # self.to_q = SDLinear(query_dim, inner_dim, qweights, qbias)
 
-        kweights = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_k.weight"]))
-        print("kweight", state_dict[f"{base_address}.to_k.weight"].shape)
-        kbias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_k.bias"])) if bias else None
 
-        self.to_k = TtLinear(cross_attention_dim, inner_dim, kweights, kbias, self.device)
+        kweights = state_dict[f"{base_address}.to_k.weight"]
+        kbias = state_dict[f"{base_address}.to_k.bias"] if bias else None
+        print("kweight", kweights.shape, cross_attention_dim, inner_dim)
+        self.to_k = make_linear(in_features=cross_attention_dim, out_features=inner_dim, weights=kweights, bias=kbias, device=self.device)
+        # kweights = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_k.weight"]))
+        # kbias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_k.bias"])) if bias else None
+        # self.to_k = TtLinear(cross_attention_dim, inner_dim, kweights, kbias, self.device)
         # self.to_k = nn.Linear(cross_attention_dim, inner_dim, bias=bias)
+        # kweights = torch_to_tt_tensor_rm(kweights, self.device, shape=[1, 1, inner_dim, cross_attention_dim])
+        # kbias = torch_to_tt_tensor_rm(kbias, self.device) if bias else None
+        # self.to_k = SDLinear(query_dim, inner_dim, kweights, kbias)
 
-        vweights = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_v.weight"]))
-        vbias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_v.bias"])) if bias else None
-        self.to_v = TtLinear(cross_attention_dim, inner_dim, vweights, vbias, self.device)
+
+        vweights = state_dict[f"{base_address}.to_v.weight"]
+        vbias = state_dict[f"{base_address}.to_v.bias"] if bias else None
+        self.to_v = make_linear(in_features=cross_attention_dim, out_features=inner_dim, weights=vweights, bias=vbias, device=self.device)
+        # vweights = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_v.weight"]))
+        # vbias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_v.bias"])) if bias else None
+        # self.to_v = TtLinear(cross_attention_dim, inner_dim, vweights, vbias, self.device)
         # self.to_v = nn.Linear(cross_attention_dim, inner_dim, bias=bias)
+        # vweights = torch_to_tt_tensor_rm(vweights, self.device, shape=[1, 1, inner_dim, cross_attention_dim])
+        # vbias = torch_to_tt_tensor_rm(vbias, self.device) if bias else None
+        # self.to_v = SDLinear(cross_attention_dim, inner_dim, vweights, vbias)
+
 
         if self.added_kv_proj_dim is not None:
-            add_k_proj_weights = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_k_proj.weight"]))
-            add_k_proj_bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_k_proj.bias"])) if bias else None
-            self.add_k_proj_weights = TtLinear(added_kv_proj_dim, cross_attention_dim, add_k_proj_weights, add_k_proj_bias, self.device)
+            add_k_proj_weights = state_dict[f"{base_address}.add_k_proj.weight"]
+            add_k_proj_bias = state_dict[f"{base_address}.add_k_proj.bias"] if bias else None
+            self.add_k_proj = make_linear(in_features=added_kv_proj_dim, out_features=cross_attention_dim, weights=add_k_proj_weights, bias=add_k_proj_bias, device=self.device)
+            # add_k_proj_weights = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_k_proj.weight"]))
+            # add_k_proj_bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_k_proj.bias"])) if bias else None
+            # self.add_k_proj = TtLinear(added_kv_proj_dim, cross_attention_dim, add_k_proj_weights, add_k_proj_bias, self.device)
             # self.add_k_proj = nn.Linear(added_kv_proj_dim, cross_attention_dim)
 
-            add_v_proj_weights = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_v_proj.weight"]))
-            add_v_proj_bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_v_proj.bias"]))
-            self.add_v_proj = TtLinear(cross_attention_dim, inner_dim, add_v_proj_weights, add_v_proj_bias, self.device)
+            add_v_proj_weights = state_dict[f"{base_address}.add_v_proj.weight"]
+            add_v_proj_bias = state_dict[f"{base_address}.add_v_proj.bias"] if bias else None
+            self.add_v_proj = make_linear(in_features=added_kv_proj_dim, out_features=cross_attention_dim, weights=add_v_proj_weights, bias=add_v_proj_bias, device=self.device)
+            # add_v_proj_weights = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_v_proj.weight"]))
+            # add_v_proj_bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.add_v_proj.bias"]))
+            # self.add_v_proj = TtLinear(cross_attention_dim, inner_dim, add_v_proj_weights, add_v_proj_bias, self.device)
             # self.add_v_proj = nn.Linear(added_kv_proj_dim, cross_attention_dim)
 
         # self.to_out = nn.ModuleList([])
-        print("linear dims", inner_dim, query_dim)
 
-        to_out0_weight = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_out.0.weight"]))
-        to_out0_bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_out.0.bias"]))
-        self.to_out = TtLinear(inner_dim, query_dim, to_out0_weight, to_out0_bias, self.device)
+        to_out0_weight = state_dict[f"{base_address}.to_out.0.weight"]
+        to_out0_bias = state_dict[f"{base_address}.to_out.0.bias"]
+        print("to out")
+        self.to_out = make_linear(in_features=inner_dim, out_features=query_dim, weights=to_out0_weight, bias=to_out0_bias, device=self.device)
+
+        # to_out0_weight = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_out.0.weight"]))
+        # to_out0_bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.to_out.0.bias"]))
+        # self.to_out = TtLinear(inner_dim, query_dim, to_out0_weight, to_out0_bias, self.device)
         # self.to_out.append(self.to_out0)
         # self.to_out.append(nn.Linear(inner_dim, query_dim))
 
@@ -132,7 +163,6 @@ class TtCrossAttention(nn.Module):
         assert False, "Not Implemented"
         # if slice_size is not None and slice_size > self.sliceable_head_dim:
         #     raise ValueError(f"slice_size {slice_size} has to be smaller or equal to {self.sliceable_head_dim}.")
-
         # if slice_size is not None and self.added_kv_proj_dim is not None:
         #     processor = SlicedAttnAddedKVProcessor(slice_size)
         # elif slice_size is not None:
@@ -141,7 +171,6 @@ class TtCrossAttention(nn.Module):
         #     processor = CrossAttnAddedKVProcessor()
         # else:
         #     processor = CrossAttnProcessor()
-
         # self.set_processor(processor)
 
     def set_processor(self, processor: "AttnProcessor"):
@@ -170,10 +199,10 @@ class TtCrossAttention(nn.Module):
         # tensor = tensor.permute(0, 2, 1, 3).reshape(batch_size // head_size, seq_len, dim * head_size)
         # return tensor
 
-        # TODO: reshape and permute
         head_size = self.heads
         _, batch_size, seq_len, dim = tensor.shape()
-        tensor = ttl.tensor.reshape(tensor, batch_size // head_size, head_size, seq_len, dim)
+        # tensor = ttl.tensor.reshape(tensor, batch_size // head_size, head_size, seq_len, dim)
+        tensor = fallback_ops.reshape(tensor, batch_size // head_size, head_size, seq_len, dim)
         tensor = ttl.tensor.permute(tensor, 0, 2, 1, 3)
         tensor = fallback_ops.reshape(tensor, 1, batch_size // head_size, seq_len, dim * head_size)
         return tensor
@@ -194,20 +223,22 @@ class TtCrossAttention(nn.Module):
 
     def get_attention_scores(self, query, key, attention_mask=None):
         t_key = ttl.tensor.transpose(key)
+        print("in get attentino scores", t_key.shape(), query.shape())
         temp = ttl.tensor.bmm(query, t_key)
 
-        _encoded_val = torch.tensor(self.scale, dtype=torch.bfloat16)
-        _encoded_val = _encoded_val.view(torch.int16).item()
+        # _encoded_val = torch.tensor(self.scale, dtype=torch.bfloat16)
+        # _encoded_val = _encoded_val.view(torch.int16).item()
+        # scale_tensor = ttl.tensor.fill_rm(temp.shape()[0],
+        #                                 temp.shape()[1],
+        #                                 temp.shape()[2],
+        #                                 temp.shape()[3],
+        #                                 0,
+        #                                 0,
+        #                                 temp,
+        #                                 _encoded_val,
+        #                                 _encoded_val)
 
-        scale_tensor = ttl.tensor.fill_rm(temp.shape()[0],
-                                        temp.shape()[1],
-                                        temp.shape()[2],
-                                        temp.shape()[3],
-                                        0,
-                                        0,
-                                        temp,
-                                        _encoded_val,
-                                        _encoded_val)
+        scale_tensor = fallback_ops.full(temp.shape(), self.scale)
 
         attention_scores = ttl.tensor.mul(scale_tensor, temp)
         # attention_scores = torch.baddbmm(
@@ -259,23 +290,30 @@ def CrossAttnProcessor(attn: TtCrossAttention, hidden_states, encoder_hidden_sta
     attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length)
 
     query = attn.to_q(hidden_states)
-    query = attn.head_to_batch_dim(query)
 
+    print(query.shape(), " this is query shape")
+    query = attn.head_to_batch_dim(query)
+    print("after head to batch dim")
     encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
-    # encoder_hidden_states: [1, 2, 64, 1280]
     key = attn.to_k(encoder_hidden_states)
+    print("after to k")
     value = attn.to_v(encoder_hidden_states)
+    print("after to v")
     key = attn.head_to_batch_dim(key)
+    print("after head to batch dim key")
     value = attn.head_to_batch_dim(value)
+    print("after head to batch dim value")
 
     attention_probs = attn.get_attention_scores(query, key, attention_mask)
-    hidden_states = ttl.tensor.bmm(attention_probs, value)
-    hidden_states = attn.batch_to_head_dim(hidden_states)
 
+    print("after get attention scores")
+    hidden_states = ttl.tensor.bmm(attention_probs, value)
+
+    hidden_states = attn.batch_to_head_dim(hidden_states)
     # linear proj
     # hidden_states = attn.to_out[0](hidden_states)
     hidden_states = attn.to_out(hidden_states)
+
     # dropout
     # hidden_states = attn.to_out[1](hidden_states)
-
     return hidden_states

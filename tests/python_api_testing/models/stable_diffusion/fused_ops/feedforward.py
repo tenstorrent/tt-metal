@@ -16,6 +16,7 @@ from libs.tt_lib.fallback_ops import fallback_ops
 from libs import tt_lib as ttl
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from utility_functions import pad_weight, tilize_to_list, torch_to_tt_tensor, tt_to_torch_tensor
+from python_api_testing.models.stable_diffusion.utils import make_linear
 
 
 class TtGEGLU(nn.Module):
@@ -32,10 +33,10 @@ class TtGEGLU(nn.Module):
         self.device = device
         self.host = host
 
-        weights = tilize_to_list(pad_weight(state_dict[f"{base_address}.proj.weight"]))
-        bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.proj.bias"]))
-        self.proj = TtLinear(dim_in, dim_out * 2, weights, bias, device)
 
+        weights = state_dict[f"{base_address}.proj.weight"]
+        bias = state_dict[f"{base_address}.proj.bias"]
+        self.proj = make_linear(in_features=dim_in, out_features=dim_out * 2, weights=weights, bias=bias, device=device)
 
     def gelu(self, gate):
         return ttl.tensor.gelu(gate)
@@ -108,10 +109,9 @@ class TtFeedForward(nn.Module):
         # project dropout
 
         # project out
-        weights = tilize_to_list(pad_weight(state_dict[f"{base_address}.net.2.weight"]))
-        bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.net.2.bias"]))
-        self.linear = TtLinear(inner_dim, dim_out, weights, bias, device)
-
+        weights = state_dict[f"{base_address}.net.2.weight"]
+        bias = state_dict[f"{base_address}.net.2.bias"]
+        self.linear = make_linear(in_features=inner_dim, out_features=dim_out, weights=weights, bias=bias, device=device)
         # FF as used in Vision Transformer, MLP-Mixer, etc. have a final dropout
 
         # if final_dropout: #Note: commented since dropout is not supported
