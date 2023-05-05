@@ -111,7 +111,8 @@ int main(int argc, char *argv[]) {
   risc_init();
 
   setup_cb_read_write_interfaces();
-  init_dram_channel_to_noc_coord_lookup_tables();
+  init_dram_bank_to_noc_coord_lookup_tables();
+  init_l1_bank_to_noc_coord_lookup_tables();
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_KERNEL_MAIN_START);

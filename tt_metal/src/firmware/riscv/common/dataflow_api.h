@@ -11,6 +11,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "circular_buffer.h"
 
+#include "debug_print.h"
 /*
  * This is a trick with Doxygen to force it to not expand the always_inline
  * attribute property. We turn on predefine-only expansion with MACRO_EXPANSION
@@ -38,11 +39,20 @@ CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
 #define NOC_UNICAST_WRITE_VC 1
 #define NOC_MULTICAST_WRITE_VC 4
 // for GS is 8, need to set to a different value for WH and future architectures
-#define NUM_DRAM_CHANNELS 8
+#define NUM_DRAM_BANKS 8
+#define NUM_L1_BANKS 128
+#define LOG_BASE_2_OF_NUM_DRAM_BANKS 3
+#define LOG_BASE_2_OF_NUM_L1_BANKS 7
+
 // dram channel to x/y lookup tables
 // TODO: these should be constexpr compile-time init'd, but it doesn't work on BRISC yet
-uint32_t dram_channel_to_noc_x[NUM_DRAM_CHANNELS];
-uint32_t dram_channel_to_noc_y[NUM_DRAM_CHANNELS];
+uint32_t dram_bank_to_noc_x[NUM_DRAM_BANKS];
+uint32_t dram_bank_to_noc_y[NUM_DRAM_BANKS];
+
+uint32_t l1_bank_to_noc_x[NUM_L1_BANKS];
+uint32_t l1_bank_to_noc_y[NUM_L1_BANKS];
+
+int32_t l1_bank_to_l1_offset[NUM_L1_BANKS];
 
 // GS RISC-V RTL bug workaround (l1 reads followed by local mem reads causes a hang)
 // in ncrisc.cc/brisc.cc: volatile uint32_t local_mem_barrier;
@@ -82,7 +92,7 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
  */
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_ ## arg_idx
 
-void init_dram_channel_to_noc_coord_lookup_tables() {
+void init_dram_bank_to_noc_coord_lookup_tables() {
 // this mapping is for GS
 // TODO: generalize for other architectures
 // Dram channel 0: 1, 0
@@ -93,15 +103,43 @@ void init_dram_channel_to_noc_coord_lookup_tables() {
 // Dram channel 5: 7, 6
 // Dram channel 6: 10, 0
 // Dram channel 7: 10, 6
-    dram_channel_to_noc_x[0] = dram_channel_to_noc_x[1] = 1;
-    dram_channel_to_noc_x[2] = dram_channel_to_noc_x[3] = 4;
-    dram_channel_to_noc_x[4] = dram_channel_to_noc_x[5] = 7;
-    dram_channel_to_noc_x[6] = dram_channel_to_noc_x[7] = 10;
+    dram_bank_to_noc_x[0] = dram_bank_to_noc_x[1] = 1;
+    dram_bank_to_noc_x[2] = dram_bank_to_noc_x[3] = 4;
+    dram_bank_to_noc_x[4] = dram_bank_to_noc_x[5] = 7;
+    dram_bank_to_noc_x[6] = dram_bank_to_noc_x[7] = 10;
 
-    dram_channel_to_noc_y[0] = dram_channel_to_noc_y[2] = dram_channel_to_noc_y[4] = dram_channel_to_noc_y[6] = 0;
-    dram_channel_to_noc_y[1] = dram_channel_to_noc_y[3] = dram_channel_to_noc_y[5] = dram_channel_to_noc_y[7] = 6;
+    dram_bank_to_noc_y[0] = dram_bank_to_noc_y[2] = dram_bank_to_noc_y[4] = dram_bank_to_noc_y[6] = 0;
+    dram_bank_to_noc_y[1] = dram_bank_to_noc_y[3] = dram_bank_to_noc_y[5] = dram_bank_to_noc_y[7] = 6;
 }
 
+void init_l1_bank_to_noc_coord_lookup_tables() {
+    int id = 0;
+    // Single bank cores
+    for (uint32_t y = 1; y < 11; y++) {
+        if (y == 6) continue;
+        for (uint32_t x = 1; x < 13; x++) {
+            l1_bank_to_noc_x[id] = x;
+            l1_bank_to_noc_y[id] = y;
+            l1_bank_to_l1_offset[id] = 0;
+            id++;
+        }
+    }
+
+    // Storage cores
+    for (uint32_t x = 2; x < 13; x++) {
+        if (x == 7) continue;
+        // DPRINT << "ID: " << id << ", NOCX: " << x << ", NOCY: " << 12 << ENDL();
+        l1_bank_to_noc_x[id] = x;
+        l1_bank_to_noc_y[id] = 11;
+        l1_bank_to_l1_offset[id] = -512 * 1024; // Bank 0 of storage core allocated top down from 512KB
+        id++;
+        // DPRINT << "ID: " << id << ", NOCX: " << x << ", NOCY: " << 12 << ENDL();
+        l1_bank_to_noc_x[id] = x;
+        l1_bank_to_noc_y[id] = 11;
+        l1_bank_to_l1_offset[id] = 0; // Bank 1 of storage core allocated top down from 1MB, like all other worker cores
+        id++;
+    }
+}
 
 
 // only BRISC to call this
@@ -438,6 +476,8 @@ std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32
     return NOC_XY_ADDR(NOC_X(noc_x), NOC_Y(noc_y), addr);
 }
 
+
+
 /*
     Need an alias to get_noc_addr so that the structs below don't confuse the above get_noc_addr with
     the struct variant
@@ -451,52 +491,76 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_x, std::uint32_t noc_y, std:
     return NOC_XY_ADDR(NOC_X(noc_x), NOC_Y(noc_y), addr);
 }
 
-typedef struct {
+template <bool DRAM>
+struct InterleavedAddrGen {
     uint32_t bank_base_address; // Base address for the whole tensor.
-    uint32_t num_used_banks; // How many DRAM banks we are using.
-    uint32_t log_base_2_of_num_used_banks; // WARNING: This can only be used if num banks is a power of 2, so ensure your test has valid num_used_banks
-    uint32_t bank_unit_size; // Num bytes in bank unit.
+    uint32_t page_size; // Num bytes in page.
 
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0) const {
-        uint32_t bank_id = id & (this->num_used_banks - 1);
 
-        // So far, only using this for DRAM, but will eventually generalize to allow usage in L1 as well
-        uint32_t dram_x = dram_channel_to_noc_x[bank_id];
-        uint32_t dram_y = dram_channel_to_noc_y[bank_id];
-        uint32_t dram_addr = mulsi3(id >> this->log_base_2_of_num_used_banks, this->bank_unit_size) + this->bank_base_address + offset;
+        uint32_t addr;
+        uint32_t noc_x;
+        uint32_t noc_y;
+        if constexpr (DRAM) {
+            uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
+            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, this->page_size) + this->bank_base_address + offset;
+            noc_x = dram_bank_to_noc_x[bank_id];
+            noc_y = dram_bank_to_noc_y[bank_id];
+        } else {
+            uint32_t bank_id = id & (NUM_L1_BANKS - 1);
+            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, this->page_size) + this->bank_base_address + offset;
+            addr += l1_bank_to_l1_offset[bank_id];
+            noc_x = l1_bank_to_noc_x[bank_id];
+            noc_y = l1_bank_to_noc_y[bank_id];
+        }
 
-        uint64_t noc_addr = get_noc_addr_helper(dram_x, dram_y, dram_addr);
+        uint64_t noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
         return noc_addr;
     }
 
-} InterleavedAddrGen;
+};
 
 
-typedef struct {
+template <bool DRAM>
+struct InterleavedPow2AddrGen {
     const uint32_t bank_base_address;
-    const uint32_t num_used_banks;
-    const uint32_t log_base_2_of_num_used_banks;
-    const uint32_t log_base_2_of_bank_unit_size; // WARNING: This struct is used for optimized get_noc_addr in which case you know that bank_unit_size is a power of 2
+    const uint32_t log_base_2_of_page_size; // WARNING: This struct is used for optimized get_noc_addr in which case you know that bank_unit_size is a power of 2
 
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id) const {
-        uint32_t bank_id = id & (this->num_used_banks - 1);
 
         // So far, only using this for DRAM, but will eventually generalize to allow usage in L1 as well
-        uint32_t dram_x = dram_channel_to_noc_x[bank_id];
-        uint32_t dram_y = dram_channel_to_noc_y[bank_id];
-        uint32_t dram_addr = ((id >> this->log_base_2_of_num_used_banks) << this->log_base_2_of_bank_unit_size) + this->bank_base_address;
+        uint32_t addr;
+        uint32_t noc_x;
+        uint32_t noc_y;
 
-        uint64_t noc_addr = get_noc_addr_helper(dram_x, dram_y, dram_addr);
+        #ifdef TEMP_DEBUG2
+        // DPRINT << this->bank_base_address << ENDL();
+        #endif
+        if constexpr (DRAM) {
+            uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
+            addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address;
+            noc_x = dram_bank_to_noc_x[bank_id];
+            noc_y = dram_bank_to_noc_y[bank_id];
+        } else {
+            uint32_t bank_id = id & (NUM_L1_BANKS - 1);
+            addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address;
+            addr += l1_bank_to_l1_offset[bank_id];
+            noc_x = l1_bank_to_noc_x[bank_id];
+            noc_y = l1_bank_to_noc_y[bank_id];
+        }
+
+        uint64_t noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
         return noc_addr;
     }
 
-} InterleavedPow2AddrGen;
+};
 
+template <bool DRAM>
 FORCE_INLINE
 std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedAddrGen& s, uint32_t offset = 0) {
+    const uint32_t id, const InterleavedAddrGen<DRAM> &s, uint32_t offset = 0) {
     /*
         Alternative API for getting the noc address when we are reading using a swizzled
         layout. This version assumes bank unit size can be arbitrary size. Use
@@ -511,9 +575,10 @@ std::uint64_t get_noc_addr(
     return s.get_noc_addr(id, offset);
 }
 
+template <bool DRAM>
 FORCE_INLINE
 std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedPow2AddrGen& s) {
+    const uint32_t id, const InterleavedPow2AddrGen<DRAM> &s) {
     /*
         Alternative API for getting the noc address when we are reading using a swizzled
         layout. This version assumes bank unit size is a power of 2. For arbitrary bank
@@ -525,6 +590,7 @@ std::uint64_t get_noc_addr(
         InterleavedPow2AddrGen: Check struct for attribute definitions.
     */
 
+    // DPRINT << s.bank_base_address << ',' << ' ' << uint(DRAM) << ENDL();
     return s.get_noc_addr(id);
 }
 

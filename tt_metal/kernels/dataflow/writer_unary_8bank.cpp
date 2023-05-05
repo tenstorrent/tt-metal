@@ -9,7 +9,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
-    const InterleavedPow2AddrGen s = { dst_addr, 8, 3, 11 };
+
+    constexpr bool write_to_dram =
+    #ifdef get_compile_time_arg_val
+    get_compile_time_arg_val(0)
+    #else
+    true
+    #endif
+    ;
+
+    const InterleavedPow2AddrGen<write_to_dram> s = { dst_addr, 11 };
 
     #if GENERATE_BCAST_SCALER
     constexpr uint32_t blk = BLOCK_SIZE; // needed for correctness of softmax/LN kernels
@@ -21,11 +30,10 @@ void kernel_main() {
     #else
     constexpr uint32_t tile_offset = 0;
     #endif
-    //DPRINT << 'W' << '_' << tile_offset << ENDL();
-
 
     for (uint32_t i = 0; i<num_tiles; i += blk) {
         cb_wait_front(cb_id_out0, blk);
+
         for (uint32_t j = 0; j<blk; j++) {
             uint64_t dst_noc_addr = get_noc_addr(i+j+tile_offset, s);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out0) + (j<<11);

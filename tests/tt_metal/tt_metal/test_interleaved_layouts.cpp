@@ -9,47 +9,13 @@
 #include "llrt/llrt.hpp"
 #include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
 
+#include "llrt/tt_debug_print_server.hpp"
+
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
-
-inline vector<uint32_t> gold_standard_tilize(std::vector<uint32_t> src_vec, vector<uint32_t> shape) {
-    vector<uint32_t> dst_vec;
-
-    int num_rows = shape.at(0);
-    int num_cols = shape.at(1) / 2;
-    for (int x = 0; x < num_rows; x += 32) {
-        for (int y = 0; y < num_cols; y += 16) {
-            int start = x * num_cols + y;
-
-            // Top faces
-            for (int j = 0; j < 2; j++) {
-                int start_ = start + 8 * j;
-                for (int k = 0; k < 16; k++) {
-                    for (int i = 0; i < 8; i++) {
-                        int idx = start_ + num_cols * k + i;
-                        dst_vec.push_back(src_vec.at(idx));
-                    }
-                }
-            }
-
-            // Bottom faces
-            start += 16 * num_cols;
-            for (int j = 0; j < 2; j++) {
-                int start_ = start + 8 * j;
-                for (int k = 0; k < 16; k++) {
-                    for (int i = 0; i < 8; i++) {
-                        int idx = start_ + num_cols * k + i;
-                        dst_vec.push_back(src_vec.at(idx));
-                    }
-                }
-            }
-        }
-    }
-
-    return dst_vec;
-}
 
 bool test_write_interleaved_sticks_and_then_read_interleaved_sticks() {
     /*
@@ -456,12 +422,164 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
     return pass;
 }
 
+
+template <bool src_is_in_l1, bool dst_is_in_l1>
+bool test_interleaved_l1_datacopy() {
+
+    uint num_pages = 256;
+    uint num_bytes_per_page = 2048;
+    uint num_entries_per_page = 512;
+    uint num_bytes_per_entry = 4;
+    uint buffer_size = num_pages * num_bytes_per_page;
+
+    uint num_l1_banks = 128;
+    uint num_dram_banks = 8;
+
+    bool pass = true;
+
+    int pci_express_slot = 0;
+    tt_metal::Device *device =
+        tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+
+    pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
+
+    tt_metal::Program *program = new tt_metal::Program();
+    tt_xy_pair core = {0, 0};
+
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        0,
+        core,
+        2,
+        2 * num_bytes_per_page,
+        tt::DataFormat::Float16_b
+    );
+
+    auto cb_output = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        16,
+        core,
+        2,
+        2 * num_bytes_per_page,
+        tt::DataFormat::Float16_b
+    );
+
+    auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_unary_8bank.cpp",
+        core,
+        tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {not src_is_in_l1}),
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_1_default);
+
+    auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        core,
+        tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {not dst_is_in_l1}),
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_0_default);
+
+
+    vector<uint32_t> compute_kernel_args = { num_pages };
+    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+        program,
+        "tt_metal/kernels/compute/eltwise_copy.cpp",
+        core,
+        eltwise_unary_args,
+        MathFidelity::HiFi4,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+
+    std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
+        buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+
+    if constexpr (src_is_in_l1) {
+        TT_ASSERT((buffer_size % num_l1_banks) == 0);
+
+        auto src = tt_metal::CreateInterleavedL1Buffer(device, num_pages, num_entries_per_page, num_bytes_per_entry);
+        tt_metal::WriteToDeviceL1Interleaved(src, host_buffer);
+
+        tt_metal::WriteRuntimeArgsToDevice(
+            device,
+            unary_reader_kernel,
+            core,
+            {src->address(), 0, 0, num_pages});
+
+    } else {
+        TT_ASSERT((buffer_size % num_dram_banks) == 0);
+
+        auto src = tt_metal::CreateInterleavedDramBuffer(device, num_pages, num_entries_per_page, num_bytes_per_entry);
+        tt_metal::WriteToDeviceDRAMChannelsInterleaved(src, host_buffer);
+
+        tt_metal::WriteRuntimeArgsToDevice(
+            device,
+            unary_reader_kernel,
+            core,
+            {src->address(), 0, 0, num_pages});
+    }
+
+    std::vector<uint32_t> readback_buffer;
+    if constexpr (dst_is_in_l1) {
+        auto dst = tt_metal::CreateInterleavedL1Buffer(device, num_pages, num_entries_per_page, num_bytes_per_entry);
+
+         tt_metal::WriteRuntimeArgsToDevice(
+            device,
+            unary_writer_kernel,
+            core,
+            {dst->address(), 0, 0, num_pages});
+
+        pass &= tt_metal::CompileProgram(device, program);
+        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
+        pass &= tt_metal::LaunchKernels(device, program);
+
+        tt_metal::ReadFromDeviceL1Interleaved(dst, readback_buffer);
+
+    } else {
+         auto dst = tt_metal::CreateInterleavedDramBuffer(device, num_pages, num_entries_per_page, num_bytes_per_entry);
+
+         tt_metal::WriteRuntimeArgsToDevice(
+            device,
+            unary_writer_kernel,
+            core,
+            {dst->address(), 0, 0, num_pages});
+
+        pass &= tt_metal::CompileProgram(device, program);
+        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
+        pass &= tt_metal::LaunchKernels(device, program);
+
+        tt_metal::ReadFromDeviceDRAMChannelsInterleaved(dst, readback_buffer);
+    }
+
+    pass = (host_buffer == readback_buffer);
+
+    TT_ASSERT(pass);
+
+    return pass;
+}
+
 int main(int argc, char **argv) {
     bool pass = true;
 
+    // DRAM row/tile interleaved layout tests
     pass &= test_write_interleaved_sticks_and_then_read_interleaved_sticks();
     pass &= interleaved_stick_reader_single_bank_tilized_writer_datacopy_test();
     pass &= interleaved_tilized_reader_interleaved_stick_writer_datacopy_test();
+
+    // L1 tile-interleaved tests
+    pass &= test_interleaved_l1_datacopy<true, true>();
+    pass &= test_interleaved_l1_datacopy<false, true>();
+    pass &= test_interleaved_l1_datacopy<true, false>();
+    pass &= test_interleaved_l1_datacopy<false, false>();
 
     if (pass) {
         log_info(LogTest, "Test Passed");

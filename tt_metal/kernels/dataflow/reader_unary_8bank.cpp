@@ -80,24 +80,30 @@ void kernel_main() {
         uint32_t gamma_addr = get_arg_val<uint32_t>(11);
         uint32_t num_beta_tiles = get_arg_val<uint32_t>(12);
         uint32_t beta_addr = get_arg_val<uint32_t>(13);
-        //DPRINT << "NC ngt=" << num_gamma_tiles << " nbt=" << num_beta_tiles << ENDL();
         constexpr uint32_t cb_id_gamma = 5;
         constexpr uint32_t cb_id_beta = 6;
-        InterleavedPow2AddrGen addrg {gamma_addr, 8, 3, 11}, addrb {beta_addr, 8, 3, 11};
+        InterleavedPow2AddrGen<true> addrg {gamma_addr, 11}, addrb {beta_addr, 11};
     #endif
 
     #if FUSED_SCALE_MASK
     uint32_t partHt = get_arg_val<uint32_t>(5);
     uint32_t Wt = get_arg_val<uint32_t>(6);
-    InterleavedPow2AddrGen addr_mask {get_arg_val<uint32_t>(7), 8, 3, 11};
+    InterleavedPow2AddrGen<true> addr_mask {get_arg_val<uint32_t>(7), 11};
 
     uint32_t ht = 0, wt = 0, nc = 0, wtblk = 0;
     constexpr uint32_t cb_id_attn = 4;
     generate_inv_sqrt_hw_bcast_tile();
-    //DPRINT << "partHt=" << partHt << "Wt=" << Wt << ENDL();
     #endif
 
-    const InterleavedPow2AddrGen s = { src_addr, 8, 3, 11 };
+    constexpr bool read_from_dram =
+    #ifdef get_compile_time_arg_val
+    get_compile_time_arg_val(0)
+    #else
+    true
+    #endif
+    ;
+
+    const InterleavedPow2AddrGen<read_from_dram> s = { src_addr, 11 };
 
     #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
@@ -118,20 +124,27 @@ void kernel_main() {
     #endif
     //DPRINT << "Reader Tile offset=" << tile_offset << ENDL();
 
-
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t i_tile = 0;
     for (uint32_t i = 0; i<num_tiles; i += blk) {
         uint32_t rem = blk; // (i + blk > num_tiles) ? num_tiles - i : blk;
         cb_reserve_back(cb_id_in0, rem);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            //DPRINT << "L1ADDR=" << l1_write_addr << " " << tile_bytes << ENDL();
+
+        // DPRINT << i << ENDL();
         for (uint32_t r = 0; r<rem; r++) {
+            // DPRINT << i+r+tile_offset << ENDL();
+
             uint64_t src_noc_addr = get_noc_addr(i+r+tile_offset, s); // not contiguous for sequential r, can be banked
             auto addr = l1_write_addr + (r<<11);
+            // DPRINT << i << ENDL();
+            // DPRINT << 'k' << ENDL();
             noc_async_read(src_noc_addr, addr, tile_bytes); // TODO(AP): data type size
+            // DPRINT << i << ENDL();
+            // DPRINT << 'l' << ENDL();
             //DPRINT << "  dest_addr=" << addr << ENDL();
         }
+        // DPRINT << uint(my_x[loading_noc]) << ", " << uint(my_y[loading_noc]) << ENDL();
         noc_async_read_barrier();
         //DPRINT << "NC in0 pushing " << rem << ENDL();
         cb_push_back(cb_id_in0, rem);
