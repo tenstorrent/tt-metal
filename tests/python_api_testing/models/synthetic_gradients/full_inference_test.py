@@ -154,7 +154,7 @@ def run_full_inference(in_features, hidden_features, out_features, device):
     bias2_lin = torch.zeros(1, 1, 32, out_features)
     bias2_lin[:, :, :1, :] = bias2_lin_src
     tilized_bias2_lin_tt = tilize_to_list(bias2_lin)
-    bias2_lin_tt = ttl.tensor.Tensor(tilized_bias2_lin_tt, bias1_lin.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    bias2_lin_tt = ttl.tensor.Tensor(tilized_bias2_lin_tt, bias2_lin.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
 
     # batch norm torch layer2
     bn2_torch = PytorchBatchNorm1D(out_features)
