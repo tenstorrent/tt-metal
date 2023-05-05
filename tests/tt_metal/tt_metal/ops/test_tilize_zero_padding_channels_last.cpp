@@ -46,7 +46,12 @@ int main(int argc, char **argv) {
         auto host_vec =  *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
         std::array<uint32_t, 4> cl_shape = {shape[0], shape[2], shape[3], shape[1]};
         Tensor g = Tensor(host_vec, cl_shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
-        Tensor golden = g.to(Layout::TILE);
+        // TODO: Update when tensor.pad_to_tile() function is added
+        auto padded_shape = g.shape();
+        padded_shape[2] = roundup(padded_shape[2], TILE_HEIGHT);
+        padded_shape[3] = roundup(padded_shape[3], TILE_WIDTH);
+        Tensor padded_g = g.pad(padded_shape, {0,0,0,0}, 0);
+        Tensor golden = padded_g.to(Layout::TILE);
         auto golden_vec =  *reinterpret_cast<std::vector<bfloat16>*>(golden.data_ptr());
         auto result_vec = *reinterpret_cast<std::vector<bfloat16>*>(c.data_ptr());
         std::cout << "Validating " << std::endl;

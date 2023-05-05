@@ -43,7 +43,12 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::cout << "Moving src data to host to validate" << std::endl;
         Tensor host_a = a.to(host); // Move tensor a to host to validate
-        Tensor golden = host_a.to(Layout::TILE);
+        // TODO: Update when tensor.pad_to_tile() function is added
+        auto padded_shape = a.shape();
+        padded_shape[2] = roundup(padded_shape[2], TILE_HEIGHT);
+        padded_shape[3] = roundup(padded_shape[3], TILE_WIDTH);
+        Tensor padded_host_a = host_a.pad(padded_shape, {0,0,0,0}, 0);
+        Tensor golden = padded_host_a.to(Layout::TILE);
         auto golden_vec =  *reinterpret_cast<std::vector<bfloat16>*>(golden.data_ptr());
         auto result_vec = *reinterpret_cast<std::vector<bfloat16>*>(c.data_ptr());
         std::cout << "Validating " << std::endl;
