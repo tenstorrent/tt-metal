@@ -285,9 +285,9 @@ class BloomModel(torch.nn.Module):
 
         # Transformer blocks
         self.h = torch.nn.ModuleList([
-        bloom_block.BloomBlock("transformer.h", 0, hugging_bloom_reference_model, hidden_size, self.num_heads, layer_norm_epsilon),
-        bloom_block.BloomBlock("transformer.h", 1, hugging_bloom_reference_model, hidden_size, self.num_heads, layer_norm_epsilon)]
-        )
+        hugging_bloom_reference_model.transformer.h[0],
+        hugging_bloom_reference_model.transformer.h[1]
+        ])
 
         # Final Layer Norm
         self.ln_f = torch.nn.LayerNorm(embed_dim, eps=layer_norm_epsilon)
@@ -391,7 +391,7 @@ class BloomModel(torch.nn.Module):
         outputs = self.h[0](hidden_states=hidden_states,attention_mask=causal_mask,head_mask=None,use_cache=False, alibi=alibi)
         #outputs = self.h[1](hidden_states=outputs,attention_mask=causal_mask,head_mask=None,use_cache=False, alibi=alibi)
 
-        hidden_states = outputs
+        hidden_states = outputs[0]
 
         if output_attentions:
             all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
@@ -419,9 +419,18 @@ def run_bloom_model_inference(device):
 
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     print(hugging_bloom_reference_model.state_dict())
-    tt_bloom_model = TtBloomModel(device, hugging_bloom_reference_model, 1024, 32,  250880, 1024, 1e-5, 2)
-    pt_bloom_model = BloomModel(hugging_bloom_reference_model, 1024, 32,  250880, 1024, 1e-5, 2)
 
+
+    hidden_size = hugging_bloom_reference_model.config.hidden_size # 1024
+    n_head = hugging_bloom_reference_model.config.n_head
+    vocab_size = hugging_bloom_reference_model.config.vocab_size
+    layer_norm_epsilon = hugging_bloom_reference_model.config.layer_norm_epsilon
+    num_hidden_layers = hugging_bloom_reference_model.config.num_hidden_layers
+
+
+    tt_bloom_model = TtBloomModel(device, hugging_bloom_reference_model, hidden_size, n_head, vocab_size, hidden_size, layer_norm_epsilon, num_hidden_layers)
+    pt_bloom_model = BloomModel(hugging_bloom_reference_model, hidden_size, n_head, vocab_size, hidden_size, layer_norm_epsilon, num_hidden_layers)
+    #pt_bloom_model = BloomModel(hugging_bloom_reference_model, 1024, 32,  250880, 1024, 1e-5, 2)
 
     # Prepare input
     torch.manual_seed(0)
