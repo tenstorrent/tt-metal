@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+import pytest
 import random
 from typing import Optional, Tuple, Union
 from loguru import logger
@@ -274,7 +275,7 @@ def run_whisper_attention(decoder, layer, device, for_audio_classification, is_s
 
             assert does_pass
 
-
+@pytest.mark.whisper_attention
 def test_WhisperEncoderAttention_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
@@ -282,7 +283,7 @@ def test_WhisperEncoderAttention_inference():
     run_whisper_attention(decoder=False, layer=0, device=device, for_audio_classification=False)
     ttm.device.CloseDevice(device)
 
-
+@pytest.mark.whisper_attention
 def test_WhisperDecoderEncoderAttention_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
@@ -290,6 +291,7 @@ def test_WhisperDecoderEncoderAttention_inference():
     run_whisper_attention(decoder=True, layer=0, device=device, for_audio_classification=False, is_self_attn = False)
     ttm.device.CloseDevice(device)
 
+@pytest.mark.whisper_attention
 def test_WhisperDecoderSelfAttention_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
@@ -297,6 +299,7 @@ def test_WhisperDecoderSelfAttention_inference():
     run_whisper_attention(decoder=True, layer=0, device=device, for_audio_classification=False, is_self_attn = True)
     ttm.device.CloseDevice(device)
 
+@pytest.mark.whisper_attention
 def test_WhisperEncoderForAudioClassificationAttention_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)

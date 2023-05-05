@@ -77,6 +77,9 @@ class TtWhisperAttention(nn.Module):
         self.q_proj = TtLinear(in_features=embed_dim, out_features=embed_dim, weight=q_proj_weight.data(), bias=q_proj_bias.data(), device=self.device)
         self.out_proj = TtLinear(in_features=embed_dim, out_features=embed_dim, weight=out_proj_weight.data(), bias=out_proj_bias.data(), device=self.device)
 
+        self.cached_q_proj_shape = None
+        self.q_proj_mul_const = None
+
     # Copied from transformers.models.bart.modeling_bart.BartAttention._shape with BART->whisper
     def _shape(self, tt_tensor: ttm.tensor.Tensor, seq_len: int, bsz: int):
         """
@@ -105,10 +108,15 @@ class TtWhisperAttention(nn.Module):
         _, bsz, tgt_len, _, = hidden_states.shape()
 
         tt_q_proj_output = self.q_proj(hidden_states)
-
         q_proj_shape = tt_q_proj_output.shape()
-        torch_q_proj_mul_const = torch.full((q_proj_shape), self.scaling)
-        q_proj_mul_const = torch2tt_tensor(torch_q_proj_mul_const, self.device)
+
+        if q_proj_shape == self.cached_q_proj_shape:
+            q_proj_mul_const = self.q_proj_mul_const
+        else:
+            torch_q_proj_mul_const = torch.full((q_proj_shape), self.scaling)
+            q_proj_mul_const = torch2tt_tensor(torch_q_proj_mul_const, self.device)
+            self.q_proj_mul_const = q_proj_mul_const
+            self.cached_q_proj_shape = q_proj_shape
 
         query_states_t = ttm.tensor.mul(tt_q_proj_output, q_proj_mul_const)
 
@@ -208,8 +216,6 @@ class TtWhisperAttention(nn.Module):
             torch_attn_weights = torch_attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
             attn_weights = torch2tt_tensor(torch_attn_weights, self.device)
-            # print("Return from attention mask")
-            # return attn_weights # PCC = 1.0
 
         if (not self.is_decoder) or (self.is_decoder and "encoder_attn" in self.base_address):
             # Unpad and pad with high negative value

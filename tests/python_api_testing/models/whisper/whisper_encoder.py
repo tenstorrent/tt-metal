@@ -160,17 +160,15 @@ class TtWhisperEncoder(nn.Module):
         hidden_states = inputs_embeds + embed_pos
         """PyTorch implementation end"""
 
-        # if self.config.architectures[0] == "WhisperForAudioClassification":
-        """Add padding"""
-        print(hidden_states.size())
+        """TTM implementation"""
+
+        # Add padding to 1504 to be divisible by 32
         output_tensor_shape = list(hidden_states.size())
         while len(output_tensor_shape) < 4:
             output_tensor_shape.insert(0,1)
         output_tensor_shape[-2] = 1504
         hidden_states = create_padded_tensor(list(hidden_states.size()), hidden_states, output_tensor_shape, pad_value=0.0, device=self.device)
-        print(hidden_states.shape())
 
-        """TTM implementation"""
         # Not suppporting dropout at moment
         #hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
@@ -210,7 +208,6 @@ class TtWhisperEncoder(nn.Module):
                         (head_mask[idx] if head_mask is not None else None),
                     )
                 else:
-
                     layer_outputs = encoder_layer(
                         hidden_states,
                         None,
@@ -226,7 +223,7 @@ class TtWhisperEncoder(nn.Module):
         H_hidden_states = 1500
         hidden_states = self.layer_norm(hidden_states, overrideH=H_hidden_states)
 
-        """Unpad output tensor"""
+        # Unpad outputs back to original shape of 1500
         input_tensors_shape = hidden_states.shape()
         input_tensors_shape[-2] = 1500
 

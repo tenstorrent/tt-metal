@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+import pytest
 import random
 from typing import Optional, Tuple, Union
 from loguru import logger
@@ -181,7 +182,7 @@ def run_whisper_decoder_layer(layer, device):
 
     assert does_pass
 
-
+@pytest.mark.whisper_decoder_layer
 def test_WhipserDecoderLayer_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)

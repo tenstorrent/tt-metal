@@ -28,41 +28,6 @@ from libs import tt_lib as ttm
 
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
-# Copied from transformers.models.bart.modeling_bart._make_causal_mask
-def _make_causal_mask(input_ids_shape: torch.Size, dtype: torch.dtype, past_key_values_length: int = 0):
-    """
-    TODO: Implemented in PyTorch for now.
-    """
-    """
-    Make causal mask used for bi-directional self-attention.
-    """
-    bsz, tgt_len = input_ids_shape
-    mask = torch.full((tgt_len, tgt_len), torch.tensor(torch.finfo(dtype).min))
-    mask_cond = torch.arange(mask.size(-1))
-    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-    mask = mask.to(dtype)
-
-    if past_key_values_length > 0:
-        mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype), mask], dim=-1)
-    return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
-
-# Copied from transformers.models.bart.modeling_bart._expand_mask
-def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
-    """
-    TODO: Implemented in PyTorch for now.
-    """
-    """
-    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
-    """
-    bsz, src_len = mask.size()
-    tgt_len = tgt_len if tgt_len is not None else src_len
-
-    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
-
-    inverted_mask = 1.0 - expanded_mask
-
-    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
-
 class WhisperPositionalEmbedding(nn.Embedding):
     """
     TODO: Implemented in PyTorch for now. And Initialized directly from HF reference model.
@@ -153,12 +118,77 @@ class TtWhisperDecoder(nn.Module):
         self.layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, 1, config.d_model, self.device, 1)
 
         self.gradient_checkpointing = False
+        self.cached_mask = None
+        self.cached_input_ids_shape = None
+        self.cached_full_mask = None
+        self.cached_concatenated_mask = None
+        self.cached_past_key_values_length = None
 
     def get_input_embeddings(self):
         return self.embed_tokens
 
     def set_input_embeddings(self, value):
         self.embed_tokens = value
+
+    def _make_causal_mask(self, input_ids_shape: torch.Size, dtype: torch.dtype, past_key_values_length: int = 0):
+        """
+        TODO: Implemented in PyTorch for now.
+        """
+        """
+        Make causal mask used for bi-directional self-attention.
+        """
+        bsz, tgt_len = input_ids_shape
+        if self.cached_input_ids_shape == input_ids_shape:
+            mask = self.cached_mask
+
+        else:
+            mask = torch.full((tgt_len, tgt_len), torch.tensor(torch.finfo(dtype).min))
+            mask_cond = torch.arange(mask.size(-1))
+            mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+            mask = mask.to(dtype)
+            self.cached_mask = mask
+
+        if past_key_values_length > 0:
+            if self.cached_input_ids_shape == input_ids_shape and self.cached_past_key_values_length == past_key_values_length:
+                mask = self.cached_concatenated_mask
+            else:
+                mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype), mask], dim=-1)
+                mask = mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
+                self.cached_concatenated_mask = mask
+                self.cached_past_key_values_length = past_key_values_length
+
+        elif self.cached_input_ids_shape == input_ids_shape:
+            mask = self.cached_full_mask
+        else:
+            mask = mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len)
+            self.cached_full_mask = mask
+            self.cached_input_ids_shape = input_ids_shape
+
+        return mask
+
+    # Copied from transformers.models.bart.modeling_bart._expand_mask
+    def _expand_mask(self, mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+        """
+        TODO: Implemented in PyTorch for now.
+        """
+        """
+        Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
+        """
+        bsz, src_len = mask.size()
+        tgt_len = tgt_len if tgt_len is not None else src_len
+
+        if self.bsz == bsz and self.tgt_len == tgt_len and self.src_len == src_len:
+            return self.cached_expand_mask
+        else:
+            expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+            inverted_mask = 1.0 - expanded_mask
+            inverted_mask = inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+            self.bsz = bsz
+            self.tgt_len = tgt_len
+            self.src_len = src_len
+            self.cached_expand_mask = inverted_mask
+
+            return inverted_mask
 
     def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
         # create causal mask
@@ -169,13 +199,13 @@ class TtWhisperDecoder(nn.Module):
         combined_attention_mask = None
 
         if input_shape[-1] > 1:
-            combined_attention_mask = _make_causal_mask(
+            combined_attention_mask = self._make_causal_mask(
                 input_shape, inputs_embeds.dtype, past_key_values_length=past_key_values_length
             ).to(inputs_embeds.device)
 
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            expanded_attn_mask = _expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
+            expanded_attn_mask = self._expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
             combined_attention_mask = (
                 expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
             )

@@ -15,6 +15,7 @@ import numpy as np
 import random
 from typing import Optional, Tuple, Union
 from loguru import logger
+import pytest
 
 from transformers import WhisperModel, WhisperConfig, WhisperForAudioClassification
 
@@ -114,7 +115,7 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
 
     assert does_pass
 
-
+@pytest.mark.whisper_encoder_layer
 def test_WhipserEncoderLayer_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)

@@ -81,9 +81,8 @@ class TtWhisperForConditionalGeneration(nn.Module):
         self.proj_out = nn.Linear(config.d_model, config.vocab_size)
         self.proj_out.weight.data = state_dict[f"proj_out.weight"]
 
+        # TT Linear unsupported weight shape
         # proj_weight = torch2tt_tensor(state_dict[f"proj_out.weight"], ttm.device.GetHost())
-        # print("******************************************** SIZE")
-        # print(proj_weight.shape())
         # self.proj_out = TtLinear(in_features=config.d_model, out_features=config.vocab_size, weight=proj_weight, bias=None, device=self.device)
 
     def get_encoder(self):
@@ -189,10 +188,7 @@ class TtWhisperForConditionalGeneration(nn.Module):
         )
         logger.info(f"Tt Whisper Model output shape {outputs.last_hidden_state.shape()}")
 
-
         if outputs.last_hidden_state.shape()[-2] != 32:
-            print(outputs.last_hidden_state.shape())
-            # input_tensor_shape = [1, 1, 1, self.config.d_model]
             tt_out_to_torch = torch.Tensor(outputs.last_hidden_state.data()).reshape(*outputs.last_hidden_state.shape())
             tt_out_to_torch = torch.squeeze(tt_out_to_torch, 0)
         else:

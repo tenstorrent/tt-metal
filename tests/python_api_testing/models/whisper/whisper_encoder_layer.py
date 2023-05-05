@@ -83,6 +83,7 @@ class TtWhisperEncoderLayer(nn.Module):
         tt_beta_1 = beta_1.data()
 
         self.final_layer_norm = TtLayernorm(tt_gamma_1, tt_beta_1, 1e-05, 1, self.embed_dim, device, 1)
+        self.clamp_value = None
 
     def forward(
         self,
@@ -135,7 +136,12 @@ class TtWhisperEncoderLayer(nn.Module):
         if hidden_states_torch.dtype == torch.float16 and (
             torch.isinf(hidden_states_torch).any() or torch.isnan(hidden_states_torch).any()
         ):
-            clamp_value = torch.finfo(hidden_states_torch.dtype).max - 1000
+            if self.clamp_value is not None:
+                clamp_value = self.clamp_value
+            else:
+                clamp_value = torch.finfo(hidden_states_torch.dtype).max - 1000
+                self.clamp_value = clamp_value
+
             hidden_states_torch = torch.clamp(hidden_states_torch, min=-clamp_value, max=clamp_value)
 
         hidden_states = torch2tt_tensor(hidden_states_torch, self.device)

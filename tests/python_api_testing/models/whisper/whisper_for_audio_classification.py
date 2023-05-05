@@ -58,6 +58,9 @@ class TtWhisperForAudioClassification(nn.Module):
         num_layers = config.num_hidden_layers + 1  # transformer layers + input embeddings
         if config.use_weighted_layer_sum:
             # Not using this parameter for now
+            N, C, H, W = 1, 1, 1, num_layers
+            weight_init_const = 1.0 / num_layers
+            # TODO: Implement in ttm as soon as full is merged
             self.layer_weights = nn.Parameter(torch.ones(num_layers) / num_layers)
             self.layer_weights =  torch2tt_tensor(self.layer_weights, self.device)
 
@@ -153,9 +156,9 @@ class TtWhisperForAudioClassification(nn.Module):
 
         if self.config.use_weighted_layer_sum:
             """Not supported for now."""
-            # This use_weighted_layer_sum is false and not used in config we are implementing
-            # We would have to convert different tuples of ttm tensors to torch in order to make this work
-            # Where the size of each individual torch tensor can originaly expect to be different (3d)
+            # Parameter use_weighted_layer_sum is false and not used in config we are implementing
+            # When implementing keep in mind that the size of each individual torch tensor
+            # is originaly expected to be 3d
 
             raise NotImplementedError
 
@@ -165,21 +168,19 @@ class TtWhisperForAudioClassification(nn.Module):
         else:
             hidden_states = encoder_outputs.last_hidden_state
 
-        """Add padding"""
+        # Pad
         add_padding = True
         if add_padding:
-
             input_tensors_shape = list(hidden_states.shape())
             # Pad inputs
             output_tensor_shape = input_tensors_shape[:]
             output_tensor_shape[-2] = 1504
             hidden_states = create_padded_tensor(input_tensors_shape, hidden_states, output_tensor_shape, pad_value=0, device=self.device)
 
-        """ Apply Linear layer"""
         hidden_states = self.projector(hidden_states)
 
+        # Unpad
         if add_padding:
-            """ Unpad """
             input_tensors_shape = list(hidden_states.shape())
             input_tensors_shape[-2] = 1500
             hidden_states = create_unpadded_tensor(hidden_states, input_tensors_shape)
@@ -192,7 +193,7 @@ class TtWhisperForAudioClassification(nn.Module):
         # If something changes these dimension -2 should always work
 
         """ Apply classifier layer in torch bc we input shape 1,num_of_classes """
-
+        #torch.Size([1, 1, 256])
         logits = self.classifier(torch_pooled_output)
         loss = None
 
