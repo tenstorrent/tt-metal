@@ -16,9 +16,30 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor softmax(const Tensor &a) {
+void num_cores_from_env(uint32_t* num_cores) {
+    const char *ttnc = getenv("TT_FORCE_NUMCORES");
+    if ( ttnc != nullptr) {
+        int new_val = std::stoi(ttnc);
+        if (new_val != 0)
+            *num_cores = new_val;
+        cout << "=== NUM CORES AFTER UPDATE FROM ENV[\"TT_FORCE_NUMCORES\"]=" << *num_cores << endl;
+    }
+}
+
+void profile_from_env(bool* profile) {
+    const char *ttprof = getenv("TT_PROFILE");
+    if (ttprof != nullptr) {
+        *profile = true;
+    }
+    cout << "=== Profile from ENV[\"TT_PROFILE\"]= " << *profile << endl;
+}
+
+// implementation of softmax with optional scale/mask (see the header for a more detailed description)
+Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
 
     bool profile = false;
+    profile_from_env(&profile);
+
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     u32 HW = H*W;
@@ -56,36 +77,43 @@ Tensor softmax(const Tensor &a) {
 
     int block_size = find_max_divisor(Wt, 8);
     //if (getenv("FORCE_BLOCK_SIZE") != nullptr) block_size = std::stoi( getenv("FORCE_BLOCK_SIZE") );
-    //std::cout << "Block size=" << block_size << std::endl;
-
-    TT_ASSERT(Wt % block_size == 0);
-    TT_ASSERT((block_size != -1) && "Wt must be divisible by one of the numbers in the range from 8 to 1.");
+    //std::cout << "Block size=" << block_size << " Wt=" << Wt << std::endl;
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t in0_t  = block_size == 8 ? 16 : 12;
     uint32_t out0_t = block_size == 8 ? 16 : 12;
     uint32_t im1_t  = block_size == 8 ? 16 : 12;
     uint32_t in2_t  = 2; // scaler for reduce coming from reader
+    uint32_t in3_t  = 2; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
+    uint32_t in4_t  = Wt; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
     uint32_t im2_t  = 2; // recip result
-    uint32_t im0_t  = (block_size == 8) ? 128 : 120; // buffer for exps
+    // TODO(AP): explain in more detail why +8 and +6
+    // 120 is a multiple of 3,5,6; 128 is divisible by 8,4,2,1; 7 is not picked currently
+    uint32_t im0_t  = (block_size==6 || block_size==3 || block_size==5) ? 120+block_size : 128+8; // buffer for exps, extra block_size space for fused variant
 
+    TT_ASSERT(Wt % block_size == 0);
+    TT_ASSERT((block_size != -1) && "Wt must be divisible by one of the numbers in the range from 8 to 1.");
     TT_ASSERT(im0_t % block_size == 0 && "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(out0_t % block_size == 0 && "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(im1_t % block_size == 0 && "Size of cb buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(in4_t % block_size == 0);
     TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
-    //std::cout << "Block size=" << block_size << std::endl;
 
     uint32_t NCHt = NC*Ht;
     CoreGridDesc grid(a.device());
     uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
-    TT_ASSERT(NCHt % num_cores == 0);
+    num_cores_from_env(&num_cores);
+    uint32_t partHt = NCHt/num_cores; // only used by fused_scale_mask variant
 
     // we are actually splitting blocks of Wt tiles, not tiles, so no checking for bank alignment is needed
     TilesSplit ts(num_cores, NCHt);
     auto tpc = ts.get_tpc();
     TT_ASSERT(NCHt % tpc == 0);
-
-    //cout << "NUM CORES=" << num_cores << " TPC=" << tpc << endl;
+    TT_ASSERT(NCHt % num_cores == 0);
+    TT_ASSERT(tpc < Ht || (tpc % Ht == 0));
+    TT_ASSERT(NCHt % num_cores == 0);
+    TT_ASSERT(partHt >= Ht || Ht % partHt == 0);
+    //cout << "NUM CORES=" << num_cores << " TPC=" << tpc << " partHt=" << partHt << endl;
 
     vector<DataMovementKernel*> readers, writers;
     readers.reserve(num_cores);
@@ -99,6 +127,10 @@ Tensor softmax(const Tensor &a) {
         CreateCircularBuffer( program, device, CB::c_in2,       core, in2_t,  in2_t *TBYTES,  DataFormat::Float16_b );
         CreateCircularBuffer( program, device, CB::c_intermed2, core, im2_t,  im2_t *TBYTES,  DataFormat::Float16_b );
         CreateCircularBuffer( program, device, CB::c_intermed0, core, im0_t,  im0_t *TBYTES,  DataFormat::Float16_b );
+        if (mask != nullptr) {
+            CreateCircularBuffer( program, device, CB::c_in3, core, in3_t,  in3_t *TBYTES,  DataFormat::Float16_b );
+            CreateCircularBuffer( program, device, CB::c_in4, core, in4_t,  in4_t *TBYTES,  DataFormat::Float16_b );
+        }
 
         DataMovementKernel *reader_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/reader_unary_8bank_sm.cpp", core,
@@ -108,18 +140,26 @@ Tensor softmax(const Tensor &a) {
             program, "tt_metal/kernels/dataflow/writer_unary_8bank_sm.cpp", core,
             DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
-        vector<uint32_t> compute_args = { tpc, Wt };
+        // for broadcasting in H direction we need to
+        // NCHt, Nt, Wt
+        // if tpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
+        // if tpc >= Ht then tpc should be a multiple of Ht
+        vector<uint32_t> compute_args = { tpc, partHt, Wt };
         ComputeKernelArgs *softmax_args = InitializeCompileTimeComputeKernelArgs(core, compute_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = true;
-        auto eltwise_binary_kernel = CreateComputeKernel(
+        auto softmax_kernel = CreateComputeKernel(
             program, "kernels/compute/softmax.cpp", core, softmax_args,
             MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
-        eltwise_binary_kernel->add_define("BLOCK_SIZE", block_size);
+        softmax_kernel->add_define("BLOCK_SIZE", block_size);
         reader_kernel->add_define("BLOCK_SIZE", block_size);
         writer_kernel->add_define("BLOCK_SIZE", block_size);
+        if (scale != 0.0f) {
+            reader_kernel->add_define("FUSED_SCALE_MASK", "1");
+            softmax_kernel->add_define("FUSED_SCALE_MASK", "1");
+        }
         readers.push_back(reader_kernel);
         writers.push_back(writer_kernel);
     }
@@ -132,11 +172,14 @@ Tensor softmax(const Tensor &a) {
         auto core = grid.wrap_core(icore);
         uint32_t src_addr = src0_dram_buffer->address();
         uint32_t dst_addr = dst_dram_buffer->address();
+        uint32_t mask_addr = mask ? mask->buffer()->address() : 0;
         uint32_t tile_offset = tpc*Wt*icore;
         //cout << "TPC=" << tpc << endl;
         //cout << "tile_offset=" << tile_offset << endl;
-        WriteRuntimeArgsToDevice(device, readers[icore], core, { src_addr, 0, 0, tpc*Wt, tile_offset, 0, 0, 0, 0x3f800000 }); // [8]=1.0f is scaler
-        WriteRuntimeArgsToDevice(device, writers[icore], core, { dst_addr, 0, 0, tpc*Wt, tile_offset });
+        union { float f; uint32_t u; } s; s.f = scale; // scale for fused scale-mask-softmax
+        //                                                              0  1    2       3            4   5       6          7           8
+        WriteRuntimeArgsToDevice(device, readers[icore], core, { src_addr, 0, s.u, tpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
+        WriteRuntimeArgsToDevice(device, writers[icore], core, { dst_addr, 0,   0, tpc*Wt, tile_offset });
     }
 
     LaunchKernels(device, program);
@@ -146,7 +189,15 @@ Tensor softmax(const Tensor &a) {
     delete program;
 
     return output;
-} // softmax
+} // scale_mask_softmax_
+
+Tensor scale_mask_softmax(float scale, const Tensor& mask, const Tensor& a) {
+    return scale_mask_softmax_(scale, &mask, a);
+}
+
+Tensor softmax(const Tensor &a) {
+    return scale_mask_softmax_(0.0f, nullptr, a); // 0.0f means unused scale
+}
 
 }  // namespace ll_buda
 

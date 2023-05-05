@@ -696,6 +696,7 @@ void TensorModule(py::module &m_tensor) {
 
     // softmax
     m_tensor.def("softmax", &softmax, "Performs a softmax operation on the last tensor dimension.");
+    m_tensor.def("scale_mask_softmax", &scale_mask_softmax, "Performs a fused scale->attention_mask->softmax operation.");
 
     // layernorm
     m_tensor.def("layernorm", &layernorm, "Performs a layernorm operation on the last tensor dimension.");

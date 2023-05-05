@@ -298,6 +298,18 @@ void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
 }
 #endif
 
+/**
+ * Returns a pointer to the beginning of a memory block previously reserved
+ * by cb_reserve_back. Note that this call is only valid between calls
+ * to cb_reserve_back and cb_push_back. The amount of valid memory
+ * is equal to the number of tiles requested in a prior cb_reserve_back call.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
+ * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ */
 inline __attribute__((always_inline))
 uint32_t get_write_ptr(std::int32_t operand) {
     std::uint32_t input = operand;
@@ -306,6 +318,18 @@ uint32_t get_write_ptr(std::int32_t operand) {
     return wr_ptr_bytes;
 }
 
+/**
+ * Returns a pointer to the beginning of a memory block previously received
+ * by cb_wait_front. Note that this call is only valid between calls
+ * to cb_wait_front and cb_pop_front. The amount of valid memory
+ * is equal to the number of tiles requested in a prior cb_wait_front call.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
+ * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ */
 inline __attribute__((always_inline))
 uint32_t get_read_ptr(std::int32_t operand) {
     std::uint32_t output = operand;

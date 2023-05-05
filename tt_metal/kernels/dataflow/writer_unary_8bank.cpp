@@ -11,7 +11,7 @@ void kernel_main() {
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
     const InterleavedPow2AddrGen s = { dst_addr, 8, 3, 11 };
 
-    #if GENERATE_SCALER
+    #if GENERATE_BCAST_SCALER
     constexpr uint32_t blk = BLOCK_SIZE; // needed for correctness of softmax/LN kernels
     #else
     constexpr uint32_t blk = 1; // needed for correctness of kernels processing single tiles

@@ -1,4 +1,4 @@
-#define GENERATE_SCALER 1
+#define GENERATE_BCAST_SCALER 1
 #define GENERATE_EPSILON 1
 #define GAMMA_BETA 1
 #define TILE_OFFSET get_arg_val<uint32_t>(4)

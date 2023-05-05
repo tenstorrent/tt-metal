@@ -63,7 +63,8 @@ struct CoreGridDesc {
 inline int find_max_divisor(uint32_t val, uint32_t start_max_div) {
     int result = 1;
     for (int find_divisor = start_max_div; find_divisor >= 1; find_divisor--) {
-        if (find_divisor == 7) continue; // do not yet attempt to solve this challenge for block_size=7, skip to 1 instead.
+        if (find_divisor == 7 || find_divisor == 5)
+            continue;
         if (val % find_divisor == 0) {
             result = find_divisor;
             break;

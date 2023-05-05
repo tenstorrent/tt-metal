@@ -1,4 +1,4 @@
-#define GENERATE_SCALER 1
+#define GENERATE_BCAST_SCALER 1
 #define TILE_OFFSET get_arg_val<uint32_t>(4)
 
 #ifndef BLOCK_SIZE // can be alread defined via add_define

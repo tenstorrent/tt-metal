@@ -6,7 +6,7 @@ REGION_ALIAS("REGION_RODATA", LOCAL_DATA_MEM_TRISC)
 REGION_ALIAS("REGION_LDM", LOCAL_DATA_MEM_TRISC)
 
 __firmware_start = ORIGIN(TRISC1_CODE);
-__firmware_stack_size = 256;
+__firmware_stack_size = 512;
 __local_mem_rodata_start_addr = ORIGIN(LOCAL_DATA_MEM_TRISC);
 
 INCLUDE "tensix-sections.ld"

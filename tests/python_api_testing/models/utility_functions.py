@@ -45,6 +45,14 @@ def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
         print("reldiff1=", reldiff1.reshape(-1)[debug_index])
         print("reldiff2=", reldiff2.reshape(-1)[debug_index])
         print("absdiff=", absdiff.reshape(-1)[debug_index])
+        HT = a.shape[-2] // 32
+        WT = a.shape[-1] // 32
+        hwt = debug_index//1024
+        wt = hwt % WT
+        ht = hwt // WT
+        h = (debug_index % 1024) // 32
+        w = (debug_index % 1024) % 32
+        print("****    at ", debug_index, " --- ", "HTWT=", ht, wt, "HW=", h, w)
     return torch.all(or_abs_rel)
 
 

@@ -58,19 +58,20 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
     // TODO(AP): can also add support for block_size=7 -> 63, 28
-    uint32_t in0_t  =  block_size == 8 ? 64 : 60; // space for 32 tiles plus buffering 32 tiles from NC. For bert we have Wt=12 => block_size=6, so we use 60
-    uint32_t out0_t =  block_size == 8 ? 64 : 60; // output can use less space TODO(AP)
-    uint32_t im0_t  =  block_size == 8 ? 64 : 60; // buffer for saving xmm
-    uint32_t im3_t  =  block_size == 8 ? 64 : 60; // buffer for xmm^2
-    uint32_t in5_t  =  block_size == 8 ? 32 : 30; // buffer for gamma
-    uint32_t in6_t  =  block_size == 8 ? 32 : 30; // buffer for beta
+    bool use_64 = (block_size == 8 || block_size == 4 || block_size == 2 || block_size == 1);
+    uint32_t in0_t  =  use_64 ? 64 : 60; // space for 32 tiles plus buffering 32 tiles from NC. For bert we have Wt=12 => block_size=6, so we use 60
+    uint32_t out0_t =  use_64 ? 64 : 60; // output can use less space TODO(AP)
+    uint32_t im0_t  =  use_64 ? 64 : 60; // buffer for saving xmm
+    uint32_t im3_t  =  use_64 ? 64 : 60; // buffer for xmm^2
+    uint32_t in5_t  =  use_64 ? 32 : 30; // buffer for gamma
+    uint32_t in6_t  =  use_64 ? 32 : 30; // buffer for beta
     uint32_t im5_t  =  2*block_size; // for buffering to/from *gamma/+beta
-    uint32_t im4_t  =   8; // 8 just in case, 4 would prob suffice
-    uint32_t in4_t  =   2; // ones column mask
-    uint32_t im1_t  =   2;
-    uint32_t in2_t  =   2; // scaler for reduce coming from reader
-    uint32_t in3_t  =   2; // epsilon coming from reader
-    uint32_t im2_t  =   2; //
+    uint32_t im4_t  =  8; // 8 just in case, 4 would prob suffice
+    uint32_t in4_t  =  2; // ones column mask
+    uint32_t im1_t  =  2;
+    uint32_t in2_t  =  2; // scaler for reduce coming from reader
+    uint32_t in3_t  =  2; // epsilon coming from reader
+    uint32_t im2_t  =  2; //
 
     TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
     TT_ASSERT(in0_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
