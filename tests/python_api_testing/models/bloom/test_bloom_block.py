@@ -19,23 +19,32 @@ import python_api_testing.models.bloom.bloom_utils as bloom_utils
 import python_api_testing.models.bloom.bloom_attention as bloom_attention
 import python_api_testing.models.bloom.bloom_block as bloom_block
 
+
 def run_bloom_block_test(device):
 
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
-    tt_bloom_block = bloom_block.TtBloomBlock(device, "transformer.h", 0, hugging_bloom_reference_model, 1024, 32, 1e-5)
-    pt_bloom_block = bloom_block.BloomBlock("transformer.h", 0, hugging_bloom_reference_model, 1024, 32, 1e-5)
+    hugging_bloom_reference_model.eval()
 
+    print(hugging_bloom_reference_model.config)
+
+    block = 0
+    hidden_size = hugging_bloom_reference_model.config.hidden_size # 1024
+    n_head = hugging_bloom_reference_model.config.n_head
+    layer_norm_epsilon = hugging_bloom_reference_model.config.layer_norm_epsilon
+
+    tt_bloom_block = bloom_block.TtBloomBlock(device, "transformer.h", block, hugging_bloom_reference_model, hidden_size, n_head, layer_norm_epsilon)
+    pt_bloom_block = hugging_bloom_reference_model.transformer.h[block]
 
     torch.manual_seed(0)
 
-    hidden_states = torch.rand(1, 64, 1024)
-    residual = torch.rand(1, 64, 1024)
-    alibi = torch.rand(32, 64, 64)
+    hidden_states = ((torch.rand(1, 64, hidden_size) * 2) - 1) / hidden_size
+    residual = ((torch.rand(1, 64, hidden_size) * 2) - 1) / hidden_size
+    alibi = ((torch.rand(n_head, 64, 64) * 2) - 1) / 64
     attention_mask = torch.randint(0, 2, (1, 1, 64, 64))
 
     #must be binary
 
-    pt_out = pt_bloom_block.forward(hidden_states, alibi, attention_mask)
+    pt_out = pt_bloom_block.forward(hidden_states, alibi, attention_mask)[0]
     print("PT finished")
 
     tt_out = tt_bloom_block.forward(device, hidden_states, alibi, attention_mask)
@@ -50,17 +59,20 @@ def run_bloom_block_test(device):
     print(comp_allclose(pt_out, tt_out_converted))
     print(pcc_message)
 
-
     if does_pass:
         logger.info("bloom_block: Passed!")
     else:
         logger.warning("bloom_block: Failed!")
 
-
     assert does_pass
+
 
 def test_bloom_block():
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     run_bloom_block_test(device)
     ttm.device.CloseDevice(device)
+
+
+if __name__ == "__main__":
+    test_bloom_block()

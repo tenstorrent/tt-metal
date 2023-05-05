@@ -24,10 +24,10 @@ def tt_baddbmm(device, input, batch1, batch2, beta=1.0, alpha=1.0, out=None) -> 
     tt_batch2 = bloom_utils.torch2tt_tensor(batch2, device)
 
     input_shape = input.shape
-    if(input_shape[1]==1):
+
+    if input_shape[1] == 1:
 
         input= input.squeeze(0)
-
 
         res1 = ttm.tensor.bmm(tt_batch1, tt_batch2)
 
@@ -44,6 +44,10 @@ def tt_baddbmm(device, input, batch1, batch2, beta=1.0, alpha=1.0, out=None) -> 
     else:
         tt_input = bloom_utils.torch2tt_tensor(input, device)
         res1 = ttm.tensor.bmm(tt_batch1, tt_batch2)
+
+        print(f"tt_input shape {tt_input.shape()}")
+        print(f"res1 shape {res1.shape()}")
+
         res2 = ttm.tensor.add(tt_input, res1)
 
     return res2
