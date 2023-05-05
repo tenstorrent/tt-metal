@@ -1,4 +1,4 @@
-import tt_lib as ttl
+from libs import tt_lib as ttl
 import torch
 
 def test_tensor_alignment():

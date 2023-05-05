@@ -415,6 +415,9 @@ inline void initialize_data_on_device(Tensor &tensor, std::vector<T> &data) {
 template <typename T>
 inline void write_data(Tensor &tensor, std::vector<T> &data) {
     TT_ASSERT(tensor.volume() == data.size(), "Tensor shape and number of data elements does not match");
+    if (tensor.layout() == Layout::TILE) {
+        TT_ASSERT((tensor.shape()[2] % tt::constants::TILE_HEIGHT == 0 && tensor.shape()[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
+    }
     if (tensor.on_host()) {
         auto data_ptr = new std::vector<T>(std::move(data));
         tensor.data_ = static_cast<void *>(data_ptr);
