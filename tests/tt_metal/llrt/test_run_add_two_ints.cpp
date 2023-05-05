@@ -22,7 +22,10 @@ bool run_add_two_ints(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) 
 
     std::vector<uint32_t> test_mailbox_init_val_check;
     test_mailbox_init_val_check = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, test_mailbox_addr, sizeof(uint32_t));  // read a single uint32_t
-    TT_ASSERT(test_mailbox_init_val_check[0] == INIT_VALUE);
+    tt::log_assert(test_mailbox_init_val_check[0] == INIT_VALUE,
+        "test_mailbox_init_val_check[0]={} != INIT_VALUE={}",
+        test_mailbox_init_val_check[0],
+        INIT_VALUE);
     log_info(tt::LogVerif, "checked test_mailbox is correctly initialized to value = {}", test_mailbox_init_val_check[0]);
 
     tt::llrt::disable_ncrisc(cluster, chip_id, core);
@@ -68,10 +71,16 @@ int main(int argc, char** argv)
     bool pass = true;
 
     std::vector<std::string> input_args(argv, argv + argc);
-    string arch_name = "";
+    string arch_name;
+    unsigned int core_r;
+    unsigned int core_c;
     try {
         std::tie(arch_name, input_args) =
             test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+        std::tie(core_r, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--core-r", 8);
+        std::tie(core_c, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--core-c", 2);
     } catch (const std::exception& e) {
         log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
     }
@@ -91,7 +100,7 @@ int main(int argc, char** argv)
         // tt::llrt::print_worker_cores(cluster);
 
         // the first worker core starts at (1,1)
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/add_two_ints/brisc/brisc.hex", 0, {10,2}, 0);
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/add_two_ints/brisc/brisc.hex", 0, {core_r, core_c}, 0);
         if (pass) {
             pass = run_add_two_ints(cluster, 0, {10,2});
         }

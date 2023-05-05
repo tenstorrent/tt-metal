@@ -152,8 +152,17 @@ int main(int argc, char** argv)
 {
     bool pass = true;
 
+    std::vector<std::string> input_args(argv, argv + argc);
+    string arch_name = "";
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+    }
+
     const TargetDevice target_type = TargetDevice::Silicon;
-    const tt::ARCH arch = tt::ARCH::GRAYSKULL;
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     const std::string sdesc_file = get_soc_description_file(arch, target_type);
 
     try {

@@ -19,8 +19,8 @@ int main() {
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
     build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/risc_write_speed.cpp";
 
-    generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, "grayskull");
-    generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, "grayskull");
+    generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, arch_name);
+    generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, arch_name);
 
     return 0;
 }

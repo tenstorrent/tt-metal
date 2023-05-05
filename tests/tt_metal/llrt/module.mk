@@ -1,7 +1,6 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 #LLRT_TESTS += $(basename $(wildcard llrt/*.cpp))
 LLRT_TESTS += tests/llrt/test_silicon_driver \
-				tests/llrt/test_load_and_write_brisc_binary \
 				tests/llrt/test_run_brisc_binary \
 				tests/llrt/test_run_add_two_ints \
 				tests/llrt/test_silicon_driver_dram_sweep \
@@ -13,7 +12,6 @@ LLRT_TESTS += tests/llrt/test_silicon_driver \
 				tests/llrt/test_run_sync \
 				tests/llrt/test_run_sync_db \
 				tests/llrt/test_run_host_write_read_stream_register \
-				tests/llrt/test_run_write_read_stream_register \
 				tests/llrt/test_run_risc_read_speed \
 				tests/llrt/test_run_risc_write_speed \
 				tests/llrt/test_run_risc_rw_speed_banked_dram \

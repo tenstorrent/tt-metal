@@ -85,9 +85,9 @@ int main(int argc, char** argv)
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
 
-        std::size_t chunk_size = 256 * 1024;
+        std::size_t chunk_size = 1024 * 1024;
         if (short_mode) {
-            chunk_size =  1024;
+            chunk_size =  32*1024;
         }
         TT_ASSERT(l1_rdwr_check(cluster, 0, chunk_size));
 

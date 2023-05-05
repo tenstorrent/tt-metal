@@ -55,10 +55,9 @@ bool run_risc_write_speed(tt_cluster *cluster, int chip_id, const tt_xy_pair& co
     auto end = std::chrono::steady_clock::now();
     // TIMER END
 
-    log_info(tt::LogVerif, "brisc on core {} finished", core.str());
-
+    log_info(tt::LogVerif, "ncrisc on core {} finished", core.str());
     std::chrono::duration<double> elapsed_seconds = end-start;
-    log_info(tt::LogVerif, "BRISC time: {}s", elapsed_seconds.count());
+    log_info(tt::LogVerif, "NCRISC time: {}s", elapsed_seconds.count());
     uint64_t total_bytes = (uint64_t)buffer_size * num_repetitions;
     double total_GB = (double)total_bytes / (1024*1024*1024);
     log_info(tt::LogVerif, "Bytes written: {}, GB written: {}", total_bytes, total_GB);
@@ -92,7 +91,7 @@ int main(int argc, char** argv)
         std::tie(dst_noc_x, input_args) =
             test_args::get_command_option_uint32_and_remaining_args(input_args, "--dst-noc-x", 1);
         std::tie(dst_noc_y, input_args) =
-            test_args::get_command_option_uint32_and_remaining_args(input_args, "--dst-noc-y", 1);
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--dst-noc-y", 2);
     } catch (const std::exception& e) {
         log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
     }
@@ -109,7 +108,7 @@ int main(int argc, char** argv)
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
 
-        pass = run_risc_write_speed(cluster, 0, {2,1}, buffer_size, num_repetitions, transaction_size, {dst_noc_x,dst_noc_y});
+        pass = run_risc_write_speed(cluster, 0, {1,1}, buffer_size, num_repetitions, transaction_size, {dst_noc_x,dst_noc_y});
 
         cluster->close_device();
         delete cluster;
