@@ -229,11 +229,11 @@ std::optional<uint32_t> FreeList::allocate_at_address(uint32_t start_address, ui
     while (curr_block != nullptr) {
         if (curr_block->size >= alloc_size) {
             if (curr_block->address == start_address) {
-                allocate_slice_of_free_block(curr_block, /*offset=*/0, size_bytes);
+                allocate_slice_of_free_block(curr_block, /*offset=*/0, alloc_size);
                 break;
             } else if ((start_address > curr_block->address) and ((start_address + alloc_size) <= (curr_block->address + curr_block->size))) {
                 uint32_t start_offset = start_address - curr_block->address;
-                allocate_slice_of_free_block(curr_block, start_offset, size_bytes);
+                allocate_slice_of_free_block(curr_block, start_offset, alloc_size);
                 break;
             }
         }
