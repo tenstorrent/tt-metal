@@ -48,7 +48,7 @@ def run_bloom_attention_test(device):
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
     pt_out_unsqueezed = pt_out.unsqueeze(0)
 
-    does_pass, pcc_message = comp_pcc(pt_out_unsqueezed, tt_out_converted, 0.98)
+    does_pass, pcc_message = comp_pcc(pt_out_unsqueezed, tt_out_converted, 0.99)
 
     print(pcc_message)
 
