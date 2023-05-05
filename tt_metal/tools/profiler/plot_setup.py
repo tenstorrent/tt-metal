@@ -9,6 +9,24 @@ class default_setup(metaclass=MergeMetaclass):
             "start": {"risc": "BRISC", "timerID": 0},
             "end": {"risc": "BRISC", "timerID": 1},
         },
+        "TRISC0 kernel start -> TRISC0 kernel end": {
+            "across": "risc",
+            "type": "adjacent",
+            "start": {"risc": "TRISC_0", "timerID": 2},
+            "end": {"risc": "TRISC_0", "timerID": 3},
+        },
+        "TRISC1 kernel start -> TRISC1 kernel end": {
+            "across": "risc",
+            "type": "adjacent",
+            "start": {"risc": "TRISC_1", "timerID": 2},
+            "end": {"risc": "TRISC_1", "timerID": 3},
+        },
+        "TRISC2 kernel start -> TRISC2 kernel end": {
+            "across": "risc",
+            "type": "adjacent",
+            "start": {"risc": "TRISC_2", "timerID": 2},
+            "end": {"risc": "TRISC_2", "timerID": 3},
+        },
         "BRISC kernel start -> BRISC kernel end": {
             "across": "risc",
             "type": "adjacent",
@@ -156,4 +174,14 @@ class test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast(default_setup):
             "start": {"risc": "NCRISC", "timerID": 39},
             "end": {"risc": "BRISC", "timerID": 3},
         },
+    }
+
+class test_full_buffer(default_setup):
+    timerAnalysis = {
+        "Marker Repeat": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "ANY", "timerID": 2},
+            "end": {"risc": "ANY", "timerID": 2},
+        }
     }

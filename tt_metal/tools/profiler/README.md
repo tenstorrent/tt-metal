@@ -1,67 +1,12 @@
 # tt_metal profiler
 
-This folder contains the library and postprocessing scripts for profiling device side and host side
-kernels and interfaces.
+## Usage
 
-## Profiling host side API
+For installation and usage please refer to the `pofiler` section under `performance_measurement_tools` of tt_metall docs.
 
-Profiling is provided through the `profiler.hpp` module. The idea is that portions of a function or
-all of it can be wrapped between a start and end timer marks. After the execution of the function,
-the delta between the two markers can be calculated as the period of the portion you wanted to
-profile. For each tt_metal function such as `LaunchKernels` the entire function is wrapped in timers
-and using `tt_metal::DumpHostProfileResults` the result will be dumped into `profile_log_host.csv` in the directory
-assigned by `tt_metal::SetProfilerDir` or the default location `tt_metal/tools/profiler/logs/`.
+## Internal to TT dev docs
 
-With respect to how the host side api of `tt_metal` is designed, it is assumed that a subset of
-methods from this module will execute __only once__ during each section of running an entire
-program. `test_add_two_ints.cpp` is a good example for this. In the first section it configures the
-device, launches the kernel, and reads from device L1. All of these tasks can be profiles. The
-second section only launches the kernel with new args and reads from L1 as the device is already
-configured and only new kernel args are being sent. In order to keep the distinction between the
-first and second section `DumpHostProfileResults(<section name>)`is used at the end of each section to
-dump the host profiler results for each function of each section.  The code for this test is
-demonstrative of what was described.
-
-The following is a sample result from runn the `test_add_two_ints` tt_metal test. You can see that
-the section name is a category in the csv. The start and stop counters are from the epoch.
-
-```
-Section Name, Function Name, Start timer count [ns], Stop timer count [ns], Delta timer count [ns]
-first, LaunchKernels, 675598390620333, 675598390740682, 120349
-first, ConfigureDeviceWithProgram, 675598152012369, 675598390619993, 238607624
-first, CompileProgram, 675597384816840, 675598152009299, 767192459
-second, LaunchKernels, 675598625865918, 675598625981107, 115189
-second, ConfigureDeviceWithProgram, 675598392545035, 675598625864988, 233319953
-```
-
-## Profiling device side
-
-### Default Markers
-On the host side minimal changes are necessary on the code.
-
-
-#### TT_METAL
-
-1. The compile flag for device side profiling has to be set, this is done by setting the flag in `tt_metal::CompileProgram`.
-2. For each kernel launch through `tt_metal::LaunchKernels(device, program);`  that you want device side profiler markers dumped,
-A call to `tt_metal::DumpDeviceProfileResults(device, program);` has to be made to append the markers to
-the current test device side output `profile_log_device.csv`
-
-e.g.
-```
-    constexpr bool profile_device = true;
-    pass &= tt_metal::CompileProgram(device, program, profile_device);
-    .
-    .
-    .
-    .
-    .
-    tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, second_runtime_args);
-    pass &= tt_metal::LaunchKernels(device, program);
-    tt_metal::DumpDeviceProfileResults(device, program);
-```
-
-#### llrt
+### llrt
 
 1. Under `tests/tt_metal/build_kernels_for_riscv`, for whichever test that you want to profile, enable kernel profiling
 through `generate_binaries_all_riscs`
@@ -89,61 +34,45 @@ e.g.
 
 ```
 
-#### Markers
+### Automation tests for the profiler module
 
-After the setup, default markers will be generated and can be post-processed.
+If new changes were made to the post processing scripts, please run automated test to make sure previously supported
+measurements still have support.
 
-Default markers are:
+Automated test are run by:
 
-1. FW start
-2. Kernel start
-3. Kernel end
-4. FW end
-
-The generated csv is `profile_log_device.csv` and it is saved under `tt_metal/tools/profiler/logs` by default.
-
-Sample generated csv for a run on core 0,0:
+1. Follow the tt-metal dev get_started and general installation guide and make sure `PYTHONPATH`
+   and other tt-metal environment variables are set. Activate the python environment as suggested by the guides.
+2. For testing the collection side of the profiler module, run the following commands under `TT_METAL_HOME`:
 
 ```
-0, 0, 0, NCRISC, 1, 1882735035004
-0, 0, 0, NCRISC, 2, 1882735036049
-0, 0, 0, NCRISC, 3, 1882735036091
-0, 0, 0, NCRISC, 4, 1882735036133
-0, 0, 0, BRISC, 1, 1882735032214
-0, 0, 0, BRISC, 2, 1882735035364
-0, 0, 0, BRISC, 3, 1882735035433
-0, 0, 0, BRISC, 4, 1882735035518
+    cd $TT_METAL_HOME
+    pytest -svvv tests/tt_metal/tools/profiler/test_device_profiler.py
 ```
 
-
-### Post-processing device profiler
-
-1. Set up the environment for running the plotter:
+3. For testing the processing side of the profiler module, run the following commands under `TT_METAL_HOME`:
 
 ```
-cd tt_metal/tools/profiler/
-python3 -m venv env
-source env/bin/activate
-pip install -r requirements.txt
+    cd $TT_METAL_HOME
+    pytest -svvv tests/tt_metal/tools/profiler/test_device_logs.py
 ```
 
-2. Run plotter webapp with:
+#### Adding device log file test
+
+Fro device log file test executed by `test_device_logs.py`, when new features are added which require
+modifying some or all of the golden artifacts, the following script can be used to populate the golden directory with the new format.
+
 ```
-cd tt_metal/tools/profiler/
-./process_device_log.py
+    cd $TT_METAL_HOME
+    ./tests/tt_metal/tools/profiler/populate_golden.py -w
 ```
 
-3. Navigate to `<machine IP>:8050` to the Device Profiler Dashboard to view stats and timeline plots.
+Note that the wipe `-w` option wipes the current golden folder and replaces its content with the new artifacts. This change will
+show up in your diff for you PR when pushing the new golden artifacts. Care needs to be taken to make sure the changes are legitimate during the PR process
 
-4. The following artifact will also be generated under the `tt_metal/tools/profiler/output` folder:
-    - `device_perf.html` contains the interactive time series plot
-    - `device_stats.txt` contains the extended stats for the run
-    - `device_rearranged_timestamps.csv` contains all timestamps arranged by each row dedicated to cores
+If new log examples need to be added, their golden artifacts can be generated by:
 
-5. For convenience all of these artifacts are tarballed into `device_perf_results.tar`. The file is Under the same output folder as the artifacts and can be downloaded by clicking the `DOWNLOAD ARTIFACTS` button on the webapp.
+1. Copy the `.csv` log file to the `tt_metal/third_party/lfs/profiler/tests/golden/device/logs/` folder and name it with this format `profile_log_device_{testName}.csv`
+2. Run `populate_golden.py` without the wipe option
 
-6. Use  `./process_device_log.py --help` to get a list of available cli options to run the post processes differently. Some of the available options are:
-    - Path to device side profiler log csv
-    - Path to artifacts output folder
-    - Custom webapp port
-    - Disabling printing stats, running webapp, generating plots and other portions of the default post-process flow
+Golden artifacts will be generated for the file and the test list file be updated for the new log

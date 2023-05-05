@@ -11,3 +11,6 @@ torch==1.13.1+cpu
 
 # For docs
 -r ../../docs/requirements-docs.txt
+
+# For profiler
+-r ../../tt_metal/tools/profiler/requirements-profiler.txt

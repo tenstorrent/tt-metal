@@ -4,3 +4,4 @@ pre-commit==3.0.4
 
 # testing
 pytest==7.2.2
+jsbeautifier==1.14.7

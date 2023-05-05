@@ -28,5 +28,8 @@ env python tests/scripts/run_tt_metal.py
 # Tests tensor and tt_dnn op APIs
 ./tests/scripts/run_tt_lib_regressions.sh
 
+# Tests profiler module
+./tests/scripts/run_profiler_regressions.sh
+
 # Please put model runs in here from now on - thank you
 ./tests/scripts/run_models.sh

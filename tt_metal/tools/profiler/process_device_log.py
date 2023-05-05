@@ -603,6 +603,7 @@ def timeseries_analysis(riscData, name, analysis):
                 "Average": tmpDF.loc[:, "diff"].mean(),
                 "Max": tmpDF.loc[:, "diff"].max(),
                 "Min": tmpDF.loc[:, "diff"].min(),
+                "Range": tmpDF.loc[:, "diff"].max() - tmpDF.loc[:, "diff"].min(),
                 "Median": tmpDF.loc[:, "diff"].median(),
                 "Sum": tmpDF.loc[:, "diff"].sum(),
                 "First": tmpDF.loc[0, "diff"],
@@ -667,6 +668,7 @@ def generate_device_level_summary(devicesData):
                         "Average": tmpDF.loc[:, "Sum"].sum() / tmpDF.loc[:, "Count"].sum(),
                         "Max": tmpDF.loc[:, "Max"].max(),
                         "Min": tmpDF.loc[:, "Min"].min(),
+                        "Range": tmpDF.loc[:, "Max"].max() - tmpDF.loc[:, "Min"].min(),
                         "Median": tmpDF.loc[:, "Median"].median(),
                     },
                 }
