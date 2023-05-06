@@ -143,8 +143,10 @@ class TtWhisperDecoder(nn.Module):
             for ind in range(config.decoder_layers)
         ])
 
-        gamma = torch2tt_tensor(self.state_dict[f"{base_address}.layer_norm.weight"], ttm.device.GetHost())
-        beta = torch2tt_tensor(self.state_dict[f"{base_address}.layer_norm.bias"], ttm.device.GetHost())
+        gamma = self.state_dict[f"{base_address}.layer_norm.weight"]
+        gamma = create_padded_tensor(list(gamma.shape), gamma, [1, 1, 32, gamma.shape[-1]], 0, ttm.device.GetHost())
+        beta = self.state_dict[f"{base_address}.layer_norm.bias"]
+        beta = create_padded_tensor(list(beta.shape), beta, [1, 1, 32, beta.shape[-1]], 0, ttm.device.GetHost())
         tt_gamma = gamma.data()
         tt_beta = beta.data()
 

@@ -62,7 +62,8 @@ class TtWhisperForAudioClassification(nn.Module):
             self.layer_weights =  torch2tt_tensor(self.layer_weights, self.device)
 
         projector_weight = torch2tt_tensor(state_dict[f"projector.weight"], ttm.device.GetHost())
-        projector_bias = torch2tt_tensor(state_dict[f"projector.bias"], ttm.device.GetHost())
+        projector_bias = state_dict[f"projector.bias"]
+        projector_bias = create_padded_tensor(list(projector_bias.shape), projector_bias, [1, 1, 32, projector_bias.shape[-1]], 0, ttm.device.GetHost())
 
         self.projector = TtLinear(in_features=config.hidden_size, out_features=config.classifier_proj_size, weight=projector_weight.data(), bias=projector_bias.data(), device=device)
 
@@ -170,7 +171,7 @@ class TtWhisperForAudioClassification(nn.Module):
 
             input_tensors_shape = list(hidden_states.shape())
             # Pad inputs
-            output_tensor_shape = input_tensors_shape
+            output_tensor_shape = input_tensors_shape[:]
             output_tensor_shape[-2] = 1504
             hidden_states = create_padded_tensor(input_tensors_shape, hidden_states, output_tensor_shape, pad_value=0, device=self.device)
 

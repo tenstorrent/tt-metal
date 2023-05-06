@@ -17,7 +17,7 @@ from typing import Optional, Tuple, Union
 from loguru import logger
 
 from transformers import WhisperConfig
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor
 
 from python_api_testing.models.whisper.whisper_attention import TtWhisperAttention
 from python_api_testing.fused_ops.layernorm import Layernorm as TtLayernorm
@@ -52,9 +52,10 @@ class TtWhisperEncoderLayer(nn.Module):
             embed_dim=self.embed_dim,
             num_heads=num_heads,
         )
-
-        gamma = torch2tt_tensor(self.state_dict[f"{base_address}.self_attn_layer_norm.weight"], ttm.device.GetHost())
-        beta = torch2tt_tensor(self.state_dict[f"{base_address}.self_attn_layer_norm.bias"], ttm.device.GetHost())
+        gamma = self.state_dict[f"{base_address}.self_attn_layer_norm.weight"]
+        gamma = create_padded_tensor(list(gamma.shape), gamma, [1, 1, 32, gamma.shape[-1]], 0, ttm.device.GetHost())
+        beta = self.state_dict[f"{base_address}.self_attn_layer_norm.bias"]
+        beta = create_padded_tensor(list(beta.shape), beta, [1, 1, 32, beta.shape[-1]], 0, ttm.device.GetHost())
         tt_gamma = gamma.data() # [1, 1, 1, 1024]
         tt_beta = beta.data()
 
@@ -65,15 +66,19 @@ class TtWhisperEncoderLayer(nn.Module):
         # self.activation_dropout = config.activation_dropout
 
         fc1_weight = torch2tt_tensor(self.state_dict[f"{base_address}.fc1.weight"], ttm.device.GetHost())
-        fc1_bias = torch2tt_tensor(self.state_dict[f"{base_address}.fc1.bias"], ttm.device.GetHost())
+        fc1_bias = state_dict[f"{base_address}.fc1.bias"]
+        fc1_bias = create_padded_tensor(list(fc1_bias.shape), fc1_bias, [1, 1, 32, fc1_bias.shape[-1]], 0, ttm.device.GetHost())
         fc2_weight = torch2tt_tensor(self.state_dict[f"{base_address}.fc2.weight"], ttm.device.GetHost())
-        fc2_bias = torch2tt_tensor(self.state_dict[f"{base_address}.fc2.bias"], ttm.device.GetHost())
+        fc2_bias = state_dict[f"{base_address}.fc2.bias"]
+        fc2_bias = create_padded_tensor(list(fc2_bias.shape), fc2_bias, [1, 1, 32, fc2_bias.shape[-1]], 0, ttm.device.GetHost())
 
         self.fc1 = TtLinear(in_features=self.embed_dim, out_features=self.encoder_ffn_dim, weight=fc1_weight.data(), bias=fc1_bias.data(), device=device)
         self.fc2 = TtLinear(in_features=self.encoder_ffn_dim, out_features=self.embed_dim, weight=fc2_weight.data(), bias=fc2_bias.data(), device=device)
 
-        gamma_1 = torch2tt_tensor(self.state_dict[f"{base_address}.final_layer_norm.weight"], ttm.device.GetHost())
-        beta_1 = torch2tt_tensor(self.state_dict[f"{base_address}.final_layer_norm.bias"], ttm.device.GetHost())
+        gamma_1 = self.state_dict[f"{base_address}.final_layer_norm.weight"]
+        gamma_1 = create_padded_tensor(list(gamma_1.shape), gamma_1, [1, 1, 32, gamma_1.shape[-1]], 0, ttm.device.GetHost())
+        beta_1 = self.state_dict[f"{base_address}.final_layer_norm.bias"]
+        beta_1 = create_padded_tensor(list(beta_1.shape), beta_1, [1, 1, 32, beta_1.shape[-1]], 0, ttm.device.GetHost())
         tt_gamma_1 = gamma_1.data()
         tt_beta_1 = beta_1.data()
 

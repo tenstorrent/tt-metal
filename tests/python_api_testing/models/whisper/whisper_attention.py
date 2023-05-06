@@ -61,13 +61,16 @@ class TtWhisperAttention(nn.Module):
         k_proj_weight = torch2tt_tensor(state_dict[f"{base_address}.k_proj.weight"], ttm.device.GetHost())
 
         v_proj_weight = torch2tt_tensor(state_dict[f"{base_address}.v_proj.weight"], ttm.device.GetHost())
-        v_proj_bias = torch2tt_tensor(state_dict[f"{base_address}.v_proj.bias"], ttm.device.GetHost())
+        v_proj_bias = state_dict[f"{base_address}.v_proj.bias"]
+        v_proj_bias = create_padded_tensor(list(v_proj_bias.shape), v_proj_bias, [1, 1, 32, v_proj_bias.shape[-1]], 0, ttm.device.GetHost())
 
         q_proj_weight = torch2tt_tensor(state_dict[f"{base_address}.q_proj.weight"], ttm.device.GetHost())
-        q_proj_bias = torch2tt_tensor(state_dict[f"{base_address}.q_proj.bias"], ttm.device.GetHost())
+        q_proj_bias = state_dict[f"{base_address}.q_proj.bias"]
+        q_proj_bias = create_padded_tensor(list(q_proj_bias.shape), q_proj_bias, [1, 1, 32, q_proj_bias.shape[-1]], 0, ttm.device.GetHost())
 
         out_proj_weight = torch2tt_tensor(state_dict[f"{base_address}.out_proj.weight"], ttm.device.GetHost())
-        out_proj_bias = torch2tt_tensor(state_dict[f"{base_address}.out_proj.bias"], ttm.device.GetHost())
+        out_proj_bias = state_dict[f"{base_address}.out_proj.bias"]
+        out_proj_bias = create_padded_tensor(list(out_proj_bias.shape), out_proj_bias, [1, 1, 32, out_proj_bias.shape[-1]], 0, ttm.device.GetHost())
 
         self.k_proj = TtLinear(in_features=embed_dim, out_features=embed_dim, weight=k_proj_weight.data(), bias=None, device=self.device)
         self.v_proj = TtLinear(in_features=embed_dim, out_features=embed_dim, weight=v_proj_weight.data(), bias=v_proj_bias.data(), device=self.device)
