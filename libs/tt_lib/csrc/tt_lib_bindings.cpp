@@ -107,6 +107,10 @@ void TensorModule(py::module &m_tensor) {
         .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
         .def_readonly("dram_channel", &MemoryConfig::dram_channel, "DRAM channel holding tensor data. Only used when tensor is not interleaved");
 
+    // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
+    // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
+    // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
+    // For additional info see: https://pybind11.readthedocs.io/en/stable/advanced/functions.html#keep-alive
     auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor", R"doc(
 
 
@@ -166,7 +170,7 @@ void TensorModule(py::module &m_tensor) {
                 [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
                     return Tensor(data, shape, data_type, layout, device);
                 }
-            ), R"doc(
+            ), py::keep_alive<1, 6>(), R"doc(
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
 
                 Example of creating a TT Tensor on TT accelerator device:
@@ -190,7 +194,7 @@ void TensorModule(py::module &m_tensor) {
                 [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
                     return Tensor(data, shape, data_type, layout, device, mem_config);
                 }
-            ), R"doc(
+            ), py::keep_alive<1, 6>(), R"doc(
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
 
                 Example of creating a TT Tensor on TT accelerator device with specified mem_config:
@@ -225,7 +229,7 @@ void TensorModule(py::module &m_tensor) {
                 [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
                     return Tensor(data, shape, data_type, layout, device);
                 }
-            ), R"doc(
+            ), py::keep_alive<1, 6>(), R"doc(
                 Not supported.
             )doc"
         )
@@ -234,13 +238,13 @@ void TensorModule(py::module &m_tensor) {
                 [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
                     return Tensor(data, shape, data_type, layout, device, mem_config);
                 }
-            ), R"doc(
+            ), py::keep_alive<1, 6>(), R"doc(
                 Not supported.
             )doc"
         )
         .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
             return self.to(device, mem_config);
-        }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, py::keep_alive<1, 2>(), R"doc(
             Move TT Tensor from host device to TT accelerator device.
             Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
 
