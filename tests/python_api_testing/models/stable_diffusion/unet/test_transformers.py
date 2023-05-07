@@ -59,8 +59,8 @@ def test_run_basic_transformer_inference():
     encoder_hidden_states_shape  = [1, 2, 77, 768]
     input = torch.randn(input_shape) * 0.01
     encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
-    # setup pytorch model
 
+    # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
@@ -126,7 +126,7 @@ def test_run_transformer_inference():
     unet.eval()
     state_dict = unet.state_dict()
 
-    test = "test1"
+    test = "test2"
     # synthesize the input
     if test == "test1":
         # assert False, "something is off here!"
@@ -188,7 +188,7 @@ def test_run_transformer_inference():
         transformer = pipe.unet.mid_block.attentions[0]
 
 
-    torch_output = transformer(input, encoder_hidden_states.squeeze(0))
+    torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
     # print(transformer)
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)

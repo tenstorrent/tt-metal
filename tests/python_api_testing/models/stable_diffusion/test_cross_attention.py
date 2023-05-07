@@ -20,7 +20,6 @@ from cross_attention import TtCrossAttention
 
 
 def test_cross_attn_inference():
-
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
     unet = pipe.unet

@@ -78,8 +78,13 @@ def run_upsample2d_inference(device, host):
 
     tt_input = torch_to_tt_tensor(input, device)
 
-    tt_up = TtUpsample2D(channels=in_channels, out_channels=out_channels, use_conv=True,use_conv_transpose=False, name="conv",
-                         state_dict=state_dict, base_address="up_blocks.0.upsamplers.0")
+    tt_up = TtUpsample2D(channels=in_channels,
+                        out_channels=out_channels,
+                        use_conv=True,
+                        use_conv_transpose=False,
+                        name="conv",
+                        state_dict=state_dict,
+                        base_address="up_blocks.0.upsamplers.0")
     tt_out = tt_up(tt_input)
     tt_out = tt_to_torch_tensor(tt_out, host)
     print('tt_out size:', tt_out.shape)
