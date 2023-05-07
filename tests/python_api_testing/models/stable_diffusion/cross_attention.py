@@ -223,7 +223,7 @@ class TtCrossAttention(nn.Module):
 
     def get_attention_scores(self, query, key, attention_mask=None):
         t_key = ttl.tensor.transpose(key)
-        print("in get attentino scores", t_key.shape(), query.shape())
+        # print("in get attention scores", t_key.shape(), query.shape())
         temp = ttl.tensor.bmm(query, t_key)
 
         # _encoded_val = torch.tensor(self.scale, dtype=torch.bfloat16)
