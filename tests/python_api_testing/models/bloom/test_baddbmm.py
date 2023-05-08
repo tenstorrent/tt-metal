@@ -37,6 +37,10 @@ def run_baddbmm_test(device):
 
     pt_out = torch.reshape(pt_out, pt_out_size)
 
+    input = bloom_utils.torch2tt_tensor(input, device)
+    batch1 = bloom_utils.torch2tt_tensor(batch1, device)
+    batch2 = bloom_utils.torch2tt_tensor(batch2, device)
+
     tt_out = baddbmm.tt_baddbmm(device, input, batch1, batch2, beta=tt_beta, alpha=tt_alpha)
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 

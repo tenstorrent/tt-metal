@@ -22,7 +22,7 @@ def run_bloom_gelu_forward_test(device):
 
     # Prepare input
     torch.manual_seed(0)
-    test_in = torch.rand(1, 1, 256, 256)
+    test_in = torch.rand(1, 1, 256, 256) / 256
 
     pt_out = bloom_gelu_forward.bloom_gelu_forward(test_in)
 
@@ -46,8 +46,13 @@ def run_bloom_gelu_forward_test(device):
 
     assert does_pass
 
+
 def test_bloom_gelu_forward():
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     run_bloom_gelu_forward_test(device)
     ttm.device.CloseDevice(device)
+
+
+if __name__ == "__main__":
+    test_bloom_gelu_forward()

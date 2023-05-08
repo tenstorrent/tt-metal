@@ -45,6 +45,9 @@ def run_bloom_block_test(device):
     pt_out = pt_bloom_block.forward(hidden_states, alibi, attention_mask)[0]
     print("PT finished")
 
+    hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
+    alibi = bloom_utils.torch2tt_tensor(alibi, device)
+
     tt_out = tt_bloom_block.forward(device, hidden_states, alibi, attention_mask)[0]
     print("TT finished")
 

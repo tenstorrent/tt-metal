@@ -42,7 +42,11 @@ def run_bloom_attention_test(device):
     pt_out = pt_bloom_attention.forward(hidden_states, residual, alibi, attention_mask)[0]
     print("Finished calc pt")
 
-    tt_out = tt_bloom_attention.forward(device, hidden_states, residual, alibi, attention_mask)[0]
+    tt_hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
+    tt_residual = bloom_utils.torch2tt_tensor(residual, device)
+    tt_alibi = bloom_utils.torch2tt_tensor(alibi, device)
+
+    tt_out = tt_bloom_attention.forward(device, tt_hidden_states, tt_residual, tt_alibi, attention_mask)[0]
     print("Finished calc tt")
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)

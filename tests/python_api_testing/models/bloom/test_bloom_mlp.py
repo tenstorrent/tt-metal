@@ -24,7 +24,7 @@ def run_bloom_mlp_test(device):
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
-    block = 0
+    block = 6
     config = hugging_bloom_reference_model.config
     state_dict = hugging_bloom_reference_model.state_dict()
     base_address = f"transformer.h.{block}.mlp"
@@ -32,11 +32,11 @@ def run_bloom_mlp_test(device):
 
     torch.manual_seed(0)
 
-    test_in = torch.rand(1, 1, 4096, hidden_size)
-    res = torch.rand(1, 1, 4096, hidden_size)
+    test_in = torch.rand(1, 1, 64, hidden_size)
+    res = torch.rand(1, 1, 64, hidden_size)
 
     tt_mlp = bloom_mlp.TtBloomMLP(config, state_dict, base_address, device)
-    tt_out = tt_mlp.forward(test_in, res, device)
+    tt_out = tt_mlp.forward(bloom_utils.torch2tt_tensor(test_in, device), bloom_utils.torch2tt_tensor(res, device), device)
 
     pt_mlp = hugging_bloom_reference_model.transformer.h[block].mlp
     pt_out = pt_mlp.forward(test_in, res)

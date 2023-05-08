@@ -237,9 +237,8 @@ class TtBloomAttention(torch.nn.Module):
         use_cache: bool = False,
         output_attentions: bool = False,
     ):
-        tt_hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
-        tt_fused_qkv = self.query_key_value(tt_hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
-        fused_qkv = bloom_utils.tt2torch_tensor(tt_fused_qkv)
+        fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
+        fused_qkv = bloom_utils.tt2torch_tensor(fused_qkv)
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = split_heads(fused_qkv, self.num_heads, self.head_dim)
@@ -251,74 +250,68 @@ class TtBloomAttention(torch.nn.Module):
 
         batch_size, q_length, _, _ = query_layer.shape
 
-        #p_reshaped_query_layer = torch.Tensor(fused_qkv).reshape(1, batch_size, seq * self.num_heads,  q_length, self.head_dim)
-        #query_layer = query_layer.transpose(1, 2).reshape(batch_size * self.num_heads, q_length, self.head_dim)
+        # p_reshaped_query_layer = torch.Tensor(fused_qkv).reshape(1, batch_size, seq * self.num_heads,  q_length, self.head_dim)
+        # query_layer = query_layer.transpose(1, 2).reshape(batch_size * self.num_heads, q_length, self.head_dim)
 
         query_layer = query_layer.transpose(1, 2)
-        tt_query_layer = bloom_utils.torch2tt_tensor(query_layer, device)
-        tt_reshaped_query_layer = ttm.tensor.reshape(tt_query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
+        query_layer = bloom_utils.torch2tt_tensor(query_layer, device)
+        reshaped_query_layer = ttm.tensor.reshape(query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
 
         #key_layer = key_layer.permute(0, 2, 3, 1).reshape(batch_size * self.num_heads, self.head_dim, q_length)
         key_layer = key_layer.permute(0, 2, 3, 1)
 
-        tt_key_layer = bloom_utils.torch2tt_tensor(key_layer, device)
-        tt_reshaped_key_layer = ttm.tensor.reshape(tt_key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
+        key_layer = bloom_utils.torch2tt_tensor(key_layer, device)
+        reshaped_key_layer = ttm.tensor.reshape(key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
 
         #value_layer = value_layer.transpose(1, 2).reshape(batch_size * self.num_heads, q_length, self.head_dim)
         value_layer = value_layer.transpose(1, 2)
-        tt_value_layer = bloom_utils.torch2tt_tensor(value_layer, device)
-        tt_reshaped_value_layer = ttm.tensor.reshape(tt_value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
+        value_layer = bloom_utils.torch2tt_tensor(value_layer, device)
+        reshaped_value_layer = ttm.tensor.reshape(value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
 
-        p_reshaped_key_layer = bloom_utils.tt2torch_tensor(tt_reshaped_key_layer)
-        p_reshaped_query_layer = bloom_utils.tt2torch_tensor(tt_reshaped_query_layer)
+        _, _, _, kv_length = reshaped_key_layer.shape()
 
-        p_reshaped_query_layer_squeezed = p_reshaped_query_layer.squeeze()
-        p_reshaped_key_layer_squeezed = p_reshaped_key_layer.squeeze()
-
-        _, _, kv_length = p_reshaped_key_layer_squeezed.shape
-
-        tt_matmul_result = baddbmm.tt_baddbmm(
+        matmul_result = baddbmm.tt_baddbmm(
             device=device,
             input=alibi,
-            batch1=p_reshaped_query_layer_squeezed,
-            batch2=p_reshaped_key_layer_squeezed,
+            batch1=reshaped_query_layer,
+            batch2=reshaped_key_layer,
             beta=self.beta,
             alpha=self.inv_norm_factor
         )
 
         # change view to [batch_size, num_heads, q_length, kv_length]
-        tt_attention_scores = ttm.tensor.reshape(tt_matmul_result, batch_size, self.num_heads, q_length, kv_length)
-        attention_scores = bloom_utils.tt2torch_tensor(tt_attention_scores)
+        attention_scores = ttm.tensor.reshape(matmul_result, batch_size, self.num_heads, q_length, kv_length)
+        attention_scores = bloom_utils.tt2torch_tensor(attention_scores)
 
-        attn_weights = torch.masked_fill(attention_scores, attention_mask, torch.finfo(attention_scores.dtype).min)
-        tt_attn_weights = bloom_utils.torch2tt_tensor(attn_weights, device)
+        attn_weights = torch.masked_fill(attention_scores, attention_mask, -100000.0) #torch.finfo(attention_scores.dtype).min)
 
         attention_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(attention_scores.dtype)
-        tt_attention_probs = bloom_utils.torch2tt_tensor(attention_probs, device)
-        # tt_attention_probs = TtSoftmax(tt_attn_weights)
+        attention_probs = bloom_utils.torch2tt_tensor(attention_probs, device)
+
+        # attn_weights = bloom_utils.torch2tt_tensor(attn_weights, device)
+        # attention_probs = TtSoftmax(attn_weights)
 
         if head_mask is not None:
-            tt_head_mask =  bloom_utils.torch2tt_tensor(head_mask, device)
-            tt_attention_probs = ttm.mul(tt_attention_probs, head_mask)
+            head_mask = bloom_utils.torch2tt_tensor(head_mask, device)
+            attention_probs = ttm.mul(attention_probs, head_mask)
 
         # change view [batch_size x num_heads, q_length, kv_length]
-        tt_attention_probs_reshaped = ttm.tensor.reshape(tt_attention_probs, 1, batch_size * self.num_heads, q_length, kv_length)
+        attention_probs_reshaped = ttm.tensor.reshape(attention_probs, 1, batch_size * self.num_heads, q_length, kv_length)
 
         # matmul: [batch_size * num_heads, q_length, head_dim]
-        tt_context_layer = ttm.tensor.bmm(tt_attention_probs_reshaped, tt_reshaped_value_layer)
-        pt_context_layer = bloom_utils.tt2torch_tensor(tt_context_layer)
+        context_layer = ttm.tensor.bmm(attention_probs_reshaped, reshaped_value_layer)
+        context_layer = bloom_utils.tt2torch_tensor(context_layer)
 
-        pt_context_layer = pt_context_layer.squeeze(0)
-        context_layer = merge_heads(pt_context_layer, self.num_heads, self.head_dim)
-
+        context_layer = context_layer.squeeze(0)
+        context_layer = merge_heads(context_layer, self.num_heads, self.head_dim)
         merged_context_layer = bloom_utils.torch2tt_tensor(context_layer, device)
-        #merged_context_layer = bloom_attention_merge_heads.tt_merge_heads(pt_context_layer.squeeze(), self.num_heads, self.hidden_size, self.num_heads, device)
 
+        #merged_context_layer = bloom_attention_merge_heads.tt_merge_heads(pt_context_layer.squeeze(), self.num_heads, self.hidden_size, self.num_heads, device)
         output_tensor = self.dense(merged_context_layer)
 
         # Dropout is used in training only
         # output_tensor = F.dropout(output_tensor, p=self.hidden_dropout, training=False)
-        output_tensor = ttm.tensor.add(bloom_utils.torch2tt_tensor(residual, device), output_tensor)
+        output_tensor = ttm.tensor.add(residual, output_tensor)
 
         outputs = (output_tensor, present)
 

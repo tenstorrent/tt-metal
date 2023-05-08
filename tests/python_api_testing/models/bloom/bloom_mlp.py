@@ -49,27 +49,24 @@ class TtBloomMLP(torch.nn.Module):
         self.training = False
 
         self.tt_weight_mlp_h4h = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.weight", state_dict)
-        self.tt_bias_mlp_h4h =  bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.bias", state_dict)
+        self.tt_bias_mlp_h4h = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.bias", state_dict)
 
         self.tt_weight_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.weight", state_dict)
         self.tt_bias_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.bias", state_dict)
 
         self.dense_h_to_4h = TtLinear(self.hidden_size, 4 * self.hidden_size, self.tt_weight_mlp_h4h.data(), self.tt_bias_mlp_h4h.data(), device)
+        self.dense_4h_to_h = TtLinear(4 * self.hidden_size, self.hidden_size, self.tt_weight_mlp_4hh.data(), self.tt_bias_mlp_4hh.data(), device)
+
         self.gelu_impl = bloom_gelu_forward.tt_bloom_gelu_forward
-        self.dense_4h_to_h = TtLinear(4*self.hidden_size, self.hidden_size, self.tt_weight_mlp_4hh.data(), self.tt_bias_mlp_4hh.data(), device)
 
-    def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor, device) -> torch.Tensor:
+    def forward(self, hidden_states, residual, device):
 
-        tt_hs = bloom_utils.torch2tt_tensor(hidden_states, device)
-        tt_h4h = self.dense_h_to_4h(tt_hs)
-
-        tt_hidden_states = self.gelu_impl(tt_h4h, device)
-        tt_intermediate_output = self.dense_4h_to_h(tt_hidden_states)
-
-        tt_res = bloom_utils.torch2tt_tensor(residual, device)
+        h4h = self.dense_h_to_4h(hidden_states)
+        hidden_states = self.gelu_impl(h4h, device)
+        intermediate_output = self.dense_4h_to_h(hidden_states)
 
         # Dropout is used in training only
-        # tt_intermediate_output = F.dropout(tt_intermediate_output, p=self.hidden_dropout, training=self.training)
-        output = ttm.tensor.add(tt_res, tt_intermediate_output)
+        # intermediate_output = F.dropout(intermediate_output, p=self.hidden_dropout, training=self.training)
+        output = ttm.tensor.add(residual, intermediate_output)
 
         return output

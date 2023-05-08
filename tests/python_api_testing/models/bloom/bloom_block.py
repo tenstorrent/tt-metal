@@ -1,6 +1,7 @@
 import torch
 import math
 from torch.nn import functional as F
+from torch.nn import LayerNorm
 
 from libs import tt_lib as ttm
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
@@ -99,14 +100,21 @@ class TtBloomBlock(torch.nn.Module):
 
         self.tt_beta = bloom_utils.tt_load_layer_weights(f"{base_address}.input_layernorm.bias", state_dict)
         self.tt_gamma = bloom_utils.tt_load_layer_weights(f"{base_address}.input_layernorm.weight", state_dict)
-
         self.input_layernorm = TtLayernorm(self.tt_gamma.data(), self.tt_beta.data(), self.layer_norm_epsilon, self.hidden_size, self.hidden_size, device, 1)
+
+        # self.input_layernorm = LayerNorm(self.hidden_size, eps=config.layer_norm_epsilon)
+        # self.input_layernorm.bias = torch.nn.Parameter(state_dict[f"{base_address}.input_layernorm.bias"])
+        # self.input_layernorm.weight = torch.nn.Parameter(state_dict[f"{base_address}.input_layernorm.weight"])
 
         self.self_attention = bloom_attention.TtBloomAttention(config, state_dict, f"{base_address}.self_attention", device)
 
         self.tt_beta_2 = bloom_utils.tt_load_layer_weights(f"{base_address}.post_attention_layernorm.bias", state_dict)
         self.tt_gamma_2 = bloom_utils.tt_load_layer_weights(f"{base_address}.post_attention_layernorm.weight", state_dict)
         self.post_attention_layernorm = TtLayernorm(self.tt_gamma_2.data(), self.tt_beta_2.data(), self.layer_norm_epsilon, self.hidden_size, self.hidden_size, device, 1)
+
+        # self.post_attention_layernorm = LayerNorm(self.hidden_size, eps=config.layer_norm_epsilon)
+        # self.post_attention_layernorm.bias = torch.nn.Parameter(state_dict[f"{base_address}.post_attention_layernorm.bias"])
+        # self.post_attention_layernorm.weight = torch.nn.Parameter(state_dict[f"{base_address}.post_attention_layernorm.weight"])
 
         self.mlp = bloom_mlp.TtBloomMLP(config, state_dict, f"{base_address}.mlp", device)
 
@@ -124,20 +132,19 @@ class TtBloomBlock(torch.nn.Module):
         # hidden_states: [batch_size, seq_length, hidden_size]
 
         # Layer norm at the beginning of the transformer layer.
-        tt_hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
-        tt_layernorm_output = self.input_layernorm(tt_hidden_states, overrideH=tt_hidden_states.shape()[-2])
+        layernorm_output = self.input_layernorm(hidden_states, overrideH=hidden_states.shape()[-2])
+
+        # layernorm_output = self.input_layernorm(hidden_states)
+        # tt_layernorm_output = bloom_utils.torch2tt_tensor(layernorm_output, device)
 
         # Layer norm post the self attention.
         if self.apply_residual_connection_post_layernorm:
-            tt_residual = tt_layernorm_output
+            residual = layernorm_output
         else:
-            tt_residual = tt_hidden_states
-
-        layernorm_output = bloom_utils.tt2torch_tensor(tt_layernorm_output)
-        residual = bloom_utils.tt2torch_tensor(tt_residual)
+            residual = hidden_states
 
         # Self attention.
-        tt_attn_outputs = self.self_attention(
+        attn_outputs = self.self_attention(
             device,
             layernorm_output,
             residual,
@@ -149,26 +156,23 @@ class TtBloomBlock(torch.nn.Module):
             output_attentions=output_attentions,
         )
 
-        tt_attention_output = tt_attn_outputs[0]
-        outputs = tt_attn_outputs[1:]
+        attention_output = attn_outputs[0]
+        outputs = attn_outputs[1:]
 
-        tt_layernorm_output = self.post_attention_layernorm(tt_attention_output, overrideH=tt_attention_output.shape()[-2])
+        layernorm_output = self.post_attention_layernorm(attention_output, overrideH=attention_output.shape()[-2])
 
         # Get residual
         if self.apply_residual_connection_post_layernorm:
-            tt_residual = tt_layernorm_output
+            tt_residual = layernorm_output
         else:
-            tt_residual = tt_attention_output
-
-        residual = bloom_utils.tt2torch_tensor(tt_residual)
-        layernorm_output = bloom_utils.tt2torch_tensor(tt_layernorm_output)
+            tt_residual = attention_output
 
         # MLP
-        tt_output = self.mlp(layernorm_output, residual, device)
+        output = self.mlp(layernorm_output, residual, device)
 
         if use_cache:
-            outputs = (tt_output,) + outputs
+            outputs = (output,) + outputs
         else:
-            outputs = (tt_output,) + outputs[1:]
+            outputs = (output,) + outputs[1:]
 
         return outputs  # hidden_states, present, attentions

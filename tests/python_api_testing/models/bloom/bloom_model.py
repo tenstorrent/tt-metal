@@ -414,10 +414,9 @@ class TtBloomModel(torch.nn.Module):
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
 
-        tt_inputs_embeds = bloom_utils.torch2tt_tensor(inputs_embeds, device)
+        inputs_embeds = bloom_utils.torch2tt_tensor(inputs_embeds, device)
 
-        tt_hidden_states = self.word_embeddings_layernorm(tt_inputs_embeds)
-        hidden_states = bloom_utils.tt2torch_tensor(tt_hidden_states)
+        hidden_states = self.word_embeddings_layernorm(inputs_embeds)
 
         presents = () if use_cache else None
         all_self_attentions = () if output_attentions else None
@@ -432,11 +431,10 @@ class TtBloomModel(torch.nn.Module):
             seq_length_with_past = seq_length_with_past + past_key_values_length
 
         if attention_mask is None:
-            attention_mask = torch.ones((batch_size, seq_length_with_past), device=hidden_states.device)
-        else:
-            attention_mask = attention_mask.to(hidden_states.device)
+            attention_mask = torch.ones((batch_size, seq_length_with_past))
 
-        alibi = self.build_alibi_tensor(attention_mask, self.num_heads, dtype=hidden_states.dtype)
+        alibi = self.build_alibi_tensor(attention_mask, self.num_heads, dtype=torch.float32)
+        alibi = bloom_utils.torch2tt_tensor(alibi, device)
 
         causal_mask = self._prepare_attn_mask(
             attention_mask,
@@ -444,7 +442,7 @@ class TtBloomModel(torch.nn.Module):
             past_key_values_length=past_key_values_length,
         )
 
-        print(hidden_states.shape)
+        print(hidden_states.shape())
         print(causal_mask.shape)
         print(alibi.shape)
 
@@ -486,7 +484,7 @@ class TtBloomModel(torch.nn.Module):
                 alibi=alibi,
             )
 
-            hidden_states = bloom_utils.tt2torch_tensor(outputs[0])
+            hidden_states = outputs[0]
 
             if use_cache is True:
                 presents = presents + (outputs[1],)
@@ -495,8 +493,6 @@ class TtBloomModel(torch.nn.Module):
                 all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
 
             i = i + 1
-
-        hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
 
         # Add last hidden state
         hidden_states = self.ln_f(hidden_states)

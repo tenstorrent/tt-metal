@@ -149,7 +149,7 @@ def tt_load_layer_weights(layer_name, state_dict):
     d2 = closestNumberDivisibleByTileSize(input_shape[2])
     d3 = closestNumberDivisibleByTileSize(input_shape[3])
 
-    print(f"Weights shape {[d0, d1, d2, d3]}")
+    # print(f"Weights shape {[d0, d1, d2, d3]}")
 
     weights = create_padded_tensor(input_shape, weights, [d0, d1, d2, d3], 0, ttm.device.GetHost())
     return weights

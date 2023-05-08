@@ -20,25 +20,20 @@ from libs import tt_lib as ttl
 
 def tt_baddbmm(device, input, batch1, batch2, beta=1.0, alpha=1.0) -> ttm.tensor.Tensor:
 
-    tt_batch1 = bloom_utils.torch2tt_tensor(batch1, device)
-    tt_batch2 = bloom_utils.torch2tt_tensor(batch2, device)
-
-    input_shape = input.shape
+    input_shape = input.shape()
 
     # print(f"input_shape {input_shape}")
-    # print(f"tt_batch1 shape {tt_batch1.shape()}")
-    # print(f"tt_batch2 shape {tt_batch2.shape()}")
-
-    tt_input = bloom_utils.torch2tt_tensor(input, device)
+    # print(f"batch1 shape {batch1.shape}")
+    # print(f"batch2 shape {batch2.shape}")
 
     if beta != 1.0:
-        tt_input = ttm.tensor.mul(beta, tt_input)
+        input = ttm.tensor.mul(beta, input)
 
-    tmp = ttm.tensor.bmm(tt_batch1, tt_batch2)
+    tmp = ttm.tensor.bmm(batch1, batch2)
 
     if alpha != 1.0:
         tmp = ttm.tensor.mul(alpha, tmp)
 
-    result = ttm.tensor.add(tt_input, tmp)
+    result = ttm.tensor.add(input, tmp)
 
     return result
