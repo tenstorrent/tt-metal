@@ -27,19 +27,22 @@ def run_bloom_block_test(device):
 
     print(hugging_bloom_reference_model.config)
 
-    block = 0
+    block = 1
     hidden_size = hugging_bloom_reference_model.config.hidden_size # 1024
     n_head = hugging_bloom_reference_model.config.n_head
     layer_norm_epsilon = hugging_bloom_reference_model.config.layer_norm_epsilon
+    apply_residual_connection_post_layernorm = hugging_bloom_reference_model.config.apply_residual_connection_post_layernorm
+    hidden_dropout = hugging_bloom_reference_model.config.hidden_dropout
+    beta = 0 # ??
 
-    tt_bloom_block = bloom_block.TtBloomBlock(device, "transformer.h", block, hugging_bloom_reference_model, hidden_size, n_head, layer_norm_epsilon)
+    tt_bloom_block = bloom_block.TtBloomBlock(device, "transformer.h", block, hugging_bloom_reference_model, hidden_size, n_head, layer_norm_epsilon, apply_residual_connection_post_layernorm, hidden_dropout, beta)
     pt_bloom_block = hugging_bloom_reference_model.transformer.h[block]
 
     torch.manual_seed(0)
 
     hidden_states = ((torch.rand(1, 64, hidden_size) * 2) - 1) / hidden_size
     residual = ((torch.rand(1, 64, hidden_size) * 2) - 1) / hidden_size
-    alibi = ((torch.rand(n_head, 64, 64) * 2) - 1) / 64
+    alibi = ((torch.rand(n_head, 64, 64) * 2) - 1) / (64 * 64)
     attention_mask = torch.randint(0, 2, (1, 1, 64, 64))
 
     #must be binary
