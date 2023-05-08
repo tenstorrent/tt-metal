@@ -289,9 +289,8 @@ WorkerCores get_worker_cores_from_cluster(tt_cluster *cluster, int chip_id) {
     return worker_cores;
 }
 
-// subchannel hard-coded to 0 for now
 tt_xy_pair get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id) {
-    return cluster->get_soc_desc(chip_id).get_core_for_dram_channel(dram_channel_id, /*sub*/ 0);
+    return cluster->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(dram_channel_id);
 }
 
 namespace utils {

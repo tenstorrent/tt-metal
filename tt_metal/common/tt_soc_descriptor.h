@@ -66,6 +66,9 @@ struct tt_SocDescriptor {
   std::unordered_map<int, int> routing_x_to_worker_x;
   std::unordered_map<int, int> routing_y_to_worker_y;
   std::vector<std::vector<tt_xy_pair>> dram_cores;  // per channel list of dram cores
+  std::vector<tt_xy_pair> preferred_worker_dram_core;  // per channel preferred worker endpoint
+  std::vector<tt_xy_pair> preferred_eth_dram_core;  // per channel preferred eth endpoint
+  std::vector<size_t> dram_address_offsets;  // starting address offset
   std::unordered_map<tt_xy_pair, std::tuple<int, int>> dram_core_channel_map;  // map dram core to chan/subchan
   std::vector<tt_xy_pair> ethernet_cores;  // ethernet cores (index == channel id)
   std::unordered_map<tt_xy_pair,int> ethernet_core_channel_map;
@@ -81,15 +84,19 @@ struct tt_SocDescriptor {
   uint32_t dram_bank_size;
   std::unordered_map<tt_xy_pair, std::vector<tt_xy_pair>> perf_dram_bank_to_workers;
 
-  int get_num_dram_channels() const;
-  std::vector<int> get_dram_chan_map() const;
   bool is_worker_core(const tt_xy_pair &core) const;
   tt_xy_pair get_worker_core(const tt_xy_pair& core) const;
+
+  int get_num_dram_channels() const;
   tt_xy_pair get_core_for_dram_channel(int dram_chan, int subchannel) const;
-  bool is_ethernet_core(const tt_xy_pair &core) const;
-  bool get_channel_of_ethernet_core(const tt_xy_pair &core) const;
+  tt_xy_pair get_preferred_worker_core_for_dram_channel(int dram_chan) const;
+  tt_xy_pair get_preferred_eth_core_for_dram_channel(int dram_chan) const;
+  size_t get_address_offset(int dram_chan) const;
   int get_num_dram_subchans() const;
   int get_num_dram_blocks_per_channel() const;
+
+  bool is_ethernet_core(const tt_xy_pair &core) const;
+  bool get_channel_of_ethernet_core(const tt_xy_pair &core) const;
 };
 
 // Allocates a new soc descriptor on the heap. Returns an owning pointer.

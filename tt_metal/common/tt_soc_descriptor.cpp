@@ -9,6 +9,17 @@
 
 #include "common/assert.hpp"
 
+bool tt_SocDescriptor::is_worker_core(const tt_xy_pair &core) const {
+    return (
+        routing_x_to_worker_x.find(core.x) != routing_x_to_worker_x.end() &&
+        routing_y_to_worker_y.find(core.y) != routing_y_to_worker_y.end());
+}
+tt_xy_pair tt_SocDescriptor::get_worker_core(const tt_xy_pair &core) const {
+    tt_xy_pair worker_xy = {
+        static_cast<size_t>(routing_x_to_worker_x.at(core.x)), static_cast<size_t>(routing_y_to_worker_y.at(core.y))};
+    return worker_xy;
+}
+
 int tt_SocDescriptor::get_num_dram_channels() const {
     int num_channels = 0;
     for (const auto& dram_core : dram_cores) {
@@ -18,40 +29,23 @@ int tt_SocDescriptor::get_num_dram_channels() const {
     }
     return num_channels;
 }
-
-std::vector<int> tt_SocDescriptor::get_dram_chan_map() const {
-    std::vector<int> chan_map;
-    for (int i = 0; i < dram_cores.size(); i++) {
-        chan_map.push_back(i);
-    }
-    return chan_map;
-};
-
-bool tt_SocDescriptor::is_worker_core(const tt_xy_pair &core) const {
-    return (
-        routing_x_to_worker_x.find(core.x) != routing_x_to_worker_x.end() &&
-        routing_y_to_worker_y.find(core.y) != routing_y_to_worker_y.end());
-}
-
-tt_xy_pair tt_SocDescriptor::get_worker_core(const tt_xy_pair &core) const {
-    tt_xy_pair worker_xy = {
-        static_cast<size_t>(routing_x_to_worker_x.at(core.x)), static_cast<size_t>(routing_y_to_worker_y.at(core.y))};
-    return worker_xy;
-}
-
 tt_xy_pair tt_SocDescriptor::get_core_for_dram_channel(int dram_chan, int subchannel) const {
+    tt::log_assert(dram_chan < this->dram_cores.size(), "dram_chan={} must be within range of num_dram_channels={}", dram_chan, this->dram_cores.size());
+    tt::log_assert(subchannel < this->dram_cores.at(dram_chan).size(), "subchannel={} must be within range of num_subchannels={}", subchannel, this->dram_cores.at(dram_chan).size());
     return this->dram_cores.at(dram_chan).at(subchannel);
 };
-
-
-bool tt_SocDescriptor::is_ethernet_core(const tt_xy_pair &core) const {
-    return this->ethernet_core_channel_map.find(core) != ethernet_core_channel_map.end();
+tt_xy_pair tt_SocDescriptor::get_preferred_worker_core_for_dram_channel(int dram_chan) const {
+    tt::log_assert(dram_chan < this->preferred_worker_dram_core.size(), "dram_chan={} must be within range of preferred_worker_dram_core.size={}", dram_chan, this->preferred_worker_dram_core.size());
+    return this->preferred_worker_dram_core.at(dram_chan);
+};
+tt_xy_pair tt_SocDescriptor::get_preferred_eth_core_for_dram_channel(int dram_chan) const {
+    tt::log_assert(dram_chan < this->preferred_eth_dram_core.size(), "dram_chan={} must be within range of preferred_eth_dram_core.size={}", dram_chan, this->preferred_eth_dram_core.size());
+    return this->preferred_eth_dram_core.at(dram_chan);
+};
+size_t tt_SocDescriptor::get_address_offset(int dram_chan) const {
+    tt::log_assert(dram_chan < this->dram_address_offsets.size(), "dram_chan={} must be within range of dram_address_offsets.size={}", dram_chan, this->dram_address_offsets.size());
+    return this->dram_address_offsets.at(dram_chan);
 }
-
-bool tt_SocDescriptor::get_channel_of_ethernet_core(const tt_xy_pair &core) const {
-    return this->ethernet_core_channel_map.at(core);
-}
-
 int tt_SocDescriptor::get_num_dram_subchans() const {
     int num_chan = 0;
     for (const std::vector<tt_xy_pair> &core : this->dram_cores) {
@@ -59,7 +53,6 @@ int tt_SocDescriptor::get_num_dram_subchans() const {
     }
     return num_chan;
 }
-
 int tt_SocDescriptor::get_num_dram_blocks_per_channel() const {
     int num_blocks = 0;
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -70,6 +63,15 @@ int tt_SocDescriptor::get_num_dram_blocks_per_channel() const {
         num_blocks = 2;
     }
     return num_blocks;
+}
+
+
+bool tt_SocDescriptor::is_ethernet_core(const tt_xy_pair &core) const {
+    return this->ethernet_core_channel_map.find(core) != ethernet_core_channel_map.end();
+}
+
+bool tt_SocDescriptor::get_channel_of_ethernet_core(const tt_xy_pair &core) const {
+    return this->ethernet_core_channel_map.at(core);
 }
 
 const char* ws = " \t\n\r\f\v";
@@ -117,10 +119,10 @@ void load_core_descriptors_from_device_descriptor(
   }
 
   int current_dram_channel = 0;
-  for (auto channel_it = device_descriptor_yaml["dram"].begin(); channel_it != device_descriptor_yaml["dram"].end(); ++channel_it) {
+  for (const auto &channel_it : device_descriptor_yaml["dram"]) {
     soc_descriptor.dram_cores.push_back({});
     auto &soc_dram_cores = soc_descriptor.dram_cores.at(soc_descriptor.dram_cores.size() - 1);
-    const auto &dram_cores = (*channel_it).as<std::vector<std::string>>();
+    const auto &dram_cores = channel_it.as<std::vector<std::string>>();
     for (int i = 0; i < dram_cores.size(); i++) {
       const auto &dram_core = dram_cores.at(i);
       CoreDescriptor core_descriptor;
@@ -132,6 +134,17 @@ void load_core_descriptors_from_device_descriptor(
     }
     current_dram_channel++;
   }
+
+  soc_descriptor.preferred_eth_dram_core.clear();
+  for (const auto& channel_it: device_descriptor_yaml["dram_preferred_eth_endpoint"]) {
+    soc_descriptor.preferred_eth_dram_core.push_back(format_node(channel_it.as<std::string>()));
+  }
+  soc_descriptor.preferred_worker_dram_core.clear();
+  for (const auto& channel_it: device_descriptor_yaml["dram_preferred_worker_endpoint"]) {
+    soc_descriptor.preferred_worker_dram_core.push_back(format_node(channel_it.as<std::string>()));
+  }
+  soc_descriptor.dram_address_offsets = device_descriptor_yaml["dram_address_offsets"].as<std::vector<size_t>>();
+
   auto eth_cores = device_descriptor_yaml["eth"].as<std::vector<std::string>>();
   int current_ethernet_channel = 0;
   for (const auto &core_string : eth_cores) {

@@ -11,6 +11,15 @@ pcie:
 dram:
   [[1-0], [1-6], [4-0], [4-6], [7-0], [7-6], [10-0], [10-6]]
 
+dram_preferred_eth_endpoint:
+  [ 1-0, 1-6, 4-0, 4-6, 7-0, 7-6, 10-0, 10-6 ]
+
+dram_preferred_worker_endpoint:
+  [ 1-0, 1-6, 4-0, 4-6, 7-0, 7-6, 10-0, 10-6 ]
+
+dram_address_offsets:
+  [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+
 eth:
   []
 

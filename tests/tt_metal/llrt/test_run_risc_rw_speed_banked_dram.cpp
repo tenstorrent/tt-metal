@@ -150,7 +150,7 @@ bool run_risc_rw_speed_dram_banked(tt_cluster *cluster, int chip_id, const std::
     std::vector<uint32_t> dram_channel_cores;
     std::uint32_t dram_channel_count = dram_channel_count_from_count_as_bits(dram_channel_count_as_bits);
     for (int channel_id = 0; channel_id < dram_channel_count; channel_id++) {
-        tt_xy_pair dram_src_noc_xy = cluster->get_soc_desc(chip_id).get_core_for_dram_channel(channel_id, /*sub*/0);
+        tt_xy_pair dram_src_noc_xy = cluster->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(channel_id);
         dram_channel_cores.push_back(static_cast<uint32_t>(dram_src_noc_xy.x));
         dram_channel_cores.push_back(static_cast<uint32_t>(dram_src_noc_xy.y));
     }
