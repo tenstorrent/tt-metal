@@ -26,10 +26,10 @@ def test_cross_attn_inference():
     unet.eval()
     state_dict = unet.state_dict()
 
-    test = "test1"
+    test = "test2"
     # synthesize the input
     if test == "test1":
-        dim = 1280
+        query_dim = 1280
         dropout = 0
         heads = 8
         dim_head = 64
@@ -43,9 +43,30 @@ def test_cross_attn_inference():
         base_address="mid_block.attentions.0.transformer_blocks.0.attn1"
         cross_attn = pipe.unet.mid_block.attentions[0].transformer_blocks[0].attn1
 
+    if test == "test2":
+        query_dim = 320
+        dim = query_dim
+        cross_attention_dim = 768
+        heads = 8
+        dim_head = 40
+        dropout = 0.0
+        bias = False
+        upcast_attention = False
+        upcast_softmax = False
+        added_kv_proj_dim = None
+        norm_num_groups = None
+
+        base_address="down_blocks.0.attentions.0.transformer_blocks.0.attn2"
+        cross_attn = pipe.unet.down_blocks[0].attentions[0].transformer_blocks[0].attn2
+
+        input_shape =  torch.Size([1, 2, 4096, 320])
+        input = torch.randn(input_shape) * 0.01
+        encoder_hidden_states_shape =  torch.Size([1, 2, 77, 768])
+        encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
+
 
     ##############################################
-    if test == "test2":
+    if test == "test3":
         assert False, "this test doesn't work right now!"
         dim = 1280
         heads = 8
@@ -65,7 +86,7 @@ def test_cross_attn_inference():
         cross_attn = pipe.unet.down_blocks[0].attentions[0].transformer_blocks[0].attn1
 
 
-    if test == "test3":
+    if test == "test4":
         dim = 320
         cross_attention_dim = 768
         heads = 8
@@ -95,7 +116,7 @@ def test_cross_attn_inference():
     host = ttl.device.GetHost()
 
     # setup tt model
-    tt_cross_attn = TtCrossAttention(query_dim=dim,
+    tt_cross_attn = TtCrossAttention(query_dim=query_dim,
                                     heads = heads,
                                     bias=bias,
                                     dim_head=dim_head,

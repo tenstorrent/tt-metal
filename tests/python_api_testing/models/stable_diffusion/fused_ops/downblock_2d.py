@@ -130,9 +130,21 @@ def run_downblock_inference(host, device):
 
 
     tt_input = torch_to_tt_tensor(input, device)
-    tt_downblock = TtDownBlock2D(in_channels=in_channels, out_channels=out_channels, temb_channels=temb_channels, dropout= 0.0, num_layers= 2, resnet_eps= 1e-6,
-                                  resnet_time_scale_shift = "default", resnet_act_fn= "silu", resnet_groups=resnet_groups, resnet_pre_norm= True, output_scale_factor=1.0,
-                                  add_downsample=True, downsample_padding=1, state_dict=state_dict, base_address = base_address)
+    tt_downblock = TtDownBlock2D(in_channels=in_channels,
+                                out_channels=out_channels,
+                                temb_channels=temb_channels,
+                                dropout= 0.0,
+                                num_layers= 2,
+                                resnet_eps= 1e-6,
+                                resnet_time_scale_shift = "default",
+                                resnet_act_fn= "silu",
+                                resnet_groups=resnet_groups,
+                                resnet_pre_norm= True,
+                                output_scale_factor=1.0,
+                                add_downsample=True,
+                                downsample_padding=1,
+                                state_dict=state_dict,
+                                base_address = base_address)
 
 
     tt_out = tt_downblock(tt_input, None)[0]

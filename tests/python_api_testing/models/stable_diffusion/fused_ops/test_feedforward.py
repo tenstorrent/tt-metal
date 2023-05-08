@@ -30,9 +30,9 @@ def test_feedforward_inference():
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
+    pipe("something")
+    assert False
     state_dict = unet.state_dict()
-    pipe('horse eating carrot')
-    return
     ff = pipe.unet.mid_block.attentions[0].transformer_blocks[0].ff
     torch_output = ff(input)
 

@@ -26,10 +26,120 @@
 
 from python_api_testing.models.stable_diffusion.utils import make_linear
 from python_api_testing.models.stable_diffusion.embeddings import TtTimestepEmbedding as TimestepEmbedding
+from python_api_testing.models.stable_diffusion.fused_ops import TtDownBlock2D as DownBlock2D
+from unet_2d_blocks import TtUNetMidBlock2DCrossAttn as UNetMidBlock2DCrossAttn
+
 from libs.tt_lib.fallback_ops import fallback_ops
 
 
-class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin):
+# num_layers=layers_per_block,
+# in_channels=input_channel,
+# out_channels=output_channel,
+# temb_channels=time_embed_dim,
+# add_downsample=not is_final_block,
+# resnet_eps=norm_eps,
+# resnet_act_fn=act_fn,
+# resnet_groups=norm_num_groups,
+# cross_attention_dim=cross_attention_dim,
+# attn_num_head_channels=attention_head_dim[i],
+# downsample_padding=downsample_padding,
+# dual_cross_attention=dual_cross_attention,
+# use_linear_projection=use_linear_projection,
+# only_cross_attention=only_cross_attention[i],
+# upcast_attention=upcast_attention,
+# resnet_time_scale_shift=resnet_time_scale_shift,
+# state_dict=state_dict,
+
+
+
+def get_down_block(tpye, **kwargs):
+    if type == "DownBlock2D":
+        return DownBlock2D(
+            num_layers=num_layers,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            temb_channels=temb_channels,
+            add_downsample=add_downsample,
+            resnet_eps=resnet_eps,
+            resnet_act_fn=resnet_act_fn,
+            resnet_groups=resnet_groups,
+            downsample_padding=downsample_padding,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            state_dict=state_dict,
+            base_address=base_address,
+            )
+    elif type == "CrossAttnDownBlock2D":
+        return CrossAttnDownBlock2D(
+            num_layers=num_layers,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            temb_channels=temb_channels,
+            add_downsample=add_downsample,
+            resnet_eps=resnet_eps,
+            resnet_act_fn=resnet_act_fn,
+            resnet_groups=resnet_groups,
+            downsample_padding=downsample_padding,
+            cross_attention_dim=cross_attention_dim,
+            attn_num_head_channels=attn_num_head_channels,
+            dual_cross_attention=dual_cross_attention,
+            use_linear_projection=use_linear_projection,
+            only_cross_attention=only_cross_attention,
+            upcast_attention=upcast_attention,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            state_dict=state_dict,
+            base_address=base_address,
+            )
+    else:
+        assert False, f"CrossAttnDownBlock2D, and DownBlock2D are the only down blocks implemented! you requested {type}"
+
+
+def get_up_block(tpye, **kwargs):
+    if type == "UpBlock2D":
+        return UpBlock2D(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            temb_channels=temb_channels,
+            dropout= 0.0,
+            num_layers=num_layers,
+            resnet_eps=resnet_eps,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            resnet_act_fn=resnet_act_fn,
+            resnet_groups=resnet_groups,
+            # resnet_pre_norm= True,
+            # output_scale_factor=1.0,
+            add_downsample=add_downsample,
+            downsample_padding=downsample_padding,
+            state_dict=state_dict,
+            base_address=base_address
+            )
+    elif type == "CrossAttnUpBlock2D":
+        return CrossAttnUpBlock2D(
+            num_layers=num_layers,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            prev_output_channel=prev_output_channel,
+            temb_channels=temb_channels,
+            add_upsample=add_upsample,
+            resnet_eps=resnet_eps,
+            resnet_act_fn=resnet_act_fn,
+            resnet_groups=resnet_groups,
+            cross_attention_dim=cross_attention_dim,
+            attn_num_head_channels=attn_num_head_channels,
+            dual_cross_attention=dual_cross_attention,
+            use_linear_projection=use_linear_projection,
+            only_cross_attention=only_cross_attention,
+            upcast_attention=upcast_attention,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            state_dict=state_dict,
+            base_address=base_address,
+        )
+    else:
+        assert False, f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {type}"
+
+
+
+# class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin):
+class UNet2DConditionModel(nn.Module):
     r"""
     UNet2DConditionModel is a conditional 2D UNet model that takes in a noisy sample, conditional state, and a timestep
     and returns sample shaped output.
@@ -114,8 +224,8 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         time_embed_dim = block_out_channels[0] * 4
 
         # input
-        conv_in_w = state_dict[f"{self.base_address_with_dot}con_in.weight"]
-        conv_in_b = state_dict[f"{self.base_address_with_dot}con_in.bias"]
+        conv_in_w = state_dict[f"{self.base_address_with_dot}conv_in.weight"]
+        conv_in_b = state_dict[f"{self.base_address_with_dot}conv_in.bias"]
         self.conv_in = fallback_ops.Conv2d(in_channelsin_channels,
                                             out_channels=block_out_channels[0],
                                             kernel_size=3,
@@ -164,7 +274,6 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             input_channel = output_channel
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
-
             down_block = get_down_block(
                 down_block_type,
                 num_layers=layers_per_block,
@@ -183,6 +292,10 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 only_cross_attention=only_cross_attention[i],
                 upcast_attention=upcast_attention,
                 resnet_time_scale_shift=resnet_time_scale_shift,
+                state_dict=state_dict,
+                base_address=f"{self.base_address_with_dot}down_blocks.{len(self.down_blocks)}",
+                device=device,
+                host=host,
             )
             self.down_blocks.append(down_block)
 
@@ -213,6 +326,8 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 attn_num_head_channels=attention_head_dim[-1],
                 resnet_groups=norm_num_groups,
                 resnet_time_scale_shift=resnet_time_scale_shift,
+                state_dict=state_dict,
+                base_address=f"{self.base_address_with_dot}mid_block"
             )
         else:
             raise ValueError(f"unknown mid_block_type : {mid_block_type}")
@@ -257,6 +372,10 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 only_cross_attention=only_cross_attention[i],
                 upcast_attention=upcast_attention,
                 resnet_time_scale_shift=resnet_time_scale_shift,
+                device=device,
+                host=host,
+                state_dict=state_dict,
+                base_address=f"{self.base_address_with_dot}up_blocks.{len(self.up_blocks)}"
             )
             self.up_blocks.append(up_block)
             prev_output_channel = output_channel
@@ -502,6 +621,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         down_block_res_samples = (sample,)
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
+
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
