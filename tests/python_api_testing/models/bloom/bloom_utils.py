@@ -100,8 +100,58 @@ def tt_const_tensor(value, shape, device):
     return tt_const
 
 
+def create_padded_tensor(input_tensors_shape, input_tensor, output_tensor_shape, pad_value, device, input_tensor_start=[0,0,0,0]):
+    while len(input_tensors_shape) < 4:
+        input_tensors_shape.insert(0, 1)
+
+    if isinstance(input_tensor, ttm.tensor.Tensor):
+        torch_tensor = torch.Tensor(input_tensor.data()).reshape(input_tensor.shape())
+    else:
+        torch_tensor = input_tensor
+
+    # Create tensor on host
+    a = ttm.tensor.Tensor(
+        torch_tensor.reshape(-1).tolist(),
+        input_tensors_shape,
+        ttm.tensor.DataType.BFLOAT16,
+        ttm.tensor.Layout.ROW_MAJOR,
+    )
+
+    # Pad inputs on host
+    a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
+
+    #a_pt = torch.Tensor(a_pad.data()).reshape(*output_tensor_shape)
+    a_dev = a_pad.to(ttm.tensor.Layout.TILE).to(device)
+
+    return a_dev
+
+
+def closestNumberDivisibleByTileSize(n):
+    if n % 32 == 0:
+      return n
+
+    q = int(n / 32)
+
+    num = 32 * (q+1)
+    return num
+
+
 def tt_load_layer_weights(layer_name, state_dict):
-    weights = tilize_to_list(pad_weight(state_dict[layer_name]))
+
+    weights = state_dict[layer_name]
+    input_shape = list(weights.shape)
+
+    while len(input_shape) < 4:
+        input_shape.insert(0, 1)
+
+    d0 = input_shape[0]
+    d1 = input_shape[1]
+    d2 = closestNumberDivisibleByTileSize(input_shape[2])
+    d3 = closestNumberDivisibleByTileSize(input_shape[3])
+
+    print(f"Weights shape {[d0, d1, d2, d3]}")
+
+    weights = create_padded_tensor(input_shape, weights, [d0, d1, d2, d3], 0, ttm.device.GetHost())
     return weights
 
 

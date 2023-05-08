@@ -48,15 +48,15 @@ class TtBloomMLP(torch.nn.Module):
         self.hidden_dropout = config.hidden_dropout
         self.training = False
 
-        tt_weight_mlp_h4h = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.weight", state_dict)
-        tt_bias_mlp_h4h =  bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.bias", state_dict)
+        self.tt_weight_mlp_h4h = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.weight", state_dict)
+        self.tt_bias_mlp_h4h =  bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.bias", state_dict)
 
-        tt_weight_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.weight", state_dict)
-        tt_bias_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.bias", state_dict)
+        self.tt_weight_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.weight", state_dict)
+        self.tt_bias_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.bias", state_dict)
 
-        self.dense_h_to_4h = TtLinear(self.hidden_size, 4 * self.hidden_size, tt_weight_mlp_h4h, tt_bias_mlp_h4h, device)
+        self.dense_h_to_4h = TtLinear(self.hidden_size, 4 * self.hidden_size, self.tt_weight_mlp_h4h.data(), self.tt_bias_mlp_h4h.data(), device)
         self.gelu_impl = bloom_gelu_forward.tt_bloom_gelu_forward
-        self.dense_4h_to_h = TtLinear(4*self.hidden_size, self.hidden_size, tt_weight_mlp_4hh, tt_bias_mlp_4hh, device)
+        self.dense_4h_to_h = TtLinear(4*self.hidden_size, self.hidden_size, self.tt_weight_mlp_4hh.data(), self.tt_bias_mlp_4hh.data(), device)
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor, device) -> torch.Tensor:
 

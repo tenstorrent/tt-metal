@@ -208,11 +208,11 @@ class TtBloomAttention(torch.nn.Module):
                 f" {self.num_heads})."
             )
 
-        weight_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.weight", state_dict)
-        bias_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.bias", state_dict)
+        self.weight_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.weight", state_dict)
+        self.bias_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.bias", state_dict)
 
-        weight_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.weight", state_dict)
-        bias_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.bias", state_dict)
+        self.weight_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.weight", state_dict)
+        self.bias_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.bias", state_dict)
 
         # Layer-wise attention scaling
         self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)
@@ -221,8 +221,8 @@ class TtBloomAttention(torch.nn.Module):
         alpha_beta_shape = [1, self.num_heads, self.head_dim, self.head_dim]
         self.inv_norm_factor = bloom_utils.tt_const_tensor(self.inv_norm_factor, alpha_beta_shape, device)
 
-        self.query_key_value = TtLinear(self.hidden_size, 3 * self.hidden_size, weight_q, bias_q, device)
-        self.dense = TtLinear(self.hidden_size, self.hidden_size, weight_d, bias_d, device)
+        self.query_key_value = TtLinear(self.hidden_size, 3 * self.hidden_size, self.weight_q.data(), self.bias_q.data(), device)
+        self.dense = TtLinear(self.hidden_size, self.hidden_size, self.weight_d.data(), self.bias_d.data(), device)
         self.attention_dropout = torch.nn.Dropout(0.0)
 
     def forward(

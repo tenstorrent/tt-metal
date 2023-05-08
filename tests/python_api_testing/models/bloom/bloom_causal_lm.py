@@ -39,12 +39,10 @@ class TtBloomForCausalLM():
         state_dict = hugging_bloom_reference_model.state_dict()
 
         self.use_return_dict = False
-
         self.transformer = bloom_model.TtBloomModel(device, hugging_bloom_reference_model, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers)
 
-        lm_head_weight = bloom_utils.tt_load_layer_weights("lm_head.weight", state_dict)
-
-        self.lm_head= TtLinear(hidden_size, vocab_size, lm_head_weight, None, device)
+        self.lm_head_weight = bloom_utils.tt_load_layer_weights("lm_head.weight", state_dict)
+        self.lm_head= TtLinear(hidden_size, vocab_size, self.lm_head_weight.data(), None, device)
 
 
     def get_output_embeddings(self):

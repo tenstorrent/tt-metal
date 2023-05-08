@@ -135,10 +135,10 @@ class TtBloomForQuestionAnswering():
         state_dict = hugging_bloom_reference_model.state_dict()
         self.transformer = bloom_model.TtBloomModel(device, hugging_bloom_reference_model, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers)
 
-        qa_outputs_weight = bloom_utils.tt_load_layer_weights("qa_outputs.weight", state_dict)
-        qa_outputs_bias = bloom_utils.tt_load_layer_weights("qa_outputs.bias", state_dict)
+        self.qa_outputs_weight = bloom_utils.tt_load_layer_weights("qa_outputs.weight", state_dict)
+        self.qa_outputs_bias = bloom_utils.tt_load_layer_weights("qa_outputs.bias", state_dict)
 
-        self.qa_outputs = TtLinear(hidden_size, 32, qa_outputs_weight, qa_outputs_bias, device)
+        self.qa_outputs = TtLinear(hidden_size, 32, self.qa_outputs_weight.data(), self.qa_outputs_bias.data(), device)
 
     def forward(
         self,
