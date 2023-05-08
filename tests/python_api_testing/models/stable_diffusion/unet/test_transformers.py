@@ -75,9 +75,9 @@ def test_run_basic_transformer_inference():
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
-    tt_input = torch_to_tt_tensor(input, device)
 
     # setup tt model
+    tt_input = torch_to_tt_tensor(input, device)
     tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
 
     tt_basic_transformer = TtBasicTransformerBlock(
@@ -95,13 +95,6 @@ def test_run_basic_transformer_inference():
 
     tt_basic_transformer.eval()
     tt_out = tt_basic_transformer(tt_input, tt_encoder_hidden_states)
-    print(type(tt_out), "type of tt_out")
-    try:
-        print("if both are torch tensor")
-        print(comp_allclose_and_pcc(tt_out, torch_output))
-
-    except:
-        print("both are not torch tensor")
 
     tt_output = tt_to_torch_tensor(tt_out, host)
 

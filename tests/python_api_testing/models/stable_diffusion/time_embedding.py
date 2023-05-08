@@ -14,47 +14,53 @@ import torch
 
 from libs import tt_lib as ttl
 from utility_functions import pad_weight, tilize_to_list, print_diff_argmax, torch_to_tt_tensor, tt_to_torch_tensor, print_corr_coef
-from python_api_testing.fused_ops.linear import Linear as TtLinear
-from python_api_testing.fused_ops.silu import SiLU as TtSiLU
-from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc
+from utility_functions import comp_allclose_and_pcc
+from python_api_testing.models.stable_diffusion.utils import make_linear
+from libs.tt_lib.fallback_ops import fallback_ops
 
 
-class TimeEmbedding(torch.nn.Module):
-    def __init__(self, n_embd):
+class TtTimestepEmbedding(nn.Module):
+    def __init__(self, in_channels: int, time_embed_dim: int, act_fn: str = "silu", out_dim: int = None, state_dict=None, base_address="", host=None, device=None):
         super().__init__()
-        self.linear_1 = nn.Linear(n_embd, 4 * n_embd, bias=False)
-        self.linear_1.weight.data.fill_(0.001)
-        self.linear_2 = nn.Linear(4 * n_embd, 4 * n_embd, bias=False)
-        self.linear_2.weight.data.fill_(0.001)
 
-    def forward(self, x):
-        x = self.linear_1(x)
-        x = F.silu(x)
-        x = self.linear_2(x)
-        return x
+        weights = state_dict[f"{base_address}.linear_1.weight"]
+        bias = state_dict[f"{base_address}.linear_1.bias"]
+        self.linear_1 = make_linear(in_features=in_channels,
+                                    out_features=time_embed_dim,
+                                    weights=weights,
+                                    bias=bias,
+                                    device=device)
+        # self.linear_1 = nn.Linear(in_channels, time_embed_dim)
+        self.act = None
+        if act_fn == "silu":
+            # self.act = nn.SiLU()
+            self.act = fallback_ops.silu
+        elif act_fn == "mish":
+            assert False, "tt does not support nn.Mish() yet"
+            self.act = nn.Mish()
 
+        if out_dim is not None:
+            time_embed_dim_out = out_dim
+        else:
+            time_embed_dim_out = time_embed_dim
 
-class TtTimeEmbedding(torch.nn.Module):
-    def __init__(self,  n_embd, device, state_dict=None):
-        super().__init__()
-        # Note: Load Weights
-        #in_feature = n_embd, out_feature = 4 * n_embd
-        weight1_shape = [1, 1, n_embd, 4*n_embd]
-        self.linear1_weight = torch.ones(weight1_shape) * 0.001
-        self.linear1_weight = self.linear1_weight.flatten().tolist()
-        self.linear_1 = TtLinear(n_embd, 4*n_embd, self.linear1_weight, bias=None, device=device)
-        #in_feature = 4 * n_embd, out_feature = 4 * n_embd
-        weight2_shape = [1, 1, 4*n_embd, 4*n_embd]
-        self.linear2_weight = torch.ones(weight2_shape) * 0.001
-        self.linear2_weight = self.linear2_weight.flatten().tolist()
-        self.linear_2 = TtLinear(4*n_embd, 4*n_embd, self.linear2_weight, bias=None, device=device)
+        weights = state_dict[f"{base_address}.linear_2.weight"]
+        bias = state_dict[f"{base_address}.linear_2.bias"]
+        self.linear_2 = make_linear(in_features=time_embed_dim,
+                                    out_features=time_embed_dim_out,
+                                    weights=weights,
+                                    bias=bias,
+                                    device=device)
+        # self.linear_2 = nn.Linear(time_embed_dim, time_embed_dim_out)
 
-    def forward(self, x):
-        x = self.linear_1(x)
-        x = TtSiLU(x)
-        x = self.linear_2(x)
-        return x
+    def forward(self, sample):
+        sample = self.linear_1(sample)
 
+        if self.act is not None:
+            sample = self.act(sample)
+
+        sample = self.linear_2(sample)
+        return sample
 
 
 if __name__ == "__main__":

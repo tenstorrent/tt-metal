@@ -32,7 +32,7 @@ class TtUpBlock2D(nn.Module):
         num_layers: int = 1,
         resnet_eps: float = 1e-6,
         resnet_time_scale_shift: str = "default",
-        resnet_act_fn: str = "swish",
+        resnet_act_fn: str = "silu",
         resnet_groups: int = 32,
         resnet_pre_norm: bool = True,
         output_scale_factor=1.0,
@@ -84,31 +84,36 @@ class TtUpBlock2D(nn.Module):
         self.gradient_checkpointing = False
 
     def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None):
+        print('tt upblock resnets:', self.resnets)
         for resnet in self.resnets:
             # pop res hidden states
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
 
-            res_hidden_states = tt_to_torch_tensor(res_hidden_states, self.host)
-            res_hidden_states_tuple = tt_to_torch_tensor(res_hidden_states_tuple, self.host)
-            hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
-            hidden_states = torch_to_tt_tensor(hidden_states, self.device)
+            # res_hidden_states = tt_to_torch_tensor(res_hidden_states, self.host)
+            # res_hidden_states_tuple = tt_to_torch_tensor(res_hidden_states_tuple, self.host)
+
+            hidden_states = fallback_ops.concat([hidden_states, res_hidden_states], dim=1)
+
+            # hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
+            # hidden_states = torch_to_tt_tensor(hidden_states, self.device)
 
 
-            if self.training and self.gradient_checkpointing:
-                assert False, "we do not support training"
-                # def create_custom_forward(module):
-                #     def custom_forward(*inputs):
-                #         return module(*inputs)
+            # if self.training and self.gradient_checkpointing:
+            #     assert False, "we do not support training"
+            #     # def create_custom_forward(module):
+            #     #     def custom_forward(*inputs):
+            #     #         return module(*inputs)
 
-                #     return custom_forward
+            #     #     return custom_forward
 
-                # hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(resnet), hidden_states, temb)
-            else:
-                hidden_states = resnet(hidden_states, temb)
+            #     # hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(resnet), hidden_states, temb)
+            # else:
+            hidden_states = resnet(hidden_states, temb)
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
+                print('adding upsampler..')
                 hidden_states = upsampler(hidden_states, upsample_size)
 
         return hidden_states
@@ -124,34 +129,49 @@ def run_upblock_inference(host, device):
     unet_upblock = pipe.unet.up_blocks[0]
     unet_resnet_upblock_module_list = unet_upblock.resnets
 
-    in_channels = unet_resnet_upblock_module_list[0].conv1.in_channels
-    out_channels = unet_resnet_upblock_module_list[0].conv2.in_channels
-    temb_channels = 1280
+    in_channels = 1280
+    out_channels = 1280
+    prev_output_channel = 1280
+
+    temb_channels = None
     eps = 1e-05
     resnet_groups = 32
 
-    input_shape  = [1, in_channels, 32, 32]
-    input = torch.randn(input_shape, dtype=torch.float32)
+    input_shape  = [2, 1280, 8, 8]
+    hidden_state = torch.randn(input_shape, dtype=torch.float32)
 
-    temb_shape  = [out_channels, out_channels]
-    temb = torch.randn(temb_shape, dtype=torch.float32)
-
-    unet_out = unet_resnet_upblock_module_list[0](input, None)
-    unet_out = unet_resnet_upblock_module_list[1](unet_out, None)
-    unet_out = unet_upblock.upsamplers[0](unet_out)
+    res_hidden_states_tuple = (hidden_state , hidden_state , hidden_state )
 
 
-    tt_input = torch_to_tt_tensor(input, device)
-    tt_upblock = TtupBlock2D(in_channels=in_channels, out_channels=out_channels, temb_channels=temb_channels, dropout= 0.0, num_layers= 2, resnet_eps= 1e-6,
+    # temb_shape  = [out_channels, out_channels]
+    # temb = torch.randn(temb_shape, dtype=torch.float32)
+
+###
+    # hidden_states_shape = [2, 1280, 8, 8]
+    temb_shape = [1, 1, 2, 1280]
+
+    # input = torch.randn(hidden_states_shape)
+    temb = torch.randn(temb_shape)
+
+###
+    # print('my input:', input.shape)
+    unet_out = unet_upblock(hidden_state, res_hidden_states_tuple, None, None)
+    # unet_out = unet_upblock.upsamplers[0](unet_out)
+    print('\n\nRun tt upblock\n\n')
+
+    # tt_hidden_states = torch_to_tt_tensor(hidden_state, device)
+    tt_upblock = TtUpBlock2D(in_channels=in_channels, prev_output_channel = prev_output_channel, out_channels=out_channels, temb_channels=temb_channels, dropout= 0.0, num_layers= 3, resnet_eps= 1e-6,
                                   resnet_time_scale_shift = "default", resnet_act_fn= "silu", resnet_groups=resnet_groups, resnet_pre_norm= True, output_scale_factor=1.0,
-                                  add_upsample=True, upsample_padding=1, state_dict=state_dict, base_address = base_address)
+                                  add_upsample=True, state_dict=state_dict, base_address = base_address)
 
-
-    tt_out = tt_upblock(tt_input, None)[0]
+    tt_out = tt_upblock(hidden_state, res_hidden_states_tuple, None, None)
     tt_out = tt_to_torch_tensor(tt_out, host)
-    print('unet_out:', unet_out[0,0,0,:12])
 
-    print('torch tt_out:', tt_out[0,0,0,:12])
+    print('unet out shape:', unet_out.shape)
+    print('tt out shape:', tt_out.shape)
+    print('unet out:', unet_out[0,0,0,:12])
+
+    print('tt out:', tt_out[0,0,0,:12])
 
     print(comp_allclose_and_pcc(unet_out, tt_out))
 
@@ -159,6 +179,7 @@ if __name__ == "__main__":
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
     run_upblock_inference(host, device)
     ttl.device.CloseDevice(device)

@@ -38,7 +38,7 @@ def test_run_unetmid2dcrossattn_inference():
         num_layers = 1
         resnet_eps = 1e-05
         resnet_time_scale_shift = 'default'
-        resnet_act_fn = 'swish'
+        resnet_act_fn = 'silu'
         resnet_groups = 32
         resnet_pre_norm = True
         attn_num_head_channels = 8
