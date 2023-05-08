@@ -174,8 +174,8 @@ std::vector<L1BankAddrPair> BasicAllocator::allocate_interleaved_l1_buffer(int n
     std::vector<std::pair<uint32_t, uint32_t>> candidate_addr_ranges;
 
     std::vector<L1BankAddrPair> bank_to_size;
-    for (uint32_t x = 0; x < this->logical_grid_size_.x; x++) {
-        for (uint32_t y = 0; y < this->logical_grid_size_.y; y++) {
+    for (uint32_t y = 0; y < this->logical_grid_size_.y; y++) {
+        for (uint32_t x = 0; x < this->logical_grid_size_.x; x++) {
             tt_xy_pair logical_core = {x, y};
             int num_units_in_bank = num_equally_distributed_units;
             if (remaining_units_after_equally_distributing > 0) {

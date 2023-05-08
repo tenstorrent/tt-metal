@@ -269,8 +269,8 @@ std::vector<L1BankAddrPair> L1BankingAllocator::allocate_interleaved_l1_buffer(i
         return range.first >= this-> storage_core_bank_size_bytes_ and range.second >= this->storage_core_bank_size_bytes_;
     };
 
-    for (uint32_t x = 0; x < this->logical_grid_size_.x; x++) {
-        for (uint32_t y = 0; y < this->logical_grid_size_.y; y++) {
+    for (uint32_t y = 0; y < this->logical_grid_size_.y; y++) {
+        for (uint32_t x = 0; x < this->logical_grid_size_.x; x++) {
             tt_xy_pair logical_core = {x, y};
             if (this->is_compute_and_storage_core(logical_core)) {
                 auto &bank = this->bank_for_logical_compute_and_storage_core(logical_core);
