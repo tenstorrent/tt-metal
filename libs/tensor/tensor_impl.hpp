@@ -388,8 +388,18 @@ inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         std::vector<float> float_data = cast_vec<float>(data);
         uint32_data = pack_fp32_vec_as_bfp8_tiles(float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-    }
-    else {
+    } else if (tensor.dtype() == DataType::BFLOAT16) {
+        if (tensor.interleaved()) {
+            if (tensor.layout() == Layout::ROW_MAJOR) {
+                TT_ASSERT(tensor.shape()[3] % 2 == 0, "Input tensor width must be a multiple of 2 to pack interleaved row major data");
+            } else if (tensor.layout() == Layout::CHANNELS_LAST) {
+                TT_ASSERT(tensor.shape()[1] % 2 == 0, "Input tensor channel must be a multiple of 2 to pack interleaved channels last data");
+            }
+        } else {
+            TT_ASSERT(tensor.volume() % 2 == 0, "Input tensor volume must be a multiple of 2 to pack contiguous data");
+        }
+        uint32_data = pack_vec_into_uint32_vec<T>(data);
+    } else {
         uint32_data = pack_vec_into_uint32_vec<T>(data);
     }
     if (tensor.interleaved()) {
