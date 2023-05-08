@@ -4,9 +4,9 @@
   tasks:
     - name: Make TT flash rom script executable
       file:
-        path: "infra_testing/assets/tt_flash/{{ arch }}/tt-flash"
+        path: "/opt/tt_metal_infra/assets/tt_flash/{{ arch }}/tt-flash"
         mode: u+x
     - name: Flash ROM on board to install new firmware and params
       become: yes
       command:
-        cmd: "infra_testing/assets/tt_flash/{{ arch }}/tt-flash"
+        cmd: "/opt/tt_metal_infra/assets/tt_flash/{{ arch }}/tt-flash"

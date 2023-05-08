@@ -3,18 +3,20 @@
   hosts: all
   tasks:
     - name: Download weka install script
+      become: yes
       ansible.builtin.uri:
         url: "http://172.27.36.114:14000/dist/v1/install"
-        dest: infra_testing/scripts/install_weka.sh
+        dest: /opt/tt_metal_infra/scripts/install_weka.sh
         status_code: [200, 304]
     - name: Make weka install script executable
+      become: yes
       ansible.builtin.file:
-        path: infra_testing/scripts/install_weka.sh
-        mode: u+x
+        path: /opt/tt_metal_infra/scripts/install_weka.sh
+        mode: ugo+x
     - name: Execute weka install script
       become: yes
       ansible.builtin.shell:
-        cmd: infra_testing/scripts/install_weka.sh
+        cmd: /opt/tt_metal_infra/scripts/install_weka.sh
       async: 600
       poll: 5
     - name: Make MLPerf dir for mounting

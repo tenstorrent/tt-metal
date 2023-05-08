@@ -19,74 +19,81 @@
           - libboost-all-dev=1.71.0.0ubuntu2
           - libsndfile1=1.0.28-7ubuntu0.1
 
+- name: Create tt_metal_infra assets
+  hosts: all
+  tasks:
+    - name: Remove current installation of tt_metal_infra
+      become: yes
+      file:
+        path: /opt/tt_metal_infra
+        state: absent
+    - name: Make workspace and syseng directories
+      become: yes
+      file:
+        path: /opt/tt_metal_infra
+        state: directory
+        mode: ugo+r
+    - name: Copy scripts
+      become: yes
+      ansible.builtin.copy:
+        src: ../scripts/
+        dest: "/opt/tt_metal_infra/scripts/"
+    - name: Copy assets
+      become: yes
+      ansible.builtin.copy:
+        src: ../assets/
+        dest: "/opt/tt_metal_infra/assets/"
+    - name: Unpack driver tar directly
+      become: yes
+      ansible.builtin.unarchive:
+        src: "/opt/tt_metal_infra/assets/tt_driver/ttkmd_1.14.tar.gz"
+        dest: "/opt/tt_metal_infra/assets/tt_driver/"
+        remote_src: yes
+
 - name: Install doxygen
   hosts: all
   tasks:
-    - name: Remove current installation of infra_testing
+    - name: Make doxygen workspace
+      become: yes
       file:
-        path: doxygen-1.9.6
-        state: absent
-    - name: Remove existing oxygen download
-      file:
-        path: doxygen-1.9.6.linux.bin.tar.gz
-        state: absent
+        path: /opt/tt_metal_infra/doxygen
+        state: directory
     - name: Download doxygen
+      become: yes
       ansible.builtin.uri:
         url: "https://www.doxygen.nl/files/doxygen-1.9.6.linux.bin.tar.gz"
-        dest: "/home/{{ ansible_user }}/"
+        dest: "/opt/tt_metal_infra/doxygen/"
         status_code: [200, 304]
     - name: Unpack doxygen
+      become: yes
       ansible.builtin.unarchive:
-        src: doxygen-1.9.6.linux.bin.tar.gz
-        dest: "/home/{{ ansible_user }}/"
+        src: /opt/tt_metal_infra/doxygen/doxygen-1.9.6.linux.bin.tar.gz
+        dest: "/opt/tt_metal_infra/doxygen/"
         remote_src: yes
     - name: Install doxygen
       become: yes
       ansible.builtin.shell:
-        chdir: "/home/{{ ansible_user }}/doxygen-1.9.6"
+        chdir: "/opt/tt_metal_infra/doxygen/doxygen-1.9.6"
         cmd: "make install"
-
-- name: Create infra_testing assets and verify devices
-  hosts: all
-  tasks:
-    - name: Remove current installation of infra_testing
-      file:
-        path: infra_testing
-        state: absent
-    - name: Make workspace and syseng directories
-      file:
-        path: infra_testing
-        state: directory
-    - name: Copy scripts
-      ansible.builtin.copy:
-        src: ../scripts/
-        dest: "infra_testing/scripts/"
-    - name: Copy assets
-      ansible.builtin.copy:
-        src: ../assets/
-        dest: "infra_testing/assets/"
-    - name: Unpack driver tar directly
-      ansible.builtin.unarchive:
-        src: "/home/{{ ansible_user }}/infra_testing/assets/tt_driver/ttkmd_1.14.tar.gz"
-        dest: "/home/{{ ansible_user }}/infra_testing/assets/tt_driver/"
-        remote_src: yes
 
 - name: Install SMI
   hosts: all
   tasks:
-    - name: Make infra_testing workspace for tt-smi
+    - name: Make tt_metal_infra workspace for tt-smi
+      become: yes
       file:
-        path: "infra_testing/tt_smi/{{ arch }}"
+        path: "/opt/tt_metal_infra/tt_smi/{{ arch }}"
         state: directory
     - name: Copy SMI to workspace (assuming assets downloaded)
+      become: yes
       ansible.builtin.copy:
         src: "../assets/tt_smi/{{ arch }}/tt-smi"
-        dest: "infra_testing/tt_smi/{{ arch }}/tt-smi"
+        dest: "/opt/tt_metal_infra/tt_smi/{{ arch }}/tt-smi"
     - name: Install SMI to local bin
       become: yes
       ansible.builtin.copy:
         remote_src: true
-        src: "infra_testing/tt_smi/{{ arch }}/tt-smi"
+        src: "/opt/tt_metal_infra/tt_smi/{{ arch }}/tt-smi"
         dest: "/usr/local/bin/tt-smi"
     - name: Make tt-smi executable
       become: yes
