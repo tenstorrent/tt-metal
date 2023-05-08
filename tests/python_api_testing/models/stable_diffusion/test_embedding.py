@@ -16,7 +16,7 @@ from typing import Optional
 from libs import tt_lib as ttl
 from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tensor_rm
-from python_api_testing.models.stable_diffusion.time_embedding import TtTimestepEmbedding
+from python_api_testing.models.stable_diffusion.embeddings import TtTimestepEmbedding
 from loguru import logger
 # 320 1280 inputs to time embedding
 # t_emb (2, 320)
