@@ -488,7 +488,7 @@ def test_WhipserForConditionalGeneration_inference():
     correct_transcription = " Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel."
 
     # sample = 3
-    # correct_transcription = " He has grave doubts whether Sir Frederick Leighton's work is really Greek after all, and can discover in it but little of rocky Ithaca."
+    # correct_transcription = " He has grave doubts whether Sir Frederick Leighton's work is really Greek after all and can discover in it but little of rocky Ithaca."
 
     tt_transcription = run_generate(sample = sample, device=device)
 
