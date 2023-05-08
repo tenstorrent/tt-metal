@@ -20,3 +20,10 @@ env ARCH_NAME=grayskull python tests/scripts/run_build_kernels_for_riscv.py -j 1
 env python tests/scripts/run_llrt.py --short-driver-tests
 
 ./tests/scripts/run_python_api_unit_tests.sh
+
+echo "Checking docs build..."
+
+cd $TT_METAL_HOME/docs
+python -m pip install -r requirements-docs.txt
+make clean
+make html
