@@ -67,42 +67,101 @@ inline void llk_unpack_debug_dump_seek(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
-inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand, const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+inline void llk_unpack_reconfig_data_format_srca_impl(const std::uint32_t srca_operand_id) {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
+
+    uint32_t alu_config_data = gl_alu_format_spec_reg;
+
+    gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(
+        ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32,
+        ALU_FORMAT_SPEC_REG0_SrcA_SHAMT,
+        ALU_FORMAT_SPEC_REG0_SrcA_MASK,
+        unpack_dst_format[srca_operand_id],
+        alu_config_data);
+
+    reconfig_unpacker_data_format(
+        srca_operand_id, THCON_SEC0_REG0_TileDescriptor_ADDR32, THCON_SEC0_REG2_Out_data_format_ADDR32);
+}
+
+inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
+    std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
+    std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+
+    if((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id])) {
+        llk_unpack_reconfig_data_format_srca_impl(new_srca_operand_id);
+    }
+}
+
+inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
+    llk_unpack_reconfig_data_format_srca_impl(get_operand_id(srca_new_operand));
+}
+
+inline void llk_unpack_reconfig_data_format_srcb_impl(std::uint32_t srcb_operand_id) {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
+
+    uint32_t alu_config_data = gl_alu_format_spec_reg;
+
+    gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(
+        ALU_FORMAT_SPEC_REG_SrcB_val_ADDR32,
+        ALU_FORMAT_SPEC_REG1_SrcB_SHAMT,
+        ALU_FORMAT_SPEC_REG1_SrcB_MASK,
+        unpack_dst_format[srcb_operand_id],
+        alu_config_data);
+
+    reconfig_unpacker_data_format(
+        srcb_operand_id, THCON_SEC1_REG0_TileDescriptor_ADDR32, THCON_SEC1_REG2_Out_data_format_ADDR32);
+}
+
+inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
+    std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+
+    if((unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
+        llk_unpack_reconfig_data_format_srcb_impl(new_srcb_operand_id);
+    }
+}
+
+inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
+    llk_unpack_reconfig_data_format_srcb_impl(get_operand_id(srcb_new_operand));
+}
+
+inline void llk_unpack_reconfig_data_format_impl(std::uint32_t srca_operand_id, std::uint32_t srcb_operand_id) {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+
+    uint alu_src_format = (unpack_dst_format[srcb_operand_id] << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
+                          (unpack_dst_format[srca_operand_id] << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT);
+    uint alu_src_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
+    uint32_t alu_config_data = gl_alu_format_spec_reg;
+
+    gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(
+        ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, alu_src_mask, alu_src_format, alu_config_data);
+
+    reconfig_unpacker_data_format(
+        srca_operand_id, THCON_SEC0_REG0_TileDescriptor_ADDR32, THCON_SEC0_REG2_Out_data_format_ADDR32);
+    reconfig_unpacker_data_format(
+        srcb_operand_id, THCON_SEC1_REG0_TileDescriptor_ADDR32, THCON_SEC1_REG2_Out_data_format_ADDR32);
+}
+
+inline void llk_unpack_reconfig_data_format(
+    const std::uint32_t srca_old_operand,
+    const std::uint32_t srca_new_operand,
+    const std::uint32_t srcb_old_operand,
+    const std::uint32_t srcb_new_operand) {
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
-
-    if((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id]) && (unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
-        
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
-
-        uint alu_src_format = (unpack_dst_format[new_srcb_operand_id] << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) | (unpack_dst_format[new_srca_operand_id] << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT);
-        uint alu_src_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
-        uint32_t alu_config_data = gl_alu_format_spec_reg;
-
-        gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, alu_src_mask, alu_src_format, alu_config_data);
-
-        reconfig_unpacker_data_format(new_srca_operand_id, THCON_SEC0_REG0_TileDescriptor_ADDR32, THCON_SEC0_REG2_Out_data_format_ADDR32);
-        reconfig_unpacker_data_format(new_srcb_operand_id, THCON_SEC1_REG0_TileDescriptor_ADDR32, THCON_SEC1_REG2_Out_data_format_ADDR32);
-    } else if((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id])) {
-
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
-
-        uint32_t alu_config_data = gl_alu_format_spec_reg;
-
-        gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, ALU_FORMAT_SPEC_REG0_SrcA_SHAMT, ALU_FORMAT_SPEC_REG0_SrcA_MASK, unpack_dst_format[new_srca_operand_id], alu_config_data);
-
-        reconfig_unpacker_data_format(new_srca_operand_id, THCON_SEC0_REG0_TileDescriptor_ADDR32, THCON_SEC0_REG2_Out_data_format_ADDR32);
-    } else if((unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
-
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
-
-        uint32_t alu_config_data = gl_alu_format_spec_reg;
-
-        gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, ALU_FORMAT_SPEC_REG1_SrcB_SHAMT, ALU_FORMAT_SPEC_REG1_SrcB_MASK, unpack_dst_format[new_srcb_operand_id], alu_config_data);
-
-        reconfig_unpacker_data_format(new_srcb_operand_id, THCON_SEC1_REG0_TileDescriptor_ADDR32, THCON_SEC1_REG2_Out_data_format_ADDR32);
+    if ((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id]) &&
+        (unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
+        llk_unpack_reconfig_data_format_impl(new_srca_operand_id, new_srcb_operand_id);
+    } else if ((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id])) {
+        llk_unpack_reconfig_data_format_srca_impl(new_srca_operand_id);
+    } else if ((unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
+        llk_unpack_reconfig_data_format_srcb_impl(new_srcb_operand_id);
     }
+}
+
+inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
+    llk_unpack_reconfig_data_format_impl(get_operand_id(srca_new_operand), get_operand_id(srcb_new_operand));
 }

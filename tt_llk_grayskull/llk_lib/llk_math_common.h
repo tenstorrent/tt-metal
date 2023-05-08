@@ -98,5 +98,10 @@ inline void llk_math_debug_dump_seek(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
-//Function only used by wh,, alu reconfig happens in unpack thread for gs
+//Functions only used by wh,, alu reconfig happens in unpack thread for gs
 inline void llk_math_reconfig_data_format(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand, const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {}
+inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {}
+inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {}
+inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {}
+inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {}
+inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {}
