@@ -176,7 +176,7 @@ Post-processing device profiler
 
 
 Automation tests for the profiler module
-----------------------------------
+----------------------------------------
 
 If new changes were made to the post processing scripts, please run automated test to make sure previously supported
 measurements still have support.
