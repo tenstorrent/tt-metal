@@ -33,6 +33,7 @@ struct p_gpr_unpack
     constexpr static uint PERF_FIRST_UNP_HI = 33;   // timestamp for first-unpack-instruction (high 32b)
     constexpr static uint TILE_SIZE_A       = 36;   // Holds tile size for unpacker 0
     constexpr static uint TILE_SIZE_B       = 37;   // Holds tile size for unpacker 1
+    constexpr static uint KT_DIM            = 38;   // Holds matmul kt_dim
 };
 
 // Math GPR thread

@@ -106,9 +106,7 @@ inline void llk_math_debug_dump_seek(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
-inline void llk_math_reconfig_data_format(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand, const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
-    
-
+inline void llk_math_reconfig_data_format(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand, const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {    
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
@@ -124,4 +122,41 @@ inline void llk_math_reconfig_data_format(const std::uint32_t srca_old_operand, 
     } else if((unpack_dst_format[old_srcb_operand_id] != unpack_dst_format[new_srcb_operand_id])){
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>((uint)unpack_dst_format[new_srcb_operand_id]);
     }
+}
+
+inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {    
+    std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+    std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+
+    uint config_data = (unpack_dst_format[new_srca_operand_id] << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (unpack_dst_format[new_srcb_operand_id] << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT);
+    constexpr uint config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
+}
+
+inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
+    std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
+    std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+
+    if((unpack_dst_format[old_srca_operand_id] != unpack_dst_format[new_srca_operand_id])){
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>((uint)unpack_dst_format[new_srca_operand_id]);
+    }
+}
+
+inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
+    std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>((uint)unpack_dst_format[new_srca_operand_id]);
+}
+
+inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
+    std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+
+    if((unpack_dst_format[old_srcb_operand_id] != unpack_dst_format[new_srcb_operand_id])){
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>((uint)unpack_dst_format[new_srcb_operand_id]);
+    }
+}
+
+inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
+    std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>((uint)unpack_dst_format[new_srcb_operand_id]);
 }

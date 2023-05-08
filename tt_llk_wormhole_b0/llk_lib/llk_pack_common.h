@@ -160,6 +160,10 @@ inline void llk_pack_debug_dump_seek(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
+inline void llk_pack_reconfig_data_format(const std::uint32_t new_operand) {
+    reconfig_packer_data_format(get_output_id(new_operand));
+}
+
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_operand, const std::uint32_t new_operand) {
     std::uint32_t old_operand_id = get_output_id(old_operand);
     std::uint32_t new_operand_id = get_output_id(new_operand);

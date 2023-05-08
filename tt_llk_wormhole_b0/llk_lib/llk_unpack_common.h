@@ -68,25 +68,52 @@ inline void llk_unpack_debug_dump_seek(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
-inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand, const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+inline void llk_unpack_reconfig_data_format_srca_impl(std::uint32_t srca_operand_id)
+{
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format[srca_operand_id]);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format[srca_operand_id]);
+    TT_SETDMAREG(0, LOWER_HALFWORD(GET_L1_TILE_SIZE((uint)unpack_src_format[srca_operand_id])), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
+}
+
+inline void llk_unpack_reconfig_data_format_srcb_impl(std::uint32_t srcb_operand_id)
+{
+    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format[srcb_operand_id]);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format[srcb_operand_id]);
+    TT_SETDMAREG(0, LOWER_HALFWORD(GET_L1_TILE_SIZE((uint)unpack_src_format[srcb_operand_id])), 0, LO_16(p_gpr_unpack::TILE_SIZE_B)); // update gpr which holds tile size B
+}
+
+inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
+    llk_unpack_reconfig_data_format_srca_impl(get_operand_id(srca_new_operand));
+}
+
+inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
+    llk_unpack_reconfig_data_format_srcb_impl(get_operand_id(srcb_new_operand));
+}
+
+inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+
+    if((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id])) {
+        llk_unpack_reconfig_data_format_srca_impl(new_srca_operand_id);
+    }
+}
+
+inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
-
-    if((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id]) && (unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format[new_srca_operand_id]);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format[new_srca_operand_id]);
-        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format[new_srcb_operand_id]);
-        cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format[new_srcb_operand_id]);
-
-    } else if((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id])) {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format[new_srca_operand_id]);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format[new_srca_operand_id]);
-
-    } else if((unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
-        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format[new_srcb_operand_id]);
-        cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format[new_srcb_operand_id]);
+    if((unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
+        llk_unpack_reconfig_data_format_srcb_impl(new_srcb_operand_id);
     }
+}
+
+inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
+    llk_unpack_reconfig_data_format_srca(srca_new_operand);
+    llk_unpack_reconfig_data_format_srcb(srcb_new_operand);
+}
+
+inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand, const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    llk_unpack_reconfig_data_format_srca(srca_old_operand, srca_new_operand);
+    llk_unpack_reconfig_data_format_srcb(srcb_old_operand, srcb_new_operand);
 }

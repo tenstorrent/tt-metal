@@ -15,7 +15,7 @@ using namespace ckernel::unpacker;
 inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim) {
 
     const bool reuse_a = ct_dim >= rt_dim;
-    constexpr uint replay_buf_prog_len = 12;
+    constexpr uint replay_buf_prog_len = 10;
     if (reuse_a) {
         #if SKIP_UNP0 == 1
             TTI_REPLAY(0, 1, 0, 1);
@@ -25,15 +25,13 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uin
 
             TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
-            TT_SETDMAREG(0, LOWER_HALFWORD(regfile[p_gpr_unpack::TILE_SIZE_A]), 0, LO_16(p_gpr_unpack::TMP_LO));
-            TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
+            TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
             //TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG7_Offset_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
             TTI_NOP;
             TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
-            TT_SETDMAREG(0, LOWER_HALFWORD(regfile[p_gpr_unpack::TILE_SIZE_A]), 0, LO_16(p_gpr_unpack::TMP_LO));
-            TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
+            TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
             //TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG7_Offset_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
             TTI_NOP;
@@ -47,14 +45,12 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uin
 
             TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_address_ADDR32);
-            TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim*regfile[p_gpr_unpack::TILE_SIZE_B]), 0, LO_16(p_gpr_unpack::TMP_LO));
             TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
             //TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG7_Offset_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
             TTI_NOP;
             TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
-            TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim*regfile[p_gpr_unpack::TILE_SIZE_B]), 0, LO_16(p_gpr_unpack::TMP_LO));
             TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
             //TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG7_Offset_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
@@ -114,6 +110,8 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXX(0b11, TILE_WIDTH*TILE_HEIGHT-1, 0x0);
+
+    TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 }
 
 inline void llk_unpack_AB_matmul(
@@ -128,6 +126,10 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t base_address_b = operands[inputB].f.fifo_rd_ptr;
     const bool reuse_a = ct_dim >= rt_dim; 
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+
+    if (!reuse_a) {
+        TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
+    }
 
     for (uint t = 0; t < t_dim; t++) {
 
