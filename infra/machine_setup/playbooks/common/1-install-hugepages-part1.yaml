@@ -26,25 +26,6 @@
       ansible.builtin.assert:
         that:
           - "tt_dev_stat.stat.exists == true"
-    - name: Copy hugepages rc to remote rc.local
-      become: yes
-      ansible.builtin.copy:
-        src: "/opt/tt_metal_infra/scripts/rc.local"
-        dest: /etc/rc.local
-        remote_src: yes
-    - name: Make rc.local executable
-      become: yes
-      file:
-        path: /etc/rc.local
-        mode: u+x
-    - name: Enable rc.local
-      become: yes
-      ansible.builtin.systemd:
-        name: rc-local.service
-        state: started
-        daemon_reload: true
-      async: 450
-      poll: 5
     - name: Execute script to enable
       become: yes
       shell:
