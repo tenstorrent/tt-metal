@@ -4,7 +4,7 @@
   vars:
     machine_type: vm
 
-- name: Enable rc-local for VM
+- name: Enable rc-local for hugepages on bootup
   hosts: all
   tasks:
     - name: Copy hugepages rc to remote rc.local
