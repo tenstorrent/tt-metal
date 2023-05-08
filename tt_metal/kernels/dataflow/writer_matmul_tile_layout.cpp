@@ -30,11 +30,11 @@ void kernel_main() {
     // single-tile
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
-    const InterleavedPow2AddrGen s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = out_tensor_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
 

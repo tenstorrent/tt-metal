@@ -20,18 +20,18 @@ void kernel_main() {
     #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
     #if (tile_size_is_pow2)
     constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = dst_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent // TODO(AP): refactor
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGen s = {
+    const InterleavedAddrGen<true> s = {
         .bank_base_address = dst_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .bank_unit_size = tile_bytes
+
+
+        .page_size = tile_bytes
     };
     #endif
 

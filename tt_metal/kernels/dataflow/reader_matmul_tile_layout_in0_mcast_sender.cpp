@@ -67,18 +67,18 @@ void kernel_main() {
     // to receive the mcast
     volatile uint32_t* in0_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in0_mcast_sender_semaphore_addr);
 
-    const InterleavedPow2AddrGen s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = in0_tensor_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
-    const InterleavedPow2AddrGen s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = in1_tensor_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
     bool one_time_multicast = true;

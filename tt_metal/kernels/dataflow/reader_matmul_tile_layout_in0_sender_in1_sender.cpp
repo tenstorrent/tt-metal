@@ -91,18 +91,18 @@ void kernel_main() {
     bool one_time_noc_wait_1 = true;
     bool one_time_cb_push = true;
 
-    const InterleavedPow2AddrGen s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = in0_tensor_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
-    const InterleavedPow2AddrGen s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = in1_tensor_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
 

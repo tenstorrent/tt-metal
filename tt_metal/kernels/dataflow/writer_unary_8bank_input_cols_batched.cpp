@@ -16,11 +16,11 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
-    const InterleavedPow2AddrGen s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = dst_addr,
-        .num_used_banks = 8,
-        .log_base_2_of_num_used_banks = 3,
-        .log_base_2_of_bank_unit_size = 11 // TODO(AP): refactor
+
+
+        .log_base_2_of_page_size = 11 // TODO(AP): refactor
     };
 
     uint32_t tile_id = 0;

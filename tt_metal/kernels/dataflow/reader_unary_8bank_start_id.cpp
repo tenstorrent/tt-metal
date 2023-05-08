@@ -29,11 +29,11 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    const InterleavedPow2AddrGen s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = src_addr,
-        .num_used_banks = 8,
-        .log_base_2_of_num_used_banks = 3,
-        .log_base_2_of_bank_unit_size = 11
+
+
+        .log_base_2_of_page_size = 11
     };
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

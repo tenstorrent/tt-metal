@@ -38,11 +38,11 @@ void kernel_main() {
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
 
-    const InterleavedPow2AddrGen s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = src0_addr,
-        .num_used_banks = 8,
-        .log_base_2_of_num_used_banks = 3,
-        .log_base_2_of_bank_unit_size = 11
+
+
+        .log_base_2_of_page_size = 11
     };
     u32 h = start_id / (CT*WT) % H;
     u32 htWT = (h >> 5) * WT;

@@ -41,11 +41,11 @@ void kernel_main() {
     constexpr uint32_t num_used_dram_ch = 8;
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
     constexpr uint32_t tile_size_pow2_exponent = 11;
-    const InterleavedPow2AddrGen s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = src1_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
     uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
     uint32_t index = 0;

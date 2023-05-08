@@ -96,7 +96,7 @@ void kernel_main() {
     #endif
 
     constexpr bool read_from_dram =
-    #ifdef get_compile_time_arg_val
+    #ifdef KERNEL_COMPILE_TIME_ARG_0
     get_compile_time_arg_val(0)
     #else
     true

@@ -49,18 +49,18 @@ void kernel_main() {
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
     constexpr uint32_t tile_size_pow2_exponent = 11;
 
-    const InterleavedPow2AddrGen s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = in0_tensor_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
-    const InterleavedPow2AddrGen s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = in1_tensor_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
     constexpr uint32_t cb_id_in0 = 0;

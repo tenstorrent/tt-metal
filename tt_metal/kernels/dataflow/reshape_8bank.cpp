@@ -26,11 +26,11 @@ void kernel_main() {
     constexpr u32 operand0 = 0;
 
 
-    const InterleavedPow2AddrGen s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = src0_addr,
-        .num_used_banks = 8,
-        .log_base_2_of_num_used_banks = 3,
-        .log_base_2_of_bank_unit_size = 11
+
+
+        .log_base_2_of_page_size = 11
     };
 
     // Sticks are a row of elements in a single tile (32 elements)

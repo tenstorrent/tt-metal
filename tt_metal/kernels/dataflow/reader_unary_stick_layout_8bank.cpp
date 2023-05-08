@@ -21,19 +21,19 @@ void kernel_main() {
 
     constexpr bool stick_size_is_power_of_two = (get_compile_time_arg_val(0) == 1);
     #if (stick_size_is_power_of_two)
-    const uint32_t log_base_2_of_bank_unit_size = get_arg_val<uint32_t>(3);
-    const InterleavedPow2AddrGen s = {
+    const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(3);
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = src_addr,
-        .num_used_banks = num_dram_channels,
-        .log_base_2_of_num_used_banks = log_base_2_of_num_dram_channels,
-        .log_base_2_of_bank_unit_size = log_base_2_of_bank_unit_size // TODO(AP): refactor
+
+
+        .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGen s = {
+    const InterleavedAddrGen<true> s = {
         .bank_base_address = src_addr,
-        .num_used_banks = num_dram_channels,
-        .log_base_2_of_num_used_banks = log_base_2_of_num_dram_channels,
-        .bank_unit_size = stick_size
+
+
+        .page_size = stick_size
     };
     #endif
 

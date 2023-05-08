@@ -19,11 +19,11 @@ void kernel_main() {
     const uint32_t num_tiles_c = stick_size / 64; // Assuming 2 bytes per datum, there are 64 bytes per tile row
     uint32_t stick_id          = 0;
 
-    const InterleavedAddrGen s = {
+    const InterleavedAddrGen<true> s = {
         .bank_base_address = dst_addr,
-        .num_used_banks = num_dram_channels,
-        .log_base_2_of_num_used_banks = log_base_2_of_num_dram_channels,
-        .bank_unit_size = stick_size
+
+
+        .page_size = stick_size
     };
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {

@@ -29,18 +29,18 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t i_bcast = 0;
 
-    const InterleavedPow2AddrGen s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = src0_addr,
-        .num_used_banks = 8,
-        .log_base_2_of_num_used_banks = 3,
-        .log_base_2_of_bank_unit_size = 11
+
+
+        .log_base_2_of_page_size = 11
     };
 
-    const InterleavedPow2AddrGen s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = src1_addr,
-        .num_used_banks = 8,
-        .log_base_2_of_num_used_banks = 3,
-        .log_base_2_of_bank_unit_size = 11
+
+
+        .log_base_2_of_page_size = 11
     };
 
     uint32_t i_nc = 0;

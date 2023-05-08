@@ -30,18 +30,18 @@ void kernel_main() {
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
     constexpr uint32_t tile_size_pow2_exponent = 11;
 
-    const InterleavedAddrGen s0 = {
+    const InterleavedAddrGen<true> s0 = {
         .bank_base_address = src0_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .bank_unit_size = address_map[2] // size of 1 stick = transfer size in address map = number of channels
+
+
+        .page_size = address_map[2] // size of 1 stick = transfer size in address map = number of channels
     };
 
-    const InterleavedPow2AddrGen s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = src1_addr,
-        .num_used_banks = num_used_dram_ch,
-        .log_base_2_of_num_used_banks = num_used_dram_ch_pow2_exponent,
-        .log_base_2_of_bank_unit_size = tile_size_pow2_exponent
+
+
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
     uint32_t l1_write_addr_in0;

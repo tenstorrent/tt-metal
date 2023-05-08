@@ -11,7 +11,7 @@ void kernel_main() {
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
     constexpr bool write_to_dram =
-    #ifdef get_compile_time_arg_val
+    #ifdef KERNEL_COMPILE_TIME_ARG_0
     get_compile_time_arg_val(0)
     #else
     true
