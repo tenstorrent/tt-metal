@@ -38,17 +38,24 @@ Then, run the Ansible playbooks:
 
 ```
 ansible-playbook -i inventory/<INV_FILE> playbooks/0-install-deps.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/<machine_type>/6-mount-weka.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot-sync.yaml
 ansible-playbook -i inventory/<INV_FILE> playbooks/3-install-drivers.yaml
-ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot-sync.yaml
 ansible-playbook -i inventory/<INV_FILE> playbooks/4-install-flash.yaml
-ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot-sync.yaml
 ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages-part1.yaml
-ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot-sync.yaml
 ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages-part2.yaml
-ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot.yaml
+ansible-playbook -i inventory/<INV_FILE> playbooks/2-reboot-sync.yaml
 ansible-playbook -i inventory/<INV_FILE> playbooks/1-install-hugepages-verify.yaml
 ansible-playbook -i inventory/<INV_FILE> playbooks/5-verify-hw.yaml
 ```
+
+where ``<machine_type>`` is one of:
+
+* ``bm``
+* ``vm``
 
 **NOTE**: You can add ``--forks <number-of-forks>`` to speed up the Ansible
 calls.
