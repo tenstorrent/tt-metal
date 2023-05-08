@@ -23,12 +23,12 @@ def run_bloom_attention_test(device):
     hugging_bloom_reference_model.eval()
 
     block = 0
-    hidden_size = hugging_bloom_reference_model.config.hidden_size # 1024
-    n_head = hugging_bloom_reference_model.config.n_head
-    hidden_dropout = hugging_bloom_reference_model.config.hidden_dropout
-    beta = 0 # hugging_bloom_reference_model.config.? Not sure what this is
+    config = hugging_bloom_reference_model.config
+    state_dict = hugging_bloom_reference_model.state_dict()
+    base_address = f"transformer.h.{block}.self_attention"
+    hidden_size = config.hidden_size
 
-    tt_bloom_attention = bloom_attention.TtBloomAttention(device, "transformer.h", block, hugging_bloom_reference_model, hidden_size, n_head, hidden_dropout, beta)
+    tt_bloom_attention = bloom_attention.TtBloomAttention(config, state_dict, base_address, device)
     pt_bloom_attention = hugging_bloom_reference_model.transformer.h[block].self_attention
 
     # Prepare input
@@ -36,13 +36,13 @@ def run_bloom_attention_test(device):
 
     hidden_states = ((torch.rand(1, 64, hidden_size) * 2) - 1) / hidden_size
     residual = ((torch.rand(1, 64, hidden_size) * 2) - 1) / hidden_size
-    alibi = ((torch.rand(n_head, 64, 64) * 2) - 1) / 64
+    alibi = ((torch.rand(config.n_head, 64, 64) * 2) - 1) / 64
     attention_mask = torch.randint(0, 2, (1, 1, 64, 64))
 
     pt_out = pt_bloom_attention.forward(hidden_states, residual, alibi, attention_mask)[0]
     print("Finished calc pt")
 
-    tt_out = tt_bloom_attention.forward(device, hidden_states, residual, alibi, attention_mask)
+    tt_out = tt_bloom_attention.forward(device, hidden_states, residual, alibi, attention_mask)[0]
     print("Finished calc tt")
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)

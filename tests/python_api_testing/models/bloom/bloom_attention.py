@@ -190,20 +190,17 @@ def merge_heads(x: torch.Tensor, num_heads, head_dim) -> torch.Tensor:
 #             output_tensor = self.dense(context_layer)
 
 #         output_tensor = dropout_add.dropout_add(output_tensor, residual, self.hidden_dropout, self.training)
-
 #         return output_tensor
 
 
 class TtBloomAttention(torch.nn.Module):
-    def __init__(self, device, dict_name, num, bloom_reference_model, hidden_size, num_heads, hidden_dropout, beta):
+    def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 
-        sd = bloom_reference_model.state_dict()
-        self.hidden_size = hidden_size
-        self.num_heads = num_heads
+        self.hidden_size = config.hidden_size
+        self.num_heads = config.n_head
         self.head_dim = self.hidden_size // self.num_heads
-        self.split_size = hidden_size
-        self.hidden_dropout = hidden_dropout
+        self.hidden_dropout = config.hidden_dropout
 
         if self.head_dim * self.num_heads != self.hidden_size:
             raise ValueError(
@@ -211,15 +208,18 @@ class TtBloomAttention(torch.nn.Module):
                 f" {self.num_heads})."
             )
 
-        weight_q = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.self_attention.query_key_value.weight", sd)
-        bias_q = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.self_attention.query_key_value.bias", sd)
+        weight_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.weight", state_dict)
+        bias_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.bias", state_dict)
 
-        weight_d = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.self_attention.dense.weight", sd)
-        bias_d = bloom_utils.tt_load_layer_weights(f"{dict_name}.{num}.self_attention.dense.bias", sd)
+        weight_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.weight", state_dict)
+        bias_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.bias", state_dict)
 
         # Layer-wise attention scaling
         self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)
-        self.beta = beta
+        self.beta = 1.0
+
+        alpha_beta_shape = [1, self.num_heads, self.head_dim, self.head_dim]
+        self.inv_norm_factor = bloom_utils.tt_const_tensor(self.inv_norm_factor, alpha_beta_shape, device)
 
         self.query_key_value = TtLinear(self.hidden_size, 3 * self.hidden_size, weight_q, bias_q, device)
         self.dense = TtLinear(self.hidden_size, self.hidden_size, weight_d, bias_d, device)
@@ -277,7 +277,14 @@ class TtBloomAttention(torch.nn.Module):
 
         _, _, kv_length = p_reshaped_key_layer_squeezed.shape
 
-        tt_matmul_result = baddbmm.tt_baddbmm(device=device, input=alibi, batch1=p_reshaped_query_layer_squeezed, batch2=p_reshaped_key_layer_squeezed, beta=self.beta, alpha=self.inv_norm_factor)
+        tt_matmul_result = baddbmm.tt_baddbmm(
+            device=device,
+            input=alibi,
+            batch1=p_reshaped_query_layer_squeezed,
+            batch2=p_reshaped_key_layer_squeezed,
+            beta=self.beta,
+            alpha=self.inv_norm_factor
+        )
 
         # change view to [batch_size, num_heads, q_length, kv_length]
         tt_attention_scores = ttm.tensor.reshape(tt_matmul_result, batch_size, self.num_heads, q_length, kv_length)
@@ -313,9 +320,9 @@ class TtBloomAttention(torch.nn.Module):
         # output_tensor = F.dropout(output_tensor, p=self.hidden_dropout, training=False)
         output_tensor = ttm.tensor.add(bloom_utils.torch2tt_tensor(residual, device), output_tensor)
 
-        # outputs = (output_tensor, present)
+        outputs = (output_tensor, present)
 
-        # if output_attentions:
-        #    outputs += (tt_attention_probs,)
+        if output_attentions:
+            outputs += (tt_attention_probs,)
 
-        return output_tensor
+        return outputs

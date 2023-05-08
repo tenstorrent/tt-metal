@@ -93,6 +93,7 @@ def tt2torch_tensor(tt_tensor):
     py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
     return py_output
 
+
 def tt_const_tensor(value, shape, device):
     pytorch_const = torch.full(shape, value)
     tt_const = torch2tt_tensor(pytorch_const, device)
@@ -103,9 +104,11 @@ def tt_load_layer_weights(layer_name, state_dict):
     weights = tilize_to_list(pad_weight(state_dict[layer_name]))
     return weights
 
+
 def pt_load_layer_weights(layer_name, state_dict):
     weights = torch.nn.Parameter(torch.tensor(state_dict[layer_name]))
     return weights
+
 
 def read_model_config(json_file):
     # read file

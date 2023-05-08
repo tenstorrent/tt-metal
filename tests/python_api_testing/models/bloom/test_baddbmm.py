@@ -9,24 +9,27 @@ sys.path.append(f"{f}/../../../..")
 import torch
 from libs import tt_lib as ttm
 
-from transformers import BloomForCausalLM
 from utility_functions import print_diff_argmax
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
-
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
 import python_api_testing.models.bloom.baddbmm as baddbmm
 
-def run_baddbmm_test(device):
 
-    # Prepare input
+def run_baddbmm_test(device):
     torch.manual_seed(0)
+
     input = torch.rand(32, 64, 64)
     batch1 = torch.rand(32, 64, 32)
     batch2 = torch.rand(32, 32, 64)
 
-    pt_out = torch.baddbmm(input, batch1, batch2)
+    alpha = 0.25
+    beta = 0.5
+    tt_alpha = bloom_utils.tt_const_tensor(alpha, [1, 32, 64, 64], device)
+    tt_beta = bloom_utils.tt_const_tensor(beta, [1, 32, 64, 64], device)
+
+    pt_out = torch.baddbmm(input, batch1, batch2, beta=beta, alpha=alpha)
     pt_out_size = list(pt_out.shape)
 
     while len(pt_out_size) < 4:
@@ -34,8 +37,7 @@ def run_baddbmm_test(device):
 
     pt_out = torch.reshape(pt_out, pt_out_size)
 
-    tt_out = baddbmm.tt_baddbmm(device, input, batch1, batch2)
-
+    tt_out = baddbmm.tt_baddbmm(device, input, batch1, batch2, beta=tt_beta, alpha=tt_alpha)
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 
     print_diff_argmax(pt_out, tt_out_converted)
@@ -49,7 +51,6 @@ def run_baddbmm_test(device):
     else:
         logger.warning("baddbmm: Failed!")
 
-
     assert does_pass
 
 
@@ -58,3 +59,7 @@ def test_baddbmm():
     ttm.device.InitializeDevice(device)
     run_baddbmm_test(device)
     ttm.device.CloseDevice(device)
+
+
+if __name__ == "__main__":
+    test_baddbmm()

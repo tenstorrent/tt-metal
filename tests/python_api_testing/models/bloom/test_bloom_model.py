@@ -20,42 +20,39 @@ import python_api_testing.models.bloom.bloom_model as bloom_model
 
 
 def run_bloom_model_test(device):
-
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
-    print(hugging_bloom_reference_model.state_dict())
+    hugging_bloom_reference_model.eval()
 
+    print(hugging_bloom_reference_model.config)
 
-    hidden_size = hugging_bloom_reference_model.config.hidden_size # 1024
-    n_head = hugging_bloom_reference_model.config.n_head
-    vocab_size = hugging_bloom_reference_model.config.vocab_size
-    layer_norm_epsilon = hugging_bloom_reference_model.config.layer_norm_epsilon
-    num_hidden_layers = hugging_bloom_reference_model.config.num_hidden_layers
+    config = hugging_bloom_reference_model.config
+    #use_cache
+    state_dict = hugging_bloom_reference_model.state_dict()
+    base_address = "transformer"
+    # hidden_size = config.hidden_size # 1024
+    # n_head = config.n_head
 
-
-    tt_bloom_model = bloom_model.TtBloomModel(device, hugging_bloom_reference_model, hidden_size, n_head, vocab_size, hidden_size, layer_norm_epsilon, num_hidden_layers)
-    pt_bloom_model = bloom_model.BloomModel(hugging_bloom_reference_model, hidden_size, n_head, vocab_size, hidden_size, layer_norm_epsilon, num_hidden_layers)
-    #pt_bloom_model = BloomModel(hugging_bloom_reference_model, 1024, 32,  250880, 1024, 1e-5, 2)
+    tt_bloom_model = bloom_model.TtBloomModel(config, state_dict, base_address, device)
+    pt_bloom_model = hugging_bloom_reference_model.transformer
 
     # Prepare input
     torch.manual_seed(0)
 
     input_ids = torch.randint(0, 100, (1, 64))
 
-    pt_out = pt_bloom_model.forward(input_ids)
-    pt_out = pt_out[0]
-
+    pt_out = pt_bloom_model.forward(input_ids)[0]
     print("PT finished")
 
-    tt_out = tt_bloom_model.forward(device, input_ids)
-
+    tt_out = tt_bloom_model.forward(device, input_ids)[0]
     print("TT finished")
 
-    tt_out_converted = bloom_utils.tt2torch_tensor(tt_out[0])
+    tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
     tt_out_converted = tt_out_converted.squeeze(0)
-    tt_out_converted = tt_out_converted.squeeze(0)
+
+    print(f"pt_out shape {pt_out.shape}")
+    print(f"tt_out_converted shape {tt_out_converted.shape}")
 
     print_diff_argmax(pt_out, tt_out_converted)
-
     does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.40)
 
     print(comp_allclose(pt_out, tt_out_converted))
@@ -65,10 +62,16 @@ def run_bloom_model_test(device):
         logger.info("bloom_model: Passed!")
     else:
         logger.warning("bloom_model: Failed!")
+
     assert does_pass
+
 
 def test_bloom_model():
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     run_bloom_model_test(device)
     ttm.device.CloseDevice(device)
+
+
+if __name__ == "__main__":
+    test_bloom_model()
