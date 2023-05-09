@@ -116,22 +116,23 @@ bool run_matmul(const bool with_bias) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
-        auto src1_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
 
-        tt_metal::DramBuffer* src2_dram_buffer = nullptr;
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_act, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size_act, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_weights, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
+
+        tt_metal::Buffer src2_dram_buffer;
         uint32_t dram_buffer_src2_addr = 0;
         if (with_bias) {
             int dram_src2_channel_id = 2;
-            src2_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src2_channel_id, single_tile_size * N, dram_buffer_src2_addr);
+            src2_dram_buffer = tt_metal::Buffer(device, single_tile_size * N, dram_buffer_src2_addr, dram_src2_channel_id, single_tile_size * N, tt_metal::BufferType::DRAM);
         }
 
-        auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_out, dram_buffer_dst_addr);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_out, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size_out, tt_metal::BufferType::DRAM);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
 
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
@@ -267,17 +268,17 @@ bool run_matmul(const bool with_bias) {
         auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         auto activations_tile_transposed = transpose_tiles(activations, M, K);
-        pass &= tt_metal::WriteToDeviceDRAM(src0_dram_buffer, activations_tile_transposed);
+        tt_metal::WriteToBuffer(src0_dram_buffer, activations_tile_transposed);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 32x32 identity
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        pass &= tt_metal::WriteToDeviceDRAM(src1_dram_buffer, weights);
+        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
 
         if (with_bias) {
             vector<uint32_t> bias(N * 512, 0); // Just a zero bias, since the output check is identity
-            pass &= tt_metal::WriteToDeviceDRAM(src2_dram_buffer, bias);
+            tt_metal::WriteToBuffer(src2_dram_buffer, bias);
         }
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
@@ -298,7 +299,7 @@ bool run_matmul(const bool with_bias) {
         };
 
         if (with_bias) {
-            auto dram_src2_noc_xy = src2_dram_buffer->noc_coordinates();
+            auto dram_src2_noc_xy = src2_dram_buffer.noc_coordinates();
             vector<uint32_t> bias_args = {
                 dram_buffer_src2_addr,
                 (std::uint32_t)dram_src2_noc_xy.x,
@@ -333,7 +334,7 @@ bool run_matmul(const bool with_bias) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
+        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

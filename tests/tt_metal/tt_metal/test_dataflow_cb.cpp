@@ -39,11 +39,11 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-        auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         int num_cbs = 1; // works at the moment
         assert(num_tiles % num_cbs == 0);
@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= tt_metal::WriteToDeviceDRAM(src_dram_buffer, src_vec);
+        tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -156,7 +156,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
+        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

@@ -10,83 +10,57 @@ namespace tt {
 
 namespace tt_metal {
 
+enum class BufferType {
+    DRAM,
+    L1,
+    SYSTEM_MEMORY
+};
+
 class Buffer {
    public:
-    Buffer(Device *device, uint32_t size_in_bytes, uint32_t address, bool allocated_on_device)
-        : device_(device), size_in_bytes_(size_in_bytes), address_(address), allocated_on_device_(allocated_on_device) {}
+    Buffer() : device_(nullptr) {}
 
-    virtual ~Buffer() {}
+    Buffer(Device *device, uint32_t size, uint32_t address, uint32_t starting_bank_id, uint32_t page_size, const BufferType buffer_type);
 
-    // TODO: Buffer clone should do memcopy
-    virtual Buffer *clone() = 0;
+    Buffer(Device *device, uint32_t size, uint32_t starting_bank_id, uint32_t page_size, const BufferType buffer_type);
+
+    ~Buffer();
 
     Device *device() const { return device_; }
 
-    // Returns size of buffer in bytes.
-    uint32_t size() const { return size_in_bytes_; }
+    uint32_t size() const { return size_; }
 
+    // Returns address of buffer in the first bank
     uint32_t address() const { return address_; }
 
-    virtual tt_xy_pair noc_coordinates() const = 0;
+    uint32_t starting_bank_id() const { return starting_bank_id_; }
 
-   protected:
-    virtual void free() = 0;
-    friend void DeallocateBuffer(Buffer *buffer);
+    uint32_t page_size() const { return page_size_; }
 
-    Device *device_;
-    uint32_t size_in_bytes_;    // Size in bytes
-    uint32_t address_;          // L1 address
-    bool allocated_on_device_;  // Indicates if buffer space has been explicitly allocated
-};
+    BufferType buffer_type() const { return buffer_type_; }
 
-class DramBuffer : public Buffer {
-   public:
-    DramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes);
+    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
-    DramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address);
+    tt_xy_pair logical_core_from_bank_id(uint32_t bank_id) const;
 
-    ~DramBuffer();
+    tt_xy_pair noc_coordinates(uint32_t bank_id) const;
 
-    Buffer *clone();
-
-    int dram_channel() const { return dram_channel_; }
-
+    // returns NoC coordinates of first bank buffer is in
     tt_xy_pair noc_coordinates() const;
+
+    uint32_t page_address(uint32_t bank_id, uint32_t page_index) const;
 
    private:
-    void free();
-    friend void DeallocateBuffer(Buffer *buffer);
+    void deallocate();
+    friend void DeallocateBuffer(Buffer &buffer);
 
-    friend class InterleavedDramBuffer;
-
-    int dram_channel_;          // DRAM channel ID
-};
-
-// Fwd declares
-class Program;
-class CircularBuffer;
-
-class L1Buffer : public Buffer {
-   public:
-    L1Buffer(Device *device, const tt_xy_pair &logical_core, uint32_t size_in_bytes);
-
-    L1Buffer(Device *device, const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
-
-    ~L1Buffer();
-
-    Buffer *clone();
-
-    tt_xy_pair logical_core() const { return logical_core_; }
-
-    tt_xy_pair noc_coordinates() const;
-
-   protected:
-    void reserve();
-
-    void free();
-    friend void DeallocateBuffer(Buffer *buffer);
-
-    tt_xy_pair logical_core_;          // Logical core
+    Device *device_;
+    uint32_t size_;                 // Size in bytes
+    uint32_t address_;              // Address of buffer in starting_bank
+    uint32_t starting_bank_id_;
+    uint32_t page_size_;            // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    BufferType buffer_type_;
+    BankIdToRelativeAddress bank_id_to_relative_address_;
 };
 
 }  // namespace tt_metal

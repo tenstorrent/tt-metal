@@ -100,7 +100,7 @@ void compile_and_configure_program(
     tt_metal::Device *device,
     tt_metal::Program *program,
     std::vector<uint32_t> &src_vec,
-    tt_metal::DramBuffer *src_dram_buffer) {
+    tt_metal::Buffer &src_dram_buffer) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
@@ -110,24 +110,24 @@ void compile_and_configure_program(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::WriteToDeviceDRAM(src_dram_buffer, src_vec);
+    tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
     tt_metal::ConfigureDeviceWithProgram(device, program);
 }
 
 void write_same_runtime_args_to_device(
-    tt_metal::Device *device, tt_metal::Program *program, const tt_metal::CoreRange &core_range, int32_t num_tiles, tt_metal::DramBuffer *src_dram_buffer, tt_metal::DramBuffer *dst_dram_buffer) {
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+    tt_metal::Device *device, tt_metal::Program *program, const tt_metal::CoreRange &core_range, int32_t num_tiles, tt_metal::Buffer &src_dram_buffer, tt_metal::Buffer &dst_dram_buffer) {
+    auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
+    auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
     std::vector<uint32_t> unary_reader_args{
-    (std::uint32_t)src_dram_buffer->address(),
+    (std::uint32_t)src_dram_buffer.address(),
     (std::uint32_t)dram_src_noc_xy.x,
     (std::uint32_t)dram_src_noc_xy.y,
     (std::uint32_t)num_tiles};
 
     std::vector<uint32_t> unary_writer_args{
-    (std::uint32_t)dst_dram_buffer->address(),
+    (std::uint32_t)dst_dram_buffer.address(),
     (std::uint32_t)dram_dst_noc_xy.x,
     (std::uint32_t)dram_dst_noc_xy.y,
     (std::uint32_t)num_tiles};
@@ -147,36 +147,36 @@ void write_unique_writer_runtime_args_to_device(
     const tt_metal::CoreRange &core_range,
     const tt_metal::CoreBlocks &core_blocks,
     int32_t num_tiles,
-    tt_metal::DramBuffer *src_dram_buffer,
-    tt_metal::DramBuffer *dst_dram_buffer_1,
-    tt_metal::DramBuffer *dst_dram_buffer_2,
-    tt_metal::DramBuffer *dst_dram_buffer_3
+    tt_metal::Buffer &src_dram_buffer,
+    tt_metal::Buffer &dst_dram_buffer_1,
+    tt_metal::Buffer &dst_dram_buffer_2,
+    tt_metal::Buffer &dst_dram_buffer_3
 ) {
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+    auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
     // All dst buffers use the same DRAM channel
-    auto dram_dst_noc_xy = dst_dram_buffer_1->noc_coordinates();
+    auto dram_dst_noc_xy = dst_dram_buffer_1.noc_coordinates();
 
     // Same readers args because all kernels read from same src
     std::vector<uint32_t> unary_reader_args{
-        (std::uint32_t)src_dram_buffer->address(),
+        (std::uint32_t)src_dram_buffer.address(),
         (std::uint32_t)dram_src_noc_xy.x,
         (std::uint32_t)dram_src_noc_xy.y,
         (std::uint32_t)num_tiles};
 
     std::vector<uint32_t> unary_writer_args_1{
-        dst_dram_buffer_1->address(),
+        dst_dram_buffer_1.address(),
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,
         (std::uint32_t)num_tiles};
 
     std::vector<uint32_t> unary_writer_args_2{
-        dst_dram_buffer_2->address(),
+        dst_dram_buffer_2.address(),
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,
         (std::uint32_t)num_tiles};
 
     std::vector<uint32_t> unary_writer_args_3{
-        dst_dram_buffer_3->address(),
+        dst_dram_buffer_3.address(),
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,
         (std::uint32_t)num_tiles};
@@ -197,48 +197,48 @@ void write_unique_reader_writer_runtime_args_to_device(
     int32_t num_tiles_1,
     int32_t num_tiles_2,
     int32_t num_tiles_3,
-    tt_metal::DramBuffer *src_dram_buffer,
-    tt_metal::DramBuffer *dst_dram_buffer_1,
-    tt_metal::DramBuffer *dst_dram_buffer_2,
-    tt_metal::DramBuffer *dst_dram_buffer_3
+    tt_metal::Buffer &src_dram_buffer,
+    tt_metal::Buffer &dst_dram_buffer_1,
+    tt_metal::Buffer &dst_dram_buffer_2,
+    tt_metal::Buffer &dst_dram_buffer_3
 ) {
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+    auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
     // All dst buffers use the same DRAM channel
-    auto dram_dst_noc_xy = dst_dram_buffer_1->noc_coordinates();
+    auto dram_dst_noc_xy = dst_dram_buffer_1.noc_coordinates();
 
     // Data movement kernels across core groups read and write different number of tiles
     std::vector<uint32_t> unary_reader_args_1{
-        src_dram_buffer->address(),
+        src_dram_buffer.address(),
         (std::uint32_t)dram_src_noc_xy.x,
         (std::uint32_t)dram_src_noc_xy.y,
         (std::uint32_t)num_tiles_1};
 
     std::vector<uint32_t> unary_reader_args_2{
-        src_dram_buffer->address(),
+        src_dram_buffer.address(),
         (std::uint32_t)dram_src_noc_xy.x,
         (std::uint32_t)dram_src_noc_xy.y,
         (std::uint32_t)num_tiles_2};
 
     std::vector<uint32_t> unary_reader_args_3{
-        src_dram_buffer->address(),
+        src_dram_buffer.address(),
         (std::uint32_t)dram_src_noc_xy.x,
         (std::uint32_t)dram_src_noc_xy.y,
         (std::uint32_t)num_tiles_3};
 
     std::vector<uint32_t> unary_writer_args_1{
-        dst_dram_buffer_1->address(),
+        dst_dram_buffer_1.address(),
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,
         (std::uint32_t)num_tiles_1};
 
     std::vector<uint32_t> unary_writer_args_2{
-        dst_dram_buffer_2->address(),
+        dst_dram_buffer_2.address(),
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,
         (std::uint32_t)num_tiles_2};
 
     std::vector<uint32_t> unary_writer_args_3{
-        dst_dram_buffer_3->address(),
+        dst_dram_buffer_3.address(),
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,
         (std::uint32_t)num_tiles_3};
@@ -272,8 +272,8 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(tt_metal::Device
     uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
     int dram_dst_channel_id = 0;
 
-    auto src_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-    auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
@@ -290,7 +290,7 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(tt_metal::Device
     tt_metal::Program *program = create_program(device, single_tile_size, all_cores, eltwise_unary_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-        src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
+        src_dram_buffer.size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
@@ -299,7 +299,7 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(tt_metal::Device
     tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> result_vec;
-    tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
+    tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
 
     ////////////////////////////////////////////////////////////////////////////
     //                          Validation
@@ -337,10 +337,10 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     uint32_t dram_buffer_dst_addr_3 = dram_buffer_dst_addr_2 + dram_buffer_size;
     int dram_dst_channel_id = 0;
 
-    auto src_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-    auto dst_dram_buffer_1 = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr_1);
-    auto dst_dram_buffer_2 = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr_2);
-    auto dst_dram_buffer_3 = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr_3);
+    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_1 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_1, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_2 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_2, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_3 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_3, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
@@ -356,7 +356,7 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     tt_metal::Program *program = create_program(device, single_tile_size, all_cores, eltwise_unary_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-        src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
+        src_dram_buffer.size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
@@ -366,13 +366,13 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> result_vec_1;
-    tt_metal::ReadFromDeviceDRAM(dst_dram_buffer_1, result_vec_1);
+    tt_metal::ReadFromBuffer(dst_dram_buffer_1, result_vec_1);
 
     std::vector<uint32_t> result_vec_2;
-    tt_metal::ReadFromDeviceDRAM(dst_dram_buffer_2, result_vec_2);
+    tt_metal::ReadFromBuffer(dst_dram_buffer_2, result_vec_2);
 
     std::vector<uint32_t> result_vec_3;
-    tt_metal::ReadFromDeviceDRAM(dst_dram_buffer_3, result_vec_3);
+    tt_metal::ReadFromBuffer(dst_dram_buffer_3, result_vec_3);
 
 
     ////////////////////////////////////////////////////////////////////////////
@@ -420,10 +420,10 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     uint32_t dram_buffer_dst_addr_3 = dram_buffer_dst_addr_2 + dram_buffer_size_2;
     int dram_dst_channel_id = 0;
 
-    auto src_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size_1, dram_buffer_src_addr);
-    auto dst_dram_buffer_1 = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_1, dram_buffer_dst_addr_1);
-    auto dst_dram_buffer_2 = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_2, dram_buffer_dst_addr_2);
-    auto dst_dram_buffer_3 = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_3, dram_buffer_dst_addr_3);
+    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_1, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size_1, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_1 = tt_metal::Buffer(device, dram_buffer_size_1, dram_buffer_dst_addr_1, dram_dst_channel_id, dram_buffer_size_1, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_2 = tt_metal::Buffer(device, dram_buffer_size_2, dram_buffer_dst_addr_2, dram_dst_channel_id, dram_buffer_size_2, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_3 = tt_metal::Buffer(device, dram_buffer_size_3, dram_buffer_dst_addr_3, dram_dst_channel_id, dram_buffer_size_3, tt_metal::BufferType::DRAM);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
@@ -446,7 +446,7 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     tt_metal::Program *program = create_program(device, single_tile_size, all_cores, eltwise_unary_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-        src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
+        src_dram_buffer.size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
@@ -457,13 +457,13 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> result_vec_1;
-    tt_metal::ReadFromDeviceDRAM(dst_dram_buffer_1, result_vec_1);
+    tt_metal::ReadFromBuffer(dst_dram_buffer_1, result_vec_1);
 
     std::vector<uint32_t> result_vec_2;
-    tt_metal::ReadFromDeviceDRAM(dst_dram_buffer_2, result_vec_2);
+    tt_metal::ReadFromBuffer(dst_dram_buffer_2, result_vec_2);
 
     std::vector<uint32_t> result_vec_3;
-    tt_metal::ReadFromDeviceDRAM(dst_dram_buffer_3, result_vec_3);
+    tt_metal::ReadFromBuffer(dst_dram_buffer_3, result_vec_3);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation

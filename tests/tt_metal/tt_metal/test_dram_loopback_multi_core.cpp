@@ -68,16 +68,12 @@ int main(int argc, char **argv) {
 
         TT_ASSERT(num_output_tiles % transient_buffer_size_tiles == 0);
 
-        auto input_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_src_addr);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        auto l1_b0 = tt_metal::CreateL1Buffer(program, device, loader_logical_core, transient_buffer_size_bytes, loader_buffer_address);
+        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        auto l1_b1 = tt_metal::CreateL1Buffer(program, device, writer_logical_core, transient_buffer_size_bytes, writer_buffer_address);
-
-        auto output_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_dst_addr);
-
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+        auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
+        auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
         // Loader (producer kernel) running on BRISC on logical core {0, 0}
         auto producer_kernel = tt_metal::CreateDataMovementKernel(
@@ -103,8 +99,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &=
-            tt_metal::WriteToDeviceDRAM(input_dram_buffer, src_vec);
+        pass &= tt_metal::WriteToBuffer(input_dram_buffer, src_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -142,7 +137,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceDRAM(output_dram_buffer, result_vec);
+        tt_metal::ReadFromBuffer(output_dram_buffer, result_vec);
         auto dst_vec = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
         ////////////////////////////////////////////////////////////////////////////

@@ -14,18 +14,6 @@ using namespace tt;
 void initialize_program(tt_metal::Device *device, tt_metal::Program *program, const tt_metal::CoreRange &core_range) {
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 2048;
-    uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-
-    uint32_t dram_buffer_src_addr = 0;
-    int dram_src_channel_id = 0;
-    uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-    int dram_dst_channel_id = 0;
-
-    auto src_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-    auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
-
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
     // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
@@ -121,7 +109,7 @@ bool test_initialize_semaphores(tt_metal::Device *device, tt_metal::Program *pro
         for (auto y = core_range.first.y; y <= core_range.second.y; y++) {
             auto logical_core = tt_xy_pair(x, y);
             std::vector<uint32_t> res;
-            tt_metal::ReadFromDeviceL1(device, logical_core, SEMAPHORE_BASE, res, SEMAPHORE_SIZE);
+            tt_metal::ReadFromDeviceL1(device, logical_core, SEMAPHORE_BASE, SEMAPHORE_SIZE, res);
             pass &= res == golden;
         }
     }

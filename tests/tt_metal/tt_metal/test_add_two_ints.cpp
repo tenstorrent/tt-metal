@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
         tt_metal::DumpDeviceProfileResults(device, program);
 
         std::vector<uint32_t> first_kernel_result;
-        tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, first_kernel_result, sizeof(int));
+        tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, sizeof(int), first_kernel_result);
         log_info(LogVerif, "first kernel result = {}", first_kernel_result[0]);
 
         tt_metal::DumpHostProfileResults("first");
@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
         tt_metal::DumpDeviceProfileResults(device, program);
 
         std::vector<uint32_t> second_kernel_result;
-        tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, second_kernel_result, sizeof(int));
+        tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, sizeof(int), second_kernel_result);
         log_info(LogVerif, "second kernel result = {}", second_kernel_result[0]);
 
         tt_metal::DumpHostProfileResults("second");

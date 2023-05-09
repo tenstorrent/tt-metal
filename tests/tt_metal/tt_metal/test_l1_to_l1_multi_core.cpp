@@ -48,13 +48,16 @@ int main(int argc, char **argv) {
                     dst_soc_core.y += 1;
                 }
                 std::cout << "Sending from " << j+1 << "," << i+1 << " to " << i+1 << "," << j+1 << std::endl;
-                auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
+                auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+                TT_ASSERT(not l1_bank_ids.empty());
+                auto l1_bank_id = l1_bank_ids.at(0);
+                auto l1_b0 = tt_metal::Buffer(device, dram_buffer_size, l1_buffer_addr, l1_bank_id, dram_buffer_size, tt_metal::BufferType::L1);
 
                 std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(
                     dram_buffer_size, i * 10 + j);
-                auto src_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
-                auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-                pass &= tt_metal::WriteToDeviceDRAM(src_dram_buffer, src_vec);
+                auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+                auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
+                tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
                 auto l1_to_l1_kernel = tt_metal::CreateDataMovementKernel(
                         program,
@@ -99,7 +102,7 @@ int main(int argc, char **argv) {
         for(uint32_t i = 0; i < 10; i++) {
             for(uint32_t j = i+1; j < 10; j++) {
                 tt_xy_pair core = {(size_t) j, (size_t) i};
-                tt_metal::ReadFromDeviceL1(device, core, l1_buffer_addr, result_vec, total_tiles_size_bytes);
+                tt_metal::ReadFromDeviceL1(device, core, l1_buffer_addr, total_tiles_size_bytes, result_vec);
                 std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(
                     dram_buffer_size, j * 10 + i);
                 if(src_vec != result_vec) {

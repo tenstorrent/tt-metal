@@ -43,8 +43,9 @@ int main(int argc, char **argv) {
         // since we are not setting NOC_CMD_BRCST_SRC_INCLUDE
         uint32_t dest_buffer_addr = 200 * 1024;
 
-        auto dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_addr);
-        auto dram_noc_xy = dram_buffer->noc_coordinates();
+        auto dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_addr, dram_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+
+        auto dram_noc_xy = dram_buffer.noc_coordinates();
 
         tt_xy_pair core_start = {0, 0};
         std::size_t num_cores_x = 12;
@@ -85,7 +86,7 @@ int main(int argc, char **argv) {
         SHAPE shape = {1, 1, 32, 32};
         tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto activations = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
-        pass &= tt_metal::WriteToDeviceDRAM(dram_buffer, activations);
+        tt_metal::WriteToBuffer(dram_buffer, activations);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         pass &= tt_metal::WriteRuntimeArgsToDevice(device, mcast_reader_kernel, core, mcast_reader_args);
@@ -98,7 +99,7 @@ int main(int argc, char **argv) {
             for(int j = 0 ; j < num_cores_x; j++) {
                 tt_xy_pair dest_core = {(std::size_t) core_start.x + j, (std::size_t) core_start.y + i};
                 std::vector<uint32_t> dest_core_data;
-                tt_metal::ReadFromDeviceL1(device, dest_core, dest_buffer_addr, dest_core_data, dram_buffer_size);
+                tt_metal::ReadFromDeviceL1(device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
                 auto dest_core_data_unpacked = unpack_uint32_vec_into_bfloat16_vec(dest_core_data);
                 pass &= (dest_core_data_unpacked == tensor.get_values());
                 if(not (dest_core_data_unpacked == tensor.get_values())) {

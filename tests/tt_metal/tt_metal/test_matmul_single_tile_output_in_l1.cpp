@@ -40,18 +40,17 @@ int main(int argc, char **argv) {
         int dram_src0_channel_id = 0;
         uint32_t dram_buffer_src1_addr = 0;
         int dram_src1_channel_id = 1;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
+        auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+        TT_ASSERT(not l1_bank_ids.empty());
+        auto l1_bank_id = l1_bank_ids.at(0);
 
-        auto src0_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size, dram_buffer_src0_addr);
-        auto src1_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
-        //auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
-        auto dst_l1_buffer = tt_metal::CreateL1Buffer(program, device, core, dram_buffer_size);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_l1_buffer = tt_metal::Buffer(device, dram_buffer_size, l1_bank_id, dram_buffer_size, tt_metal::BufferType::L1);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        //auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-        auto l1_dst_noc_xy = dst_l1_buffer->noc_coordinates();
+        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
+        auto l1_dst_noc_xy = dst_l1_buffer.noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
@@ -143,12 +142,12 @@ int main(int argc, char **argv) {
         tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto activations_tile_layout = convert_to_tile_layout(tensor.get_values());
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-        pass &= tt_metal::WriteToDeviceDRAM(src0_dram_buffer, activations);
+        tt_metal::WriteToBuffer(src0_dram_buffer, activations);
 
         auto identity = create_identity_matrix(32, 32, 32); //bflaot16 32x32 identity
         auto weights_tile_layout = convert_to_tile_layout(identity);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        pass &= tt_metal::WriteToDeviceDRAM(src1_dram_buffer, weights);
+        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -172,7 +171,7 @@ int main(int argc, char **argv) {
             device,
             unary_writer_kernel,
             core,
-            {dst_l1_buffer->address(),
+            {dst_l1_buffer.address(),
             (std::uint32_t)l1_dst_noc_xy.x,
             (std::uint32_t)l1_dst_noc_xy.y,
             num_tiles});
@@ -180,7 +179,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceL1(dst_l1_buffer, result_vec);
+        tt_metal::ReadFromBuffer(dst_l1_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

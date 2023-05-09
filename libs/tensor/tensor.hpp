@@ -6,7 +6,7 @@
 
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/host.hpp"
-#include "tt_metal/impl/buffers/interleaved_dram_buffer.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "common/bfloat16.hpp"
@@ -176,7 +176,7 @@ class Tensor {
         DataType dtype_;
         Layout layout_;
         Device *device_ = nullptr;                  // Set if tensor is allocated on device
-        Buffer *buffer_ = nullptr;                  // Tensor can be stored in multiple DRAM buffers across multiple banks or one buffer
+        Buffer *buffer_ = nullptr;                  // Tensors on device are backed by an underlying buffer
         MemoryConfig mem_config_;
 };
 

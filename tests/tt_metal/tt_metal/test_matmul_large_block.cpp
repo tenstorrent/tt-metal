@@ -365,13 +365,13 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
-        auto src1_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
-        auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_out, dram_buffer_dst_addr);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_act, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size_act, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_weights, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_out, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size_out, tt_metal::BufferType::DRAM);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         std::vector<uint32_t> mm_reader_rt_args{
             dram_buffer_src0_addr,
@@ -503,13 +503,13 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
             auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
             activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         }
-        pass &= tt_metal::WriteToDeviceDRAM(src0_dram_buffer, activations);
+        tt_metal::WriteToBuffer(src0_dram_buffer, activations);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 32x32 identity
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        pass &= tt_metal::WriteToDeviceDRAM(src1_dram_buffer, weights);
+        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -531,7 +531,7 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         pass &= tt_metal::LaunchKernels(device, program);
         // read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 1);
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
+        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

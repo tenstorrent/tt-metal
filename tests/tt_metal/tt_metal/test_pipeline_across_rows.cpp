@@ -177,12 +177,8 @@ int main(int argc, char **argv) {
         }
 
         /// used only if IO data in DRAM
-        tt_metal::DramBuffer* src_dram_buffer = nullptr;
-        tt_metal::DramBuffer* dst_dram_buffer = nullptr;
-
-        // used only if IO data in L1
-        tt_metal::L1Buffer* src_l1_buffer = nullptr;
-        tt_metal::L1Buffer* dst_l1_buffer = nullptr;
+        tt_metal::Buffer src_buffer;
+        tt_metal::Buffer dst_buffer;
 
         uint32_t src_address;
         tt_xy_pair src_noc_xy;
@@ -193,23 +189,31 @@ int main(int argc, char **argv) {
             uint32_t dram_buffer_addr = 0;
             TT_ASSERT(dram_buffer_addr + buffer_size <= 1024 * 1024 * 1024); // 1GB
 
-            src_dram_buffer = tt_metal::CreateDramBuffer(device, 0, buffer_size, dram_buffer_addr);
-            dst_dram_buffer = tt_metal::CreateDramBuffer(device, 7, buffer_size, dram_buffer_addr);
+            src_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr, 0, buffer_size, tt_metal::BufferType::DRAM);
+            dst_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr, 7, buffer_size, tt_metal::BufferType::DRAM);
 
-            src_address = src_dram_buffer->address();
-            src_noc_xy = src_dram_buffer->noc_coordinates();
-            dst_address = dst_dram_buffer->address();
-            dst_noc_xy = dst_dram_buffer->noc_coordinates();
+            src_address = src_buffer.address();
+            src_noc_xy = src_buffer.noc_coordinates();
+            dst_address = dst_buffer.address();
+            dst_noc_xy = dst_buffer.noc_coordinates();
         } else {
             uint32_t l1_buffer_addr = l1_alloc(buffer_size); // same address on src / dst cores
 
-            src_l1_buffer = tt_metal::CreateL1Buffer(program, device, cores[0],           buffer_size, l1_buffer_addr);
-            dst_l1_buffer = tt_metal::CreateL1Buffer(program, device, cores[num_cores-1], buffer_size, l1_buffer_addr);
+            auto src_l1_bank_ids = device->bank_ids_from_logical_core(cores[0]);
+            TT_ASSERT(not src_l1_bank_ids.empty());
+            auto src_l1_bank_id = src_l1_bank_ids.at(0);
 
-            src_address = src_l1_buffer->address();
-            src_noc_xy = device->worker_core_from_logical_core(src_l1_buffer->logical_core());
-            dst_address = dst_l1_buffer->address();
-            dst_noc_xy = device->worker_core_from_logical_core(dst_l1_buffer->logical_core());
+            auto dst_l1_bank_ids = device->bank_ids_from_logical_core(cores[num_cores - 1]);
+            TT_ASSERT(not dst_l1_bank_ids.empty());
+            auto dst_l1_bank_id = dst_l1_bank_ids.at(0);
+
+            src_buffer = tt_metal::Buffer(device, buffer_size, l1_buffer_addr, src_l1_bank_id, buffer_size, tt_metal::BufferType::L1);
+            dst_buffer = tt_metal::Buffer(device, buffer_size, l1_buffer_addr, dst_l1_bank_id, buffer_size, tt_metal::BufferType::L1);
+
+            src_address = src_buffer.address();
+            src_noc_xy = src_buffer.noc_coordinates();
+            dst_address = dst_buffer.address();
+            dst_noc_xy = dst_buffer.noc_coordinates();
         }
 
 
@@ -265,15 +269,11 @@ int main(int argc, char **argv) {
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         log_info("src_vec[0] = {}", src_vec[0]);
 
-        if (IO_data_in_dram) {
-            pass &= tt_metal::WriteToDeviceDRAM(src_dram_buffer, src_vec);
-        } else {
-            pass &= tt_metal::WriteToDeviceL1(device, src_l1_buffer->logical_core(), src_vec, src_l1_buffer->address());
-        }
+        tt_metal::WriteToBuffer(src_buffer, src_vec);
         // host initializes only the sender's semaphores, reciver's semaphores are initialized by the kernel
         std::vector<uint32_t> invalid = {INVALID};
         for (auto core : cores) {
-            tt_metal::WriteToDeviceL1(device, core, invalid, sender_semaphore_addr);
+            tt_metal::WriteToDeviceL1(device, core, sender_semaphore_addr, invalid);
         }
 
         // send run-time kernel arguments
@@ -334,12 +334,9 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Reading results from device...");
         std::vector<uint32_t> result_vec;
-        if (IO_data_in_dram) {
-            tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
-        } else {
-            tt_metal::ReadFromDeviceL1(device, dst_l1_buffer->logical_core(), dst_l1_buffer->address(), result_vec, dst_l1_buffer->size());
-        }
-            ////////////////////////////////////////////////////////////////////////////
+        tt_metal::ReadFromBuffer(dst_buffer, result_vec);
+
+        ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         pass &= (src_vec == result_vec);

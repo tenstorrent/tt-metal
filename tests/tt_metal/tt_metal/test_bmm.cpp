@@ -47,10 +47,11 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_src0_addr = 0;
         uint32_t dram_buffer_src1_addr = 256 * 1024 * 1024;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
+        uint32_t starting_dram_bank_id = 0;
 
-        auto src0_dram_buffer = tt_metal::CreateDramBuffer(device, 0, bytesA, dram_buffer_src0_addr);
-        auto src1_dram_buffer = tt_metal::CreateDramBuffer(device, 0, bytesB, dram_buffer_src1_addr);
-        auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, 0, bytesC, dram_buffer_dst_addr);
+        auto src0_dram_buffer = tt_metal::Buffer(device, bytesA, dram_buffer_src0_addr, starting_dram_bank_id, single_tile_size, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, bytesB, dram_buffer_src1_addr, starting_dram_bank_id, single_tile_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, bytesC, dram_buffer_dst_addr, starting_dram_bank_id, single_tile_size, tt_metal::BufferType::DRAM);
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
@@ -129,8 +130,8 @@ int main(int argc, char **argv) {
 
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-        pass &= tt_metal::WriteToDeviceDRAMChannelsInterleavedTiles(device, src0_vec, src0_dram_buffer->address());
-        pass &= tt_metal::WriteToDeviceDRAMChannelsInterleavedTiles(device, src1_vec, src1_dram_buffer->address());
+        tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
+        tt_metal::WriteToBuffer(src1_dram_buffer, src1_vec);
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         uint32_t do_bcast = 0;
         tt_metal::WriteRuntimeArgsToDevice(
@@ -144,8 +145,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceDRAMChannelsInterleavedTiles(
-            device, dst_dram_buffer->address(), result_vec, dst_dram_buffer->size());
+        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         {
             // Read the result back from device DRAM and ref comparisone

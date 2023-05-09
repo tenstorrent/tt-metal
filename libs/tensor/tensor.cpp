@@ -265,7 +265,7 @@ void Tensor::free_buffer() {
     if (this->buffer_ == nullptr) {
         return;
     }
-    DeallocateBuffer(this->buffer_);
+    DeallocateBuffer(*this->buffer_);
     delete this->buffer_;
     this->buffer_ = nullptr;
 }

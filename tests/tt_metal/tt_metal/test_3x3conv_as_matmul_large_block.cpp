@@ -140,13 +140,13 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_src0_size, dram_buffer_src0_addr);
-        auto src1_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_src1_size, dram_buffer_src1_addr);
-        auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_dst_size, dram_buffer_dst_addr);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_src0_size, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_src0_size, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_src1_size, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_src1_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_dst_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_dst_size, tt_metal::BufferType::DRAM);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         uint32_t cb0_index = 0;
         uint32_t cb0_addr = 200 * 1024;
@@ -300,9 +300,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
 
         auto activations = pack_bfloat16_vec_into_uint32_vec(src_vec);
-        pass &= tt_metal::WriteToDeviceDRAM(src0_dram_buffer, activations);
+        tt_metal::WriteToBuffer(src0_dram_buffer, activations);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tilized);
-        pass &= tt_metal::WriteToDeviceDRAM(src1_dram_buffer, weights);
+        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
         std::cout << "DONE WRITING TO DEVICE. GOING TO CONFIGURE DEVICE WITH PROGRAM" << std::endl;
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         tt_metal::WriteRuntimeArgsToDevice(
@@ -317,12 +317,13 @@ int main(int argc, char **argv) {
             core,
             writer_rt_args);
         std::cout << "DONE DEVICE CONFIGURE. GOING TO WRITE address map TO DEVICE L1" << std::endl;
-        tt_metal::WriteToDeviceL1(device, core, source_addresses, source_addresses_in_l1_addr);
+        tt_metal::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
 
         // DEBUG
         // Sanity check to verify address map in L1
         std::vector<uint32_t> source_addresses_in_l1;
-        tt_metal::ReadFromDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses_in_l1, source_addresses.size() * sizeof(uint32_t));
+
+        tt_metal::ReadFromDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses.size() * sizeof(uint32_t), source_addresses_in_l1);
         assert(source_addresses == source_addresses_in_l1);
         // END DEBUG
 
@@ -331,7 +332,7 @@ int main(int argc, char **argv) {
         std::cout << "DONE KERNELS. GOING TO READ FROM DRAM." << std::endl;
 
         std::vector<uint32_t> result_uint32;
-        tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_uint32);
+        tt_metal::ReadFromBuffer(dst_dram_buffer, result_uint32);
         auto result_vec_tilized = unpack_uint32_vec_into_bfloat16_vec(result_uint32);
         assert(golden_act_matrix_tilized.size() == result_vec_tilized.size());
         auto result_vec = untilize(result_vec_tilized, act_rows, weight_cols);

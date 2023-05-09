@@ -42,7 +42,10 @@ Tensor transpose_hc_rm(const Tensor &a) {
     tt_metal::Tensor output = tt_metal::Tensor(bshape, a.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, src0_dram_buffer->size());
+    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+    TT_ASSERT(not l1_bank_ids.empty());
+    auto l1_bank_id = l1_bank_ids.at(0);
+    auto l1_b0 = tt_metal::Buffer(device, src0_dram_buffer->size(), l1_bank_id, src0_dram_buffer->size(), tt_metal::BufferType::L1);
 
     uint32_t num_cb_tiles = 16;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
@@ -75,7 +78,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
         core,
         {src0_dram_buffer->address(),
         dst_dram_buffer->address(),
-        l1_b0->address(),
+        l1_b0.address(),
         uint32_t(N),
         uint32_t(C),
         uint32_t(H),
@@ -126,7 +129,10 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {
             tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
-            auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, per_core_l1_size, l1_buffer_addr);
+            auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+            TT_ASSERT(not l1_bank_ids.empty());
+            auto l1_bank_id = l1_bank_ids.at(0);
+            auto l1_b0 = tt_metal::Buffer(device, per_core_l1_size, l1_buffer_addr, l1_bank_id, per_core_l1_size, tt_metal::BufferType::L1);
         }
     }
     std::cout << "Creating kernels " << std::endl;

@@ -18,10 +18,9 @@ template<class... Ts> struct overloaded_core : Ts... { using Ts::operator()...; 
 template<class... Ts> overloaded_core(Ts...) -> overloaded_core<Ts...>;
 
 // Fwd declares
+enum class BufferType;
 class CircularBuffer;
-class DramBuffer;
-class InterleavedDramBuffer;
-class L1Buffer;
+class Buffer;
 class Program;
 
 // A physical PCIexpress Tenstorrent device
@@ -60,8 +59,19 @@ class Device {
 
     std::vector<tt_xy_pair> worker_cores_from_logical_cores(const std::vector<tt_xy_pair> &logical_cores);
 
+    uint32_t num_banks(const BufferType &buffer_type) const;
+
+    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
+
+    tt_xy_pair logical_core_from_bank_id(uint32_t bank_id) const;
+
+    std::vector<uint32_t> bank_ids_from_dram_channel(uint32_t dram_channel) const;
+
+    std::vector<uint32_t> bank_ids_from_logical_core(const tt_xy_pair &logical_core) const;
+
    private:
     bool cluster_is_initialized() const { return cluster_ != nullptr; }
+    void check_allocator_is_initialized() const;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
@@ -74,23 +84,8 @@ class Device {
     bool close();
     friend bool CloseDevice(Device *device);
 
-    // Interfaces to memory manager
-    uint32_t allocate_dram_buffer(int dram_channel, uint32_t size_in_bytes);
-    uint32_t allocate_dram_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address);
-    void free_dram_buffer(int dram_channel, uint32_t address);
-    uint32_t allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes);
-    uint32_t allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
-    uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes);
-    uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address);
-    void free_l1_buffer(const tt_xy_pair &logical_core, uint32_t address);
-    std::vector<DramBankAddrPair> allocate_interleaved_dram_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
-    std::vector<L1BankAddrPair> allocate_interleaved_l1_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
-    uint32_t address_for_circular_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes);
-    friend class DramBuffer;
-    friend class InterleavedDramBuffer;
+    friend class Buffer;
     friend class CircularBuffer;
-    friend class L1Buffer;
-    friend class InterleavedL1Buffer;
     friend std::vector<CircularBuffer *> CreateCircularBuffers(
         Program *program,
         Device *device,

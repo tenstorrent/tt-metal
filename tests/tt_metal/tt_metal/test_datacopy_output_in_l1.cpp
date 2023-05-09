@@ -45,12 +45,16 @@ int main(int argc, char **argv) {
         uint32_t buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         int dram_src_channel_id = 0;
-        auto src_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src_channel_id, buffer_size);
+        auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+        TT_ASSERT(not l1_bank_ids.empty());
+        auto l1_bank_id = l1_bank_ids.at(0);
 
-        auto dst_l1_buffer = tt_metal::CreateL1Buffer(program, device, core, buffer_size);
+        auto src_dram_buffer = tt_metal::Buffer(device, buffer_size, dram_src_channel_id, buffer_size, tt_metal::BufferType::DRAM);
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto l1_dst_noc_xy = dst_l1_buffer->noc_coordinates();
+        auto dst_l1_buffer = tt_metal::Buffer(device, buffer_size, l1_bank_id, buffer_size, tt_metal::BufferType::L1);
+
+        auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
+        auto l1_dst_noc_xy = dst_l1_buffer.noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
@@ -119,7 +123,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= tt_metal::WriteToDeviceDRAM(src_dram_buffer, src_vec);
+        tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -127,7 +131,7 @@ int main(int argc, char **argv) {
             device,
             unary_reader_kernel,
             core,
-            {src_dram_buffer->address(),
+            {src_dram_buffer.address(),
             (std::uint32_t)dram_src_noc_xy.x,
             (std::uint32_t)dram_src_noc_xy.y,
             num_tiles});
@@ -136,7 +140,7 @@ int main(int argc, char **argv) {
             device,
             unary_writer_kernel,
             core,
-            {dst_l1_buffer->address(),
+            {dst_l1_buffer.address(),
             (std::uint32_t)l1_dst_noc_xy.x,
             (std::uint32_t)l1_dst_noc_xy.y,
             num_tiles});
@@ -145,7 +149,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceL1(dst_l1_buffer, result_vec);
+        tt_metal::ReadFromBuffer(dst_l1_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

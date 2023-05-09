@@ -1,4 +1,0 @@
-ReadFromDeviceDRAM()
-=====================
-
-.. doxygenfunction:: ReadFromDeviceDRAM

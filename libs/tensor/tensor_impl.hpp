@@ -330,10 +330,6 @@ std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataType dtyp
 
 void allocate_dram_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
-void read_contiguous_data_from_device(const Tensor &tensor, uint32_t size_in_bytes, std::vector<uint32_t> &host_buffer);
-
-void write_contiguous_data_to_device(const Tensor &tensor, std::vector<uint32_t> &data);
-
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -360,16 +356,11 @@ inline std::vector<T> initialize_data(const std::array<uint32_t, 4> &shape, Init
     return data;
 }
 
-void read_interleaved_data_from_device(const Tensor &tensor, uint32_t size_in_bytes, std::vector<uint32_t> &host_buffer);
-
 template <typename T>
 std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_bytes) {
     std::vector<uint32_t> device_data;
-    if (tensor.interleaved()) {
-        read_interleaved_data_from_device(tensor, size_in_bytes, device_data);
-    } else {
-        read_contiguous_data_from_device(tensor, size_in_bytes, device_data);
-    }
+    TT_ASSERT(tensor.buffer()->size() == size_in_bytes);
+    ReadFromBuffer(*tensor.buffer(), device_data);
     std::vector<T> unpacked_data;
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         std::vector<float> float_unpacked_data = unpack_bfp8_tiles_into_float_vec(device_data, /*row_major_output=*/false, /*is_exp_a=*/false);
@@ -379,8 +370,6 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     }
     return unpacked_data;
 }
-
-void write_interleaved_data_to_device(const Tensor &tensor, std::vector<uint32_t> &data);
 
 template <typename T>
 inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
@@ -402,11 +391,7 @@ inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
     } else {
         uint32_data = pack_vec_into_uint32_vec<T>(data);
     }
-    if (tensor.interleaved()) {
-        write_interleaved_data_to_device(tensor, uint32_data);
-    } else {
-        write_contiguous_data_to_device(tensor, uint32_data);
-    }
+    WriteToBuffer(*tensor.buffer(), uint32_data);
 }
 
 template <typename T>

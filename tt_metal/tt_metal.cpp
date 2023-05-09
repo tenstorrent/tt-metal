@@ -208,40 +208,6 @@ uint32_t TileSize(const DataFormat &data_format) {
     return tt::tile_size(data_format);
 }
 
-DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes, uint32_t address) {
-    TT_ASSERT(dram_channel >= 0 and dram_channel <= 7, "Valid range for DRAM channel is [0, 7]");
-    DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes, address);
-    return buffer;
-}
-
-DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_bytes) {
-    TT_ASSERT(dram_channel >= 0 and dram_channel <= 7, "Valid range for DRAM channel is [0, 7]");
-    DramBuffer *buffer = new DramBuffer(device, dram_channel, size_in_bytes);
-    return buffer;
-}
-
-InterleavedDramBuffer *CreateInterleavedDramBuffer(Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
-    InterleavedDramBuffer *interleaved_buffer = new InterleavedDramBuffer(device, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-    return interleaved_buffer;
-}
-
-InterleavedL1Buffer *CreateInterleavedL1Buffer(Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
-    InterleavedL1Buffer *interleaved_buffer = new InterleavedL1Buffer(device, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-    return interleaved_buffer;
-}
-
-L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address) {
-    L1Buffer *l1_buffer = new L1Buffer(device, core, size_in_bytes, address);
-    program->add_l1_buffer(l1_buffer);
-    return l1_buffer;
-}
-
-L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes) {
-    L1Buffer *l1_buffer = new L1Buffer(device, core, size_in_bytes);
-    program->add_l1_buffer(l1_buffer);
-    return l1_buffer;
-}
-
 CircularBuffer *CreateCircularBuffer(
     Program *program,
     Device *device,
@@ -304,7 +270,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format) {
-    uint32_t l1_address = device->address_for_circular_buffers_across_core_range(core_range, size_in_bytes);
+    uint32_t l1_address = device->allocator_->get_address_for_circular_buffers_across_core_range(core_range, size_in_bytes);
     std::vector<CircularBuffer *> circular_buffers;
     auto start_core = core_range.first;
     auto end_core = core_range.second;
@@ -351,8 +317,157 @@ std::vector<Semaphore *> CreateSemaphores(Program *program, Device *device, cons
     return semaphores;
 }
 
-void DeallocateBuffer(Buffer *buffer) {
-    buffer->free();
+void WriteToDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+    tt_metal_profiler.markStart("WriteToDevice");
+
+    uint32_t page_size = buffer.page_size();
+    TT_ASSERT(buffer.size() % page_size == 0);
+    uint32_t num_pages = buffer.size() / page_size;
+
+    static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
+    uint32_t num_entries_per_page = buffer.size() / (num_pages * bytes_per_page_entry);
+
+    auto device = buffer.device();
+    auto num_banks = device->num_banks(buffer.buffer_type());
+    uint32_t bank_index = buffer.starting_bank_id();
+    int data_index = 0;
+    for (int page_index = 0; page_index < num_pages; page_index++) {
+        auto absolute_address = buffer.page_address(bank_index, page_index);
+        std::vector<uint32_t> page;
+        page.insert(page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
+        switch (buffer.buffer_type()) {
+            case BufferType::DRAM: {
+                auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
+                device->cluster()->write_dram_vec(page, tt_target_dram{device->pcie_slot(), dram_channel, 0}, absolute_address);
+            }
+            break;
+            case BufferType::L1: {
+                auto noc_coordinates = buffer.noc_coordinates(bank_index);
+                llrt::write_hex_vec_to_core(device->cluster(), device->pcie_slot(), noc_coordinates, page, absolute_address);
+            }
+            break;
+            default:
+                TT_ASSERT(false && "Unsupported buffer type to write to device!");
+        }
+
+        bank_index = (bank_index + 1) % num_banks;
+        data_index += num_entries_per_page;
+    }
+    tt_metal_profiler.markStop("WriteToDevice");
+}
+
+void WriteToBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+    tt_metal_profiler.markStart("WriteToBuffer");
+    switch (buffer.buffer_type()) {
+        case BufferType::DRAM:
+        case BufferType::L1: {
+            WriteToDevice(buffer, host_buffer);
+        }
+        break;
+        case BufferType::SYSTEM_MEMORY: {
+            TT_ASSERT(false && "Writing to host memory is unsupported!");
+        }
+        break;
+        default:
+            TT_ASSERT(false && "Unsupported buffer type!");
+    }
+    tt_metal_profiler.markStop("WriteToBuffer");
+}
+
+void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+    tt_metal_profiler.markStart("ReadFromDevice");
+
+    host_buffer.clear(); // overwrite the data
+    uint32_t page_size = buffer.page_size();
+    TT_ASSERT(buffer.size() % page_size == 0);
+    uint32_t num_pages = buffer.size() / page_size;
+
+    static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
+    auto device = buffer.device();
+    auto num_banks = device->num_banks(buffer.buffer_type());
+
+    uint32_t bank_index = buffer.starting_bank_id();
+    for (int page_index = 0; page_index < num_pages; page_index++) {
+        auto absolute_address = buffer.page_address(bank_index, page_index);
+        std::vector<uint32_t> page;
+        switch (buffer.buffer_type()) {
+            case BufferType::DRAM: {
+                auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
+                device->cluster()->read_dram_vec(page, tt_target_dram{device->pcie_slot(), dram_channel, 0}, absolute_address, page_size);
+            }
+            break;
+            case BufferType::L1: {
+                auto noc_coordinates = buffer.noc_coordinates(bank_index);
+                page = llrt::read_hex_vec_from_core(device->cluster(), device->pcie_slot(), noc_coordinates, absolute_address, page_size);
+            }
+            break;
+            default:
+                TT_ASSERT(false && "Unsupported buffer type to write to device!");
+        }
+
+        // Copy page into host buffer
+        for (uint32_t entry: page) {
+            host_buffer.push_back(entry);
+        }
+
+        bank_index = (bank_index + 1) % num_banks;
+    }
+
+    tt_metal_profiler.markStop("ReadFromDevice");
+}
+
+void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+    switch (buffer.buffer_type()) {
+        case BufferType::DRAM:
+        case BufferType::L1: {
+            ReadFromDevice(buffer, host_buffer);
+        }
+        break;
+        case BufferType::SYSTEM_MEMORY: {
+            TT_ASSERT(false && "Reading from host memory is unsupported!");
+        }
+        break;
+        default:
+            TT_ASSERT(false && "Unsupported buffer type!");
+    }
+}
+
+void DeallocateBuffer(Buffer &buffer) {
+    buffer.deallocate();
+}
+
+bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer) {
+    tt_metal_profiler.markStart("ReadFromDeviceDRAMChannel");
+    bool pass = true;
+    device->cluster()->read_dram_vec(host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, address, size);
+    tt_metal_profiler.markStop("ReadFromDeviceDRAMChannel");
+    return pass;
+}
+
+bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer) {
+    tt_metal_profiler.markStart("WriteToDeviceDRAMChannel");
+    bool pass = true;
+    device->cluster()->write_dram_vec(host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, address);
+    tt_metal_profiler.markStop("WriteToDeviceDRAMChannel");
+    return pass;
+}
+
+bool WriteToDeviceL1(Device *device, const tt_xy_pair &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer) {
+    tt_metal_profiler.markStart("WriteToDeviceL1");
+    bool pass = true;
+    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    llrt::write_hex_vec_to_core(device->cluster(), device->pcie_slot(), worker_core, host_buffer, address);
+    tt_metal_profiler.markStop("WriteToDeviceL1");
+    return pass;
+}
+
+bool ReadFromDeviceL1(Device *device, const tt_xy_pair &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer) {
+    tt_metal_profiler.markStart("ReadFromDeviceL1");
+    bool pass = true;
+    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    host_buffer = llrt::read_hex_vec_from_core(device->cluster(), device->pcie_slot(), worker_core, address, size);
+    tt_metal_profiler.markStop("ReadFromDeviceL1");
+    return pass;
 }
 
 bool GenerateBinaries(
@@ -442,21 +557,10 @@ void SetCircularBufferDataFormat(
 }
 
 void ValidateL1Buffers(Device *device, Program *program, const tt_xy_pair &logical_core) {
-    auto l1_buffers_on_core = program->l1_buffers_on_core(logical_core);
     auto cbs_on_core = program->circular_buffers_on_core(logical_core);
     std::unordered_set<uint32_t> buffer_addresses;
     uint32_t total_l1_buffer_size_in_bytes = 0;
     uint32_t max = device->l1_size() - UNRESERVED_BASE;
-    for (auto l1_buffer : l1_buffers_on_core) {
-        if (buffer_addresses.find(l1_buffer->address()) != buffer_addresses.end()) {
-            continue;
-        }
-        buffer_addresses.insert(l1_buffer->address());
-        total_l1_buffer_size_in_bytes += l1_buffer->size();
-        if (total_l1_buffer_size_in_bytes > max) {
-            TT_THROW("Size of L1 buffers on " + logical_core.str() + "is " + std::to_string(total_l1_buffer_size_in_bytes) + " bytes, which exceeds maximum size of " + std::to_string(max) + " bytes");
-        }
-    }
     for (auto circular_buffer : cbs_on_core) {
         if (buffer_addresses.find(circular_buffer->address()) != buffer_addresses.end()) {
             continue;
@@ -632,8 +736,6 @@ void ConfigureKernelGroup(const KernelGroup &kernel_group, Device *device, const
     kernel_group.riscv_0->configure(device, logical_core);
 }
 
-
-
 bool ConfigureDeviceWithProgram(Device *device, Program *program) {
     bool pass = true;
 
@@ -795,282 +897,6 @@ bool LaunchKernels(Device *device, Program *program, bool stagger_start) {
     return pass;
 }
 
-// Copies data from a host buffer into a buffer within the device DRAM channel
-bool WriteToDeviceDRAM(DramBuffer *dram_buffer, std::vector<uint32_t> &host_buffer) {
-    tt_metal_profiler.markStart("WriteToDeviceDRAM");
-    bool pass = true;
-    dram_buffer->device()->cluster()->write_dram_vec(
-        host_buffer, tt_target_dram{dram_buffer->device()->pcie_slot(), dram_buffer->dram_channel(), 0}, dram_buffer->address());
-    tt_metal_profiler.markStop("WriteToDeviceDRAM");
-    return pass;
-}
-
-// Copy data from a device DRAM channel to a host buffer
-bool ReadFromDeviceDRAM(
-    DramBuffer *dram_buffer,
-    std::vector<uint32_t> &host_buffer) {
-    tt_metal_profiler.markStart("ReadFromDeviceDRAM");
-    bool pass = true;
-    dram_buffer->device()->cluster()->read_dram_vec(
-        host_buffer, tt_target_dram{dram_buffer->device()->pcie_slot(), dram_buffer->dram_channel(), 0}, dram_buffer->address(), dram_buffer->size());
-    tt_metal_profiler.markStop("ReadFromDeviceDRAM");
-    return pass;
-}
-
-// Copies data from a host buffer into the device DRAM channel
-bool WriteToDeviceDRAMChannel(
-    Device *device, int dram_channel, std::vector<uint32_t> &host_buffer, uint32_t dram_address) {
-    tt_metal_profiler.markStart("WriteToDeviceDRAMChannel");
-    bool pass = true;
-    device->cluster()->write_dram_vec(
-        host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, dram_address);
-    tt_metal_profiler.markStop("WriteToDeviceDRAMChannel");
-    return pass;
-}
-
-// Copy data from a device DRAM channel to a host buffer
-bool ReadFromDeviceDRAMChannel(
-    Device *device,
-    int dram_channel,
-    uint32_t device_address,
-    std::vector<uint32_t> &host_buffer,
-    uint32_t size) {
-    tt_metal_profiler.markStart("ReadFromDeviceDRAMChannel");
-    bool pass = true;
-    device->cluster()->read_dram_vec(
-        host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, device_address, size);
-    tt_metal_profiler.markStop("ReadFromDeviceDRAMChannel");
-    return pass;
-}
-
-bool ReadFromDeviceDRAMChannelsInterleaved(
-    Device *device, std::vector<uint32_t> &host_buffer, uint32_t start_dram_buffer_address,
-    int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
-
-    /*
-        Reads interleaved bank units into a host buffer vector. A bank unit is just the unit of data
-        that we store in banks round-robbin.
-    */
-    int dram_channel = 0;
-    int dram_addr = start_dram_buffer_address;
-    int tensor_index = 0;
-    int bank_unit_size = num_entries_per_bank_unit * num_bytes_per_entry;
-
-    bool pass = true;
-    for (int s = 0; s < num_bank_units; s++) {
-        std::vector<uint32_t> bank_unit;
-        pass &= tt_metal::ReadFromDeviceDRAMChannel(device, dram_channel, dram_addr, bank_unit, bank_unit_size);
-
-        // Copy bank unit into vector
-        for (uint32_t el: bank_unit) {
-            host_buffer.push_back(el);
-        }
-
-        dram_channel++;
-        if (dram_channel == device->num_dram_channels()) {
-            dram_channel = 0;
-            dram_addr += bank_unit_size;
-        }
-
-        tensor_index += num_entries_per_bank_unit;
-    }
-
-    return pass;
-}
-
-bool WriteToDeviceDRAMChannelsInterleaved(
-    Device *device, std::vector<uint32_t> &host_buffer, uint32_t start_dram_buffer_address,
-    int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
-
-    /*
-        Writes a vector into device DRAM interleaved, where the vector is broken up into
-        bank units and written to DRAM round-robbin.
-    */
-    int dram_channel = 0;
-    int dram_addr = start_dram_buffer_address;
-    int tensor_index = 0;
-
-    bool pass = true;
-    for (int s = 0; s < num_bank_units; s++) {
-        std::vector<uint32_t> bank_unit;
-        bank_unit.insert(bank_unit.end(), host_buffer.begin() + tensor_index, host_buffer.begin() + tensor_index + num_entries_per_bank_unit);
-
-        pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_channel, bank_unit, dram_addr);
-
-        dram_channel++;
-        if (dram_channel == device->num_dram_channels()) {
-            dram_channel = 0;
-            dram_addr += num_entries_per_bank_unit * num_bytes_per_entry;
-        }
-
-        tensor_index += num_entries_per_bank_unit;
-    }
-
-    return pass;
-}
-
-// Read from interleave tiles from 8 banks starting at a given address (same starting address for each bank)
-// See comments for the Write version of this function
-bool ReadFromDeviceDRAMChannelsInterleavedTiles(
-    Device *device,
-    uint32_t device_dram_address,
-    std::vector<uint32_t> &dst_host_buffer,
-    uint32_t size_bytes) {
-    using std::vector;
-
-    const uint32_t tile_bytes = 2048; // TODO(AP): magic for bf16
-    dst_host_buffer.resize(0);
-    TT_ASSERT(size_bytes % tile_bytes == 0);
-    int num_tiles = size_bytes/tile_bytes;
-    uint32_t src_address = device_dram_address;
-    for (int i_tile = 0; i_tile < num_tiles; i_tile++) {
-        uint32_t dram_channel = (i_tile % 8);
-        if ((i_tile > 0) && ((i_tile % 8) == 0))
-            src_address += tile_bytes;
-        vector<uint32_t> onetile;
-        device->cluster()->read_dram_vec(
-            onetile, tt_target_dram{device->pcie_slot(), dram_channel, 0}, src_address, tile_bytes);
-        dst_host_buffer.insert(dst_host_buffer.end(), onetile.begin(), onetile.end());
-    }
-    TT_ASSERT(size_bytes == dst_host_buffer.size()*sizeof(dst_host_buffer[0]));
-    return true;
-}
-
-// Interleave tiles into 8 banks starting at a given address (same starting address for each bank)
-// Each write is tile-sized, so performance is probably not ideal.
-// This can probably be made more optimal with strided or chain or async DMAs or whatnot
-bool WriteToDeviceDRAMChannelsInterleavedTiles(
-    Device *device,
-    std::vector<uint32_t> &host_buffer,
-    uint32_t dram_address) {
-
-    using std::vector;
-
-    const uint32_t tile_bytes = 2048; // TODO(AP): magic for bf16
-    const uint32_t tile_u32s = tile_bytes/sizeof(uint32_t);
-    int num_tiles = host_buffer.size()*sizeof(uint32_t);
-    TT_ASSERT(num_tiles % tile_bytes == 0);
-    num_tiles /= tile_bytes;
-    uint32_t dst_address = dram_address;
-    for (int i_tile = 0; i_tile < num_tiles; i_tile++) {
-        vector<uint32_t> tile = vector<uint32_t>(
-            host_buffer.begin()+(i_tile+0)*tile_u32s,
-            host_buffer.begin()+(i_tile+1)*tile_u32s
-        );
-        uint32_t dram_channel = (i_tile % 8);
-        if ((i_tile > 0) && ((i_tile % 8) == 0))
-            dst_address += tile_bytes;
-        device->cluster()->write_dram_vec(
-            tile, tt_target_dram{device->pcie_slot(), dram_channel, 0}, dst_address);
-    }
-    return true;
-}
-
-void ReadFromDeviceDRAMChannelsInterleaved(InterleavedDramBuffer *buffer, std::vector<uint32_t> &host_buffer) {
-    uint32_t bank_unit_size = buffer->bank_unit_size();
-    TT_ASSERT(buffer->size() % bank_unit_size == 0);
-    uint32_t num_bank_units = buffer->size() / bank_unit_size;
-
-    int bank_index = 0;
-    for (int bank_unit_index = 0; bank_unit_index < num_bank_units; bank_unit_index++) {
-        auto dram_bank = buffer->bank(bank_index);
-        auto absolute_address = buffer->address_of_bank_unit(bank_index, bank_unit_index);
-        std::vector<uint32_t> bank_unit;
-        tt_metal::ReadFromDeviceDRAMChannel(buffer->device(), dram_bank.channel, absolute_address, bank_unit, bank_unit_size);
-
-        // Copy bank unit into vector
-        for (uint32_t el: bank_unit) {
-            host_buffer.push_back(el);
-        }
-
-        bank_index = (bank_index + 1) %  buffer->num_banks();
-    }
-}
-
-void WriteToDeviceDRAMChannelsInterleaved(InterleavedDramBuffer *buffer, std::vector<uint32_t> &host_buffer) {
-    uint32_t bank_unit_size = buffer->bank_unit_size();
-    TT_ASSERT(buffer->size() % bank_unit_size == 0);
-    uint32_t num_bank_units = buffer->size() / bank_unit_size;
-    uint32_t num_entries_per_bank_unit = buffer->num_entries_per_bank_unit();
-
-    int bank_index = 0;
-    int data_index = 0;
-    for (int bank_unit_index = 0; bank_unit_index < num_bank_units; bank_unit_index++) {
-        auto dram_bank = buffer->bank(bank_index);
-        auto absolute_address = buffer->address_of_bank_unit(bank_index, bank_unit_index);
-        std::vector<uint32_t> bank_unit;
-        bank_unit.insert(bank_unit.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_bank_unit);
-
-        tt_metal::WriteToDeviceDRAMChannel(buffer->device(), dram_bank.channel, bank_unit, absolute_address);
-
-        bank_index = (bank_index + 1) %  buffer->num_banks();
-        data_index += num_entries_per_bank_unit;
-    }
-}
-
-void ReadFromDeviceL1Interleaved(InterleavedL1Buffer *buffer, std::vector<uint32_t> &host_buffer) {
-    uint32_t bank_unit_size = buffer->bank_unit_size();
-    TT_ASSERT(buffer->size() % bank_unit_size == 0);
-    uint32_t num_bank_units = buffer->size() / bank_unit_size;
-
-    int bank_index = 0;
-    for (int bank_unit_index = 0; bank_unit_index < num_bank_units; bank_unit_index++) {
-        auto l1_bank = buffer->bank(bank_index);
-        auto absolute_address = buffer->address_of_bank_unit(bank_index, bank_unit_index);
-
-        std::vector<uint32_t> bank_unit;
-        tt_metal::ReadFromDeviceL1(buffer->device(), l1_bank.logical_core, absolute_address, bank_unit, bank_unit_size);
-
-        // Copy bank unit into vector
-        for (uint32_t el: bank_unit) {
-            host_buffer.push_back(el);
-        }
-
-        bank_index = (bank_index + 1) %  buffer->num_banks();
-    }
-}
-
-void WriteToDeviceL1Interleaved(InterleavedL1Buffer *buffer, std::vector<uint32_t> &host_buffer) {
-    auto bank_unit_size = buffer->bank_unit_size();
-    TT_ASSERT(buffer->size() % bank_unit_size == 0);
-    auto num_bank_units = buffer->size() / bank_unit_size;
-    auto num_entries_per_bank_unit = buffer->num_entries_per_bank_unit();
-
-    int bank_index = 0;
-    int data_index = 0;
-    for (int bank_unit_index = 0; bank_unit_index < num_bank_units; bank_unit_index++) {
-        auto l1_bank = buffer->bank(bank_index);
-        auto absolute_address = buffer->address_of_bank_unit(bank_index, bank_unit_index);
-
-        std::vector<uint32_t> bank_unit;
-        bank_unit.insert(bank_unit.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_bank_unit);
-
-        tt_metal::WriteToDeviceL1(buffer->device(), l1_bank.logical_core, bank_unit, absolute_address);
-
-        bank_index = (bank_index + 1) %  buffer->num_banks();
-        data_index += num_entries_per_bank_unit;
-    }
-}
-
-bool WriteToDeviceL1(
-    Device *device,
-    const tt_xy_pair &core,
-    std::vector<uint32_t> &host_buffer,
-    uint32_t buffer_address) {
-    bool pass = true;
-    auto worker_core = device->worker_core_from_logical_core(core);
-    llrt::write_hex_vec_to_core(
-        device->cluster(), device->pcie_slot(), worker_core, host_buffer, buffer_address);
-    return pass;
-}
-
-bool WriteToDeviceL1(L1Buffer *l1_buffer, std::vector<uint32_t> &host_buffer) {
-    bool pass = true;
-    llrt::write_hex_vec_to_core(
-        l1_buffer->device()->cluster(), l1_buffer->device()->pcie_slot(), l1_buffer->noc_coordinates(), host_buffer, l1_buffer->address());
-    return pass;
-}
-
 bool WriteToDeviceL1(
     Device *device,
     const tt_xy_pair &core,
@@ -1080,22 +906,6 @@ bool WriteToDeviceL1(
     auto worker_core = device->worker_core_from_logical_core(core);
     llrt::write_graph_interpreter_op_info_to_core(
         device->cluster(), device->pcie_slot(), worker_core, op_info, op_idx);
-    return pass;
-}
-
-bool ReadFromDeviceL1(
-    Device *device, const tt_xy_pair &core, int device_buffer_addess, std::vector<uint32_t> &host_buffer, int size) {
-    bool pass = true;
-    auto worker_core = device->worker_core_from_logical_core(core);
-    host_buffer =
-        llrt::read_hex_vec_from_core(device->cluster(), device->pcie_slot(), worker_core, device_buffer_addess, size);
-    return pass;
-}
-
-bool ReadFromDeviceL1(L1Buffer *l1_buffer, std::vector<uint32_t> &host_buffer) {
-    bool pass = true;
-    host_buffer = llrt::read_hex_vec_from_core(
-            l1_buffer->device()->cluster(), l1_buffer->device()->pcie_slot(), l1_buffer->noc_coordinates(), l1_buffer->address(), l1_buffer->size());
     return pass;
 }
 

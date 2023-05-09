@@ -2,8 +2,8 @@ Data Movement
 ==================
 
 .. toctree::
-  WriteToDeviceDRAM
-  ReadFromDeviceDRAM
+  WriteToBuffer
+  ReadFromBuffer
   WriteToDeviceDRAMChannel
   ReadFromDeviceDRAMChannel
   WriteToDeviceL1

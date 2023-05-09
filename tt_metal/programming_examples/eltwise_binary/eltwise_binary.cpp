@@ -71,9 +71,9 @@ int main(int argc, char **argv) {
         constexpr uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         constexpr int dram_dst_channel_id = 0;
 
-        DramBuffer *src0_dram_buffer = CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size, dram_buffer_src0_addr);
-        DramBuffer *src1_dram_buffer = CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size, dram_buffer_src1_addr);
-        DramBuffer *dst_dram_buffer = CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size, dram_buffer_dst_addr);
+        Buffer src0_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size, BufferType::DRAM);
+        Buffer src1_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size, BufferType::DRAM);
+        Buffer dst_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, BufferType::DRAM);
 
         /*
          * Use circular buffers to set input and output buffers that the
@@ -170,12 +170,12 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
 
-        pass &= WriteToDeviceDRAM(src0_dram_buffer, src0_vec);
+        WriteToBuffer(src0_dram_buffer, src0_vec);
 
         constexpr float val_to_add = -1.0f;
         std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_add);
 
-        pass &= WriteToDeviceDRAM(src1_dram_buffer, src1_vec);
+        WriteToBuffer(src1_dram_buffer, src1_vec);
 
         /*
          * Configure program and runtime kernel arguments, then execute.
@@ -187,13 +187,13 @@ int main(int argc, char **argv) {
             binary_reader_kernel,
             core,
             {
-                src0_dram_buffer->address(),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+                src0_dram_buffer.address(),
+                static_cast<uint32_t>(src0_dram_buffer.noc_coordinates().x),
+                static_cast<uint32_t>(src0_dram_buffer.noc_coordinates().y),
                 num_tiles,
-                src1_dram_buffer->address(),
-                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
+                src1_dram_buffer.address(),
+                static_cast<uint32_t>(src1_dram_buffer.noc_coordinates().x),
+                static_cast<uint32_t>(src1_dram_buffer.noc_coordinates().y),
                 num_tiles,
                 0
             }
@@ -204,9 +204,9 @@ int main(int argc, char **argv) {
             unary_writer_kernel,
             core,
             {
-                dst_dram_buffer->address(),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+                dst_dram_buffer.address(),
+                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
+                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
                 num_tiles
             }
         );
@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
          * Read in result into a host vector.
          */
         std::vector<uint32_t> result_vec;
-        ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
+        ReadFromBuffer(dst_dram_buffer, result_vec);
 
         /*
          * Move src data back into DRAM src buffer 0 to do another eltwise calculation
@@ -298,12 +298,12 @@ int main(int argc, char **argv) {
         /*
          * Send new input data.
          */
-        pass &= WriteToDeviceDRAM(src0_dram_buffer, result_vec);
+        WriteToBuffer(src0_dram_buffer, result_vec);
 
         constexpr float val_to_mul = 2.0f;
         src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_mul);
 
-        pass &= WriteToDeviceDRAM(src1_dram_buffer, src1_vec);
+        WriteToBuffer(src1_dram_buffer, src1_vec);
 
         pass &= ConfigureDeviceWithProgram(device, program_mul);
 
@@ -315,13 +315,13 @@ int main(int argc, char **argv) {
             binary_reader_kernel,
             core,
             {
-                src0_dram_buffer->address(),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+                src0_dram_buffer.address(),
+                static_cast<uint32_t>(src0_dram_buffer.noc_coordinates().x),
+                static_cast<uint32_t>(src0_dram_buffer.noc_coordinates().y),
                 num_tiles,
-                src1_dram_buffer->address(),
-                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
+                src1_dram_buffer.address(),
+                static_cast<uint32_t>(src1_dram_buffer.noc_coordinates().x),
+                static_cast<uint32_t>(src1_dram_buffer.noc_coordinates().y),
                 num_tiles,
                 0
             }
@@ -332,9 +332,9 @@ int main(int argc, char **argv) {
             unary_writer_kernel,
             core,
             {
-                dst_dram_buffer->address(),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+                dst_dram_buffer.address(),
+                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
+                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
                 num_tiles
             }
         );
@@ -349,7 +349,7 @@ int main(int argc, char **argv) {
          * Read the result and compare to a golden result. Record pass/fail
          * and teardown.
          */
-        ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
+        ReadFromBuffer(dst_dram_buffer, result_vec);
 
         std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
             return bfloat16((a.to_float() + val_to_add) * val_to_mul);

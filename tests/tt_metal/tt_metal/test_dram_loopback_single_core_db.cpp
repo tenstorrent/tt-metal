@@ -44,14 +44,12 @@ int main(int argc, char **argv) {
         TT_ASSERT(total_l1_buffer_size_tiles % 2 == 0);
         uint32_t total_l1_buffer_size_bytes = total_l1_buffer_size_tiles * single_tile_size;
 
-        auto input_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel, dram_buffer_size_bytes, input_dram_buffer_addr);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_bytes, input_dram_buffer_addr, dram_channel, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
 
-        auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, total_l1_buffer_size_bytes, l1_buffer_addr);
+        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_bytes, output_dram_buffer_addr, dram_channel, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
 
-        auto output_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel, dram_buffer_size_bytes, output_dram_buffer_addr);
-
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+        auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
+        auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
         auto dram_copy_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -70,7 +68,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             dram_buffer_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= tt_metal::WriteToDeviceDRAM(input_dram_buffer, input_vec);
+        tt_metal::WriteToBuffer(input_dram_buffer, input_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -93,7 +91,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceDRAM(output_dram_buffer, result_vec);
+        tt_metal::ReadFromBuffer(output_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

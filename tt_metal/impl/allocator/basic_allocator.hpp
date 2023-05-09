@@ -26,27 +26,27 @@ class BasicAllocator : public Allocator {
     BasicAllocator(BasicAllocator &&other) { }
     BasicAllocator& operator=(BasicAllocator &&other) { return *this; }
 
-    uint32_t allocate_dram_buffer(int dram_channel, uint32_t size_bytes);
+    BankIdToRelativeAddress allocate_buffer(uint32_t starting_bank_id, uint32_t size, uint32_t page_size, const BufferType &buffer_type);
 
-    uint32_t allocate_dram_buffer(int dram_channel, uint32_t start_address, uint32_t size_bytes);
+    BankIdToRelativeAddress allocate_buffer(uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t address, const BufferType &buffer_type);
 
-    std::vector<DramBankAddrPair> allocate_interleaved_dram_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
+    void deallocate_buffer(uint32_t bank_id, uint32_t address, const BufferType &buffer_type);
 
-    void deallocate_dram_buffer(int dram_channel, uint32_t address);
+    uint32_t num_banks(const BufferType &buffer_type) const;
+
+    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
+
+    tt_xy_pair logical_core_from_bank_id(uint32_t bank_id) const;
+
+    std::vector<uint32_t> bank_ids_from_dram_channel(uint32_t dram_channel) const;
+
+    std::vector<uint32_t> bank_ids_from_logical_core(const tt_xy_pair &logical_core) const;
 
     uint32_t allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_bytes);
 
     uint32_t allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes);
 
-    uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_bytes);
-
-    uint32_t allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes);
-
-    std::vector<L1BankAddrPair> allocate_interleaved_l1_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry);
-
     uint32_t get_address_for_circular_buffers_across_core_range(const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes) const;
-
-    void deallocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t address);
 
     void clear_dram();
 
@@ -55,11 +55,19 @@ class BasicAllocator : public Allocator {
     void clear();
 
    private:
+    allocator::Algorithm &allocator_for_dram_channel(uint32_t bank_id) const;
+
+    allocator::Algorithm &allocator_for_logical_core(uint32_t bank_id) const;
+
+    allocator::Algorithm &get_allocator(uint32_t bank_id, const BufferType &buffer_type) const;
+
+    std::string generate_bank_identifier_str(uint32_t bank_id, uint32_t size_bytes, const BufferType &buffer_type) const;
+
+    BankIdToRelativeAddress allocate_contiguous_buffer(uint32_t bank_id, uint32_t size_bytes, const BufferType &buffer_type);
+
+    BankIdToRelativeAddress allocate_contiguous_buffer(uint32_t bank_id, uint32_t address, uint32_t size_bytes, const BufferType &buffer_type);
+
     static constexpr bool allocate_bottom_up_ = true;
-    allocator::Algorithm &allocator_for_dram_channel(int dram_channel) const;
-
-    allocator::Algorithm &allocator_for_logical_core(const tt_xy_pair &logical_core) const;
-
     tt_xy_pair logical_grid_size_;
     std::map<int, std::unique_ptr<allocator::Algorithm>> dram_manager_;
     std::map<tt_xy_pair, std::unique_ptr<allocator::Algorithm>> l1_manager_;

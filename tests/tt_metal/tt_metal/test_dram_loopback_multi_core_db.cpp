@@ -72,18 +72,30 @@ int main(int argc, char **argv) {
 
         TT_ASSERT(num_output_tiles % transient_buffer_size_tiles == 0);
 
-        auto input_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_src_addr);
+        auto loader_l1_bank_ids = device->bank_ids_from_logical_core(loader_logical_core);
+        TT_ASSERT(not loader_l1_bank_ids.empty());
+        auto loader_l1_bank_id = loader_l1_bank_ids.at(0);
 
-        auto l1_b0_a = tt_metal::CreateL1Buffer(program, device, loader_logical_core, transient_buffer_size_bytes, loader_buffer_address1);
-        auto l1_b0_b = tt_metal::CreateL1Buffer(program, device, loader_logical_core, transient_buffer_size_bytes, loader_buffer_address2);
+        auto writer_l1_bank_ids = device->bank_ids_from_logical_core(writer_logical_core);
+        TT_ASSERT(not writer_l1_bank_ids.empty());
+        auto writer_l1_bank_id = writer_l1_bank_ids.at(0);
 
-        auto l1_b1_a = tt_metal::CreateL1Buffer(program, device, writer_logical_core, transient_buffer_size_bytes, writer_buffer_address1);
-        auto l1_b1_b = tt_metal::CreateL1Buffer(program, device, writer_logical_core, transient_buffer_size_bytes, writer_buffer_address2);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+
+        // auto l1_b0_a = tt_metal::CreateL1Buffer(
+        //     device, transient_buffer_size_bytes, loader_buffer_address1, loader_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferType::L1);
+        // auto l1_b0_b = tt_metal::CreateL1Buffer(
+        //     device, transient_buffer_size_bytes, loader_buffer_address2, loader_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferType::L1);
+
+        // auto l1_b1_a = tt_metal::CreateL1Buffer(
+        //     device, transient_buffer_size_bytes, writer_buffer_address1, writer_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferType::L1);
+        // auto l1_b1_b = tt_metal::CreateL1Buffer(
+        //     device, transient_buffer_size_bytes, writer_buffer_address2, writer_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferType::L1);
 
         auto output_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+        auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
+        auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
         // Loader (producer kernel) running on BRISC on logical core {0, 0}
         auto producer_kernel = tt_metal::CreateDataMovementKernel(
@@ -110,7 +122,7 @@ int main(int argc, char **argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         pass &=
-            tt_metal::WriteToDeviceDRAM(input_dram_buffer, src_vec);
+            tt_metal::WriteToBuffer(input_dram_buffer, src_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -155,7 +167,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceDRAM(output_dram_buffer, result_vec);
+        tt_metal::ReadFromBuffer(output_dram_buffer, result_vec);
         auto dst_vec = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
         ////////////////////////////////////////////////////////////////////////////

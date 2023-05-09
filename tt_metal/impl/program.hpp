@@ -24,8 +24,6 @@ class Program {
 
     std::vector<Kernel *> kernels() const { return kernels_; }
 
-    std::vector<L1Buffer *> l1_buffers() const { return l1_buffers_; }
-
     std::vector<CircularBuffer *> circular_buffers() const { return circular_buffers_; }
 
     std::vector<ComputeKernel *> compute_kernels() const;
@@ -38,8 +36,6 @@ class Program {
 
     std::vector<CircularBuffer *> circular_buffers_on_core(const tt_xy_pair &core) const;
 
-    std::vector<L1Buffer *> l1_buffers_on_core(const tt_xy_pair &core) const;
-
     std::vector<Semaphore *> semaphores_on_core(const tt_xy_pair &core) const;
 
     std::vector<tt_xy_pair> logical_cores() const;
@@ -51,7 +47,6 @@ class Program {
    private:
     std::vector<Kernel *> kernels_;
     std::vector<CircularBuffer *> circular_buffers_;
-    std::vector<L1Buffer *> l1_buffers_;
     std::unordered_map<tt_xy_pair, std::vector<Semaphore *>> logical_core_to_semaphores_;
 
     friend DataMovementKernel *CreateDataMovementKernel(
@@ -102,9 +97,6 @@ class Program {
         bool fp32_dest_acc_en,
         bool math_approx_mode);
 
-    friend L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address);
-    friend L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes);
-
     friend CircularBuffer *CreateCircularBuffer(
         Program *program,
         Device *device,
@@ -146,8 +138,6 @@ class Program {
     friend std::vector<Semaphore *> CreateSemaphores(Program *program, Device *device, const CoreRange &core_range, uint32_t initial_value);
 
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
-
-    void add_l1_buffer(L1Buffer *buffer) { l1_buffers_.push_back(buffer); }
 
     void add_circular_buffer(CircularBuffer *circular_buffer) { circular_buffers_.push_back(circular_buffer); }
 

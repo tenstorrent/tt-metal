@@ -71,10 +71,17 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
-        auto src0_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_bytes, dram_buffer_src0_addr);
-        auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_bytes/(Ht*Wt), dram_buffer_dst_addr);
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+        uint32_t src_page_size = single_tile_bytes;
+        uint32_t dst_page_size = single_tile_bytes;
+        if (not multibank) {
+            src_page_size = dram_buffer_bytes;
+            dst_page_size = dram_buffer_bytes/(Ht*Wt);
+        }
+
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes, dram_buffer_src0_addr, dram_src0_channel_id, src_page_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes/(Ht*Wt), dram_buffer_dst_addr, dram_dst_channel_id, dst_page_size, tt_metal::BufferType::DRAM);
+        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
@@ -165,10 +172,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         auto seed = std::chrono::system_clock::now().time_since_epoch().count();
         vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 1.0f, 0x1234, -0.48f);
-        if (multibank)
-            pass &= tt_metal::WriteToDeviceDRAMChannelsInterleavedTiles(device, src0_vec, src0_dram_buffer->address());
-        else
-            pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_src0_channel_id, src0_vec, src0_dram_buffer->address());
+        tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -201,12 +205,7 @@ int main(int argc, char **argv) {
 
         // The kernel will view the input as TILED32_4FACES
         vector<uint32_t> result_vec;
-        if (multibank)
-            tt_metal::ReadFromDeviceDRAMChannelsInterleavedTiles(
-                device, dst_dram_buffer->address(), result_vec, dst_dram_buffer->size());
-        else
-            tt_metal::ReadFromDeviceDRAMChannel(
-                device, dram_dst_channel_id, dst_dram_buffer->address(), result_vec, dst_dram_buffer->size());
+        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
         TT_ASSERT(result_vec.size() == NC*32*32/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
 
         ////////////////////////////////////////////////////////////////////////////

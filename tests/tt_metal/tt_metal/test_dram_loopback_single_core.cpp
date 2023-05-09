@@ -41,14 +41,12 @@ int main(int argc, char **argv) {
         uint32_t output_dram_buffer_addr = 512 * 1024;
         int dram_channel = 0;
 
-        auto input_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel, dram_buffer_size, input_dram_buffer_addr);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_channel, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
+        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_channel, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        auto output_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel, dram_buffer_size, output_dram_buffer_addr);
-
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+        auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
+        auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
         auto dram_copy_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -67,7 +65,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= tt_metal::WriteToDeviceDRAM(input_dram_buffer, input_vec);
+        tt_metal::WriteToBuffer(input_dram_buffer, input_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -87,7 +85,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceDRAM(output_dram_buffer, result_vec);
+        tt_metal::ReadFromBuffer(output_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

@@ -110,24 +110,24 @@ Extra runtime arguments and source tensor
         constexpr float val_to_add = -1.0f;
         std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_add);
 
-        pass &= WriteToDeviceDRAM(src1_dram_buffer, src1_vec);
+        WriteToBuffer(src1_dram_buffer, src1_vec);
 
 In this program, we have a second source tensor. We will be adding this to the
 first source tensor.
 
 .. code-block:: cpp
 
-  WriteRuntimeArgsToDevice(
-      device,
-      unary_writer_kernel,
-      core,
-      {
-          dst_dram_buffer->address(),
-          static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-          static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
-          num_tiles
-      }
-  );
+        WriteRuntimeArgsToDevice(
+          device,
+          unary_writer_kernel,
+          core,
+            {
+              dst_dram_buffer.address(),
+              static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
+              static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
+              num_tiles
+            }
+        );
 
 In this program,  we're using a separate reader kernel to take in data from
 DRAM into L1, and a separate writer kernel to write out results from the

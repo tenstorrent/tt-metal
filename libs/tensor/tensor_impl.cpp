@@ -18,72 +18,60 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     return os;
 }
 
-std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(
-    DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape) {
+uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape) {
     uint32_t W = shape[3];
     uint32_t C = shape[1];
-    int num_bank_units;
-    int num_entries_per_bank_unit;
-    int num_bytes_per_entry;
+    uint32_t page_size = 0;
     switch (layout) {
         case Layout::ROW_MAJOR: {
-            num_bank_units = total_size_bytes / (W*2);
-            num_entries_per_bank_unit = W/2; // num elements in tile packed as uint32
-            num_bytes_per_entry = 4;
+            page_size = W * 2;
         }
         break;
         case Layout::TILE: {
-            int tile_size; // TODO: Update to be generic for data type (issue 462)
-
+            // TODO: Update to be generic for data type (issue 462)
             switch (dtype) {
                 case DataType::BFLOAT16:
                 case DataType::FLOAT32: {
                     // Float is converted to bfloat16 before being written to device
                     uint32_t size_of_element = element_size_bytes_wrapper(DataType::BFLOAT16);
-                    tile_size = 32 * 32 * size_of_element;
-                    int num_elements_packed_as_uint32 = 2;
-                    num_entries_per_bank_unit = (32 * 32) / num_elements_packed_as_uint32;
+                    page_size = 32 * 32 * size_of_element;
                 }
                 break;
                 case DataType::UINT32: {
                     uint32_t size_of_element = element_size_bytes_wrapper(dtype);
-                    tile_size = 32 * 32 * size_of_element;
-                    int num_elements_packed_as_uint32 = 1;
-                    num_entries_per_bank_unit = (32 * 32) / num_elements_packed_as_uint32;
+                    page_size = 32 * 32 * size_of_element;
                 }
                 break;
                 case DataType::BFLOAT8_B:  {
-                    tile_size = 1088; // (256 * 4) + (16 *4)
-                    num_entries_per_bank_unit = 272; // 256 + 16
+                    page_size = 1088; // (256 * 4) + (16 *4)
                 }
                 break;
                 default:
                     TT_ASSERT(false && "Unsupported data type!");
             }
-            TT_ASSERT(total_size_bytes % tile_size == 0);
-            num_bank_units = total_size_bytes / tile_size;
-            num_bytes_per_entry = 4;
+            TT_ASSERT(total_size_bytes % page_size == 0);
         }
         break;
         case Layout::CHANNELS_LAST:
-            num_bank_units = total_size_bytes / (C*2);
-            num_entries_per_bank_unit = C/2; // num elements in tile packed as uint32
-            num_bytes_per_entry = 4;
+            page_size = C * 2;
         break;
         default:
             TT_ASSERT(false && "Unsupported layout to write to device");
     }
-    return {num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry};
+    TT_ASSERT(page_size != 0);
+    return page_size;
 }
 
 void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
-    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(tensor.dtype(), tensor.layout(), buffer_size_bytes, tensor.shape());
-    tensor.buffer_ = CreateInterleavedDramBuffer(tensor.device(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    uint32_t page_size = get_page_size(tensor.dtype(), tensor.layout(), buffer_size_bytes, tensor.shape());
+    uint32_t starting_bank_id = 0;
+    tensor.buffer_ = new Buffer(tensor.device(), buffer_size_bytes, starting_bank_id, page_size, BufferType::DRAM);
 }
 
 void allocate_dram_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
     TT_ASSERT(tensor.mem_config_.dram_channel != -1);
-    tensor.buffer_ = CreateDramBuffer(tensor.device(), tensor.mem_config_.dram_channel, buffer_size_bytes);
+    uint32_t starting_bank_id = tensor.mem_config_.dram_channel;
+    tensor.buffer_ = new Buffer(tensor.device(), buffer_size_bytes, starting_bank_id, buffer_size_bytes, BufferType::DRAM);
 }
 
 void allocate_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
@@ -92,31 +80,6 @@ void allocate_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
     } else {
         allocate_dram_buffer_on_device(tensor, buffer_size_bytes);
     }
-}
-
-void read_interleaved_data_from_device(const Tensor &tensor, uint32_t size_in_bytes, std::vector<uint32_t> &host_buffer) {
-    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(tensor.dtype(), tensor.layout(), size_in_bytes, tensor.shape());
-    ReadFromDeviceDRAMChannelsInterleaved(tensor.device(), host_buffer, tensor.buffer()->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-}
-
-void read_contiguous_data_from_device(const Tensor &tensor, uint32_t size_in_bytes, std::vector<uint32_t> &host_buffer) {
-    TT_ASSERT(tensor.buffer()->size() == size_in_bytes);
-    auto dram_buffer = dynamic_cast<DramBuffer *>(tensor.buffer());
-    TT_ASSERT(dram_buffer != nullptr);
-    ReadFromDeviceDRAM(dram_buffer, host_buffer);
-}
-
-void write_interleaved_data_to_device(const Tensor &tensor, std::vector<uint32_t> &host_buffer) {
-    uint32_t packed_size_in_bytes = host_buffer.size() * sizeof(uint32_t);
-    auto [num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry] = get_interleaved_read_write_unit_metadata(tensor.dtype(), tensor.layout(), packed_size_in_bytes, tensor.shape());
-    WriteToDeviceDRAMChannelsInterleaved(
-        tensor.device(), host_buffer, tensor.buffer()->address(), num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-}
-
-void write_contiguous_data_to_device(const Tensor &tensor, std::vector<uint32_t> &host_buffer) {
-    auto dram_buffer = dynamic_cast<DramBuffer *>(tensor.buffer());
-    TT_ASSERT(dram_buffer != nullptr);
-    WriteToDeviceDRAM(dram_buffer, host_buffer);
 }
 
 void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout) {

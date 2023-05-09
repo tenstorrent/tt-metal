@@ -114,89 +114,35 @@ std::vector<tt_xy_pair> Device::worker_cores_from_logical_cores(const std::vecto
     return worker_cores;
 }
 
-uint32_t Device::allocate_dram_buffer(int dram_channel, uint32_t size_in_bytes) {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
+void Device::check_allocator_is_initialized() const {
+    if (this->allocator_ == nullptr) {
+        TT_THROW("No memory allocator! Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    auto buffer_address = this->allocator_->allocate_dram_buffer(dram_channel, size_in_bytes);
-    return buffer_address;
 }
 
-uint32_t Device::allocate_dram_buffer(int dram_channel, uint32_t size_in_bytes, uint32_t address) {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    auto buffer_address = this->allocator_->allocate_dram_buffer(dram_channel, address, size_in_bytes);
-    TT_ASSERT(buffer_address == address);
-    return buffer_address;
+uint32_t Device::num_banks(const BufferType &buffer_type) const {
+    this->check_allocator_is_initialized();
+    return this->allocator_->num_banks(buffer_type);
 }
 
-void Device::free_dram_buffer(int dram_channel, uint32_t address) {
-    if (this->closed_) {
-        return;
-    }
-
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    this->allocator_->deallocate_dram_buffer(dram_channel, address);
+uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
+    this->check_allocator_is_initialized();
+    return this->allocator_->dram_channel_from_bank_id(bank_id);
 }
 
-uint32_t Device::allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes) {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    auto buffer_address = this->allocator_->allocate_circular_buffer(logical_core, size_in_bytes);
-    return buffer_address;
+tt_xy_pair Device::logical_core_from_bank_id(uint32_t bank_id) const {
+    this->check_allocator_is_initialized();
+    return this->allocator_->logical_core_from_bank_id(bank_id);
 }
 
-uint32_t Device::allocate_circular_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address) {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    auto buffer_address = this->allocator_->allocate_circular_buffer(logical_core, address, size_in_bytes);
-    TT_ASSERT(buffer_address == address);
-    return buffer_address;
+std::vector<uint32_t> Device::bank_ids_from_dram_channel(uint32_t dram_channel) const {
+    this->check_allocator_is_initialized();
+    return this->allocator_->bank_ids_from_dram_channel(dram_channel);
 }
 
-uint32_t Device::allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes) {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    auto buffer_address = this->allocator_->allocate_l1_buffer(logical_core, size_in_bytes);
-    return buffer_address;
-}
-
-uint32_t Device::allocate_l1_buffer(const tt_xy_pair &logical_core, uint32_t size_in_bytes, uint32_t address) {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    auto buffer_address = this->allocator_->allocate_l1_buffer(logical_core, address, size_in_bytes);
-    TT_ASSERT(buffer_address == address);
-    return buffer_address;
-}
-
-void Device::free_l1_buffer(const tt_xy_pair &logical_core, uint32_t address) {
-    if (this->closed_) {
-        return;
-    }
-
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    this->allocator_->deallocate_l1_buffer(logical_core, address);
-}
-
-std::vector<DramBankAddrPair> Device::allocate_interleaved_dram_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
-    return this->allocator_->allocate_interleaved_dram_buffer(num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-}
-
-std::vector<L1BankAddrPair> Device::allocate_interleaved_l1_buffer(int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
-    return this->allocator_->allocate_interleaved_l1_buffer(num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-}
-
-uint32_t Device::address_for_circular_buffers_across_core_range(const CoreRange &logical_core_range, uint32_t size_in_bytes) {
-    return this->allocator_->get_address_for_circular_buffers_across_core_range(logical_core_range, size_in_bytes);
+std::vector<uint32_t> Device::bank_ids_from_logical_core(const tt_xy_pair &logical_core) const {
+    this->check_allocator_is_initialized();
+    return this->allocator_->bank_ids_from_logical_core(logical_core);
 }
 
 }  // namespace tt_metal

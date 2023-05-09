@@ -239,7 +239,10 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     );
 
     uint32_t zero_buffer_l1_addr = 600 * 1024;
-    auto zero_buffer_l1 = tt_metal::CreateL1Buffer(program, device, core, row_size_bytes, zero_buffer_l1_addr);
+    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+    TT_ASSERT(not l1_bank_ids.empty());
+    auto l1_bank_id = l1_bank_ids.at(0);
+    auto zero_buffer_l1 = new tt_metal::Buffer(device, row_size_bytes, zero_buffer_l1_addr, l1_bank_id, row_size_bytes, tt_metal::BufferType::L1);
 
     // Reader compile-time args
     bool stick_size_is_power_of_two = (ceil(log2(row_size_bytes)) == floor(log2(row_size_bytes)));
@@ -323,7 +326,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
         (uint32_t) (output.shape()[0] * output.shape()[1] * output.shape()[2] * output.shape()[3] / TILE_HW)}
     );
     std::vector<uint32_t> zero_buffer_stick(row_size_datum, 0);
-    tt_metal::WriteToDeviceL1(device, core, zero_buffer_stick, zero_buffer_l1_addr);
+    tt_metal::WriteToDeviceL1(device, core, zero_buffer_l1_addr, zero_buffer_stick);
     tt_metal::LaunchKernels(device, program);
 
     delete program;
@@ -416,9 +419,12 @@ Tensor tilize_conv_activation(const Tensor &a, bool conv1x1 = false) {
         num_output_tiles * single_tile_size,
         DataFormat::Float16_b
     );
-
-    auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, address_map.size() * sizeof(uint32_t));
-    uint32_t address_map_l1_addr = l1_b0->address();
+    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+    TT_ASSERT(not l1_bank_ids.empty());
+    auto l1_bank_id = l1_bank_ids.at(0);
+    auto l1_b0_size = address_map.size() * sizeof(uint32_t);
+    auto l1_b0 = tt_metal::Buffer(device, l1_b0_size, l1_bank_id, l1_b0_size, tt_metal::BufferType::L1);
+    uint32_t address_map_l1_addr = l1_b0.address();
     vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(),
                                             (uint32_t)dram_dst_noc_xy.x,
                                             (uint32_t)dram_dst_noc_xy.y,
@@ -471,7 +477,7 @@ Tensor tilize_conv_activation(const Tensor &a, bool conv1x1 = false) {
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::ConfigureDeviceWithProgram(device, program);
-    tt_metal::WriteToDeviceL1(device, core, address_map, address_map_l1_addr);
+    tt_metal::WriteToDeviceL1(device, core, address_map_l1_addr, address_map);
 
     tt_metal::WriteRuntimeArgsToDevice(
         device,

@@ -108,16 +108,6 @@ std::vector<CircularBuffer *> Program::circular_buffers_on_core(const tt_xy_pair
     return cbs_on_core;
 }
 
-std::vector<L1Buffer *> Program::l1_buffers_on_core(const tt_xy_pair &core) const {
-    std::vector<L1Buffer *> l1_buffers_on_core;
-    for (auto l1_buffer : l1_buffers_) {
-        if (l1_buffer->logical_core() == core) {
-            l1_buffers_on_core.push_back(l1_buffer);
-        }
-    }
-    return l1_buffers_on_core;
-}
-
 std::vector<Semaphore *> Program::semaphores_on_core(const tt_xy_pair &core) const {
     if (this->logical_core_to_semaphores_.find(core) == this->logical_core_to_semaphores_.end()) {
         return {};
@@ -146,9 +136,6 @@ Program::~Program() {
     }
     for (auto circular_buffer : circular_buffers_) {
         delete circular_buffer;
-    }
-    for (auto l1_buffer : l1_buffers_) {
-        delete l1_buffer;
     }
 }
 

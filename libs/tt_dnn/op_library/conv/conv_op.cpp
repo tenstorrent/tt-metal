@@ -379,8 +379,12 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     Tensor output = create_output_dram_buffer_(a.device(), a.dtype(), cshape, untilize_out);
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, address_map.size() * sizeof(uint32_t));
-    uint32_t address_map_l1_addr = l1_b0->address();
+    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+    TT_ASSERT(not l1_bank_ids.empty());
+    auto l1_bank_id = l1_bank_ids.at(0);
+    auto l1_b0_size = address_map.size() * sizeof(uint32_t);
+    auto l1_b0 = tt_metal::Buffer(device, l1_b0_size, l1_bank_id, l1_b0_size, tt_metal::BufferType::L1);
+    uint32_t address_map_l1_addr = l1_b0.address();
 
     // Keep for now, but need to fix when you get to multibank
     uint32_t out_dram_addr = dst_dram_buffer->address();
@@ -564,7 +568,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
 
     pass &= tt_metal::CompileProgram(device, program, false);
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    tt_metal::WriteToDeviceL1(device, core, address_map, address_map_l1_addr);
+    tt_metal::WriteToDeviceL1(device, core, address_map_l1_addr, address_map);
 
         pass &= tt_metal::LaunchKernels(device, program);
 

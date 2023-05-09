@@ -12,40 +12,21 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool test_interleaved_l1_buffers_basic_allocator(tt_metal::Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
+bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages, uint32_t page_size) {
     bool pass = true;
 
-    uint32_t buffer_size = num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry;
+    uint32_t buffer_size = num_pages * page_size;
+    uint32_t starting_bank_id = 0;
 
-    auto interleaved_buffer = tt_metal::CreateInterleavedL1Buffer(device, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
+    auto interleaved_buffer = tt_metal::Buffer(device, buffer_size, starting_bank_id, page_size, tt_metal::BufferType::L1);
 
     std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    tt_metal::WriteToDeviceL1Interleaved(interleaved_buffer, host_buffer);
+    tt_metal::WriteToBuffer(interleaved_buffer, host_buffer);
 
     std::vector<uint32_t> readback_buffer;
-    tt_metal::ReadFromDeviceL1Interleaved(interleaved_buffer, readback_buffer);
-
-    pass &= (host_buffer == readback_buffer);
-
-    return pass;
-}
-
-bool test_interleaved_l1_buffers_l1_banking_allocator(tt_metal::Device *device, int num_bank_units, int num_entries_per_bank_unit, int num_bytes_per_entry) {
-    bool pass = true;
-
-    uint32_t buffer_size = num_bank_units * num_entries_per_bank_unit * num_bytes_per_entry;
-
-    auto interleaved_buffer = tt_metal::CreateInterleavedL1Buffer(device, num_bank_units, num_entries_per_bank_unit, num_bytes_per_entry);
-
-    std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
-        buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-
-    tt_metal::WriteToDeviceL1Interleaved(interleaved_buffer, host_buffer);
-
-    std::vector<uint32_t> readback_buffer;
-    tt_metal::ReadFromDeviceL1Interleaved(interleaved_buffer, readback_buffer);
+    tt_metal::ReadFromBuffer(interleaved_buffer, readback_buffer);
 
     pass &= (host_buffer == readback_buffer);
 
@@ -63,24 +44,22 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
-        uint32_t single_tile_size = 2 * 1024;
-        int num_entries_per_bank_unit = 512;
-        int num_bytes_per_entry = 4;
+        uint32_t page_size =  2 * 1024;
 
-        int num_bank_units_one = 258;
-        int num_bank_units_two = 378;
+        int num_bank_pages_one = 258;
+        int num_bank_pages_two = 378;
 
         // First run tests with basic memory allocator
         pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::BASIC);
-        pass &= test_interleaved_l1_buffers_basic_allocator(device, num_bank_units_one, num_entries_per_bank_unit, num_bytes_per_entry);
-        pass &= test_interleaved_l1_buffers_basic_allocator(device, num_bank_units_two, num_entries_per_bank_unit, num_bytes_per_entry);
+        pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, page_size);
+        pass &= test_interleaved_l1_buffer(device, num_bank_pages_two, page_size);
 
         // Close device and re-initialize it with L1 banking allocator
         pass &= tt_metal::CloseDevice(device);
         pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
 
-        pass &= test_interleaved_l1_buffers_l1_banking_allocator(device, num_bank_units_one, num_entries_per_bank_unit, num_bytes_per_entry);
-        pass &= test_interleaved_l1_buffers_l1_banking_allocator(device, num_bank_units_two, num_entries_per_bank_unit, num_bytes_per_entry);
+        pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, page_size);
+        pass &= test_interleaved_l1_buffer(device, num_bank_pages_two, page_size);
 
         pass &= tt_metal::CloseDevice(device);
 

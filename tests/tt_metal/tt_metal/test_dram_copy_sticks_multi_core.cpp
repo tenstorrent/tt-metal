@@ -52,16 +52,19 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_src_addr = 0;
         int dram_src_channel_id = 0;
 
-        auto src_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src_channel_id, dram_buffer_size, dram_buffer_src_addr);
+        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+        auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
         uint32_t l1_buffer_addr = 400 * 1024;
-        assert(src_dram_buffer->size() % (num_cores_r * num_cores_c) == 0);
-        uint32_t per_core_l1_size = src_dram_buffer->size() / (num_cores_r * num_cores_c);
+        assert(src_dram_buffer.size() % (num_cores_r * num_cores_c) == 0);
+        uint32_t per_core_l1_size = src_dram_buffer.size() / (num_cores_r * num_cores_c);
         for(int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
-                auto l1_b0 = tt_metal::CreateL1Buffer(program, device, core, per_core_l1_size, l1_buffer_addr);
+                auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+                TT_ASSERT(not l1_bank_ids.empty());
+                auto l1_bank_id = l1_bank_ids.at(0);
+                auto l1_b0 = tt_metal::Buffer(device, per_core_l1_size, l1_buffer_addr, l1_bank_id, per_core_l1_size, tt_metal::BufferType::L1);
             }
         }
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
@@ -82,7 +85,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= tt_metal::WriteToDeviceDRAM(src_dram_buffer, src_vec);
+        tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         std::cout << "Num cores " << num_cores_r * num_cores_c << std::endl;
@@ -107,7 +110,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
         tt_metal::DumpDeviceProfileResults(device, program);
         //std::vector<uint32_t> result_vec;
-        //tt_metal::ReadFromDeviceDRAM(dst_dram_buffer, result_vec);
+        //tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

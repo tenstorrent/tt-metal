@@ -373,28 +373,28 @@ int main(int argc, char **argv) {
                 uint32_t dram_buffer_size_weights = single_tile_size * K * per_core_N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
                 uint32_t dram_buffer_size_out = single_tile_size * per_core_M * per_core_N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-                auto src0_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src0_channel_id, dram_buffer_size_act, dram_buffer_src0_addr);
-                auto src1_dram_buffer = tt_metal::CreateDramBuffer(device, dram_src1_channel_id, dram_buffer_size_weights, dram_buffer_src1_addr);
-                auto dst_dram_buffer = tt_metal::CreateDramBuffer(device, dram_dst_channel_id, dram_buffer_size_out, dram_buffer_dst_addr);
+                auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_act, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size_act, tt_metal::BufferType::DRAM);
+                auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_weights, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
+                auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_out, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size_out, tt_metal::BufferType::DRAM);
 
                 TT_ASSERT(dram_buffer_src0_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
                 TT_ASSERT(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
                 TT_ASSERT(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
 
-                auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-                auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-                auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+                auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
+                auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
+                auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
                 auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
                 auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 auto activations_tile_transposed = transpose_tiles(activations, per_core_M, K, in0_block_w);
-                pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_src0_channel_id, activations_tile_transposed, dram_buffer_src0_addr);
+                pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
 
                 auto identity_tilized = tilize(weights_slice, K * 32, per_core_N * 32);
                 auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-                pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_src1_channel_id, weights, dram_buffer_src1_addr);
+                pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
 
                 std::vector<uint32_t> mm_reader_args = {
                     (std::uint32_t) dram_buffer_src0_addr,
@@ -440,8 +440,7 @@ int main(int argc, char **argv) {
                 int core_index = i * num_cores_c + j;
                 uint32_t dram_buffer_dst_addr = core_index * per_core_M * per_core_N * single_tile_size;
                 int dram_dst_channel_id = 2;
-                tt_metal::ReadFromDeviceDRAMChannel(
-                    device, dram_dst_channel_id, dram_buffer_dst_addr, result_vec, per_core_M * per_core_N * single_tile_size);
+                tt_metal::ReadFromDeviceDRAMChannel(device, dram_dst_channel_id, dram_buffer_dst_addr, per_core_M * per_core_N * single_tile_size, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 auto result_flat_layout = convert_to_flat_layout(result_bfp16);
                 auto result_untilized = untilize(result_flat_layout, per_core_M*32, per_core_N*32);

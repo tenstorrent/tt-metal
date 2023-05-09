@@ -43,14 +43,15 @@ int main(int argc, char **argv) {
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
         constexpr uint32_t l1_buffer_addr = 400 * 1024;
 
-        L1Buffer *l1_buffer = CreateL1Buffer(program, device, core, dram_buffer_size, l1_buffer_addr);
+        uint32_t l1_bank_id = device->bank_ids_from_logical_core(core).at(0);
+        Buffer l1_buffer = Buffer(device, dram_buffer_size, l1_buffer_addr, l1_bank_id, dram_buffer_size, BufferType::L1);
 
         constexpr uint32_t input_dram_buffer_addr = 0;
         constexpr int dram_channel = 0;
-        DramBuffer *input_dram_buffer = CreateDramBuffer(device, dram_channel, dram_buffer_size, input_dram_buffer_addr);
+        Buffer input_dram_buffer = Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_channel, dram_buffer_size, BufferType::DRAM);
 
         constexpr uint32_t output_dram_buffer_addr = 512 * 1024;
-        DramBuffer *output_dram_buffer = CreateDramBuffer(device, dram_channel, dram_buffer_size, output_dram_buffer_addr);
+        Buffer output_dram_buffer = Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_channel, dram_buffer_size, BufferType::DRAM);
 
         /*
         * Compile kernels used during execution
@@ -63,19 +64,19 @@ int main(int argc, char **argv) {
         */
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        pass &= WriteToDeviceDRAM(input_dram_buffer, input_vec);
+        WriteToBuffer(input_dram_buffer, input_vec);
 
         pass &= ConfigureDeviceWithProgram(device, program);
 
         const std::vector<uint32_t> runtime_args = {
-            l1_buffer->address(),
-            input_dram_buffer->address(),
-            static_cast<uint32_t>(input_dram_buffer->noc_coordinates().x),
-            static_cast<uint32_t>(input_dram_buffer->noc_coordinates().y),
-            output_dram_buffer->address(),
-            static_cast<uint32_t>(output_dram_buffer->noc_coordinates().x),
-            static_cast<uint32_t>(output_dram_buffer->noc_coordinates().y),
-            l1_buffer->size()
+            l1_buffer.address(),
+            input_dram_buffer.address(),
+            static_cast<uint32_t>(input_dram_buffer.noc_coordinates().x),
+            static_cast<uint32_t>(input_dram_buffer.noc_coordinates().y),
+            output_dram_buffer.address(),
+            static_cast<uint32_t>(output_dram_buffer.noc_coordinates().x),
+            static_cast<uint32_t>(output_dram_buffer.noc_coordinates().y),
+            l1_buffer.size()
         };
 
         pass &= WriteRuntimeArgsToDevice(
@@ -91,7 +92,7 @@ int main(int argc, char **argv) {
         * Validation & Teardown
         */
         std::vector<uint32_t> result_vec;
-        ReadFromDeviceDRAM(output_dram_buffer, result_vec);
+        ReadFromBuffer(output_dram_buffer, result_vec);
 
         pass &= input_vec == result_vec;
 
