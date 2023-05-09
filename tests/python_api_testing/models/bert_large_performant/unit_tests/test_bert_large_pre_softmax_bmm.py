@@ -43,7 +43,7 @@ def run_bert_large_pre_softmax_bmm_test(dtype):
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
-        .to(device)
+        .to(device, memory_config)
     )
 
     t2 = ttl.tensor.bert_large_pre_softmax_bmm(a_t, b_t)
