@@ -8,27 +8,19 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 from libs import tt_lib as ttm
-
-from transformers import BloomForCausalLM
 from utility_functions import print_diff_argmax
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
-
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
-import python_api_testing.models.bloom.dropout_add as dropout_add
 import python_api_testing.models.bloom.bloom_attention_merge_heads as bloom_attention_merge_heads
 
 
-
 def run_bloom_attention_merge_heads_test(device, num_heads, hidden_size, num_attention_heads):
-
-    # Prepare input
     torch.manual_seed(0)
     test_in = torch.rand(4096, 128, 32)
 
     pt_out = bloom_attention_merge_heads.merge_heads(test_in, num_heads, hidden_size, num_attention_heads)
-
     tt_out = bloom_attention_merge_heads.tt_merge_heads(test_in, num_heads, hidden_size, num_attention_heads, device)
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
@@ -46,8 +38,13 @@ def run_bloom_attention_merge_heads_test(device, num_heads, hidden_size, num_att
 
     assert does_pass
 
+
 def test_bloom_attention_merge():
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
     run_bloom_attention_merge_heads_test(device, 32, 1024, 32)
     ttm.device.CloseDevice(device)
+
+
+if __name__ == "__main__":
+    test_bloom_attention_merge()

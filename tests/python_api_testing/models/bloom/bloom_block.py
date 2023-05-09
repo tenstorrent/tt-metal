@@ -130,12 +130,8 @@ class TtBloomBlock(torch.nn.Module):
         output_attentions: bool = False,
     ):
         # hidden_states: [batch_size, seq_length, hidden_size]
-
         # Layer norm at the beginning of the transformer layer.
         layernorm_output = self.input_layernorm(hidden_states, overrideH=hidden_states.shape()[-2])
-
-        # layernorm_output = self.input_layernorm(hidden_states)
-        # tt_layernorm_output = bloom_utils.torch2tt_tensor(layernorm_output, device)
 
         # Layer norm post the self attention.
         if self.apply_residual_connection_post_layernorm:
