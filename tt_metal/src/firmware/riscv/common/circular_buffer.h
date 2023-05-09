@@ -1,6 +1,7 @@
 #pragma once
 
 // TODO: we probably don't need any of these to be int16
+// All of this is in local memory only, not in L1
 struct CBReadInterface {
    uint32_t fifo_size;
    uint32_t fifo_limit;

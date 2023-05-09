@@ -4,6 +4,8 @@
 #include "constants.hpp"
 #include "libs/tt_dnn/op_library/work_split.hpp"
 
+#include "../op_config.hpp"
+
 #include <iostream>
 
 using u32 = std::uint32_t;
@@ -15,7 +17,9 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor* beta) {
+// computes layernorm(a+*b)*gamma + beta
+// if b is nullptr it's treated as zero (no addition)
+Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gamma, const Tensor* beta) {
 
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
@@ -32,14 +36,16 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
     int block_size = find_max_divisor(Wt, 8);
     //if (getenv("FORCE_BLOCK_SIZE") != nullptr) block_size = std::stoi( getenv("FORCE_BLOCK_SIZE") );
-    //std::cout << "Block size=" << block_size << std::endl;
+    std::cout << "Block size=" << block_size << std::endl;
 
     uint32_t single_tile_size = 2 * 1024;
 
-    Buffer *src0_dram_buffer = a.buffer();
+    Buffer *a_dram_buf = a.buffer();
+    auto b_dram_addr = b ? b->buffer()->address() : 0;
     auto gamma_dram_addr = gamma ? gamma->buffer()->address() : 0;
     auto beta_dram_addr = beta ? beta->buffer()->address() : 0;
 
+    TT_ASSERT(b == nullptr || a.shape() == b->shape());
     TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume()/TILE_HW;
     uint32_t num_gamma_tiles = gamma ? gamma->volume()/TILE_HW : 0;
@@ -58,13 +64,19 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
     // TODO(AP): can also add support for block_size=7 -> 63, 28
-    bool use_64 = (block_size == 8 || block_size == 4 || block_size == 2 || block_size == 1);
-    uint32_t in0_t  =  use_64 ? 64 : 60; // space for 32 tiles plus buffering 32 tiles from NC. For bert we have Wt=12 => block_size=6, so we use 60
-    uint32_t out0_t =  use_64 ? 64 : 60; // output can use less space TODO(AP)
-    uint32_t im0_t  =  use_64 ? 64 : 60; // buffer for saving xmm
-    uint32_t im3_t  =  use_64 ? 64 : 60; // buffer for xmm^2
-    uint32_t in5_t  =  use_64 ? 32 : 30; // buffer for gamma
-    uint32_t in6_t  =  use_64 ? 32 : 30; // buffer for beta
+    uint32_t WtB    =  divup(Wt, block_size)*block_size; // Wt padded to be divisible by block size
+    uint32_t in0_t  =  WtB+2*block_size; // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
+    uint32_t in1_t  =  block_size*2; // buffer for fused pre-add b tensor
+    uint32_t out0_t =  block_size*2;
+    uint32_t im0_t  =  WtB; // buffer for saving xmm
+    uint32_t im3_t  =  WtB; // buffer for xmm^2
+    uint32_t in5_t  =  WtB; // buffer for gamma
+    uint32_t in6_t  =  WtB; // buffer for beta
+    uint32_t im6_t  =  block_size*2; // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
+    if (b) {
+        im6_t = in0_t;
+        in0_t = 2*block_size;
+    }
     uint32_t im5_t  =  2*block_size; // for buffering to/from *gamma/+beta
     uint32_t im4_t  =  8; // 8 just in case, 4 would prob suffice
     uint32_t in4_t  =  2; // ones column mask
@@ -75,16 +87,19 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
 
     TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
     TT_ASSERT(in0_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(in1_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(out0_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(im0_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(im3_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(in5_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(in6_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_ASSERT(im6_t % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(Wt % block_size == 0);
 
     uint32_t NCHt = NC*Ht;
     CoreGridDesc grid(a.device());
     uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
+    OpEnvConfig::update_num_cores(&num_cores);
     TT_ASSERT(NCHt % num_cores == 0);
 
     // we are actually splitting blocks of Wt tiles, not tiles, so no checking for bank alignment is needed
@@ -111,6 +126,15 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
         CreateCircularBuffer( program, device, CB::c_intermed5, core, im5_t,  im5_t*single_tile_size,  DataFormat::Float16_b );
         CreateCircularBuffer( program, device, CB::c_in5,       core, in5_t,  in5_t*single_tile_size,  DataFormat::Float16_b );
         CreateCircularBuffer( program, device, CB::c_in6,       core, in6_t,  in6_t*single_tile_size,  DataFormat::Float16_b );
+        if (b) {
+            // x = a+b in this notation
+            // result = ln(x)*gamma + beta
+            // if there's no pre-add we use cb_in0 for x, otherwise a is pre-buffered into in0, added into im6, then im6 is used as x
+            // b is buffered into c_in1
+            CreateCircularBuffer( program, device, CB::c_intermed6, core, im6_t,  im6_t*single_tile_size,  DataFormat::Float16_b );
+            // c_in1 is input buffer for b
+            CreateCircularBuffer( program, device, CB::c_in1,       core, in1_t,  in1_t*single_tile_size,  DataFormat::Float16_b );
+        }
 
         DataMovementKernel *reader_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/reader_unary_8bank_ln.cpp", core,
@@ -137,11 +161,16 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
         eltwise_binary_kernel->add_define("BLOCK_SIZE", block_size);
         reader_kernel->add_define("BLOCK_SIZE", block_size);
         writer_kernel->add_define("BLOCK_SIZE", block_size);
+        if (b) {
+            reader_kernel->add_define("FUSE_PRE_ADD", "1");
+            eltwise_binary_kernel->add_define("FUSE_PRE_ADD", "1");
+        }
         readers.push_back(reader_kernel);
         writers.push_back(writer_kernel);
     }
 
     bool profile = false;
+    OpEnvConfig::update_profile(&profile);
     CompileProgram(device, program, profile);
     ConfigureDeviceWithProgram(device, program);
 
@@ -155,8 +184,8 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
         //std::cout << "Num beta=" << num_beta_tiles << " addr=" << beta_dram_addr << std::endl;
         uint32_t tile_offset = tpc*Wt*icore;
         WriteRuntimeArgsToDevice( device, readers[icore], core,
-            { src0_dram_buffer->address(), 0, 0, tpc*Wt, tile_offset, 0, 0, 0, winv.u, e.u, // 0-9
-            num_gamma_tiles, gamma_dram_addr, num_beta_tiles, beta_dram_addr } // 10-13
+            { a_dram_buf->address(), 0, 0, tpc*Wt, tile_offset, 0, 0, 0, winv.u, e.u, // 0-9
+              num_gamma_tiles, gamma_dram_addr, num_beta_tiles, beta_dram_addr, b_dram_addr } // 10-14
         );
         WriteRuntimeArgsToDevice( device, writers[icore], core, { dst_dram_buffer->address(), 0, 0, tpc*Wt, tile_offset } );
     }
@@ -170,9 +199,10 @@ Tensor layernorm_(const Tensor &a, float eps, const Tensor* gamma, const Tensor*
     return output;
 } // softmax
 
-Tensor layernorm(const Tensor &a, float eps) { return layernorm_(a, eps, nullptr, nullptr); }
-Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma) { return layernorm_(a, eps, &gamma, nullptr); }
-Tensor layernorm_gamma_beta(const Tensor &a, float eps, const Tensor& gamma, const Tensor& beta) { return layernorm_(a, eps, &gamma, &beta); }
+Tensor layernorm(const Tensor &a, float eps) { return layernorm_(a, nullptr, eps, nullptr, nullptr); }
+Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma) { return layernorm_(a, nullptr, eps, &gamma, nullptr); }
+Tensor layernorm_gamma_beta(const Tensor &a, float eps, const Tensor& gamma, const Tensor& beta) { return layernorm_(a, nullptr, eps, &gamma, &beta); }
+Tensor add_layernorm_gamma_beta(const Tensor &a, const Tensor& b, float eps, const Tensor& gamma, const Tensor& beta) { return layernorm_(a, &b, eps, &gamma, &beta); }
 
 }  // namespace ll_buda
 

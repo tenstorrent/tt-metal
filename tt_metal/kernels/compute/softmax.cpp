@@ -7,6 +7,7 @@
 #define BCAST_DIM BroadcastType::COL
 
 #include "llk_3c.h"
+#include "../op_config.hpp"
 
 #include "debug_print.h"
 
@@ -59,7 +60,7 @@ void MAIN {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
             //auto s8 = SliceRange::hw0_32_8();
             //auto s16 = SliceRange::hw0_32_16();
-            auto shw04 = SliceRange::hw041();
+            //auto shw04 = SliceRange::hw041();
             //auto h032 = SliceRange::h0_32_w0();
             //DPRINT << FIXP() << SETW(4) << SETP(3);
             //kernel_profiler::mark_time(7);

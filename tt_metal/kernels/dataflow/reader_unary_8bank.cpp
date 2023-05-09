@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#include "debug_print.h"
+//#include "debug_print.h"
 
 void generate_bcast_scaler() {
     constexpr uint32_t cb_in_2 = 2;
@@ -63,12 +63,12 @@ void generate_col_ones() {
 }
 
 void kernel_main() {
-    auto s16 = SliceRange::hw0_32_16();
+    //auto s16 = SliceRange::hw0_32_16();
 
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(3); // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -95,15 +95,16 @@ void kernel_main() {
     generate_inv_sqrt_hw_bcast_tile();
     #endif
 
-    constexpr bool read_from_dram =
     #ifdef KERNEL_COMPILE_TIME_ARG_0
-    get_compile_time_arg_val(0)
+    constexpr bool read_from_dram = get_compile_time_arg_val(0);
     #else
-    true
+    constexpr bool read_from_dram = true;
     #endif
-    ;
 
-    const InterleavedPow2AddrGen<read_from_dram> s = { src_addr, 11 };
+    const InterleavedPow2AddrGen<read_from_dram> src_a = { src_addr, 11 };
+    #ifdef FUSE_PRE_ADD
+    const InterleavedPow2AddrGen src_b = { get_arg_val<uint32_t>(14), 11 };
+    #endif
 
     #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
@@ -112,6 +113,7 @@ void kernel_main() {
     #else
     constexpr uint32_t blk = 1; // 1 for correctness for unfused kernels
     #endif
+
     #if GENERATE_EPSILON // for LN
     generate_epsilon();
     generate_col_ones();
@@ -133,9 +135,7 @@ void kernel_main() {
 
         // DPRINT << i << ENDL();
         for (uint32_t r = 0; r<rem; r++) {
-            // DPRINT << i+r+tile_offset << ENDL();
-
-            uint64_t src_noc_addr = get_noc_addr(i+r+tile_offset, s); // not contiguous for sequential r, can be banked
+            uint64_t src_noc_addr = get_noc_addr(i+r+tile_offset, src_a); // not contiguous for sequential r, can be banked
             auto addr = l1_write_addr + (r<<11);
             // DPRINT << i << ENDL();
             // DPRINT << 'k' << ENDL();
@@ -146,8 +146,21 @@ void kernel_main() {
         }
         // DPRINT << uint(my_x[loading_noc]) << ", " << uint(my_y[loading_noc]) << ENDL();
         noc_async_read_barrier();
-        //DPRINT << "NC in0 pushing " << rem << ENDL();
         cb_push_back(cb_id_in0, rem);
+
+        #ifdef FUSE_PRE_ADD
+        // TODO(AP): refactor the ifdefs
+        cb_reserve_back(cb_id_in1, rem);
+        l1_write_addr = get_write_ptr(cb_id_in1);
+        for (uint32_t r = 0; r<rem; r++) {
+            uint64_t src_noc_addr = get_noc_addr(i+r+tile_offset, src_b); // not contiguous for sequential r, can be banked
+            auto addr = l1_write_addr + (r<<11);
+            noc_async_read(src_noc_addr, addr, tile_bytes); // TODO(AP): data type size
+        }
+        noc_async_read_barrier();
+        //DPRINT << "NC in1 pushing tiles " << rem << ENDL();
+        cb_push_back(cb_id_in1, rem);
+        #endif
 
         #if GAMMA_BETA // TODO(AP): refactor
         if (num_gamma_written < num_gamma_tiles) {

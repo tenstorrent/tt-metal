@@ -159,11 +159,13 @@ To use debug printing capability, it is first required to start the debug print 
 Debug print supports printing tile contents with the help of TSLICE macros.
 These allow to sample a tile with a given sample count, starting index and stride.
 This can be used on TRISCs as follows:
-``PACK(( { DPRINT  << TSLICE(CB::c_intermed1, 0, TileSlice::s0_32_8()) << ENDL(); } ));``
-This will extract a numpy slice ``[0:32:8, 0:32:8]`` from tile 0 from CB::c_intermed1.
+``PACK(( { DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); } ));``
+This will extract a numpy slice ``[0:32:16, 0:32:16]`` from tile 0 from CB::c_intermed1.
 The ``PACK(())`` wrapper will limit printing to only be from the pack trisc thread.
 Note that due to asynchronous and triple-threaded nature of compute engine kernels, this print statement has restrictions on validity and cannot be inserted at an arbitrary point in the kernel code.
-See extended comments before TileSlice declaration in debug_print.h for additional information on when this DPRINT is valid.
+``UNPACK(( DPRINT << ... ))`` only works between between cb_wait_front and cb_pop_front.
+``PACK(( DPRINT << ... ))`` only works between cb_reserve_back and cb_push_back.
+This applies both to TRISCs and in the reader/writer kernels.
 
 
 *Known issues:*

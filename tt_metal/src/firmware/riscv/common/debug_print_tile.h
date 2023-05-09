@@ -5,6 +5,7 @@
 
 struct SliceRange {
     // A slice object encoding semantics of np.slice(h0:h1:hs, w0:w1:ws)
+    // This is only used with DPRINT for TileSlice object
     int h0, h1, hs, w0, w1, ws;
     // [0:32:16, 0:32:16]
     static inline SliceRange hw0_32_16() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16 }; }

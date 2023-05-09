@@ -814,6 +814,7 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("layernorm", &layernorm, "Performs a layernorm operation on the last tensor dimension.");
     m_tensor.def("layernorm_gamma", &layernorm_gamma, "Performs a layernorm operation on the last tensor dimension fused with post-multiplication via W-bcast.");
     m_tensor.def("layernorm_gamma_beta", &layernorm_gamma_beta, "Performs a layernorm operation on the last tensor dimension fused with post-multiplication and addition via W-bcast.");
+    m_tensor.def("add_layernorm_gamma_beta", &add_layernorm_gamma_beta, "Performs a layernorm(a+b)*gamma + beta operation.");
 
     // TMs
     m_tensor.def("reshape", &reshape, R"doc(

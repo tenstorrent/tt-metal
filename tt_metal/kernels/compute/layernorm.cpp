@@ -8,7 +8,7 @@
 
 #include "llk_3c.h"
 
-#include "debug_print.h"
+//#include "debug_print.h"
 
 //#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
@@ -43,9 +43,9 @@ void MAIN {
     constexpr auto cb_ex = CB::c_intermed1; // E[x]
     constexpr auto cb_ex2 = CB::c_intermed2; // E[(x-E[x])^2]
     constexpr auto cb_xmm2 = CB::c_intermed3; // xmm^2
-    constexpr auto cb_savex = cb_xmm2; // aka
     constexpr auto cb_ex2pe = CB::c_intermed4; // E[(x-E[x])^2]+eps
     constexpr auto cb_in = CB::c_in0; // input
+    constexpr auto cb_inb = CB::c_in1; // input b for fused pre-add
     constexpr auto cb_out = CB::c_out0; // output
     constexpr auto cb_gamma = CB::c_in5;
     constexpr auto cb_beta = CB::c_in6;
@@ -53,6 +53,11 @@ void MAIN {
     constexpr auto ndst = BLOCK_SIZE; // configurable size of DST block, use 1,2 for stress testing
     constexpr auto scaler0 = 0;
     //constexpr auto cb_exps1 = CB::c_intermed4;
+    #ifdef FUSE_PRE_ADD
+    constexpr auto cb_x = CB::c_intermed6;
+    #else
+    constexpr auto cb_x = CB::c_in0;
+    #endif
 
     cb_wait_front(cb_scaler, 1); // comes from the reader
     cb_wait_front(cb_eps, 1); // comes from the reader
@@ -66,35 +71,61 @@ void MAIN {
 
     uint32_t nwait_g = 0, nwait_b = 0;
 
-    for (uint32_t nc = 0; nc < NCHt; nc++) {
+    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
-        auto s8 = SliceRange::hw0_32_8();
-        auto s16 = SliceRange::hw0_32_16();
+        //auto s8 = SliceRange::hw0_32_8();
+        //auto s16 = SliceRange::hw0_32_16();
         //auto h032 = SliceRange::h0_32_w0();
         //auto h0w032 = SliceRange::h0_w0_32();
         //auto h9w26 = SliceRange{.h0 = 9, .h1 = 10, .hs = 1, .w0 = 26, .w1 = 27, .ws = 1};
         //DPRINT << FIXP() << SETW(4) << SETP(3);
+            #ifdef FUSE_PRE_ADD
+                add_tiles_init();
+                for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+                    ACQ();
+                            //UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
+                    cb_wait_front(cb_in, ndst);
+                            //UNPACK(( { DPRINT  << "Waiting on cb_inb" << ENDL(); } ));
+                    cb_wait_front(cb_inb, ndst);
+                            //UNPACK(( { DPRINT  << "Done Waiting on cb_inb" << ENDL(); } ));
+                    cb_reserve_back(cb_x, ndst);
+                    for (uint32_t j = 0; j < ndst; j++) {
+                            //if (ncht == 0 && wt+j == 0) UNPACK(( { DPRINT  << "pre-addB:" << ENDL(); } ));
+                            //if (ncht == 0 && wt+j == 0) UNPACK(( { DPRINT  << TSLICE(cb_inb, j, s16) << ENDL(); } ));
+                        add_tiles(cb_in, cb_inb, j, j, j);
+                        pack_tile(j, cb_x); // repack the addition result into back of the same cb_x buffer
+                            //if (ncht == 0 && wt+j == 0) PACK(( { DPRINT  << "a+b:" << ENDL(); } ));
+                            //if (ncht == 0 && wt+j == 0) PACK(( { DPRINT  << TSLICE(cb_x, j, s16) << ENDL(); } ));
+                    }
+                    REL();
+                    cb_pop_front(cb_in, ndst);
+                    cb_push_back(cb_x, ndst); // push the sum into the same buffer
+                    cb_pop_front(cb_inb, ndst);
+                }
+                // by the end of this loop we should end up with Wt tiles in cb_x
+            #endif
+
             // means = tensor.reduce(x, RSUM, RW, 1.0/W) # -> NCH1
             ACQ();
             cb_reserve_back(cb_ex, 1*onetile);
             reduce_init_delta_v2<false>(REDUCE_OP, REDUCE_DIM);
-            uint32_t nwait = 0;
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-                nwait += ndst; // cb_wait_front currently needs to use a cumulative number in each call if we don't wait/pop the same number of tiles
-                cb_wait_front(cb_in, nwait);
+                #ifndef FUSE_PRE_ADD
+                cb_wait_front(cb_x, wt+ndst);
+                #endif
                 for (uint32_t j = 0; j < ndst; j++) {
                     //UNPACK(( DPRINT  << "rem=" << U32(rem) << ENDL() ));
                     //if (ht == 0 && wt == 16) { UNPACK(( { DPRINT  << "x: " << wt+j << ENDL(); } )); }
-                    //if (ht == 0 && wt == 16) { UNPACK(( { DPRINT  << TSLICE8(cb_in, wt+j, s16) << ENDL(); } )); }
+                    //if (ht == 0 && wt == 16) { UNPACK(( { DPRINT  << TSLICE8(cb_x, wt+j, s16) << ENDL(); } )); }
                     //UNPACK(( DPRINT << "wt=" << wt << " j=" << j << ENDL() ));
                     //UNPACK(( { DPRINT << "CB addr=" << HEX() << uint32_t(&cb_read_interface[0]) << ENDL(); } ));
                     //if (ht >= 0 && wt+j >= 0) { UNPACK(( { DPRINT  << "x: ht=" << ht << " wt=" << wt+j << ENDL(); } )); }
-                    //if (ht >= 0 && wt+j >= 0) { UNPACK(( { DPRINT  << TSLICE8(cb_in, wt+j, s16) << ENDL(); } )); }
-                    reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_in, cb_scaler, wt+j, scaler0, dst0);
+                    //if (ht >= 0 && wt+j >= 0) { UNPACK(( { DPRINT  << TSLICE8(cb_x, wt+j, s16) << ENDL(); } )); }
+                    reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_x, cb_scaler, wt+j, scaler0, dst0);
                 }
-                // we don't pop cb_in until we compute Ex
+                // we don't pop cb_x until we compute Ex
             }
             reduce_revert_delta_v2();
 
@@ -104,7 +135,7 @@ void MAIN {
                     //if (ht == 3) PACK(( { DPRINT  << TSLICE(cb_ex, 0, s8) << ENDL(); } ));
             cb_push_back(cb_ex, 1);
 
-            // compute xmm=x-mean. Reuse cb_in since we didn't pop anything from it
+            // compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
             cb_wait_front(cb_ex, 1); // should have 1 tile
             cb_reserve_back(cb_xmm, Wt);
             sub_bcast_cols_init_short();
@@ -113,12 +144,12 @@ void MAIN {
                 for (uint32_t wtr = 0; wtr<ndst; wtr++) {
                         //UNPACK(( { if (ht == 3 && wt+wtr >= 0) DPRINT  << "x:" << wt+wtr << ENDL(); } ));
                         //UNPACK(( { if (ht == 3 && wt+rem == 4) DPRINT  << U32(sizeof(TSLICE32)) << ENDL(); } ));
-                        //UNPACK(( { if (ht == 3 && wt+wtr >= 0) DPRINT  << TSLICE8(cb_in, wt+wtr, s16) << ENDL(); } ));
-                        //UNPACK(( { if (ht == 3 && wt+rem >= 4) DPRINT  << CB_RD_PTR(cb_in) << ENDL(); } ));
+                        //UNPACK(( { if (ht == 3 && wt+wtr >= 0) DPRINT  << TSLICE8(cb_x, wt+wtr, s16) << ENDL(); } ));
+                        //UNPACK(( { if (ht == 3 && wt+rem >= 4) DPRINT  << CB_RD_PTR(cb_x) << ENDL(); } ));
                         //if (ht >= 0 && wt+wtr >= 0) { UNPACK(( { DPRINT  << "x: ht=" << ht << " wt=" << wt+wtr << ENDL(); } )); }
-                        //if (ht >= 0 && wt+wtr >= 0) { UNPACK(( { DPRINT  << TSLICE8(cb_in, wt+wtr, s16) << ENDL(); } )); }
+                        //if (ht >= 0 && wt+wtr >= 0) { UNPACK(( { DPRINT  << TSLICE8(cb_x, wt+wtr, s16) << ENDL(); } )); }
                         //UNPACK(( { for(volatile int i = 0; i < 10000000; i++) ; } )) ;
-                    sub_tiles_bcast_cols(cb_in, cb_ex, wt+wtr, 0, wtr); // tile *= 1/(sum(exp(x)))
+                    sub_tiles_bcast_cols(cb_x, cb_ex, wt+wtr, 0, wtr); // tile *= 1/(sum(exp(x)))
                     pack_tile(wtr, cb_xmm);
                         //PACK(( { if (ht == 3 && wt+wtr >= 4) DPRINT << "xmm[" << ht << "," << wt+wtr << "]" << ENDL(); } ));
                         //PACK(( { if (ht == 3 && wt+wtr >= 4) DPRINT << TSLICE(cb_xmm, wt+wtr, s8) << ENDL(); } ));
@@ -128,14 +159,12 @@ void MAIN {
                 REL();
             }
             cb_pop_front(cb_ex, 1);
-            cb_pop_front(cb_in, Wt);
+            cb_pop_front(cb_x, Wt);
 
             // compute temp = xmm*xmm = (x-E[x])^2
             mul_tiles_init();
-            nwait = 0;
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-                nwait += ndst;
-                cb_wait_front(cb_xmm, nwait);
+                cb_wait_front(cb_xmm, wt+ndst); // cumulative wait
                 cb_reserve_back(cb_xmm2, ndst); // can probably use less space for this if we block
                 ACQ();
                 for (uint32_t wtr = 0; wtr<ndst; wtr++) {

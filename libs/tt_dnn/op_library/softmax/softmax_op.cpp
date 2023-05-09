@@ -2,6 +2,8 @@
 #include "libs/tt_dnn/op_library/work_split.hpp"
 #include "tile_math.hpp"
 
+#include "../op_config.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
 
@@ -16,29 +18,12 @@ namespace tt {
 
 namespace tt_metal {
 
-void num_cores_from_env(uint32_t* num_cores) {
-    const char *ttnc = getenv("TT_FORCE_NUMCORES");
-    if ( ttnc != nullptr) {
-        int new_val = std::stoi(ttnc);
-        if (new_val != 0)
-            *num_cores = new_val;
-        cout << "=== NUM CORES AFTER UPDATE FROM ENV[\"TT_FORCE_NUMCORES\"]=" << *num_cores << endl;
-    }
-}
-
-void profile_from_env(bool* profile) {
-    const char *ttprof = getenv("TT_PROFILE");
-    if (ttprof != nullptr) {
-        *profile = true;
-    }
-    cout << "=== Profile from ENV[\"TT_PROFILE\"]= " << *profile << endl;
-}
 
 // implementation of softmax with optional scale/mask (see the header for a more detailed description)
 Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
 
     bool profile = false;
-    profile_from_env(&profile);
+    OpEnvConfig::update_profile(&profile);
 
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
@@ -82,14 +67,14 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t in0_t  = block_size == 8 ? 16 : 12;
     uint32_t out0_t = block_size == 8 ? 16 : 12;
-    uint32_t im1_t  = block_size == 8 ? 16 : 12;
+    uint32_t im1_t  = 2;
     uint32_t in2_t  = 2; // scaler for reduce coming from reader
     uint32_t in3_t  = 2; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in4_t  = Wt; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
     uint32_t im2_t  = 2; // recip result
-    // TODO(AP): explain in more detail why +8 and +6
     // 120 is a multiple of 3,5,6; 128 is divisible by 8,4,2,1; 7 is not picked currently
-    uint32_t im0_t  = (block_size==6 || block_size==3 || block_size==5) ? 120+block_size : 128+8; // buffer for exps, extra block_size space for fused variant
+    // buffer for keeping exps in L1 to reuse
+    uint32_t im0_t  = (block_size+1)*divup(Wt, block_size); // +1 space for pushing/popping an extra block
 
     TT_ASSERT(Wt % block_size == 0);
     TT_ASSERT((block_size != -1) && "Wt must be divisible by one of the numbers in the range from 8 to 1.");
@@ -102,7 +87,7 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
     uint32_t NCHt = NC*Ht;
     CoreGridDesc grid(a.device());
     uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
-    num_cores_from_env(&num_cores);
+    OpEnvConfig::update_num_cores(&num_cores);
     uint32_t partHt = NCHt/num_cores; // only used by fused_scale_mask variant
 
     // we are actually splitting blocks of Wt tiles, not tiles, so no checking for bank alignment is needed
