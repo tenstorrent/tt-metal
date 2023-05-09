@@ -360,7 +360,7 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
-    tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+    tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device, tt::tt_metal::MemoryConfig{true, -1, BufferType::L1});
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
