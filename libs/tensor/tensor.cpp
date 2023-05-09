@@ -251,7 +251,7 @@ const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
     auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
 
     if (this->layout() == Layout::TILE) {
-        TT_ASSERT(H % TILE_HEIGHT == 0 && W % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
+        TT_ASSERT(new_shape[2] % TILE_HEIGHT == 0 && new_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
 
     shape_ = new_shape;

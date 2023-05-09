@@ -207,6 +207,34 @@ def gen_unpad_args(input_shapes):
     return [test_args]
 
 
+def gen_pad_to_tile_args(input_shapes):
+    assert len(input_shapes) == 1
+    assert len(input_shapes[0]) == 4
+
+    pad_value = random.uniform(-100, 100)
+    # Cast to bfloat16 then back to float for exact match
+    pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
+
+    test_args = {
+        "pad_value": pad_value,
+    }
+
+    return [test_args]
+
+
+def gen_unpad_from_tile_args(input_shapes):
+    assert len(input_shapes) == 1
+    assert len(input_shapes[0]) == 4
+    assert input_shapes[0][-2] % 32 == 0
+    assert input_shapes[0][-1] % 32 == 0
+
+    output_tensor_shape = [*input_shapes[0][:-2], random.randint(input_shapes[0][-2] - 32 + 1, input_shapes[0][-2]), random.randint(input_shapes[0][-1] - 32 + 1, input_shapes[0][-1])]
+
+    test_args = {
+        "output_tensor_shape": output_tensor_shape,
+    }
+    return [test_args]
+
 def gen_permute_args(input_shapes):
     return [
         {"permute_dims": permute_dims}

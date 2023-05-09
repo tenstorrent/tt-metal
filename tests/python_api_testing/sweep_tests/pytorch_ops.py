@@ -1,5 +1,5 @@
 import torch
-
+from tt_lib.utils import _nearest_32 as nearest_32
 
 ################################################
 #################### TT-DNN ####################
@@ -29,7 +29,7 @@ def relu(x, *args, **kwargs):
 
 
 def sigmoid(x, *args, **kwargs):
-    return torch.nn.functional.sigmoid(x)
+    return torch.sigmoid(x)
 
 
 def log(x, *args, **kwargs):
@@ -101,7 +101,7 @@ def pad(x, *args, **kwargs):
         input_tensor_start[i] + input_tensor_shape[i]
         for i in range(len(input_tensor_shape))
     )
-    out = torch.ones(*output_tensor_shape, dtype=torch.bfloat16) * pad_value
+    out = torch.full(output_tensor_shape, pad_value, dtype=torch.bfloat16)
     out[
         input_tensor_start[0] : input_tensor_end[0],
         input_tensor_start[1] : input_tensor_end[1],
@@ -124,6 +124,32 @@ def unpad(x, *args, **kwargs):
         output_tensor_start[1] : output_tensor_end[1] + 1,
         output_tensor_start[2] : output_tensor_end[2] + 1,
         output_tensor_start[3] : output_tensor_end[3] + 1,
+    ]
+
+    return out
+
+def pad_to_tile(x, pad_value, *args, **kwargs):
+
+    input_tensor_shape = x.shape
+    output_tensor_shape = [*input_tensor_shape[:-2], nearest_32(input_tensor_shape[-2]), nearest_32(input_tensor_shape[-1])]
+    out = torch.full(output_tensor_shape, pad_value, dtype=torch.bfloat16)
+    out[
+        0 : input_tensor_shape[0],
+        0 : input_tensor_shape[1],
+        0 : input_tensor_shape[2],
+        0 : input_tensor_shape[3],
+    ] = x
+
+    return out
+
+
+def unpad_from_tile(x, output_tensor_shape, *args, **kwargs):
+
+    out = x[
+        0 : output_tensor_shape[0],
+        0 : output_tensor_shape[1],
+        0 : output_tensor_shape[2],
+        0 : output_tensor_shape[3]
     ]
 
     return out

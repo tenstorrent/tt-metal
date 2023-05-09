@@ -162,4 +162,12 @@ op_map = {
         "tt_lib_op": tt_lib_ops.unpad,
         "pytorch_op": pytorch_ops.unpad,
     },
+    "pad_to_tile": {
+        "tt_lib_op": tt_lib_ops.pad_to_tile,
+        "pytorch_op": pytorch_ops.pad_to_tile,
+    },
+    "unpad_from_tile": {
+        "tt_lib_op": tt_lib_ops.unpad_from_tile,
+        "pytorch_op": pytorch_ops.unpad_from_tile,
+    },
 }

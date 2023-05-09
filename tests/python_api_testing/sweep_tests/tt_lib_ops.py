@@ -1217,3 +1217,42 @@ def unpad(x, pcie_slot, *args, **kwargs):
     output = torch.Tensor(t1.data()).reshape(t1.shape())
 
     return output
+
+
+def pad_to_tile(x, pcie_slot, *args, **kwargs):
+
+    assert "pad_value" in kwargs
+
+    pad_value = kwargs["pad_value"]
+
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t0.pad_to_tile(pad_value)
+
+    output = torch.Tensor(t1.data()).reshape(t1.shape())
+
+    return output
+
+
+def unpad_from_tile(x, pcie_slot, *args, **kwargs):
+    assert "output_tensor_shape" in kwargs
+
+    output_tensor_shape = kwargs["output_tensor_shape"]
+
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t0.unpad_from_tile(output_tensor_shape)
+
+    output = torch.Tensor(t1.data()).reshape(t1.shape())
+
+    return output
