@@ -761,11 +761,7 @@ bool LaunchKernels(Device *device, Program *program, bool stagger_start) {
     auto worker_cores = device->worker_cores_from_logical_cores(logical_cores_used_in_program);
     llrt::internal_::enable_cores(cluster, pcie_slot, worker_cores);  // BRISC FW waits for this enable to run
 
-    for (const auto &worker_core: worker_cores) {
-        // tt_cxy_pair core = tt_cxy_pair(0, worker_core);
-        device->cluster()->set_remote_tensix_risc_reset(tt_cxy_pair(0, worker_core), TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
-    }
-    // llrt::deassert_brisc_reset_for_all_chips_all_cores(cluster, stagger_start);
+    llrt::deassert_brisc_reset_for_all_chips_all_cores(cluster, stagger_start);
 
     bool riscs_are_done = false;
     while (not riscs_are_done) {
