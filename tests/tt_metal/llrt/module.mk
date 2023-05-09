@@ -19,7 +19,7 @@ LLRT_TESTS += tests/llrt/test_silicon_driver \
 				tests/llrt/test_run_transpose_hc \
 				tests/llrt/test_run_matmul_small_block \
 				tests/llrt/test_run_dataflow_cb_test \
-				tests/llrt/test_dispatch_v1
+				# tests/llrt/test_dispatch_v1
 
 LLRT_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(LLRT_TESTS:tests%=%)))
 

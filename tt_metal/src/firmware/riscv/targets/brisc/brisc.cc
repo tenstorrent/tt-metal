@@ -14,6 +14,9 @@
 #include "ckernel_globals.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+
+#include "debug_print.h"
+
 // TODO: commonize this w/ the runtime -- it's the same configs
 // these consts must be constexprs
 constexpr uint32_t TRISC_BASE = MEM_TRISC0_BASE;
@@ -285,6 +288,11 @@ void local_mem_copy() {
 }
 
 int main() {
+
+    // volatile uint* my_ptr = get_cq_commands_received_ptr();
+    // DPRINT << my_ptr[0] << ENDL();
+    // while(true);
+
     kernel_profiler::init_BR_profiler();
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
@@ -305,7 +313,13 @@ int main() {
 #endif
 
     init_sync_registers();  // this init needs to be done before NCRISC / TRISCs are launched, only done by BRISC
+
+#if defined(IS_DISPATCH_KERNEL)
+    setup_cq_read_write_interface();
+#else
     setup_cb_read_write_interfaces();                // done by both BRISC / NCRISC
+#endif
+
     init_dram_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
     init_l1_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
 
@@ -333,7 +347,16 @@ int main() {
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
 #endif
     // Run the BRISC kernel
+
+#ifdef IS_DISPATCH_KERNEL
+    // while(true) { // Eventually, we want this to keep looping on some 'done' flag
+        kernel_main();
+
+        // Need some sort of semwait here
+    // }
+#else
     kernel_main();
+#endif
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
     kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif
@@ -373,7 +396,7 @@ int main() {
 #endif
 
 #if defined(IS_DISPATCH_KERNEL) or defined(WRITE_TO_HUGE_PAGE)
-    notify_host_kernel_finished();
+    // notify_host_kernel_finished();
 #endif
 
 #if defined(DEVICE_DISPATCH_MODE) and not defined(IS_DISPATCH_KERNEL)

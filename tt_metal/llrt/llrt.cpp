@@ -107,10 +107,10 @@ void assert_reset_for_all_chips(tt_cluster *cluster) {
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
 void write_hex_vec_to_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, std::vector<uint32_t> hex_vec, uint64_t addr) {
+    tt_cluster *cluster, int chip, const tt_xy_pair &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access) {
     // the API is named "write_dram_vec", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
-    cluster->write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr);
+    cluster->write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr, small_access);
 }
 
 std::vector<std::uint32_t> read_hex_vec_from_core(

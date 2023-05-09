@@ -83,7 +83,12 @@ constexpr static std::uint32_t ASSERT_RESET_SRC_L1_ADDR   = 110784;
 // Dispatch message address
 constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = 110816;
 constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;
-constexpr static std::uint32_t NOTIFY_HOST_KERNEL_COMPLETE_ADDR = 110880;
+constexpr static std::uint32_t NOTIFY_HOST_KERNEL_COMPLETE_ADDR = 110912;
+
+// Command queue pointers
+constexpr static std::uint32_t CQ_READ_PTR = 110944;
+constexpr static std::uint32_t CQ_WRITE_PTR = 110976;
+
 
 // Information for deassert/assert reset
 enum class TensixSoftResetOptions: std::uint32_t {
@@ -138,3 +143,9 @@ static constexpr TensixSoftResetOptions ALL_TENSIX_SOFT_RESET = TensixSoftResetO
 
 static constexpr TensixSoftResetOptions TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER = TensixSoftResetOptions::NCRISC |
                                                                                 ALL_TRISC_SOFT_RESET;
+
+
+// Host addresses for dispatch
+static constexpr uint32_t HOST_CQ_READ_PTR = 0;
+static constexpr uint32_t HOST_CQ_WRITE_PTR = 32;
+static constexpr uint32_t HOST_CQ_FINISH_PTR = 64;

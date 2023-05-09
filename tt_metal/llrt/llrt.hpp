@@ -105,7 +105,7 @@ void assert_reset_for_all_chips(tt_cluster *cluster);
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 void write_hex_vec_to_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, std::vector<uint32_t> hex_vec, uint64_t addr);
+    tt_cluster *cluster, int chip, const tt_xy_pair &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access = false);
 
 std::vector<std::uint32_t> read_hex_vec_from_core(
     tt_cluster *cluster, int chip, const tt_xy_pair &core, uint64_t addr, uint32_t size);

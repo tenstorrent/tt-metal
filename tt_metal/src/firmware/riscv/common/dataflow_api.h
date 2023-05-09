@@ -10,6 +10,7 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/bank_to_noc_coord_mapping.h"
+// #include "frameworks/tt_dispatch/impl/command.hpp"
 #include "circular_buffer.h"
 
 #include "debug_print.h"
@@ -35,6 +36,8 @@
  */
 CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
 CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
+
+CBReadInterface cq_read_interface;
 
 // Use VC 1 for unicast writes, and VC 4 for mcast writes
 #define NOC_UNICAST_WRITE_VC 1
@@ -163,13 +166,11 @@ void init_l1_bank_to_noc_coord_lookup_tables() {
     }
 }
 
-
 // only BRISC to call this
 void init_sync_registers() {
 
-    volatile std::uint32_t* tiles_received_ptr;
-    volatile std::uint32_t* tiles_acked_ptr;
-
+    volatile uint* tiles_received_ptr;
+    volatile uint* tiles_acked_ptr;
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
       tiles_received_ptr = get_cb_tiles_received_ptr(operand);
       tiles_received_ptr[0] = 0;
@@ -216,6 +217,26 @@ void setup_cb_read_write_interfaces() {
 
     circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; // move by 3 uint32's
   }
+}
+
+
+// Only the read interface is set up on the device... the write interface
+// belongs to host
+void setup_cq_read_write_interface() {
+    uint fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4; // The fifo starts after the pointer addresses
+    uint fifo_size = ((1024 * 1024 * 1024) >> 4) - fifo_addr;
+
+    cq_read_interface.fifo_limit = fifo_addr + fifo_size - 1;
+    cq_read_interface.fifo_rd_ptr = fifo_addr;
+    cq_read_interface.fifo_size = fifo_size;
+
+    // Setting up here rather than in init sync registers function
+    // since these are not registers, rather they are L1 values
+    // Read ptr
+    get_cq_read_ptr()[0] = fifo_addr;
+
+    // Write ptr
+    get_cq_write_ptr()[0] = fifo_addr;
 }
 
 // replicated from ckernels_defs.h, which are currently not included in BRISC / NCRISC builds
@@ -542,6 +563,7 @@ struct InterleavedAddrGen {
         if constexpr (DRAM) {
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, this->page_size) + this->bank_base_address + offset;
+
             noc_x = dram_bank_to_noc_x[bank_id];
             noc_y = dram_bank_to_noc_y[bank_id];
         } else {
@@ -1043,4 +1065,36 @@ inline void noc_prepare_deassert_reset_flag(uint32_t l1_addr) {
 
 inline void noc_prepare_assert_reset_flag(uint32_t l1_addr) {
     reinterpret_cast<volatile uint32_t*>(l1_addr)[0] = uint32_t(TENSIX_ASSERT_SOFT_RESET);
+}
+
+
+// Command queue APIs
+FORCE_INLINE
+void cq_wait_front() {
+
+    u32 fifo_wr_ptr;
+    do {
+        fifo_wr_ptr = get_cq_write_ptr()[0];
+    } while (cq_read_interface.fifo_rd_ptr == fifo_wr_ptr);
+}
+
+FORCE_INLINE
+void cq_pop_front(u32 cmd_size_16B) {
+    cq_read_interface.fifo_rd_ptr += cmd_size_16B;
+
+    if (cq_read_interface.fifo_rd_ptr > cq_read_interface.fifo_limit) {
+        cq_read_interface.fifo_rd_ptr -= cq_read_interface.fifo_size;
+    }
+
+    uint32_t pcie_noc_x = NOC_X(0);
+    uint32_t pcie_noc_y = NOC_Y(4); // These are the PCIE core coordinates
+    uint64_t pcie_address =
+        get_noc_addr(pcie_noc_x, pcie_noc_y, HOST_CQ_READ_PTR);  // For now, we are writing to host hugepages at offset 0 (nothing else currently writing to it)
+
+    u32 rd_ptr = cq_read_interface.fifo_rd_ptr;
+    volatile u32* rd_ptr_ptr = get_cq_read_ptr();
+
+    rd_ptr_ptr[0] = rd_ptr;
+    noc_async_write(u32(rd_ptr_ptr), pcie_address, 4);
+    noc_async_write_barrier();
 }

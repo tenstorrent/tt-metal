@@ -1,4 +1,9 @@
 #pragma once
+#include <cstdint>
+
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
 
 /*
 * This file contains values that are visible to both host and device compiled code.

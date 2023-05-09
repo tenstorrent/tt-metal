@@ -96,7 +96,8 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/dtx/collapse_transformations", "dtx/collapse_transformations"),
     #TestEntry("tt_metal/tests/dtx/tensor_evaluate", "dtx/tensor_evaluate"),
 
-
+    # Dispatch Tests
+    TestEntry("tt_metal/tests/tt_dispatch/test_enqueue_read_and_write", "tt_dispatch/test_enqueue_read_and_write"),
 )
 
 

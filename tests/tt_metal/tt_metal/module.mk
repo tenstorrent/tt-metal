@@ -71,12 +71,13 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_untilize_eltwise_binary \
 		 tests/tt_metal/test_bfp8_conversion \
 		 tests/tt_metal/test_semaphores \
+		 tests/tt_metal/tt_dispatch/test_enqueue_read_and_write \
 		 # test/tt_metal/test_datacopy_multi_core_multi_dram \  # this does not compile
 
 TT_METAL_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(TT_METAL_TESTS:tests/%=%)))
 
 TT_METAL_TEST_INCLUDES = $(TEST_INCLUDES) $(TT_METAL_INCLUDES)
-TT_METAL_TESTS_LDFLAGS = -ltensor -ltt_dnn -ldtx -ltt_metal_impl -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
+TT_METAL_TESTS_LDFLAGS = -ltensor -ltt_dnn -ldtx -ltt_metal_impl -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp -ltt_dispatch
 
 TT_METAL_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.o))
 TT_METAL_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.d))

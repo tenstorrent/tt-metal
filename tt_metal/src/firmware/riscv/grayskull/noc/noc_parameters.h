@@ -228,7 +228,10 @@
 #define NOC_MCAST_ADDR_START_X(addr)   (((addr) >> (NOC_ADDR_LOCAL_BITS+2*NOC_ADDR_NODE_ID_BITS))  &  NOC_NODE_ID_MASK)
 #define NOC_MCAST_ADDR_START_Y(addr)   (((addr) >> (NOC_ADDR_LOCAL_BITS+3*NOC_ADDR_NODE_ID_BITS))  &  NOC_NODE_ID_MASK)
 
-// Addres formats
+// Address formats
+#define NOC_XY_ENCODING(x, y) \
+   ((((uint32_t)(y)) << (NOC_ADDR_NODE_ID_BITS)) |  \
+   (((uint32_t)(x))))
 
 #define NOC_XY_ADDR(x, y, addr)                                        \
   ((((uint64_t)(y)) << (NOC_ADDR_LOCAL_BITS+NOC_ADDR_NODE_ID_BITS)) |  \

@@ -31,7 +31,7 @@ LLRT_TEST_ENTRIES = (
 
     TestEntry("llrt/tests/test_run_test_debug_print", "test_run_test_debug_print"),
     TestEntry("llrt/tests/test_run_datacopy_switched_riscs", "test_run_datacopy_switched_riscs"),
-    TestEntry("llrt/tests/test_dispatch_v1", "test_dispatch_v1"),
+    # TestEntry("llrt/tests/test_dispatch_v1", "test_dispatch_v1"),
 )
 
 

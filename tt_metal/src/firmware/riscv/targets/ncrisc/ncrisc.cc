@@ -103,6 +103,11 @@ int main(int argc, char *argv[]) {
   risc_init();
 
   setup_cb_read_write_interfaces();
+
+#if defined(IS_DISPATCH_KERNEL)
+    setup_cq_read_write_interface();
+#endif
+
   init_dram_bank_to_noc_coord_lookup_tables();
   init_l1_bank_to_noc_coord_lookup_tables();
 
