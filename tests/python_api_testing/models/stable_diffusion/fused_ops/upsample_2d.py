@@ -23,7 +23,7 @@ from upsample_nearest2d import TtUpsampleNearest2d
 
 
 class TtUpsample2D(nn.Module):
-    def __init__(self, channels, out_channels, use_conv, use_conv_transpose, name, state_dict, base_address):
+    def __init__(self, channels, out_channels, use_conv, use_conv_transpose=False, name="conv", state_dict=None, base_address=""):
         super().__init__()
         assert not use_conv_transpose, "StableDiffusion's Unet does not use convTranspose, so leaving it out"
         self.in_channels = channels

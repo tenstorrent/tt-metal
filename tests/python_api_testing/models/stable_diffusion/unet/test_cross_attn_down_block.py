@@ -19,7 +19,7 @@ from typing import Optional
 from libs import tt_lib as ttl
 from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tensor_rm
-from unet_2d_blocks import TtCrossAttnDownBlock2d
+from unet_2d_blocks import TtCrossAttnDownBlock2D
 
 from loguru import logger
 
@@ -81,7 +81,7 @@ def test_run_cross_attn_down_block_inference():
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
 
-    tt_cross_attn_down_block = TtCrossAttnDownBlock2d(
+    tt_cross_attn_down_block = TtCrossAttnDownBlock2D(
                             in_channels = in_channels,
                             out_channels = out_channels,
                             temb_channels = temb_channels,

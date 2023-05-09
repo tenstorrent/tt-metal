@@ -25,6 +25,8 @@ from python_api_testing.models.stable_diffusion.fused_ops.upsample_2d import TtU
 from python_api_testing.models.stable_diffusion.fused_ops.downsample_2d import TtDownsample2D as Downsample2D
 from python_api_testing.models.stable_diffusion.unet.transformer_2d import TtTransformer2DModel as Transformer2DModel
 
+from libs.tt_lib.fallback_ops import fallback_ops
+
 
 class TtUNetMidBlock2DCrossAttn(nn.Module):
     def __init__(
@@ -259,7 +261,8 @@ class TtCrossAttnUpBlock2D(nn.Module):
             # pop res hidden states
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
-            hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
+            # hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
+            hidden_states = fallback_ops.concat([hidden_states, res_hidden_states], dim=1)
 
             if self.training and self.gradient_checkpointing:
                 assert False, "this should not be triggered!"
@@ -323,7 +326,7 @@ class TtCrossAttnUpBlock2D(nn.Module):
 # cross_attention_kwargs =  None
 # unet.down_blocks.0
 
-class TtCrossAttnDownBlock2d(nn.Module):
+class TtCrossAttnDownBlock2D(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -497,7 +500,7 @@ class TtCrossAttnDownBlock2d(nn.Module):
             else:
                 print("running resnet in cross attention")
                 hidden_states = resnet(hidden_states, temb)
-                output_states += (hidden_states,)
+                # output_states += (hidden_states,)
 
                 hidden_states = attn(
                     hidden_states,

@@ -1,4 +1,12 @@
-
+from pathlib import Path
+import sys
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/")
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+sys.path.append(f"{f}/../../../../..")
 
 
 from torch import autocast
@@ -12,15 +20,12 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, HeunDi
 from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
-from python_api_testing.models.stable_diffusion.embeddings import Timesteps
-
+from utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc
+from libs import tt_lib as ttl
+from python_api_testing.models.stable_diffusion.unet.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):
     # self.time_proj = Timesteps(block_out_channels[0], flip_sin_to_cos, freq_shift)
-
-
-
-
     timesteps = timesteps[None]
     timesteps = timesteps.expand(sample.shape[0])
     t_emb = time_proj(timesteps)
@@ -30,6 +35,13 @@ def constant_prop_time_embeddings(timesteps, sample, time_proj):
 
 
 def demo():
+
+    # Initialize the device
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
+    host = ttl.device.GetHost()
+
     # 1. Load t`he autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
 
@@ -50,14 +62,43 @@ def demo():
     vae.to(torch_device)
     text_encoder.to(torch_device)
     unet.to(torch_device)
+    print(unet)
+    state_dict = torch_unet.state_dict()
+    tt_unet = tt_unet_condition(sample_size = 64,
+                                in_channels = 4,
+                                out_channels = 4,
+                                center_input_sample = False,
+                                flip_sin_to_cos = True,
+                                freq_shift = 0,
+                                down_block_types = ['CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'DownBlock2D'],
+                                mid_block_type = 'UNetMidBlock2DCrossAttn',
+                                up_block_types = ['UpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D'],
+                                only_cross_attention = False,
+                                block_out_channels = [320, 640, 1280, 1280],
+                                layers_per_block = 2,
+                                downsample_padding = 1,
+                                mid_block_scale_factor = 1,
+                                act_fn = 'silu',
+                                norm_num_groups = 32,
+                                norm_eps = 1e-05,
+                                cross_attention_dim = 768,
+                                attention_head_dim = 8,
+                                dual_cross_attention = False,
+                                use_linear_projection = False,
+                                class_embed_type = None,
+                                num_class_embeds = None,
+                                upcast_attention = False,
+                                resnet_time_scale_shift = 'default',
+                                state_dict=state_dict,
+                                base_address="")
 
-
+    tt_unet.config = torch_unet.config
     prompt = ["a photo of an astronaut riding a horse on mars"]
     prompt = ["oil painting frame of Breathtaking mountain range with a clear river running through it, surrounded by tall trees and misty clouds, serene, peaceful, mountain landscape, high detail"]
 
     height = 512                        # default height of Stable Diffusion
     width = 512                         # default width of Stable Diffusion
-    num_inference_steps = 50           # Number of denoising steps
+    num_inference_steps = 1           # Number of denoising steps
     guidance_scale = 7.5                # Scale for classifier-free guidance
     generator = torch.manual_seed(174)    # 10233 Seed generator to create the inital latent noise
     batch_size = len(prompt)
@@ -100,9 +141,23 @@ def demo():
         t1 = time.time()
         # predict the noise residual
         with torch.no_grad():
-            t = constant_prop_time_embeddings(t, latent_model_input, torch_unet.proj_time)
+            _t = constant_prop_time_embeddings(t, latent_model_input, torch_unet.time_proj)
 
-            noise_pred = unet(latent_model_input, t, encoder_hidden_states=text_embeddings)
+            _t = torch_to_tt_tensor_rm(_t, device, put_on_device=False)
+            tt_latent_model_input = torch_to_tt_tensor_rm(latent_model_input, device, put_on_device=False)
+            tt_text_embeddings = torch_to_tt_tensor_rm(text_embeddings, device, put_on_device=False)
+
+            tt_noise_pred = tt_unet(tt_latent_model_input, _t, encoder_hidden_states=tt_text_embeddings)
+
+            torch_noise_pred = unet(latent_model_input, t, encoder_hidden_states=text_embeddings)
+
+        tt_noise_pred = tt_to_torch_tensor(tt_noise_pred, host)
+        print("########### comparing ############")
+        print(comp_allclose_and_pcc(torch_noise_pred, tt_noise_pred))
+        print("######### end of comparing #########")
+
+        noise_pred = tt_noise_pred
+
 
         t2 = time.time()
         # perform guidance
@@ -141,4 +196,5 @@ journal = {Hugging Face Blog},
 year = {2022},
 note = {[https://huggingface.co/blog/rlhf](https://huggingface.co/blog/stable_diffusion)},
 }
-''' `
+'''
+demo()

@@ -19,7 +19,7 @@ from typing import Optional
 from libs import tt_lib as ttl
 from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tensor_rm
-from unet_2d_blocks import TtCrossAttnUpBlock2d
+from unet_2d_blocks import TtCrossAttnUpBlock2D
 
 from loguru import logger
 
@@ -34,11 +34,12 @@ def test_run_cross_attn_up_block_inference():
     test = "test1"
 
     if test == "test1":
-        in_channels = 320
-        out_channels = 320
-        temb_channels = 1280
-        dropout = 0.0
-        num_layers = 2
+        in_channels  = 640
+        out_channels  = 1280
+        temb_channels  = 1280
+        prev_output_channel = 1280
+        dropout  = 0.0
+        num_layers = 3
         resnet_eps = 1e-05
         resnet_time_scale_shift = 'default'
         resnet_act_fn = 'silu'
@@ -47,33 +48,48 @@ def test_run_cross_attn_up_block_inference():
         attn_num_head_channels = 8
         cross_attention_dim = 768
         output_scale_factor = 1.0
-        downsample_padding = 1
-        add_downsample = True
+        add_upsample = True
         dual_cross_attention = False
         use_linear_projection = False
         only_cross_attention = False
         upcast_attention = False
-        ##### end of cross att down blck #####
-        sample_shape =  [2, 320, 64, 64]
-        temb_shape =  [1, 1, 2, 1280] # original: 2, 1280
-        encoder_hidden_states_shape =  [1, 2, 77, 768] # original: 2, 77, 768
-        attention_mask = None
+        ##### end of cross att up blck #####
+        hidden_states_shape = torch.Size([2, 1280, 16, 16])
+        sample = torch.randn(hidden_states_shape)
+        temb_shape = torch.Size([1, 1, 2, 1280])
+        emb = torch.randn(temb_shape)
+
+        # res_hidden_states_tuple =  3
+        res0 = torch.Size([2, 640, 16, 16])
+        res1 = torch.Size([2, 1280, 16, 16])
+        res2 = torch.Size([2, 1280, 16, 16])
+        res_samples = (torch.randn(res0), torch.randn(res1), torch.randn(res2))
+        encoder_hidden_states_shape =  torch.Size([1, 2, 77, 768])
+        encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
+
         cross_attention_kwargs = None
+        upsample_size = None
+        attention_mask = None
         base_address = "up_blocks.1"
-        down_block = pipe.unet.up_blocks[1]
+        up_block = pipe.unet.up_blocks[1]
 
+# hidden_states=sample,
+#                     temb=emb,
+#                     res_hidden_states_tuple=res_samples,
+#                     encoder_hidden_states=encoder_hidden_states,
+#                     cross_attention_kwargs=cross_attention_kwargs,
+#                     upsample_size=upsample_size,
+#                     attention_mask=attention_mask,
 
-    sample = torch.randn(sample_shape)
-    emb = torch.randn(temb_shape)
-    encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
-
-    # torch_output, torch_list_out = up_block(
-    #                     sample,
-    #                     emb.squeeze(0).squeeze(0),
-    #                     encoder_hidden_states=encoder_hidden_states.squeeze(0),
-    #                     attention_mask=attention_mask,
-    #                     cross_attention_kwargs=cross_attention_kwargs
-    #                     )
+    torch_output = up_block(
+                        hidden_states=sample,
+                        temb=emb.squeeze(0).squeeze(0),
+                        res_hidden_states_tuple= res_samples,
+                        encoder_hidden_states=encoder_hidden_states.squeeze(0),
+                        attention_mask=attention_mask,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        upsample_size=upsample_size,
+                        )
 
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -81,40 +97,42 @@ def test_run_cross_attn_up_block_inference():
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
 
-    # tt_cross_attn_down_block = TtCrossAttnUpBlock2d(
-    #                         in_channels = in_channels,
-    #                         out_channels = out_channels,
-    #                         temb_channels = temb_channels,
-    #                         dropout = dropout,
-    #                         num_layers = num_layers,
-    #                         resnet_eps = resnet_eps,
-    #                         resnet_time_scale_shift = resnet_time_scale_shift,
-    #                         resnet_act_fn = resnet_act_fn,
-    #                         resnet_groups = resnet_groups,
-    #                         resnet_pre_norm = resnet_pre_norm,
-    #                         attn_num_head_channels = attn_num_head_channels,
-    #                         cross_attention_dim = cross_attention_dim,
-    #                         output_scale_factor = output_scale_factor,
-    #                         downsample_padding = downsample_padding,
-    #                         add_downsample = add_downsample,
-    #                         dual_cross_attention = dual_cross_attention,
-    #                         use_linear_projection = use_linear_projection,
-    #                         only_cross_attention = only_cross_attention,
-    #                         upcast_attention = upcast_attention,
-    #                         state_dict=state_dict,
-    #                         base_address="up_blocks.1"
-    # )
+    tt_cross_attn_up_block = TtCrossAttnUpBlock2D(
+                            in_channels = in_channels,
+                            out_channels = out_channels,
+                            temb_channels = temb_channels,
+                            prev_output_channel = prev_output_channel,
+                            dropout = dropout,
+                            num_layers = num_layers,
+                            resnet_eps = resnet_eps,
+                            resnet_time_scale_shift = resnet_time_scale_shift,
+                            resnet_act_fn = resnet_act_fn,
+                            resnet_groups = resnet_groups,
+                            resnet_pre_norm = resnet_pre_norm,
+                            attn_num_head_channels = attn_num_head_channels,
+                            cross_attention_dim = cross_attention_dim,
+                            output_scale_factor = output_scale_factor,
+                            add_upsample = add_upsample,
+                            dual_cross_attention = dual_cross_attention,
+                            use_linear_projection = use_linear_projection,
+                            only_cross_attention = only_cross_attention,
+                            upcast_attention = upcast_attention,
+                            state_dict=state_dict,
+                            base_address="up_blocks.1"
+    )
 
     tt_sample = torch_to_tt_tensor_rm(sample, device, put_on_device=False)
     tt_emb = torch_to_tt_tensor_rm(emb, device, put_on_device=False)
     tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
 
-    tt_output, list_out = tt_cross_attn_up_block(
-        tt_sample,
-        tt_emb,
+    tt_output = tt_cross_attn_up_block(
+        hidden_states=tt_sample,
+        temb=tt_emb,
+        res_hidden_states_tuple= res_samples, # TODO fix this
         encoder_hidden_states=tt_encoder_hidden_states,
         attention_mask=attention_mask,
         cross_attention_kwargs=cross_attention_kwargs
+
         )
 
     # for i in range(len(list_out)):
@@ -133,4 +151,4 @@ def test_run_cross_attn_up_block_inference():
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
-test_run_cross_attn_down_block_inference()
+test_run_cross_attn_up_block_inference()

@@ -24,10 +24,20 @@
 # upcast attention:  False
 # resnet time scale:  default
 
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+
+import torch.nn as nn
+
+
 from python_api_testing.models.stable_diffusion.utils import make_linear
 from python_api_testing.models.stable_diffusion.embeddings import TtTimestepEmbedding as TimestepEmbedding
-from python_api_testing.models.stable_diffusion.fused_ops import TtDownBlock2D as DownBlock2D
+from python_api_testing.models.stable_diffusion.fused_ops.downblock_2d import TtDownBlock2D as DownBlock2D
+from python_api_testing.models.stable_diffusion.fused_ops.upblock_2d import TtUpBlock2D as UpBlock2D
 from unet_2d_blocks import TtUNetMidBlock2DCrossAttn as UNetMidBlock2DCrossAttn
+from unet_2d_blocks import TtCrossAttnDownBlock2D as CrossAttnDownBlock2D
+from unet_2d_blocks import TtCrossAttnUpBlock2D as CrossAttnUpBlock2D
+
 
 from libs.tt_lib.fallback_ops import fallback_ops
 
@@ -52,8 +62,28 @@ from libs.tt_lib.fallback_ops import fallback_ops
 
 
 
-def get_down_block(tpye, **kwargs):
-    if type == "DownBlock2D":
+def get_down_block(down_block_type,
+                    num_layers,
+                    in_channels,
+                    out_channels,
+                    temb_channels,
+                    add_downsample,
+                    resnet_eps,
+                    resnet_act_fn,
+                    attn_num_head_channels,
+                    resnet_groups=None,
+                    cross_attention_dim=None,
+                    downsample_padding=None,
+                    dual_cross_attention=False,
+                    use_linear_projection=False,
+                    only_cross_attention=False,
+                    upcast_attention=False,
+                    resnet_time_scale_shift="default",
+                    state_dict=None,
+                    base_address=""
+                    ):
+
+    if down_block_type == "DownBlock2D":
         return DownBlock2D(
             num_layers=num_layers,
             in_channels=in_channels,
@@ -68,7 +98,7 @@ def get_down_block(tpye, **kwargs):
             state_dict=state_dict,
             base_address=base_address,
             )
-    elif type == "CrossAttnDownBlock2D":
+    elif down_block_type == "CrossAttnDownBlock2D":
         return CrossAttnDownBlock2D(
             num_layers=num_layers,
             in_channels=in_channels,
@@ -90,29 +120,45 @@ def get_down_block(tpye, **kwargs):
             base_address=base_address,
             )
     else:
-        assert False, f"CrossAttnDownBlock2D, and DownBlock2D are the only down blocks implemented! you requested {type}"
+        assert False, f"CrossAttnDownBlock2D, and DownBlock2D are the only down blocks implemented! you requested {down_block_type}"
 
 
-def get_up_block(tpye, **kwargs):
-    if type == "UpBlock2D":
+def get_up_block(up_block_type,
+                num_layers,
+                in_channels,
+                out_channels,
+                prev_output_channel,
+                temb_channels,
+                add_upsample,
+                resnet_eps,
+                resnet_act_fn,
+                attn_num_head_channels,
+                resnet_groups=None,
+                cross_attention_dim=None,
+                dual_cross_attention=False,
+                use_linear_projection=False,
+                only_cross_attention=False,
+                upcast_attention=False,
+                resnet_time_scale_shift="default",
+                state_dict=None,
+                base_address=""
+                ):
+    if up_block_type == "UpBlock2D":
         return UpBlock2D(
+            num_layers=num_layers,
             in_channels=in_channels,
             out_channels=out_channels,
+            prev_output_channel=prev_output_channel,
             temb_channels=temb_channels,
-            dropout= 0.0,
-            num_layers=num_layers,
+            add_upsample=add_upsample,
             resnet_eps=resnet_eps,
-            resnet_time_scale_shift=resnet_time_scale_shift,
             resnet_act_fn=resnet_act_fn,
             resnet_groups=resnet_groups,
-            # resnet_pre_norm= True,
-            # output_scale_factor=1.0,
-            add_downsample=add_downsample,
-            downsample_padding=downsample_padding,
+            resnet_time_scale_shift=resnet_time_scale_shift,
             state_dict=state_dict,
             base_address=base_address
             )
-    elif type == "CrossAttnUpBlock2D":
+    elif up_block_type == "CrossAttnUpBlock2D":
         return CrossAttnUpBlock2D(
             num_layers=num_layers,
             in_channels=in_channels,
@@ -134,7 +180,7 @@ def get_up_block(tpye, **kwargs):
             base_address=base_address,
         )
     else:
-        assert False, f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {type}"
+        assert False, f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {up_block_type}"
 
 
 
@@ -178,9 +224,8 @@ class UNet2DConditionModel(nn.Module):
             summed with the time embeddings. Choose from `None`, `"timestep"`, or `"identity"`.
     """
 
-    _supports_gradient_checkpointing = True
+    # _supports_gradient_checkpointing = True
 
-    @register_to_config
     def __init__(
         self,
         sample_size: Optional[int] = None,
@@ -226,7 +271,7 @@ class UNet2DConditionModel(nn.Module):
         # input
         conv_in_w = state_dict[f"{self.base_address_with_dot}conv_in.weight"]
         conv_in_b = state_dict[f"{self.base_address_with_dot}conv_in.bias"]
-        self.conv_in = fallback_ops.Conv2d(in_channelsin_channels,
+        self.conv_in = fallback_ops.Conv2d(in_channels=in_channels,
                                             out_channels=block_out_channels[0],
                                             kernel_size=3,
                                             padding=(1, 1),
@@ -243,7 +288,7 @@ class UNet2DConditionModel(nn.Module):
         self.time_embedding = TimestepEmbedding(timestep_input_dim,
                                                 time_embed_dim,
                                                 state_dict=state_dict,
-                                                base_address=f"{self.base_address_with_dot}")
+                                                base_address=f"{self.base_address_with_dot}time_embedding")
 
         # class embedding
         if class_embed_type is None and num_class_embeds is not None:
@@ -294,8 +339,8 @@ class UNet2DConditionModel(nn.Module):
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 state_dict=state_dict,
                 base_address=f"{self.base_address_with_dot}down_blocks.{len(self.down_blocks)}",
-                device=device,
-                host=host,
+                # device=device,
+                # host=host,
             )
             self.down_blocks.append(down_block)
 
@@ -314,8 +359,11 @@ class UNet2DConditionModel(nn.Module):
                 dual_cross_attention=dual_cross_attention,
                 use_linear_projection=use_linear_projection,
                 upcast_attention=upcast_attention,
+                state_dict=state_dict,
+                base_address=f"{self.base_address_with_dot}mid_block"
             )
         elif mid_block_type == "UNetMidBlock2DSimpleCrossAttn":
+            assert False, "this is not happening"
             self.mid_block = UNetMidBlock2DSimpleCrossAttn(
                 in_channels=block_out_channels[-1],
                 temb_channels=time_embed_dim,
@@ -372,10 +420,10 @@ class UNet2DConditionModel(nn.Module):
                 only_cross_attention=only_cross_attention[i],
                 upcast_attention=upcast_attention,
                 resnet_time_scale_shift=resnet_time_scale_shift,
-                device=device,
-                host=host,
                 state_dict=state_dict,
-                base_address=f"{self.base_address_with_dot}up_blocks.{len(self.up_blocks)}"
+                base_address=f"{self.base_address_with_dot}up_blocks.{len(self.up_blocks)}",
+                # device=device,
+                # host=host,
             )
             self.up_blocks.append(up_block)
             prev_output_channel = output_channel
@@ -399,144 +447,144 @@ class UNet2DConditionModel(nn.Module):
                                             out_channels=out_channels,
                                             kernel_size=3,
                                             padding=1,
-                                            weighs=conv_out_w,
+                                            weights=conv_out_w,
                                             biases=conv_out_b
                                             )
 
 
-    @property
-    def attn_processors(self) -> Dict[str, AttnProcessor]:
-        r"""
-        Returns:
-            `dict` of attention processors: A dictionary containing all attention processors used in the model with
-            indexed by its weight name.
-        """
-        # set recursively
-        processors = {}
+    # @property
+    # def attn_processors(self) -> Dict[str, AttnProcessor]:
+    #     r"""
+    #     Returns:
+    #         `dict` of attention processors: A dictionary containing all attention processors used in the model with
+    #         indexed by its weight name.
+    #     """
+    #     # set recursively
+    #     processors = {}
 
-        def fn_recursive_add_processors(name: str, module: torch.nn.Module, processors: Dict[str, AttnProcessor]):
-            if hasattr(module, "set_processor"):
-                processors[f"{name}.processor"] = module.processor
+    #     def fn_recursive_add_processors(name: str, module: torch.nn.Module, processors: Dict[str, AttnProcessor]):
+    #         if hasattr(module, "set_processor"):
+    #             processors[f"{name}.processor"] = module.processor
 
-            for sub_name, child in module.named_children():
-                fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
+    #         for sub_name, child in module.named_children():
+    #             fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
 
-            return processors
+    #         return processors
 
-        for name, module in self.named_children():
-            fn_recursive_add_processors(name, module, processors)
+    #     for name, module in self.named_children():
+    #         fn_recursive_add_processors(name, module, processors)
 
-        return processors
+    #     return processors
 
-    def set_attn_processor(self, processor: Union[AttnProcessor, Dict[str, AttnProcessor]]):
-        r"""
-        Parameters:
-            `processor (`dict` of `AttnProcessor` or `AttnProcessor`):
-                The instantiated processor class or a dictionary of processor classes that will be set as the processor
-                of **all** `CrossAttention` layers.
-            In case `processor` is a dict, the key needs to define the path to the corresponding cross attention processor. This is strongly recommended when setting trainablae attention processors.:
+    # def set_attn_processor(self, processor: Union[AttnProcessor, Dict[str, AttnProcessor]]):
+    #     r"""
+    #     Parameters:
+    #         `processor (`dict` of `AttnProcessor` or `AttnProcessor`):
+    #             The instantiated processor class or a dictionary of processor classes that will be set as the processor
+    #             of **all** `CrossAttention` layers.
+    #         In case `processor` is a dict, the key needs to define the path to the corresponding cross attention processor. This is strongly recommended when setting trainablae attention processors.:
 
-        """
-        count = len(self.attn_processors.keys())
+    #     """
+    #     count = len(self.attn_processors.keys())
 
-        if isinstance(processor, dict) and len(processor) != count:
-            raise ValueError(
-                f"A dict of processors was passed, but the number of processors {len(processor)} does not match the"
-                f" number of attention layers: {count}. Please make sure to pass {count} processor classes."
-            )
+    #     if isinstance(processor, dict) and len(processor) != count:
+    #         raise ValueError(
+    #             f"A dict of processors was passed, but the number of processors {len(processor)} does not match the"
+    #             f" number of attention layers: {count}. Please make sure to pass {count} processor classes."
+    #         )
 
-        def fn_recursive_attn_processor(name: str, module: torch.nn.Module, processor):
-            if hasattr(module, "set_processor"):
-                if not isinstance(processor, dict):
-                    module.set_processor(processor)
-                else:
-                    module.set_processor(processor.pop(f"{name}.processor"))
+    #     def fn_recursive_attn_processor(name: str, module: torch.nn.Module, processor):
+    #         if hasattr(module, "set_processor"):
+    #             if not isinstance(processor, dict):
+    #                 module.set_processor(processor)
+    #             else:
+    #                 module.set_processor(processor.pop(f"{name}.processor"))
 
-            for sub_name, child in module.named_children():
-                fn_recursive_attn_processor(f"{name}.{sub_name}", child, processor)
+    #         for sub_name, child in module.named_children():
+    #             fn_recursive_attn_processor(f"{name}.{sub_name}", child, processor)
 
-        for name, module in self.named_children():
-            fn_recursive_attn_processor(name, module, processor)
+    #     for name, module in self.named_children():
+    #         fn_recursive_attn_processor(name, module, processor)
 
-    def set_attention_slice(self, slice_size):
-        r"""
-        Enable sliced attention computation.
+    # def set_attention_slice(self, slice_size):
+    #     r"""
+    #     Enable sliced attention computation.
 
-        When this option is enabled, the attention module will split the input tensor in slices, to compute attention
-        in several steps. This is useful to save some memory in exchange for a small speed decrease.
+    #     When this option is enabled, the attention module will split the input tensor in slices, to compute attention
+    #     in several steps. This is useful to save some memory in exchange for a small speed decrease.
 
-        Args:
-            slice_size (`str` or `int` or `list(int)`, *optional*, defaults to `"auto"`):
-                When `"auto"`, halves the input to the attention heads, so attention will be computed in two steps. If
-                `"max"`, maxium amount of memory will be saved by running only one slice at a time. If a number is
-                provided, uses as many slices as `attention_head_dim // slice_size`. In this case, `attention_head_dim`
-                must be a multiple of `slice_size`.
-        """
-        sliceable_head_dims = []
+    #     Args:
+    #         slice_size (`str` or `int` or `list(int)`, *optional*, defaults to `"auto"`):
+    #             When `"auto"`, halves the input to the attention heads, so attention will be computed in two steps. If
+    #             `"max"`, maxium amount of memory will be saved by running only one slice at a time. If a number is
+    #             provided, uses as many slices as `attention_head_dim // slice_size`. In this case, `attention_head_dim`
+    #             must be a multiple of `slice_size`.
+    #     """
+    #     sliceable_head_dims = []
 
-        def fn_recursive_retrieve_slicable_dims(module: torch.nn.Module):
-            if hasattr(module, "set_attention_slice"):
-                sliceable_head_dims.append(module.sliceable_head_dim)
+    #     def fn_recursive_retrieve_slicable_dims(module: torch.nn.Module):
+    #         if hasattr(module, "set_attention_slice"):
+    #             sliceable_head_dims.append(module.sliceable_head_dim)
 
-            for child in module.children():
-                fn_recursive_retrieve_slicable_dims(child)
+    #         for child in module.children():
+    #             fn_recursive_retrieve_slicable_dims(child)
 
-        # retrieve number of attention layers
-        for module in self.children():
-            fn_recursive_retrieve_slicable_dims(module)
+    #     # retrieve number of attention layers
+    #     for module in self.children():
+    #         fn_recursive_retrieve_slicable_dims(module)
 
-        num_slicable_layers = len(sliceable_head_dims)
+    #     num_slicable_layers = len(sliceable_head_dims)
 
-        if slice_size == "auto":
-            # half the attention head size is usually a good trade-off between
-            # speed and memory
-            slice_size = [dim // 2 for dim in sliceable_head_dims]
-        elif slice_size == "max":
-            # make smallest slice possible
-            slice_size = num_slicable_layers * [1]
+    #     if slice_size == "auto":
+    #         # half the attention head size is usually a good trade-off between
+    #         # speed and memory
+    #         slice_size = [dim // 2 for dim in sliceable_head_dims]
+    #     elif slice_size == "max":
+    #         # make smallest slice possible
+    #         slice_size = num_slicable_layers * [1]
 
-        slice_size = num_slicable_layers * [slice_size] if not isinstance(slice_size, list) else slice_size
+    #     slice_size = num_slicable_layers * [slice_size] if not isinstance(slice_size, list) else slice_size
 
-        if len(slice_size) != len(sliceable_head_dims):
-            raise ValueError(
-                f"You have provided {len(slice_size)}, but {self.config} has {len(sliceable_head_dims)} different"
-                f" attention layers. Make sure to match `len(slice_size)` to be {len(sliceable_head_dims)}."
-            )
+    #     if len(slice_size) != len(sliceable_head_dims):
+    #         raise ValueError(
+    #             f"You have provided {len(slice_size)}, but {self.config} has {len(sliceable_head_dims)} different"
+    #             f" attention layers. Make sure to match `len(slice_size)` to be {len(sliceable_head_dims)}."
+    #         )
 
-        for i in range(len(slice_size)):
-            size = slice_size[i]
-            dim = sliceable_head_dims[i]
-            if size is not None and size > dim:
-                raise ValueError(f"size {size} has to be smaller or equal to {dim}.")
+    #     for i in range(len(slice_size)):
+    #         size = slice_size[i]
+    #         dim = sliceable_head_dims[i]
+    #         if size is not None and size > dim:
+    #             raise ValueError(f"size {size} has to be smaller or equal to {dim}.")
 
-        # Recursively walk through all the children.
-        # Any children which exposes the set_attention_slice method
-        # gets the message
-        def fn_recursive_set_attention_slice(module: torch.nn.Module, slice_size: List[int]):
-            if hasattr(module, "set_attention_slice"):
-                module.set_attention_slice(slice_size.pop())
+    #     # Recursively walk through all the children.
+    #     # Any children which exposes the set_attention_slice method
+    #     # gets the message
+    #     def fn_recursive_set_attention_slice(module: torch.nn.Module, slice_size: List[int]):
+    #         if hasattr(module, "set_attention_slice"):
+    #             module.set_attention_slice(slice_size.pop())
 
-            for child in module.children():
-                fn_recursive_set_attention_slice(child, slice_size)
+    #         for child in module.children():
+    #             fn_recursive_set_attention_slice(child, slice_size)
 
-        reversed_slice_size = list(reversed(slice_size))
-        for module in self.children():
-            fn_recursive_set_attention_slice(module, reversed_slice_size)
+    #     reversed_slice_size = list(reversed(slice_size))
+    #     for module in self.children():
+    #         fn_recursive_set_attention_slice(module, reversed_slice_size)
 
-    def _set_gradient_checkpointing(self, module, value=False):
-        if isinstance(module, (CrossAttnDownBlock2D, DownBlock2D, CrossAttnUpBlock2D, UpBlock2D)):
-            module.gradient_checkpointing = value
+    # def _set_gradient_checkpointing(self, module, value=False):
+    #     if isinstance(module, (CrossAttnDownBlock2D, DownBlock2D, CrossAttnUpBlock2D, UpBlock2D)):
+    #         module.gradient_checkpointing = value
 
     def forward(
         self,
-        sample: torch.FloatTensor,
-        timestep: Union[torch.Tensor, float, int],
-        encoder_hidden_states: torch.Tensor,
-        class_labels: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        sample,
+        timestep,
+        encoder_hidden_states,
+        class_labels = None,
+        attention_mask = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
-    ) -> Union[UNet2DConditionOutput, Tuple]:
+    ):
         r"""
         Args:
             sample (`torch.FloatTensor`): (batch, channel, height, width) noisy inputs tensor
@@ -560,7 +608,7 @@ class UNet2DConditionModel(nn.Module):
         forward_upsample_size = False
         upsample_size = None
 
-        if any(s % default_overall_up_factor != 0 for s in sample.shape[-2:]):
+        if any(s % default_overall_up_factor != 0 for s in sample.shape()[-2:]):
             logger.info("Forward upsample size to force interpolation output size.")
             forward_upsample_size = True
 
@@ -599,8 +647,8 @@ class UNet2DConditionModel(nn.Module):
         # there might be better ways to encapsulate this.
         # t_emb = t_emb.to(dtype=self.dtype)
 
-        print("this is t_emb", t_emb.shape)
-
+        # print("this is t_emb", t_emb.shape)
+        t_emb = timestep
         emb = self.time_embedding(t_emb)
 
         if self.class_embedding is not None:
@@ -654,7 +702,7 @@ class UNet2DConditionModel(nn.Module):
             # upsample size, we do it here
             if not is_final_block and forward_upsample_size:
                 upsample_size = down_block_res_samples[-1].shape[2:]
-
+            print("ith upsample running", i)
             if hasattr(upsample_block, "has_cross_attention") and upsample_block.has_cross_attention:
                 sample = upsample_block(
                     hidden_states=sample,
