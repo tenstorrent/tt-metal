@@ -99,29 +99,21 @@ void kernel_main() {
     #if (tile_size_is_pow2)
     const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = in1_tensor_addr,
-
-
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
     // WRITER
-    const InterleavedPow2AddrGen<true> s = {
+    const InterleavedPow2AddrGen<false> s = {
         .bank_base_address = out_tensor_addr,
-
-
         .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
     #else
     const InterleavedAddrGen<true> s1 = {
         .bank_base_address = in1_tensor_addr,
-
-
         .page_size = single_tile_size_bytes
     };
     // WRITER
-    const InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<false> s = {
         .bank_base_address = out_tensor_addr,
-
-
         .page_size = single_tile_size_bytes
     };
     #endif

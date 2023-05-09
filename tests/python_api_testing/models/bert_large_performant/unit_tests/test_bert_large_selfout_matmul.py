@@ -16,7 +16,7 @@ import torch
 def run_bert_large_selfout_matmul_test(dtype):
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
+    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
     host = ttl.device.GetHost()
     a_shape = [9, 1, 384, 1024]
     b_shape = [1, 1, 1024, 1024]
@@ -24,6 +24,7 @@ def run_bert_large_selfout_matmul_test(dtype):
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
 
+    memory_config = ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1)
     a_t = (
         ttl.tensor.Tensor(
             A.flatten().tolist(),
@@ -32,7 +33,7 @@ def run_bert_large_selfout_matmul_test(dtype):
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
-        .to(device)
+        .to(device, memory_config)
     )
     b_t = (
         ttl.tensor.Tensor(

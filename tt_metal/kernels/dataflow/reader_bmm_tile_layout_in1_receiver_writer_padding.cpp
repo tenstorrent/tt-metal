@@ -78,14 +78,14 @@ void kernel_main() {
     #define tile_size_is_pow2 tile_size_is_power_of_two == 1
     #if (tile_size_is_pow2)
     constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<true> s = {
+    const InterleavedPow2AddrGen<false> s = {
         .bank_base_address = out_tensor_addr,
 
 
         .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<false> s = {
         .bank_base_address = out_tensor_addr,
 
 
