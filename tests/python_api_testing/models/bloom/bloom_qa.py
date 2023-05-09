@@ -6,19 +6,18 @@ from fused_ops.linear import Linear as TtLinear
 from typing import Optional
 
 
-# class PtBloomForQuestionAnswering():
+# class BloomForQuestionAnswering(BloomPreTrainedModel):
+#     _keys_to_ignore_on_load_missing = [r"h.*.self_attention.scale_mask_softmax.causal_mask", r"lm_head.weight"]
 
-#     def __init__(self, hugging_bloom_reference_model, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers):
-#         state_dict = hugging_bloom_reference_model.state_dict()
-#         self.transformer = bloom_model.BloomModel(hugging_bloom_reference_model, hidden_size, n_head, vocab_size, embed_dim, layer_norm_epsilon, num_hidden_layers)
+#     def __init__(self, config):
+#         super().__init__(config)
+#         self.transformer = BloomModel(config)
+#         self.qa_outputs = nn.Linear(config.hidden_size, 2)
 
-#         qa_outputs_weight = bloom_utils.pt_load_layer_weights("qa_outputs.weight", state_dict)
-#         qa_outputs_bias = bloom_utils.pt_load_layer_weights("qa_outputs.bias", state_dict)
+#         # Initialize weights and apply final processing
+#         self.post_init()
 
-#         self.qa_outputs = torch.nn.Linear(hidden_size, 2)
-#         self.qa_outputs.weight = qa_outputs_weight
-#         self.qa_outputs.weight = qa_outputs_weight
-
+#     @add_start_docstrings_to_model_forward(BLOOM_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
 #     def forward(
 #         self,
 #         input_ids: Optional[torch.LongTensor] = None,
@@ -31,9 +30,8 @@ from typing import Optional
 #         output_attentions: Optional[bool] = None,
 #         output_hidden_states: Optional[bool] = None,
 #         return_dict: Optional[bool] = None,
-#     ):
-#         self.use_return_dict = False
-#         """
+#     ) -> Union[Tuple, QuestionAnsweringModelOutput]:
+#         r"""
 #         start_positions (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
 #             Labels for position (index) of the start of the labelled span for computing the token classification loss.
 #             Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
@@ -43,7 +41,7 @@ from typing import Optional
 #             Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
 #             are not taken into account for computing the loss.
 #         """
-#         return_dict = return_dict if return_dict is not None else self.use_return_dict
+#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
 #         outputs = self.transformer(
 #             input_ids,
@@ -56,17 +54,9 @@ from typing import Optional
 #             return_dict=return_dict,
 #         )
 
-
 #         sequence_output = outputs[0]
-#         print('PT--------------------SASHAPE1')
-
-#         print(sequence_output.shape)
 
 #         logits = self.qa_outputs(sequence_output)
-#         print('PT--------------------SASHAPE')
-#         print(logits.shape)
-
-
 #         start_logits, end_logits = logits.split(1, dim=-1)
 #         start_logits = start_logits.squeeze(-1).contiguous()
 #         end_logits = end_logits.squeeze(-1).contiguous()
@@ -106,11 +96,16 @@ class TtBloomForQuestionAnswering():
     def __init__(self, config, state_dict, device):
         self.transformer = bloom_model.TtBloomModel(config, state_dict, "transformer", device)
 
-        self.qa_outputs_weight = bloom_utils.tt_load_layer_weights("qa_outputs.weight", state_dict)
-        self.qa_outputs_bias = bloom_utils.tt_load_layer_weights("qa_outputs.bias", state_dict)
+        # Tt Linear
+        # self.qa_outputs_weight = bloom_utils.tt_load_layer_weights("qa_outputs.weight", state_dict)
+        # self.qa_outputs_bias = bloom_utils.tt_load_layer_weights("qa_outputs.bias", state_dict)
 
-        out_features = self.qa_outputs_bias.shape()[-1]
-        self.qa_outputs = TtLinear(config.hidden_size, out_features, self.qa_outputs_weight.data(), self.qa_outputs_bias.data(), device)
+        # out_features = self.qa_outputs_bias.shape()[-1]
+        # self.qa_outputs = TtLinear(config.hidden_size, out_features, self.qa_outputs_weight.data(), self.qa_outputs_bias.data(), device)
+
+        self.qa_outputs = torch.nn.Linear(config.hidden_size, 2)
+        self.qa_outputs.weight = bloom_utils.pt_load_layer_weights("qa_outputs.weight", state_dict)
+        self.qa_outputs.bias = bloom_utils.pt_load_layer_weights("qa_outputs.bias", state_dict)
 
     def forward(
         self,
@@ -152,16 +147,9 @@ class TtBloomForQuestionAnswering():
         )
 
         sequence_output = outputs[0]
-        # print(f"sequence_output shape {sequence_output.shape()}")
+        sequence_output = bloom_utils.tt2torch_tensor(sequence_output)
 
         logits = self.qa_outputs(sequence_output)
-        logits = bloom_utils.tt2torch_tensor(logits)
-        # print(f"logits shape {logits.shape}")
-
-        logits = logits.squeeze(0)
-        logits = logits.squeeze(0)
-        logits = logits[:,0:2]
-
         start_logits, end_logits = logits.split(1, dim=-1)
         start_logits = start_logits.squeeze(-1).contiguous()
         end_logits = end_logits.squeeze(-1).contiguous()
