@@ -36,7 +36,7 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
     int block_size = find_max_divisor(Wt, 8);
     //if (getenv("FORCE_BLOCK_SIZE") != nullptr) block_size = std::stoi( getenv("FORCE_BLOCK_SIZE") );
-    std::cout << "Block size=" << block_size << std::endl;
+    //std::cout << "Block size=" << block_size << std::endl;
 
     uint32_t single_tile_size = 2 * 1024;
 
