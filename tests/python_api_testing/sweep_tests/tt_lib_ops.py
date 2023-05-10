@@ -1,829 +1,749 @@
 import torch
 import tt_lib as ttl
-from tt_lib.utils import pad_weight
+from tt_lib.fallback_ops import fallback_ops
+
+
+def setup_host_and_device(func):
+    def wrap(*args, pcie_slot, **kwargs):
+        host = ttl.device.GetHost()
+        device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
+        ttl.device.InitializeDevice(device)
+        ttl.device.SetDefaultDevice(device)
+        try:
+            output = func(*args, host=host, device=device, **kwargs)
+        finally:
+            ttl.device.CloseDevice(device)
+
+        return output
+
+    return wrap
 
 
 ################################################
 #################### TT-DNN ####################
 ################################################
-def eltwise_exp(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_exp(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.exp(t0)
+    t1 = ttl.tensor.exp(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def eltwise_recip(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_recip(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.recip(t0)
+    t1 = ttl.tensor.recip(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def eltwise_sqrt(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_sqrt(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.sqrt(t0)
+    t1 = ttl.tensor.sqrt(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def eltwise_gelu(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_gelu(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.gelu(t0)
+    t1 = ttl.tensor.gelu(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def eltwise_relu(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_relu(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.relu(t0)
+    t1 = ttl.tensor.relu(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def eltwise_sigmoid(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_sigmoid(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.sigmoid(t0)
+    t1 = ttl.tensor.sigmoid(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def eltwise_log(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_log(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.log(t0)
+    t1 = ttl.tensor.log(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def eltwise_tanh(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_tanh(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.tanh(t0)
+    t1 = ttl.tensor.tanh(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def eltwise_add(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_add(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-        t2 = ttl.tensor.add(t0, t1)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    t2 = ttl.tensor.add(t0, t1)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def eltwise_sub(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_sub(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-        t2 = ttl.tensor.sub(t0, t1)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    t2 = ttl.tensor.sub(t0, t1)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def eltwise_mul(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def eltwise_mul(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-        t2 = ttl.tensor.mul(t0, t1)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    t2 = ttl.tensor.mul(t0, t1)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def matmul(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def matmul(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-        t2 = ttl.tensor.matmul(t0, t1)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    t2 = ttl.tensor.matmul(t0, t1)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def bmm(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def bmm(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-        t2 = ttl.tensor.bmm(t0, t1)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    t2 = ttl.tensor.bmm(t0, t1)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def bcast_add_h(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def bcast_add_h(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        # Pad bcast tensor
-        y = pad_weight(y)
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+    if layout == ttl.tensor.Layout.TILE:
+        pad_shape = list(y.shape)
+        pad_shape[2] = 32
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        t2 = ttl.tensor.bcast(
-            t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
-        )
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def bcast_add_w(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def bcast_add_w(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        # Pad bcast tensor
-        y = pad_weight(y)
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+    if layout == ttl.tensor.Layout.TILE:
+        pad_shape = list(y.shape)
+        pad_shape[3] = 32
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
+        pad_shape = list(y.shape)
+        pad_shape[3] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
+        pad_shape = list(y.shape)
+        pad_shape[1] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        t2 = ttl.tensor.bcast(
-            t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.W
-        )
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.W)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
-
-    return output
-
-
-def bcast_add_hw(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
-
-    try:
-        # Pad bcast tensor
-        y = pad_weight(y)
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-
-        t2 = ttl.tensor.bcast(
-            t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.HW
-        )
-
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def bcast_sub_h(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def bcast_add_hw(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        # Pad bcast tensor
-        y = pad_weight(y)
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+    if layout == ttl.tensor.Layout.TILE:
+        pad_shape = list(y.shape)
+        pad_shape[2] = 32
+        pad_shape[3] = 32
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
+        pad_shape = list(y.shape)
+        pad_shape[3] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
+        pad_shape = list(y.shape)
+        pad_shape[1] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        t2 = ttl.tensor.bcast(
-            t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.H
-        )
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.HW)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
-
-    return output
-
-
-def bcast_sub_w(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
-
-    try:
-        # Pad bcast tensor
-        y = pad_weight(y)
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-
-        t2 = ttl.tensor.bcast(
-            t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.W
-        )
-
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def bcast_sub_hw(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def bcast_sub_h(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        # Pad bcast tensor
-        y = pad_weight(y)
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+    if layout == ttl.tensor.Layout.TILE:
+        pad_shape = list(y.shape)
+        pad_shape[2] = 32
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        t2 = ttl.tensor.bcast(
-            t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.HW
-        )
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.H)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def bcast_mul_h(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def bcast_sub_w(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        # Pad bcast tensor
-        y = pad_weight(y)
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+    if layout == ttl.tensor.Layout.TILE:
+        pad_shape = list(y.shape)
+        pad_shape[3] = 32
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
+        pad_shape = list(y.shape)
+        pad_shape[3] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
+        pad_shape = list(y.shape)
+        pad_shape[1] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        t2 = ttl.tensor.bcast(
-            t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.H
-        )
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.W)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
-
-    return output
-
-
-def bcast_mul_w(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
-
-    try:
-        # Pad bcast tensor
-        y = pad_weight(y)
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-
-        t2 = ttl.tensor.bcast(
-            t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.W
-        )
-
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def bcast_mul_hw(x, y, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def bcast_sub_hw(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        # Pad bcast tensor
-        y = pad_weight(y)
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-        t1 = (
-            ttl.tensor.Tensor(
-                y.reshape(-1).tolist(),
-                y.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+    if layout == ttl.tensor.Layout.TILE:
+        pad_shape = list(y.shape)
+        pad_shape[2] = 32
+        pad_shape[3] = 32
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
+        pad_shape = list(y.shape)
+        pad_shape[3] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
+        pad_shape = list(y.shape)
+        pad_shape[1] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        t2 = ttl.tensor.bcast(
-            t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.HW
-        )
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.HW)
 
-        output = torch.Tensor(
-            t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
 
     return output
 
 
-def reduce_sum_h(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def bcast_mul_h(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+    if layout == ttl.tensor.Layout.TILE:
+        pad_shape = list(y.shape)
+        pad_shape[2] = 32
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
 
-        t1 = ttl.tensor.reduce(
-            t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.H, 1
-        )
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.H)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def bcast_mul_w(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+    if layout == ttl.tensor.Layout.TILE:
+        pad_shape = list(y.shape)
+        pad_shape[3] = 32
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
+        pad_shape = list(y.shape)
+        pad_shape[3] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
+        pad_shape = list(y.shape)
+        pad_shape[1] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
+
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.W)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def bcast_mul_hw(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+    if layout == ttl.tensor.Layout.TILE:
+        pad_shape = list(y.shape)
+        pad_shape[2] = 32
+        pad_shape[3] = 32
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
+        pad_shape = list(y.shape)
+        pad_shape[3] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
+        pad_shape = list(y.shape)
+        pad_shape[1] = 2
+        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
+
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.HW)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def reduce_sum_h(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.reduce(
+        t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.H, 1.0
+    )
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     # Slice out the 0 values from reduction
     output = output[..., :1, :]
@@ -831,32 +751,26 @@ def reduce_sum_h(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def reduce_sum_w(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def reduce_sum_w(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.reduce(
-            t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, 1
-        )
+    t1 = ttl.tensor.reduce(
+        t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, 1.0
+    )
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     # Slice out the 0 values from reduction
     output = output[..., :, :1]
@@ -864,32 +778,26 @@ def reduce_sum_w(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def reduce_sum_hw(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def reduce_sum_hw(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.reduce(
-            t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.HW, 1
-        )
+    t1 = ttl.tensor.reduce(
+        t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.HW, 1.0
+    )
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     # Slice out the 0 values from reduction
     output = output[..., :1, :1]
@@ -897,32 +805,26 @@ def reduce_sum_hw(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def reduce_max_h(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def reduce_max_h(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.reduce(
-            t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.H, 1
-        )
+    t1 = ttl.tensor.reduce(
+        t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.H, 1.0
+    )
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     # Slice out the 0 values from reduction
     output = output[..., :1, :]
@@ -930,32 +832,26 @@ def reduce_max_h(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def reduce_max_w(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def reduce_max_w(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.reduce(
-            t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.W, 1
-        )
+    t1 = ttl.tensor.reduce(
+        t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.W, 1.0
+    )
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     # Slice out the 0 values from reduction
     output = output[..., :1]
@@ -963,32 +859,26 @@ def reduce_max_w(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def reduce_max_hw(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def reduce_max_hw(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.reduce(
-            t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.HW, 1
-        )
+    t1 = ttl.tensor.reduce(
+        t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.HW, 1.0
+    )
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     # Slice out the 0 values from reduction
     output = output[..., :1, :1]
@@ -996,150 +886,113 @@ def reduce_max_hw(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def transpose_wh(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def transpose_wh(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.transpose(t0)
+    t1 = ttl.tensor.transpose(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def transpose_hc(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def transpose_hc(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.transpose_hc(t0)
+    t1 = ttl.tensor.transpose_hc(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def transpose_cn(x, pcie_slot, *args, **kwargs):
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+@setup_host_and_device
+def transpose_cn(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-        t1 = ttl.tensor.transpose_cn(t0)
+    t1 = ttl.tensor.transpose_cn(t0)
 
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
 
-def permute(x, pcie_slot, *args, **kwargs):
-    assert "permute_dims" in kwargs
+@setup_host_and_device
+def permute(x, *args, host, device, dtype, layout, on_device, permute_dims, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    permute_dims = kwargs["permute_dims"]
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+    t1 = ttl.tensor.permute(t0, *permute_dims)
 
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-
-        t1 = ttl.tensor.permute(t0, *permute_dims)
-
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 
+@setup_host_and_device
+def reshape(
+    x,  *args, host, device, dtype, layout, on_device, reshape_dims, **kwargs
+):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-def reshape(x, pcie_slot, *args, **kwargs):
-    assert "reshape_dims" in kwargs
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
 
-    reshape_dims = kwargs["reshape_dims"]
+    t1 = ttl.tensor.reshape(t0, *reshape_dims)
 
-    host = ttl.device.GetHost()
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
-
-    try:
-        t0 = (
-            ttl.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-
-        t1 = ttl.tensor.reshape(t0, *reshape_dims)
-
-        output = torch.Tensor(
-            t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t1.shape())
-    finally:
-        ttl.device.CloseDevice(device)
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
 
     return output
 

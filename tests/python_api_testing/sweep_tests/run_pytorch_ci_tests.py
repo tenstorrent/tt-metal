@@ -54,9 +54,11 @@ def run_single_pytorch_test(
         old_env_dict[key] = os.environ.pop(key, None)
         os.environ[key] = value
 
+    if not test_args:
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
     ################# RUN TEST #################
     logger.info(f"Running with shape: {input_shapes} on device: {pcie_slot}")
-    test_pass, test_output, test_args = run_tt_lib_test(
+    test_pass, test_output = run_tt_lib_test(
         op_map[test_name]["tt_lib_op"],
         op_map[test_name]["pytorch_op"],
         input_shapes,

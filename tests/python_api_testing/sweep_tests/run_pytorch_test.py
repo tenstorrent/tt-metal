@@ -92,7 +92,8 @@ def run_pytorch_test(args):
             getattr(comparison_funcs, comparison_dict["function"]), **comparison_args
         )
         test_args_gen = getattr(
-            generation_funcs, test_config.get("args-gen", "gen_default_args")
+            generation_funcs,
+            test_config.get("args-gen", "gen_default_dtype_layout_device"),
         )
 
         # Optional test args for dtype, etc...
@@ -130,6 +131,7 @@ def run_pytorch_test(args):
                         input_shapes,
                         data_seed,
                         env_dict,
+                        generated_test_args,
                         op_map[test_name]["tt_lib_op"],
                         op_map[test_name]["pytorch_op"],
                         input_shapes,

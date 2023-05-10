@@ -2,6 +2,9 @@ import random
 import torch
 from itertools import product
 from functools import partial
+import functools
+import operator
+from collections import deque
 from loguru import logger
 
 from python_api_testing.sweep_tests import generation_funcs
@@ -57,6 +60,9 @@ TEST_FIELDNAMES = {
         "permute_dims",
         "data_seed",
         "env_vars",
+        "layout",
+        "dtype",
+        "on_device",
         "status",
         "test_output",
         "pass/fail",
@@ -67,6 +73,9 @@ TEST_FIELDNAMES = {
         "reshape_dims",
         "data_seed",
         "env_vars",
+        "layout",
+        "dtype",
+        "on_device",
         "status",
         "test_output",
         "pass/fail",
@@ -82,6 +91,9 @@ def get_test_fieldnames(test_name):
             "input_shapes",
             "data_seed",
             "env_vars",
+            "layout",
+            "dtype",
+            "on_device",
             "status",
             "test_output",
             "pass/fail",
@@ -106,19 +118,25 @@ def run_tt_lib_test(
         tensor_input = data_gen_func(input_shape)
         tensor_inputs.append(tensor_input)
 
-    tt_lib_out = tt_lib_op(*tensor_inputs, pcie_slot, **test_args)
+    tt_lib_out = tt_lib_op(*tensor_inputs, pcie_slot=pcie_slot, **test_args)
     pytorch_out = pytorch_op(*tensor_inputs, **test_args)
 
     result, output = output_comparison_func(pytorch_out, tt_lib_out)
-    return result, output, test_args
+    return result, output
 
 
 def run_test_and_save_results(
-    results_csv_writer, test_name, input_shapes, data_seed, env_vars, *run_test_args
+    results_csv_writer,
+    test_name,
+    input_shapes,
+    data_seed,
+    env_vars,
+    test_args,
+    *run_test_args,
 ):
     def _try_except_wrapper(func, *args, **kwargs):
         try:
-            test_pass, test_output, test_args = func(*args, **kwargs)
+            test_pass, test_output = func(*args, **kwargs)
             if test_pass:
                 test_result = "pass"
             else:
@@ -130,15 +148,14 @@ def run_test_and_save_results(
             test_status = "error"
             test_output = err
             test_result = "fail"
-            test_args = {}
 
         # test_pass and test_output comes from actual test
         # test_status is completed/error (ie. runtime)
         # test_result is pass/fail depending on test_pass bool
         # test_args is a dict of specific args required by ops to run
-        return test_pass, test_status, test_output, test_result, test_args
+        return test_pass, test_status, test_output, test_result
 
-    test_pass, test_status, test_output, test_result, test_args = _try_except_wrapper(
+    test_pass, test_status, test_output, test_result = _try_except_wrapper(
         run_tt_lib_test, *run_test_args
     )
     results_csv_writer.writerow(
@@ -224,8 +241,8 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                 for i in range(num_dims)
             ]
 
-            sweeps_generator = list(product(*dim_ranges))
-            total_shapes = len(sweeps_generator)
+            sweeps_generator = product(*dim_ranges)
+            total_shapes = functools.reduce(operator.mul, map(len, dim_ranges), 1)
             idx_list = _get_sample_indices(total_shapes, num_shapes)
 
             if "split" in shape_dict:
@@ -238,9 +255,15 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                 idx_list = idx_list[
                     (split_id - 1) * samples_per_split : split_id * samples_per_split
                 ]
-
-            for idx in idx_list:
-                shape = list(sweeps_generator[idx])
+            idx_list = deque(idx_list)
+            for i, shape in enumerate(sweeps_generator):
+                if i == idx_list[0]:
+                    idx_list.popleft()
+                    if len(idx_list) == 0:
+                        break
+                else:
+                    continue
+                shape = list(shape)
                 yield [shape] * num_shapes, datagen_funcs
 
         elif method in ("bcast_h", "bcast_w", "bcast_hw"):
@@ -260,8 +283,8 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                 for i in range(num_dims)
             ]
 
-            sweeps_generator = list(product(*dim_ranges))
-            total_shapes = len(sweeps_generator)
+            sweeps_generator = product(*dim_ranges)
+            total_shapes = functools.reduce(operator.mul, map(len, dim_ranges), 1)
             idx_list = _get_sample_indices(total_shapes, num_shapes)
 
             if "split" in shape_dict:
@@ -275,8 +298,15 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                     (split_id - 1) * samples_per_split : split_id * samples_per_split
                 ]
 
-            for idx in idx_list:
-                shape = list(sweeps_generator[idx])
+            idx_list = deque(idx_list)
+            for i, shape in enumerate(sweeps_generator):
+                if i == idx_list[0]:
+                    idx_list.popleft()
+                    if len(idx_list) == 0:
+                        break
+                else:
+                    continue
+                shape = list(shape)
                 b, c, h, w = shape
                 if method == "bcast_h":
                     bcast_shape = [b, c, 1, w]
@@ -318,8 +348,8 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                 range(shape2_start[-1], shape2_end[-1] + interval[-1], interval[-1])
             )
 
-            sweeps_generator = list(product(*dim_ranges))
-            total_shapes = len(sweeps_generator)
+            sweeps_generator = product(*dim_ranges)
+            total_shapes = functools.reduce(operator.mul, map(len, dim_ranges), 1)
             idx_list = _get_sample_indices(total_shapes, num_shapes)
 
             if "split" in shape_dict:
@@ -333,8 +363,16 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                     (split_id - 1) * samples_per_split : split_id * samples_per_split
                 ]
 
-            for idx in idx_list:
-                b, c, h, w, outer_dim = sweeps_generator[idx]
+            idx_list = deque(idx_list)
+            for i, shape in enumerate(sweeps_generator):
+                if i == idx_list[0]:
+                    idx_list.popleft()
+                    if len(idx_list) == 0:
+                        break
+                else:
+                    continue
+                shape = list(shape)
+                b, c, h, w, outer_dim = shape
                 shape1 = [b, c, h, w]
                 shape2 = [b, c, w, outer_dim]
                 if bcast_batch:

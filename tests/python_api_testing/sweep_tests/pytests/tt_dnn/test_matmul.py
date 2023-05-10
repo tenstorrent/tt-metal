@@ -61,7 +61,7 @@ def test_run_matmul_test(input_shapes, pcie_slot, dtype, function_level_defaults
         datagen_func,
         comparison_func,
         pcie_slot,
-        {"dtype": dtype},
+        {"dtype": dtype, "layout": ttl.tensor.Layout.TILE, "on_device": True},
     )
 
 
@@ -110,5 +110,5 @@ def test_run_bmm_test(input_shapes, pcie_slot, dtype, function_level_defaults):
         datagen_func,
         comparison_func,
         pcie_slot,
-        {"dtype": dtype},
+        {"dtype": dtype, "layout": ttl.tensor.Layout.TILE, "on_device": True},
     )

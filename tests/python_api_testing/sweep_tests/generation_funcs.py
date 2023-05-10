@@ -1,13 +1,27 @@
 import torch
 import random
-from itertools import permutations
+from itertools import permutations, product
 from functools import lru_cache
+import tt_lib as ttl
 
 # torch.testing.get_all_dtypes()
 supported_dtypes = {
     "float32": torch.float32,
     "bfloat16": torch.bfloat16,
 }
+
+supported_tt_dtypes = {ttl.tensor.DataType.BFLOAT16}
+
+supported_tt_layouts = [
+    ttl.tensor.Layout.ROW_MAJOR,
+    ttl.tensor.Layout.TILE,
+    ttl.tensor.Layout.CHANNELS_LAST,
+]
+
+on_device_options = [
+    True,
+    False,
+]
 
 
 # Wrapper around gen functions to include casting
@@ -228,20 +242,72 @@ def gen_unpad_from_tile_args(input_shapes):
     assert input_shapes[0][-2] % 32 == 0
     assert input_shapes[0][-1] % 32 == 0
 
-    output_tensor_shape = [*input_shapes[0][:-2], random.randint(input_shapes[0][-2] - 32 + 1, input_shapes[0][-2]), random.randint(input_shapes[0][-1] - 32 + 1, input_shapes[0][-1])]
+    output_tensor_shape = [
+        *input_shapes[0][:-2],
+        random.randint(input_shapes[0][-2] - 32 + 1, input_shapes[0][-2]),
+        random.randint(input_shapes[0][-1] - 32 + 1, input_shapes[0][-1]),
+    ]
 
     test_args = {
         "output_tensor_shape": output_tensor_shape,
     }
     return [test_args]
 
-def gen_permute_args(input_shapes):
+
+def gen_default_dtype_layout_device(input_shapes):
     return [
-        {"permute_dims": permute_dims}
-        for permute_dims in permutations([0, 1, 2, 3])
-        if input_shapes[0][permute_dims[2]] % 32 == 0
-        and input_shapes[0][permute_dims[3]] % 32 == 0
+        {
+            "dtype": ttl.tensor.DataType.BFLOAT16,
+            "layout": ttl.tensor.Layout.TILE,
+            "on_device": True,
+        }
     ]
+
+
+def sanitize_args(input_shapes, dtype_device_layout):
+    for shape in input_shapes:
+        if (
+            (
+                dtype_device_layout["layout"] == ttl.tensor.Layout.TILE
+                and (shape[2] % 32 != 0 or shape[3] % 32 != 0)
+            )
+            or (  # Shape cannot be tilized
+                dtype_device_layout["layout"] == ttl.tensor.Layout.CHANNELS_LAST
+                and dtype_device_layout["on_device"]
+                and shape[1] % 2 != 0
+            )
+            or (  # Shape cannot be placed as channels last on device
+                dtype_device_layout["layout"] == ttl.tensor.Layout.ROW_MAJOR
+                and dtype_device_layout["on_device"]
+                and shape[3] % 2 != 0
+            )  # Shape cannot be placed as row major on device
+            or (
+                dtype_device_layout["dtype"] == ttl.tensor.DataType.BFLOAT8_B
+                and dtype_device_layout["layout"] != ttl.tensor.Layout.TILE
+            )  # BFLOAT8_B must be tile layout
+        ):
+            return None
+    return dtype_device_layout
+
+
+def gen_dtype_layout_device(input_shapes, supported_dtypes = supported_tt_dtypes, supported_layouts = supported_tt_layouts, on_device = on_device_options):
+    for dtype, layout, on_device in product(
+        supported_dtypes, supported_layouts, on_device
+    ):
+        out = sanitize_args(
+            input_shapes, {"dtype": dtype, "layout": layout, "on_device": on_device}
+        )
+        if out is not None:
+            yield out
+
+
+def gen_permute_args(input_shapes):
+    for permute_dims in permutations([0, 1, 2, 3]):
+        permuted_shape = [input_shapes[0][i] for i in permute_dims]
+        for input_info in gen_dtype_layout_device((input_shapes[0], permuted_shape)):
+            if input_info is not None:
+                input_info.update({"permute_dims": permute_dims})
+                yield input_info
 
 
 @lru_cache(maxsize=5000)
@@ -254,11 +320,11 @@ def _get_factors(i, s):
 
 
 @lru_cache(maxsize=5000)
-def _gen_reshape_args_from_volume(volume):
+def _gen_reshape_args_from_volume(volume, step):
     shapes = []
-    for w in _get_factors(volume, 32):
+    for w in _get_factors(volume, step):
         v = volume // w
-        for h in _get_factors(v, 32):
+        for h in _get_factors(v, step):
             v2 = v // h
             for c in _get_factors(v2, 1):
                 b = v2 // c
@@ -273,4 +339,9 @@ def gen_reshape_args(input_shapes):
         * input_shapes[0][2]
         * input_shapes[0][3]
     )
-    return _gen_reshape_args_from_volume(vol)
+    step = 1
+    for reshape_dims in _gen_reshape_args_from_volume(vol, step):
+        for input_info in gen_dtype_layout_device((input_shapes[0], reshape_dims["reshape_dims"]), supported_layouts=[ttl.tensor.Layout.TILE]):
+            if input_info is not None:
+                input_info.update(reshape_dims)
+                yield input_info
