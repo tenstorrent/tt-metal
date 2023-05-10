@@ -170,6 +170,7 @@ void deepcopy_host_data(const Tensor &src, Tensor &dst) {
     }
     if (src.data_ptr() == nullptr) {
         dst.data_ = nullptr;
+        return;
     }
     std::vector<T> *src_data_ptr = reinterpret_cast<std::vector<T>*>(src.data_ptr());
     auto data_ptr = new std::vector<T>(*src_data_ptr);
@@ -183,11 +184,9 @@ void move_host_data(Tensor &&src, Tensor &dst) {
     }
     if (src.data_ptr() == nullptr) {
         dst.data_ = nullptr;
+        return;
     }
-    std::vector<T> *src_data_ptr = reinterpret_cast<std::vector<T>*>(src.data_ptr());
-    auto data_ptr = new std::vector<T>(*src_data_ptr);
-    dst.data_ = static_cast<void *>(data_ptr);
-    delete src_data_ptr;
+    dst.data_ = std::move(src.data_);
     src.data_ = nullptr;
 }
 
@@ -475,12 +474,9 @@ void move_device_data(Tensor &&src, Tensor &dst) {
     if (src.on_host()) {
         return;
     }
-    uint32_t size_in_bytes = src.buffer()->size();
-    auto data_vec = read_data_from_device<T>(src, size_in_bytes);
-    initialize_data_on_device<T>(dst, data_vec);
-    src.free_buffer();
-    delete src.buffer_;
+    dst.buffer_ = std::move(src.buffer_);
     src.buffer_ = nullptr;
+    src.device_ = nullptr;
 }
 
 // ======================================================================================
