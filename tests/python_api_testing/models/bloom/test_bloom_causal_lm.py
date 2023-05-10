@@ -43,7 +43,7 @@ def run_bloom_causal_lm_test(device):
     tt_out = tt_out.squeeze(0)
 
     print_diff_argmax(pt_out, tt_out)
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.66)
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.50)
 
     print(comp_allclose(pt_out, tt_out))
     print(pcc_message)

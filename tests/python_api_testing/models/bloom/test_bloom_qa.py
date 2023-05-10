@@ -79,7 +79,7 @@ def run_bloom_qa_inference(device):
     # tt_answer = nlp.postprocess([tt_res], **postprocess_params)['answer']
 
     print_diff_argmax(pt_start_logits, tt_start_logits)
-    does_pass, pcc_message = comp_pcc(pt_start_logits, tt_start_logits, 0.66)
+    does_pass, pcc_message = comp_pcc(pt_start_logits, tt_start_logits, 0.91)
 
     print(comp_allclose(pt_start_logits, tt_start_logits))
     print(pcc_message)

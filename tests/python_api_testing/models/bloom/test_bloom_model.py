@@ -53,7 +53,7 @@ def run_bloom_model_test(device):
     print(f"tt_out_converted shape {tt_out_converted.shape}")
 
     print_diff_argmax(pt_out, tt_out_converted)
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.40)
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.65)
 
     print(comp_allclose(pt_out, tt_out_converted))
     print(pcc_message)
