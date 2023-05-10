@@ -25,12 +25,12 @@ def ref_stable_softmax(x):
     #print(x.shape)
     H = x.shape[-2]
     #print("H=", H)
-    pw0, pw1 = 0, 0 # prints a tile slice with these tile coord range
-    ph0, ph1 = 0, 0
-    sh, sw   = 1, 1 # stride inside the tile
-    ow0, ow1 = 0, 4 # offset inside the tile
-    oh0, oh1 = 0, 4
-    #print("Ref x=\n", x[0, 0, ph0*32+oh0:ph1*32+oh1:sh, pw0*32+ow0:pw1*32+ow1:sw])
+    pw0, pw1 = 0, 1 # prints a tile slice with these tile coord range
+    ph0, ph1 = 0, 1
+    sh, sw   = 16, 16 # stride inside the tile
+    ow0, ow1 = 0, 0 # offset inside the tile
+    oh0, oh1 = 0, 0
+    print("Ref x=\n", x[0, 0, ph0*32+oh0:ph1*32+oh1:sh, pw0*32+ow0:pw1*32+ow1:sw])
     #print("Ref exps=\n", numerator[0, 0, ph0*32 : ph1*32 : sh, pw0*32 : pw1*32 : sw])
     denominator = torch.sum(numerator, 3, keepdim=True)
     #print("denom shape=", denominator.shape)
@@ -86,27 +86,26 @@ def generate_attn_mask(NC, W, dev, offs):
 if __name__ == "__main__":
     dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
     device.InitializeDevice(dev)
-    #device.StartDebugPrintServer(dev)
+    device.StartDebugPrintServer(dev)
     host = device.GetHost()
     #N, C, H, W = 1, 7, 5*32, 17*32
     test_dims = ((1,1,32,4*8*32), (1, 1, 2048, 4*8*32), (1, 1, 128, 12*32), (1, 1, 32, 7*32))
     #test_dims = ((1,1,4*32,7*32),)
     #test_dims = ((1,9,6144,384),)
-    test_dims = ((1,1,384,384),)
+    test_dims = ((1,1,64,384),)
     test_dims = ((1,1,6144,384),)
     test_dims = ((1,9,6144,384),)
-    test_dims = ((1,1,64,384),)
     torch.manual_seed(123)
     random.seed(123)
+    #for test_fused_mask in [True, False]:
     for test_fused_mask in [True, False]:
-    #for test_fused_mask in [True,]:
         for nchw in test_dims:
-            for nrepeat in range(0, 10):
-                nchw = (1,random.randint(1,5),random.randint(1,16)*32,random.randint(1,16)*32)
+            for nrepeat in range(0, 2):
+                #nchw = (1,random.randint(1,5),random.randint(1,16)*32,random.randint(1,16)*32)
                 (N,C,H,W) = nchw
                 print("NCHW=", nchw)
                 print("Ht,Wt=", H//32, W//32)
-                x = torch.randn((N,C,H,W))*2 - 1.0
+                x = torch.randn((N,C,H,W))*2.0 - 1.0
                 if test_fused_mask:
                     torch_scale, tt_scale = generate_recip_tensor(dev, 0.5+random.random())
                     torch_attn_mask, tt_attn_mask = generate_attn_mask(N*C, W, dev, -4.2*1)
@@ -117,8 +116,10 @@ if __name__ == "__main__":
                 t0 = tensor.Tensor(x_t, [N, C, H, W], tensor.DataType.BFLOAT16, tensor.Layout.TILE, dev)
 
                 if test_fused_mask:
+                    print("=== Running scale_mask_softmax")
                     t1_fused = tensor.scale_mask_softmax(tt_scale, tt_attn_mask, t0)
                 else:
+                    print("=== Running softmax")
                     t1_fused = tensor.softmax(t0)
                 t2_data_fused = t1_fused.to(host).data()
                 tt_got_back_fused = torch.Tensor(t2_data_fused).reshape((N,C,H,W))

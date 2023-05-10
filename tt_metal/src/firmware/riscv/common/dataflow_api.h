@@ -342,6 +342,8 @@ void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
  * to cb_reserve_back and cb_push_back. The amount of valid memory
  * is equal to the number of tiles requested in a prior cb_reserve_back call.
  *
+ * CB total size must be an even multiple of this call.
+ *
  * Return value: None
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
@@ -388,6 +390,8 @@ inline void wait_for_sync_register_value(std::uint32_t addr, std::int32_t val) {
 /**
  * A blocking call that waits for the specified number of tiles to be free in the specified circular buffer. This call is used by the producer to wait for the consumer to consume (ie. free up) the specified number of tiles.
  *
+ * CB total size must be an even multiple of the argument passed to this call.
+ *
  * Return value: None
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
@@ -425,6 +429,8 @@ void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
  * Example 1: cb_wait_front(32), cb_wait_front(40), cb_pop_front(32+8) tiles on a CB of size 64 would produce incorrect behavior.
  * Example 2: cb_wait_front(3) on a cb of size 32 would also produce incorrect behavior.
  * These limitations are due to performance optimizations in the CB implementation.
+ *
+ * Important note: CB total size must be an even multiple of the argument passed to this call.
  *
  * Return value: None
  *

@@ -65,22 +65,29 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
     //std::cout << "Block size=" << block_size << " Wt=" << Wt << std::endl;
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t  = block_size == 8 ? 16 : 12;
-    uint32_t out0_t = block_size == 8 ? 16 : 12;
+    uint32_t in0_t  = block_size*2;
+    uint32_t out0_t = block_size*2;
     uint32_t im1_t  = 2;
     uint32_t in2_t  = 2; // scaler for reduce coming from reader
     uint32_t in3_t  = 2; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
-    uint32_t in4_t  = Wt; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
+    uint32_t in4_t  = divup(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
     uint32_t im2_t  = 2; // recip result
     // 120 is a multiple of 3,5,6; 128 is divisible by 8,4,2,1; 7 is not picked currently
     // buffer for keeping exps in L1 to reuse
-    uint32_t im0_t  = (block_size+1)*divup(Wt, block_size); // +1 space for pushing/popping an extra block
+
+    // cb_exps - keeps exps in CB in L1 to avoid recomputing
+    uint32_t im0_t  = block_size*divup(Wt, block_size);
+    TT_ASSERT(im0_t == Wt);
+
+    // used for buffering scale-mask
+    // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
+    uint32_t im3_t  = block_size*(divup(Wt, block_size)+1);
+    TT_ASSERT(im3_t == Wt+block_size);
 
     TT_ASSERT(Wt % block_size == 0);
     TT_ASSERT((block_size != -1) && "Wt must be divisible by one of the numbers in the range from 8 to 1.");
     TT_ASSERT(im0_t % block_size == 0 && "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(out0_t % block_size == 0 && "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(im1_t % block_size == 0 && "Size of cb buffer must be divisible by the size of block used by the reader and compute kernel.");
     TT_ASSERT(in4_t % block_size == 0);
     TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
 
@@ -113,6 +120,7 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
         CreateCircularBuffer( program, device, CB::c_intermed2, core, im2_t,  im2_t *TBYTES,  DataFormat::Float16_b );
         CreateCircularBuffer( program, device, CB::c_intermed0, core, im0_t,  im0_t *TBYTES,  DataFormat::Float16_b );
         if (mask != nullptr) {
+            CreateCircularBuffer( program, device, CB::c_intermed3, core, im3_t,  im3_t *TBYTES,  DataFormat::Float16_b );
             CreateCircularBuffer( program, device, CB::c_in3, core, in3_t,  in3_t *TBYTES,  DataFormat::Float16_b );
             CreateCircularBuffer( program, device, CB::c_in4, core, in4_t,  in4_t *TBYTES,  DataFormat::Float16_b );
         }
@@ -152,7 +160,6 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
     CompileProgram(device, program, profile);
     ConfigureDeviceWithProgram(device, program);
 
-    const int bank_size = 8;
     for (uint32_t icore = 0; icore < num_cores; icore++) {
         auto core = grid.wrap_core(icore);
         uint32_t src_addr = src0_dram_buffer->address();

@@ -103,7 +103,7 @@ void kernel_main() {
 
     const InterleavedPow2AddrGen<read_from_dram> src_a = { src_addr, 11 };
     #ifdef FUSE_PRE_ADD
-    const InterleavedPow2AddrGen src_b = { get_arg_val<uint32_t>(14), 11 };
+    const InterleavedPow2AddrGen<true> src_b = { get_arg_val<uint32_t>(14), 11 };
     #endif
 
     #if GENERATE_BCAST_SCALER
