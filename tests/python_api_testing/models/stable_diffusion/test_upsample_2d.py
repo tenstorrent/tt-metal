@@ -9,32 +9,36 @@ sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
 import torch
+from torch import nn
+from torch.nn import functional as F
 from diffusers import StableDiffusionPipeline
+import numpy as np
 from loguru import logger
 
-from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc
 from libs import tt_lib as ttl
-from feedforward import TtFeedForward
+from libs.tt_lib.fallback_ops import fallback_ops
+from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
+from utility_functions import comp_allclose_and_pcc, comp_pcc
+
+from upsample_2d import TtUpsample2D
 
 
-def test_feedforward_inference():
-    # synthesize the input
-    dim = 1280
-    dropout = 0
-    act = "geglu"
-    final_dropout = False
-    input_shape  = [1, 2, 64, 1280]
-    input = torch.randn(input_shape) * 0.01
-
+def test_run_upsample2d_inference():
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
+
     unet = pipe.unet
     unet.eval()
-    pipe("something")
-    assert False
     state_dict = unet.state_dict()
-    ff = pipe.unet.mid_block.attentions[0].transformer_blocks[0].ff
-    torch_output = ff(input)
+    unet_upblock = pipe.unet.up_blocks[0]
+    resnet_upsampler = unet_upblock.upsamplers[0]
+
+    input_shape =  [1, 1280, 32, 32]
+    input = torch.randn(input_shape)
+    in_channels = 1280
+    out_channels = 1280
+    torch_output = resnet_upsampler(input)
+
 
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -42,16 +46,22 @@ def test_feedforward_inference():
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
 
-    # setup tt model
-    tt_ff = TtFeedForward(dim=dim, dropout=dropout, activation_fn=act, final_dropout=False, state_dict=state_dict, device=device, host=host,)
     tt_input = torch_to_tt_tensor(input, device)
-    tt_output = tt_ff(tt_input)
-    tt_output = tt_to_torch_tensor(tt_output, host)
+
+    tt_up = TtUpsample2D(channels=in_channels,
+                        out_channels=out_channels,
+                        use_conv=True,
+                        use_conv_transpose=False,
+                        name="conv",
+                        state_dict=state_dict,
+                        base_address="up_blocks.0.upsamplers.0")
+    tt_out = tt_up(tt_input)
+
+
+    tt_output = tt_to_torch_tensor(tt_out, host)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
     ttl.device.CloseDevice(device)
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
-
-test_feedforward_inference()

@@ -7,22 +7,19 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
+from typing import Optional
 
 import torch.nn as nn
 import torch
 from diffusers import StableDiffusionPipeline
-from typing import Optional
 
 from libs import tt_lib as ttl
 from utility_functions import comp_pcc, comp_allclose_and_pcc
 from utility_functions import torch_to_tt_tensor_rm, torch_to_tt_tensor, tt_to_torch_tensor
 from libs.tt_lib.fallback_ops import fallback_ops
-
-from python_api_testing.fused_ops.layernorm import Layernorm as TtLayerNorm
-from python_api_testing.models.stable_diffusion.cross_attention import TtCrossAttention
-from python_api_testing.models.stable_diffusion.fused_ops.feedforward import TtFeedForward
-
-from python_api_testing.models.stable_diffusion.utils import make_linear
+from cross_attention import TtCrossAttention
+from feedforward import TtFeedForward
+from utils import make_linear
 
 
 class TtBasicTransformerBlock(nn.Module):
@@ -76,11 +73,7 @@ class TtBasicTransformerBlock(nn.Module):
                 f"`norm_type` is set to {norm_type}, but `num_embeds_ada_norm` is not defined. Please make sure to"
                 f" define `num_embeds_ada_norm` if setting `norm_type` to {norm_type}."
             )
-        print("name of the basic transformer", self.base_address)
 
-        # 1. Self-Attn
-        print("tt stuff", dim, num_attention_heads, attention_head_dim, attention_bias, only_cross_attention)
-        # assert False
         self.attn1 = TtCrossAttention(
             query_dim=dim,
             heads=num_attention_heads,
@@ -115,7 +108,7 @@ class TtBasicTransformerBlock(nn.Module):
                 host=self.host,
                 state_dict=state_dict,
                 base_address=f"{base_address}.attn2"
-            )  # is self-attn if encoder_hidden_states is none
+            )
         else:
             self.attn2 = None
 
@@ -137,19 +130,13 @@ class TtBasicTransformerBlock(nn.Module):
             # We currently only use AdaLayerNormZero for self attention where there will only be one attention block.
             # I.e. the number of returned modulation chunks from AdaLayerZero would not make sense if returned during
             # the second cross attention block.
-            assert not self.use_ada_layer_norm, "AdaLayerNorm not supported and not used in stable diffusion"
+            assert not self.use_ada_layer_norm, "AdaLayerNorm is not supported and not used in stable diffusion"
             norm2_weights = state_dict[f"{base_address}.norm2.weight"]
             norm2_bias = state_dict[f"{base_address}.norm2.bias"]
             self.norm2 = fallback_ops.LayerNorm(weights=norm2_weights,
                                                 biases=norm2_bias,
                                                 normalized_shape=dim,
                                                 elementwise_affine=norm_elementwise_affine)
-
-            # self.norm2 = (
-            #     AdaLayerNorm(dim, num_embeds_ada_norm)
-            #     if self.use_ada_layer_norm
-            #     else nn.LayerNorm(dim, elementwise_affine=norm_elementwise_affine)
-            # )
         else:
             self.norm2 = None
 
@@ -185,9 +172,7 @@ class TtBasicTransformerBlock(nn.Module):
 
         # 1. Self-Attention
         cross_attention_kwargs = cross_attention_kwargs if cross_attention_kwargs is not None else {}
-        # print("starting attn1")
-        # print(norm_hidden_states.shape(), "norm hidden state shape")
-        # print(encoder_hidden_states.shape(), "encoder hidden state shape")
+
         attn_output = self.attn1(
             norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
@@ -202,19 +187,10 @@ class TtBasicTransformerBlock(nn.Module):
             # attn_output = gate_msa.unsqueeze(1) * attn_output
 
         hidden_states = ttl.tensor.add(attn_output, hidden_states)
-        print("starting attn2")
         if self.attn2 is not None:
             norm_hidden_states = (
                 self.norm2(hidden_states, timestep) if self.use_ada_layer_norm else self.norm2(hidden_states)
             )
-            print("########## self.attn2############")
-            print(self.attn2)
-            print(norm_hidden_states.shape(), "norm hidden shape")
-            print(encoder_hidden_states.shape(), "encoder hidden state shape")
-            print(attention_mask, "attention mask")
-            print(cross_attention_kwargs, "cross attention kwargs")
-            print("##### end of it #######")
-
             # 2. Cross-Attention
             attn_output = self.attn2(
                 norm_hidden_states,
@@ -319,13 +295,7 @@ class TtTransformer2DModel(nn.Module):
                                                 affine=True,
                                                 weights=norm_weights,
                                                 biases=norm_bias)
-            # self.torch_norm = torch.nn.GroupNorm(num_groups=norm_num_groups, num_channels=in_channels, eps=1e-6, affine=True)
-            # self.torch_norm.weight = nn.Parameter(state_dict[f"{base_address}.norm.weight"])
-            # self.torch_norm.bias = nn.Parameter(state_dict[f"{base_address}.norm.bias"])
             if use_linear_projection:
-                # weights = tilize_to_list(pad_weight(state_dict[f"{base_address}.proj_in.weight"]))
-                # bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.proj_in.bias"]))
-                # self.proj_in = TtLinear(in_channels, inner_dim, weights, bias, self.device)
                 proj_in_weights = state_dict[f"{base_address}.proj_in.weight"]
                 proj_in_bias = state_dict[f"{base_address}.proj_in.bias"]
                 self.proj_in = make_linear(in_features=in_channels,
@@ -343,10 +313,6 @@ class TtTransformer2DModel(nn.Module):
                                                     kernel_size=1,
                                                     stride=1,
                                                     padding=0)
-                # self.proj_in = nn.Conv2d(in_channels, inner_dim, kernel_size=1, stride=1, padding=0)
-                # self.proj_in.weight = nn.Parameter(state_dict[f"{base_address}.proj_in.weight"])
-                # self.proj_in.bias = nn.Parameter(state_dict[f"{base_address}.proj_in.bias"])
-
         else:
             assert False, "only continuous input is acceptable for stable diffusion in transformer model"
 
@@ -380,9 +346,6 @@ class TtTransformer2DModel(nn.Module):
         if self.is_input_continuous:
             # TODO: should use out_channels for continous projections
             if use_linear_projection:
-                # weights = tilize_to_list(pad_weight(state_dict[f"{base_address}.proj_out.weight"]))
-                # bias = tilize_to_list(pad_weight(state_dict[f"{base_address}.proj_out.bias"]))
-                # self.proj_out = TtLinear(in_channels, inner_dim, weights, bias, self.device)
                 proj_out_weights = state_dict[f"{base_address}.proj_out.weight"]
                 proj_out_bias = state_dict[f"{base_address}.proj_out.bias"]
                 self.proj_out = make_linear(in_features=in_channels,
@@ -399,9 +362,6 @@ class TtTransformer2DModel(nn.Module):
                                                     kernel_size=1,
                                                     stride=1,
                                                     padding=0)
-                # self.proj_out = nn.Conv2d(inner_dim, in_channels, kernel_size=1, stride=1, padding=0)
-                # self.proj_out.weight = nn.Parameter(state_dict[f"{base_address}.proj_out.weight"])
-                # self.proj_out.bias = nn.Parameter(state_dict[f"{base_address}.proj_out.bias"])
 
         else:
             assert False, "only continuous input is acceptable for stable diffusion in transformer model"
@@ -438,35 +398,20 @@ class TtTransformer2DModel(nn.Module):
         """
         # 1. Input
         if self.is_input_continuous:
-            print("input is continuous")
             batch, _, height, width = hidden_states.shape()
             residual = hidden_states
 
-            # hidden_states = tt_to_torch_tensor(hidden_states, self.host)
-            # hidden_states = self.torch_norm(hidden_states)
-            # hidden_states = torch_to_tt_tensor(hidden_states, self.device)
             hidden_states = self.norm(hidden_states)
 
             if not self.use_linear_projection:
-                # hidden_states = tt_to_torch_tensor(hidden_states, self.host)
-                hidden_states = self.proj_in(hidden_states) # conv
-                # hidden_states = torch_to_tt_tensor(hidden_states, self.device)
+                hidden_states = self.proj_in(hidden_states)
 
                 inner_dim = hidden_states.shape()[1]
 
-                # hidden_states = tt_to_torch_tensor(hidden_states, self.host)
-                # hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch, height * width, inner_dim)
-                # hidden_states = torch_to_tt_tensor(hidden_states, self.device)
                 hidden_states = ttl.tensor.permute(hidden_states, 0, 2, 3, 1)
                 hidden_states = fallback_ops.reshape(hidden_states, 1, batch, height * width, inner_dim)
-
-
             else:
                 inner_dim = hidden_states.shape()[1]
-
-                # hidden_states = tt_to_torch_tensor(hidden_states, self.host)
-                # hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch, height * width, inner_dim)
-                # hidden_states = torch_to_tt_tensor(hidden_states, self.device)
                 hidden_states = ttl.tensor.permute(hidden_states, 0, 2, 3, 1)
                 hidden_states = fallback_ops.reshape(hidden_states, 1, batch, height * width, inner_dim)
 
@@ -485,19 +430,12 @@ class TtTransformer2DModel(nn.Module):
         # 3. Output
         if self.is_input_continuous:
             if not self.use_linear_projection:
-                # hidden_states = tt_to_torch_tensor(hidden_states, self.host)
-                # hidden_states = hidden_states.reshape(batch, height, width, inner_dim).permute(0, 3, 1, 2).contiguous()
-                # hidden_states = torch_to_tt_tensor(hidden_states, self.device)
                 hidden_states = fallback_ops.reshape(hidden_states, batch, height, width, inner_dim)
                 hidden_states = ttl.tensor.permute(hidden_states, 0, 3, 1, 2)
 
                 hidden_states = self.proj_out(hidden_states)
             else:
                 hidden_states = self.proj_out(hidden_states)
-
-                # hidden_states = tt_to_torch_tensor(hidden_states, self.host)
-                # hidden_states = hidden_states.reshape(batch, height, width, inner_dim).permute(0, 3, 1, 2).contiguous()
-                # hidden_states = torch_to_tt_tensor(hidden_states, self.device)
                 hidden_states = fallback_ops.reshape(hidden_states, batch, height, width, inner_dim)
                 hidden_states = ttl.tensor.permute(hidden_states, 0, 3, 1, 2)
 
@@ -507,4 +445,3 @@ class TtTransformer2DModel(nn.Module):
         if not return_dict:
             return (output,)
         return output
-        # return Transformer2DModelOutput(sample=output)

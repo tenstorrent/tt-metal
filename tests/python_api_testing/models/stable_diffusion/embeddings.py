@@ -30,10 +30,8 @@ class TtTimestepEmbedding(nn.Module):
                                     weights=weights,
                                     bias=bias,
                                     device=device)
-        # self.linear_1 = nn.Linear(in_channels, time_embed_dim)
         self.act = None
         if act_fn == "silu":
-            # self.act = nn.SiLU()
             self.act = fallback_ops.silu
         elif act_fn == "mish":
             assert False, "tt does not support nn.Mish() yet"
@@ -51,7 +49,6 @@ class TtTimestepEmbedding(nn.Module):
                                     weights=weights,
                                     bias=bias,
                                     device=device)
-        # self.linear_2 = nn.Linear(time_embed_dim, time_embed_dim_out)
 
     def forward(self, sample):
         sample = self.linear_1(sample)
@@ -61,33 +58,3 @@ class TtTimestepEmbedding(nn.Module):
 
         sample = self.linear_2(sample)
         return sample
-
-
-if __name__ == "__main__":
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-
-    n_embd = 32
-    torch.manual_seed(123)
-
-    input_shape =  [1, 1, 32, n_embd]
-    input = torch.randn(input_shape)
-
-    torch_emb = TimeEmbedding(n_embd)
-    torch_out = torch_emb(input)
-
-    # time = torch.reshape(time, [32, 32, 32, 1280])
-    # time = torch.randn([32, 32, 32, 1280])
-
-    tt_input = torch_to_tt_tensor(input, device)
-    tt_emb = TtTimeEmbedding(n_embd, device)
-    tt_out = tt_emb(tt_input)
-    tt_out = tt_to_torch_tensor(tt_out, host)
-
-    print_diff_argmax(tt_out, torch_out)
-    print(comp_allclose_and_pcc(torch_out, tt_out))
-
-    print("TEST PASSED!")
-    ttl.device.CloseDevice(device)

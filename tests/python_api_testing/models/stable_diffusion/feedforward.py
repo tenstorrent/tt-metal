@@ -14,7 +14,6 @@ from typing import Optional
 
 from libs.tt_lib.fallback_ops import fallback_ops
 from libs import tt_lib as ttl
-from python_api_testing.fused_ops.linear import Linear as TtLinear
 from utility_functions import pad_weight, tilize_to_list, torch_to_tt_tensor, tt_to_torch_tensor
 from python_api_testing.models.stable_diffusion.utils import make_linear
 
@@ -40,21 +39,11 @@ class TtGEGLU(nn.Module):
 
     def gelu(self, gate):
         return ttl.tensor.gelu(gate)
-        # if gate.device.type != "mps":
-            # return F.gelu(gate)
-        # mps: gelu is not implemented for float16
-        # return F.gelu(gate.to(dtype=torch.float32)).to(dtype=gate.dtype)
 
     def forward(self, hidden_states):
         hidden_states = self.proj(hidden_states)
 
         hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
-
-        # hidden_states = tt_to_torch_tensor(hidden_states, self.host)
-        # hidden_states, gate = hidden_states.chunk(2, dim=-1)
-        # hidden_states = torch_to_tt_tensor(hidden_states, self.device)
-        # gate = torch_to_tt_tensor(gate, self.device)
-
         act = self.gelu(gate)
         return ttl.tensor.mul(hidden_states, act)
 
@@ -93,29 +82,17 @@ class TtFeedForward(nn.Module):
         dim_out = dim_out if dim_out is not None else dim
 
 
-        # if activation_fn == "gelu":
-        #     act_fn = GELU(dim, inner_dim)
-        # if activation_fn == "gelu-approximate":
-        #     act_fn = GELU(dim, inner_dim, approximate="tanh")
         if activation_fn == "geglu":
             act_fn = TtGEGLU(dim, inner_dim, device, host, state_dict, base_address=f"{base_address}.net.0")
         else:
             assert False, "other activation ops are not implemented"
-        # elif activation_fn == "geglu-approximate":
-        #     act_fn = ApproximateGELU(dim, inner_dim)
 
-        # project in
         self.act_fn = act_fn
-        # project dropout
 
-        # project out
         weights = state_dict[f"{base_address}.net.2.weight"]
         bias = state_dict[f"{base_address}.net.2.bias"]
         self.linear = make_linear(in_features=inner_dim, out_features=dim_out, weights=weights, bias=bias, device=device)
-        # FF as used in Vision Transformer, MLP-Mixer, etc. have a final dropout
 
-        # if final_dropout: #Note: commented since dropout is not supported
-        #     self.net.append(nn.Dropout(dropout))
 
     def forward(self, hidden_states):
         hidden_states = self.act_fn(hidden_states)

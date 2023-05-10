@@ -18,8 +18,8 @@ from libs.tt_lib.fallback_ops import fallback_ops
 from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc
 
-from python_api_testing.models.stable_diffusion.residual_block import TtResnetBlock2D
-from python_api_testing.models.stable_diffusion.fused_ops.downsample_2d import TtDownsample2D
+from residual_block import TtResnetBlock2D
+from downsample_2d import TtDownsample2D
 
 
 class TtDownBlock2D(nn.Module):
@@ -100,65 +100,3 @@ class TtDownBlock2D(nn.Module):
             output_states += (hidden_states,)
 
         return hidden_states, output_states
-
-
-def run_downblock_inference(host, device):
-    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
-
-    base_address = 'down_blocks.0'
-    unet = pipe.unet
-    unet.eval()
-    state_dict = unet.state_dict()
-    unet_downblock = pipe.unet.down_blocks[0]
-    unet_resnet_downblock_module_list = unet_downblock.resnets
-
-    in_channels = unet_resnet_downblock_module_list[0].conv1.in_channels
-    out_channels = unet_resnet_downblock_module_list[0].conv2.in_channels
-    temb_channels = 1280
-    eps = 1e-05
-    resnet_groups = 32
-
-    input_shape  = [1, in_channels, 32, 32]
-    input = torch.randn(input_shape, dtype=torch.float32)
-
-    temb_shape  = [out_channels, out_channels]
-    temb = torch.randn(temb_shape, dtype=torch.float32)
-
-    unet_out = unet_resnet_downblock_module_list[0](input, None)
-    unet_out = unet_resnet_downblock_module_list[1](unet_out, None)
-    unet_out = unet_downblock.downsamplers[0](unet_out)
-
-
-    tt_input = torch_to_tt_tensor(input, device)
-    tt_downblock = TtDownBlock2D(in_channels=in_channels,
-                                out_channels=out_channels,
-                                temb_channels=temb_channels,
-                                dropout= 0.0,
-                                num_layers= 2,
-                                resnet_eps= 1e-6,
-                                resnet_time_scale_shift = "default",
-                                resnet_act_fn= "silu",
-                                resnet_groups=resnet_groups,
-                                resnet_pre_norm= True,
-                                output_scale_factor=1.0,
-                                add_downsample=True,
-                                downsample_padding=1,
-                                state_dict=state_dict,
-                                base_address = base_address)
-
-
-    tt_out = tt_downblock(tt_input, None)[0]
-    tt_out = tt_to_torch_tensor(tt_out, host)
-    print('unet_out:', unet_out[0,0,0,:12])
-
-    print('torch tt_out:', tt_out[0,0,0,:12])
-
-    print(comp_allclose_and_pcc(unet_out, tt_out))
-
-if __name__ == "__main__":
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-    run_downblock_inference(host, device)
-    ttl.device.CloseDevice(device)

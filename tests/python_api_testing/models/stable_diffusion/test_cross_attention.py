@@ -14,95 +14,41 @@ from loguru import logger
 
 from libs import tt_lib as ttl
 from utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
-from utility_functions import comp_pcc, comp_allclose_and_pcc
+from utility_functions import comp_pcc, comp_allclose_and_pcc, enable_compile_cache, enable_binary_cache
 
 from cross_attention import TtCrossAttention
 
 
 def test_cross_attn_inference():
+    # enable_compile_cache()
+    # enable_binary_cache()
+
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
-    test = "test2"
     # synthesize the input
-    if test == "test1":
-        query_dim = 1280
-        dropout = 0
-        heads = 8
-        dim_head = 64
-        bias=False
-        cross_attention_dim = None
-        upcast_attention = False
-        input_shape  = [1, 2, 64, 1280]
-        input = torch.randn(input_shape) * 0.01
-        encoder_hidden_states = None
-        # base_address = "ISLOST!"
-        base_address="mid_block.attentions.0.transformer_blocks.0.attn1"
-        cross_attn = pipe.unet.mid_block.attentions[0].transformer_blocks[0].attn1
+    query_dim = 320
+    dim = query_dim
+    cross_attention_dim = 768
+    heads = 8
+    dim_head = 40
+    dropout = 0.0
+    bias = False
+    upcast_attention = False
+    upcast_softmax = False
+    added_kv_proj_dim = None
+    norm_num_groups = None
 
-    if test == "test2":
-        query_dim = 320
-        dim = query_dim
-        cross_attention_dim = 768
-        heads = 8
-        dim_head = 40
-        dropout = 0.0
-        bias = False
-        upcast_attention = False
-        upcast_softmax = False
-        added_kv_proj_dim = None
-        norm_num_groups = None
+    base_address="down_blocks.0.attentions.0.transformer_blocks.0.attn2"
+    cross_attn = pipe.unet.down_blocks[0].attentions[0].transformer_blocks[0].attn2
 
-        base_address="down_blocks.0.attentions.0.transformer_blocks.0.attn2"
-        cross_attn = pipe.unet.down_blocks[0].attentions[0].transformer_blocks[0].attn2
-
-        input_shape =  torch.Size([1, 2, 4096, 320])
-        input = torch.randn(input_shape) * 0.01
-        encoder_hidden_states_shape =  torch.Size([1, 2, 77, 768])
-        encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
-
-
-    ##############################################
-    if test == "test3":
-        assert False, "this test doesn't work right now!"
-        dim = 1280
-        heads = 8
-        dim_head = 160
-        cross_attention_dim = 768
-        dropout = 0
-        bias = False
-        cross_attention_dim = None
-        upcast_attention = False
-        dim_head = 64
-        input_shape = (1, 2, 256, 1280)
-        encoder_hidden_states_shape = (1, 2, 77, 768)
-        input = torch.randn(input_shape)
-        encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
-        # base_address="mid_block.attentions.0.transformer_blocks.0.attn1"
-        base_address="down_blocks.0.attentions.0.transformer_blocks.0.attn1"
-        cross_attn = pipe.unet.down_blocks[0].attentions[0].transformer_blocks[0].attn1
-
-
-    if test == "test4":
-        dim = 320
-        cross_attention_dim = 768
-        heads = 8
-        dim_head = 40
-        dropout  = 0.0
-        bias = False
-        upcast_attention = False
-        upcast_softmax = False
-        added_kv_proj_dim = None
-        norm_num_groups = None
-        input_shape = (1, 2, 4096, 320)
-        encoder_hidden_states_shape = (1, 2, 77, 768)
-        input = torch.randn(input_shape)
-        encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
-        base_address="down_blocks.0.attentions.0.transformer_blocks.0.attn2"
-        cross_attn = pipe.unet.down_blocks[0].attentions[0].transformer_blocks[0].attn2
+    input_shape =  torch.Size([1, 2, 4096, 320])
+    input = torch.randn(input_shape) * 0.01
+    encoder_hidden_states_shape =  torch.Size([1, 2, 77, 768])
+    encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
 
 
     print(cross_attn)

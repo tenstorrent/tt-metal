@@ -20,27 +20,28 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, HeunDi
 from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
-from utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc
+from utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
+from utility_functions import enable_binary_cache, enable_compile_cache
 from libs import tt_lib as ttl
-from python_api_testing.models.stable_diffusion.unet.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
+from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
+
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):
-    # self.time_proj = Timesteps(block_out_channels[0], flip_sin_to_cos, freq_shift)
     timesteps = timesteps[None]
     timesteps = timesteps.expand(sample.shape[0])
     t_emb = time_proj(timesteps)
     return t_emb
 
 
-
-
 def demo():
 
     # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 1)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
+    # enable_binary_cache()
+    # enable_compile_cache()
 
     # 1. Load t`he autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
@@ -98,8 +99,9 @@ def demo():
 
     height = 512                        # default height of Stable Diffusion
     width = 512                         # default width of Stable Diffusion
-    num_inference_steps = 1           # Number of denoising steps
-    guidance_scale = 7.5                # Scale for classifier-free guidance
+    num_inference_steps = 10          # Number of denoising steps
+    # guidance_scale = 7.5                # Scale for classifier-free guidance
+    guidance_scale = 12                # Scale for classifier-free guidance
     generator = torch.manual_seed(174)    # 10233 Seed generator to create the inital latent noise
     batch_size = len(prompt)
 
@@ -132,7 +134,7 @@ def demo():
     # Denoising loop
     scheduler.set_timesteps(num_inference_steps)
     tic= time.time()
-
+    iteration = 0
     for t in tqdm(scheduler.timesteps):
         # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
         latent_model_input = torch.cat([latents] * 2)
@@ -141,20 +143,28 @@ def demo():
         t1 = time.time()
         # predict the noise residual
         with torch.no_grad():
+            pr = Profiler()
+
+            pr.start("torch_unet")
+            torch_noise_pred = unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+            pr.end("torch_unet")
+            print("one unet iter torch; ", pr.get("torch_unet"))
+
             _t = constant_prop_time_embeddings(t, latent_model_input, torch_unet.time_proj)
 
             _t = torch_to_tt_tensor_rm(_t, device, put_on_device=False)
             tt_latent_model_input = torch_to_tt_tensor_rm(latent_model_input, device, put_on_device=False)
             tt_text_embeddings = torch_to_tt_tensor_rm(text_embeddings, device, put_on_device=False)
 
+            pr.start("tt_unet")
             tt_noise_pred = tt_unet(tt_latent_model_input, _t, encoder_hidden_states=tt_text_embeddings)
+            pr.end("tt_unet")
+            print("one unet iter; ", pr.get("tt_unet"))
 
-            torch_noise_pred = unet(latent_model_input, t, encoder_hidden_states=text_embeddings)
 
         tt_noise_pred = tt_to_torch_tensor(tt_noise_pred, host)
-        print("########### comparing ############")
-        print(comp_allclose_and_pcc(torch_noise_pred, tt_noise_pred))
-        print("######### end of comparing #########")
+        print(comp_allclose_and_pcc(torch_noise_pred, tt_noise_pred), iteration, "th iteration")
+        iteration += 1
 
         noise_pred = tt_noise_pred
 
@@ -184,7 +194,7 @@ def demo():
     image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
     images = (image * 255).round().astype("uint8")
     pil_images = [Image.fromarray(image) for image in images][0]
-    pil_images.save("mountain_river_oil_painintg__512.png")
+    pil_images.save("tt_first_image_512.png")
     toc = time.time()
     print("Image Time:", round(toc-tic, 3))
 

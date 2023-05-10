@@ -8,18 +8,17 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
+from typing import Optional
 
 import torch.nn as nn
 import torch
 from diffusers import StableDiffusionPipeline
-from typing import Optional
+from loguru import logger
 
 from libs import tt_lib as ttl
 from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tensor_rm
 from transformer_2d import TtBasicTransformerBlock, TtTransformer2DModel
-
-from loguru import logger
 
 
 '''
@@ -98,18 +97,11 @@ def test_run_basic_transformer_inference():
 
     tt_output = tt_to_torch_tensor(tt_out, host)
 
-
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
     ttl.device.CloseDevice(device)
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
-
-
-
-# test_run_basic_transformer_inference()
-
-
 
 
 def test_run_transformer_inference():
@@ -171,8 +163,6 @@ def test_run_transformer_inference():
         upcast_attention = False
         norm_type = 'layer_norm'
         norm_elementwise_affine = True
-
-        # hidden_state.shape torch.Size([2, 1280, 8, 8])
         input_shape = (2, 1280, 8, 8)
         encoder_hidden_states_shape  = [1, 2, 77, 768]
         input = torch.randn(input_shape) * 0.01
@@ -182,7 +172,7 @@ def test_run_transformer_inference():
 
 
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
-    # print(transformer)
+
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
@@ -190,7 +180,6 @@ def test_run_transformer_inference():
     host = ttl.device.GetHost()
 
     # setup tt model
-
     tt_input = torch_to_tt_tensor_rm(input, device, put_on_device=False)
     tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
 
@@ -212,5 +201,3 @@ def test_run_transformer_inference():
     ttl.device.CloseDevice(device)
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
-
-test_run_transformer_inference()
