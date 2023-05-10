@@ -635,7 +635,7 @@ std::string GetOpName(const KernelGroup &kernel_group) {
     return dummy_op_name;
 }
 
-size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const tt_xy_pair &logical_core, const std::string &op_name) {
+size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const tt_xy_pair &logical_core, const std::string &op_name, const int &pcie_slot) {
     size_t kg_compile_hash = 0;
     if (kernel_group.compute != nullptr) {
         tt::utils::hash_combine(kg_compile_hash, kernel_group.compute->compile_time_args_hash(logical_core));
@@ -644,6 +644,8 @@ size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const tt_xy_pair 
     tt::utils::hash_combine(kg_compile_hash, kernel_group.riscv_0->compile_time_args_hash(logical_core));
     tt::utils::hash_combine(kg_compile_hash, kernel_group.riscv_1->compile_time_args_hash(logical_core));
     tt::utils::hash_combine(kg_compile_hash, std::hash<std::string>{}(op_name));
+    // Add the device id into the compile hash to prevent clashes from simultaneous builds during multi-process runs
+    tt::utils::hash_combine(kg_compile_hash, std::hash<int>{}(pcie_slot));
     return kg_compile_hash;
 }
 
@@ -689,7 +691,7 @@ bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
         auto dummy_op_name = GetOpName(kernel_group);
         build_kernel_for_riscv_options_t dummy_op("dummy_type", dummy_op_name + std::to_string(op_idx++));
 
-        auto kernel_group_hash = KernelGroupCompileHash(kernel_group, logical_core, dummy_op_name);
+        auto kernel_group_hash = KernelGroupCompileHash(kernel_group, logical_core, dummy_op_name, device->pcie_slot());
         std::string op_path = out_dir_path + dummy_op_name + "/" + std::to_string(kernel_group_hash);
 
         SetCircularBufferDataFormat(program, logical_core, &dummy_op, op_path);
