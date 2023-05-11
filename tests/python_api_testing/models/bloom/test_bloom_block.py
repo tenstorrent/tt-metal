@@ -25,47 +25,50 @@ def run_bloom_block_test(device):
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
+    do_all_blocks_pass = True
     block = 21
-    config = hugging_bloom_reference_model.config
-    state_dict = hugging_bloom_reference_model.state_dict()
-    base_address = f"transformer.h.{block}"
-    hidden_size = config.hidden_size
-    n_head = config.n_head
 
-    tt_bloom_block = bloom_block.TtBloomBlock(config, state_dict, base_address, device)
-    pt_bloom_block = hugging_bloom_reference_model.transformer.h[block]
+    for block in range(24):
+        config = hugging_bloom_reference_model.config
+        state_dict = hugging_bloom_reference_model.state_dict()
+        base_address = f"transformer.h.{block}"
+        hidden_size = config.hidden_size
+        n_head = config.n_head
 
-    torch.manual_seed(0)
+        tt_bloom_block = bloom_block.TtBloomBlock(config, state_dict, base_address, device)
+        pt_bloom_block = hugging_bloom_reference_model.transformer.h[block]
 
-    hidden_states = ((torch.rand(1, 64, hidden_size) * 2) - 1) / hidden_size
-    residual = ((torch.rand(1, 64, hidden_size) * 2) - 1) / hidden_size
-    alibi = ((torch.rand(n_head, 64, 64) * 2) - 1) / (64 * 64)
-    attention_mask = torch.randint(0, 2, (1, 1, 64, 64))
+        torch.manual_seed(0)
 
-    pt_out = pt_bloom_block.forward(hidden_states, alibi, attention_mask)[0]
-    print("PT finished")
+        hidden_states = ((torch.rand(1, 64, hidden_size) * 2) - 1) / hidden_size
+        alibi = ((torch.rand(n_head, 64, 64) * 2) - 1) / (64 * 64)
+        attention_mask = torch.randint(0, 2, (1, 1, 64, 64))
 
-    hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
-    alibi = bloom_utils.torch2tt_tensor(alibi, device)
+        pt_out = pt_bloom_block.forward(hidden_states, alibi, attention_mask)[0]
+        print("PT finished")
 
-    tt_out = tt_bloom_block.forward(device, hidden_states, alibi, attention_mask)[0]
-    print("TT finished")
+        hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
+        alibi = bloom_utils.torch2tt_tensor(alibi, device)
 
-    tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
-    tt_out_converted = tt_out_converted.squeeze()
+        tt_out = tt_bloom_block.forward(device, hidden_states, alibi, attention_mask)[0]
+        print("TT finished")
 
-    print_diff_argmax(pt_out, tt_out_converted)
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.98)
+        tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
+        tt_out_converted = tt_out_converted.squeeze()
 
-    print(comp_allclose(pt_out, tt_out_converted))
-    print(pcc_message)
+        print_diff_argmax(pt_out, tt_out_converted)
+        does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.98)
 
-    if does_pass:
-        logger.info("bloom_block: Passed!")
-    else:
-        logger.warning("bloom_block: Failed!")
+        print(comp_allclose(pt_out, tt_out_converted))
+        print(pcc_message)
 
-    assert does_pass
+        if does_pass:
+            logger.info(f"bloom_block {block}: Passed!")
+        else:
+            do_all_blocks_pass = False
+            logger.warning(f"bloom_block {block}: Failed!")
+
+    assert do_all_blocks_pass
 
 
 def test_bloom_block():

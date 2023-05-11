@@ -316,6 +316,6 @@ class TtBloomAttention(torch.nn.Module):
         outputs = (output_tensor, present)
 
         if output_attentions:
-            outputs += (tt_attention_probs,)
+            outputs += (attention_probs,)
 
         return outputs
