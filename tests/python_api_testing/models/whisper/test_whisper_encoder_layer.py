@@ -15,7 +15,6 @@ import numpy as np
 import random
 from typing import Optional, Tuple, Union
 from loguru import logger
-import pytest
 
 from transformers import WhisperModel, WhisperConfig, WhisperForAudioClassification
 
@@ -115,7 +114,6 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
 
     assert does_pass
 
-@pytest.mark.whisper_encoder_layer
 def test_WhipserEncoderLayer_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
@@ -123,7 +121,7 @@ def test_WhipserEncoderLayer_inference():
     run_whisper_encoder_layer(layer=0, device=device)
     ttm.device.CloseDevice(device)
 
-def test_WhisperEncoderLayerForAudioClassificationAttention_inference():
+def test_WhisperEncoderLayerForAudioClassification_inference():
     torch.manual_seed(1234)
     device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
     ttm.device.InitializeDevice(device)
@@ -132,4 +130,4 @@ def test_WhisperEncoderLayerForAudioClassificationAttention_inference():
 
 if __name__ == "__main__":
     test_WhipserEncoderLayer_inference()
-    test_WhisperEncoderLayerForAudioClassificationAttention_inference()
+    test_WhisperEncoderLayerForAudioClassification_inference()

@@ -42,7 +42,7 @@ def run_whisper_for_audio_classification(device):
     )
 
     input_features = inputs.input_features
-    print(f"Input of size {input_features.size()}") # 1, 80, 3000 [:2048]
+    print(f"Input of size {input_features.size()}") # 1, 80, 3000
     print("Input audio language:")
     print(sample["language"])
 
@@ -66,13 +66,19 @@ def run_whisper_for_audio_classification(device):
         ttm_logits = tt_whisper_model(
             input_features = input_features,
         ).logits
-
+        print(ttm_logits)
+        # Convert to Torch
+        ttm_logits = torch.Tensor(ttm_logits.data()).reshape(ttm_logits.shape())
         tt_predicted_class_ids = torch.argmax(ttm_logits).item()
         tt_predicted_label = model.config.id2label[tt_predicted_class_ids]
+
         print(f"TT predicted label: {tt_predicted_label}")
+        print(f"Torch predicted label: {predicted_label}")
+
+        ttm_logits = torch.squeeze(ttm_logits, 0)
+        ttm_logits = torch.squeeze(ttm_logits, 0)
 
         does_pass, pcc_message = comp_pcc(logits, ttm_logits, 0.98)
-        ttm_logits = torch.squeeze(ttm_logits, 0)
 
         print(comp_allclose(logits, ttm_logits))
         print(pcc_message)

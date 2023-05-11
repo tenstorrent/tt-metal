@@ -21,6 +21,7 @@ from transformers import  WhisperConfig
 from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
 from python_api_testing.models.whisper.whisper_encoder import TtWhisperEncoder
 from python_api_testing.fused_ops.linear import Linear as TtLinear
+from python_api_testing.models.whisper.whisper_linear_layer import WhisperPaddedLinear
 
 from libs import tt_lib as ttm
 
@@ -28,7 +29,7 @@ from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 @dataclass
 class TtWhisperForAudioClassificationOutput():
-    loss: Optional[torch.Tensor] = None
+    loss: Optional[ttm.tensor.Tensor] = None
     logits: ttm.tensor.Tensor = None
     hidden_states: Optional[Tuple[ttm.tensor.Tensor]] = None
     attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
@@ -69,16 +70,7 @@ class TtWhisperForAudioClassification(nn.Module):
         projector_bias = create_padded_tensor(list(projector_bias.shape), projector_bias, [1, 1, 32, projector_bias.shape[-1]], 0, ttm.device.GetHost())
 
         self.projector = TtLinear(in_features=config.hidden_size, out_features=config.classifier_proj_size, weight=projector_weight.data(), bias=projector_bias.data(), device=device)
-
-        self.classifier = nn.Linear(config.classifier_proj_size, config.num_labels)
-        self.classifier.weight.data = state_dict[f"classifier.weight"]
-        self.classifier.bias.data = state_dict[f"classifier.bias"]
-
-        # Classifier cannot be TTM because its tensor of size [1, config.classifier_proj_size]. Pooling is done just after projection layer...
-        # classifier_weight = torch2tt_tensor(state_dict[f"classifier.weight"], ttm.device.GetHost())
-        # classifier_bias = torch2tt_tensor(state_dict[f"classifier.bias"], ttm.device.GetHost())
-        # self.classifier = TtLinear(in_features=config.classifier_proj_size, out_features=config.num_labels, weight=classifier_weight, bias=classifier_bias, device=device)
-
+        self.classifier = WhisperPaddedLinear(config.classifier_proj_size, config.num_labels, state_dict[f"classifier.weight"], state_dict[f"classifier.bias"], device)
 
     def freeze_encoder(self):
         """
@@ -168,19 +160,20 @@ class TtWhisperForAudioClassification(nn.Module):
         else:
             hidden_states = encoder_outputs.last_hidden_state
 
-        # Pad
+        # Pad inputs
         add_padding = True
         if add_padding:
             input_tensors_shape = list(hidden_states.shape())
-            # Pad inputs
             output_tensor_shape = input_tensors_shape[:]
             output_tensor_shape[-2] = 1504
             hidden_states = create_padded_tensor(input_tensors_shape, hidden_states, output_tensor_shape, pad_value=0, device=self.device)
 
+        # Apply Linear layer
         hidden_states = self.projector(hidden_states)
 
         # Unpad
         if add_padding:
+            # Unpad
             input_tensors_shape = list(hidden_states.shape())
             input_tensors_shape[-2] = 1500
             hidden_states = create_unpadded_tensor(hidden_states, input_tensors_shape)
@@ -192,9 +185,18 @@ class TtWhisperForAudioClassification(nn.Module):
         torch_pooled_output = torch_hidden_states.mean(dim=-2)
         # If something changes these dimension -2 should always work
 
-        """ Apply classifier layer in torch bc we input shape 1,num_of_classes """
-        #torch.Size([1, 1, 256])
-        logits = self.classifier(torch_pooled_output)
+        if add_padding:
+            pooled_output = create_padded_tensor(list(torch_pooled_output.size()), torch_pooled_output, [1,1,32, torch_pooled_output.size()[-1]], pad_value=0, device=self.device)
+        else:
+            pooled_output = torch2tt_tensor(torch_pooled_output, self.device)
+
+        # Apply classifier layer
+        logits = self.classifier(pooled_output)
+
+        if add_padding:
+            # Unpad
+            logits = create_unpadded_tensor(logits, [1, 1, 1, self.config.num_labels])
+
         loss = None
 
         if labels is not None:
