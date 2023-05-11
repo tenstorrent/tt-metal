@@ -159,9 +159,9 @@ class TtBloomBlock(torch.nn.Module):
 
         # Get residual
         if self.apply_residual_connection_post_layernorm:
-            tt_residual = layernorm_output
+            residual = layernorm_output
         else:
-            tt_residual = attention_output
+            residual = attention_output
 
         # MLP
         output = self.mlp(layernorm_output, residual, device)

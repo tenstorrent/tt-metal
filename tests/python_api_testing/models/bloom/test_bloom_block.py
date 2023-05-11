@@ -25,7 +25,7 @@ def run_bloom_block_test(device):
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
-    block = 6
+    block = 21
     config = hugging_bloom_reference_model.config
     state_dict = hugging_bloom_reference_model.state_dict()
     base_address = f"transformer.h.{block}"
