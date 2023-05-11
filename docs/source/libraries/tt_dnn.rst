@@ -14,80 +14,6 @@ unified Python interface that provides both TT-DNN and the Tensor library.
 tt-DNN API through ``tt_lib``
 =============================
 
-Tensor math operations
-----------------------
-
-All arguments to operations on tensors are tensors, regardless of arity of
-operation (unary, binary etc.).
-
-+----------+----------------------+-----------+-------------+----------+
-| Argument | Description          | Data type | Valid range | Required |
-+==========+======================+===========+=============+==========+
-| arg      | Tensor argument      | Tensor    |             | Yes      |
-+----------+----------------------+-----------+-------------+----------+
-
-Any arguments which are exceptions to this rule will be noted in that
-operation's listing.
-
-.. autofunction:: tt_lib.tensor.add
-
-.. autofunction:: tt_lib.tensor.sub
-
-.. autofunction:: tt_lib.tensor.mul
-
-.. autofunction:: tt_lib.tensor.matmul
-
-.. autofunction:: tt_lib.tensor.bmm
-
-.. autofunction:: tt_lib.tensor.exp
-
-.. autofunction:: tt_lib.tensor.recip
-
-.. autofunction:: tt_lib.tensor.gelu
-
-.. autofunction:: tt_lib.tensor.sqrt
-
-.. autofunction:: tt_lib.tensor.sigmoid
-
-.. autofunction:: tt_lib.tensor.log
-
-.. autofunction:: tt_lib.tensor.tanh
-
-Tensor manipulation operations
-------------------------------
-
-These operations change the tensor shape in some way, giving it new dimensions
-but in general retaining the data.
-
-.. autofunction:: tt_lib.tensor.reshape
-
-.. autofunction:: tt_lib.tensor.transpose
-
-.. autofunction:: tt_lib.tensor.transpose_hc
-
-.. autofunction:: tt_lib.tensor.transpose_hc_rm
-
-.. autofunction:: tt_lib.tensor.transpose_cn
-
-.. autofunction:: tt_lib.tensor.permute
-
-.. autofunction:: tt_lib.tensor.tilize
-
-.. autofunction:: tt_lib.tensor.untilize
-
-All other operations
---------------------
-
-.. autofunction:: tt_lib.tensor.fill_rm
-
-.. autofunction:: tt_lib.tensor.fill_ones_rm
-
-.. autofunction:: tt_lib.tensor.pad_h_rm
-
-.. autofunction:: tt_lib.tensor.bcast
-
-.. autofunction:: tt_lib.tensor.reduce
-
 Enums
 -----
 
@@ -103,11 +29,69 @@ Enums
 .. autoclass:: tt_lib.tensor.ReduceOpDim
     :members: H, W, HW
 
-``tt_lib`` Mini-Graph Library
-==============================
+Tensor elementwise operations
+-----------------------------
 
-Fused Operations
-----------------
+.. autofunction:: tt_lib.tensor.add
+
+.. autofunction:: tt_lib.tensor.sub
+
+.. autofunction:: tt_lib.tensor.mul
+
+.. autofunction:: tt_lib.tensor.gelu
+
+.. autofunction:: tt_lib.tensor.relu
+
+..
+    autofunction:: tt_lib.tensor.sigmoid
+
+.. autofunction:: tt_lib.tensor.exp
+
+.. autofunction:: tt_lib.tensor.recip
+
+.. autofunction:: tt_lib.tensor.sqrt
+
+.. autofunction:: tt_lib.tensor.log
+
+.. autofunction:: tt_lib.tensor.tanh
+
+
+Tensor matrix math operations
+-----------------------------
+
+.. autofunction:: tt_lib.tensor.matmul
+
+.. autofunction:: tt_lib.tensor.bmm
+
+Tensor manipulation operations
+------------------------------
+
+These operations change the tensor shape in some way, giving it new dimensions
+but in general retaining the data.
+
+.. autofunction:: tt_lib.tensor.reshape
+
+.. autofunction:: tt_lib.tensor.transpose
+
+.. autofunction:: tt_lib.tensor.transpose_hc
+
+.. autofunction:: tt_lib.tensor.permute
+
+
+Broadcast and Reduce
+--------------------
+
+.. autofunction:: tt_lib.tensor.bcast
+
+.. autofunction:: tt_lib.tensor.reduce
+
+Experimental Operations
+=======================
+
+Operations in this section are experimental, don't have full support, and may behave in unexpectedx ways.
+
+Fused Operations from ``tt_lib`` Mini-Graph Library
+---------------------------------------------------
 
 We have a variety of common operations that require fusion of multiple
 base operations together.
@@ -119,3 +103,54 @@ base operations together.
 .. autofunction:: tt_lib.fused_ops.layernorm.Layernorm
 
 .. autofunction:: tt_lib.fused_ops.add_and_norm.AddAndNorm
+
+Other Operations
+----------------
+
+.. autofunction:: tt_lib.tensor.transpose_hc_rm
+
+.. autofunction:: tt_lib.tensor.tilize
+
+.. autofunction:: tt_lib.tensor.untilize
+
+.. autofunction:: tt_lib.tensor.fill_rm
+
+.. autofunction:: tt_lib.tensor.fill_ones_rm
+
+.. autofunction:: tt_lib.tensor.pad_h_rm
+
+.. autofunction:: tt_lib.tensor.large_bmm
+
+.. autofunction:: tt_lib.tensor.large_bmm_single_block
+
+.. autofunction:: tt_lib.tensor.conv
+
+.. autofunction:: tt_lib.tensor.bert_large_fused_qkv_matmul
+
+.. autofunction:: tt_lib.tensor.bert_large_ff1_matmul
+
+.. autofunction:: tt_lib.tensor.bert_large_ff2_matmul
+
+.. autofunction:: tt_lib.tensor.bert_large_selfout_matmul
+
+.. autofunction:: tt_lib.tensor.bert_large_pre_softmax_bmm
+
+.. autofunction:: tt_lib.tensor.bert_large_post_softmax_bmm
+
+.. autofunction:: tt_lib.tensor.softmax
+
+.. autofunction:: tt_lib.tensor.scale_mask_softmax
+
+.. autofunction:: tt_lib.tensor.layernorm
+
+.. autofunction:: tt_lib.tensor.layernorm_gamma
+
+.. autofunction:: tt_lib.tensor.layernorm_gamma_beta
+
+.. autofunction:: tt_lib.tensor.add_layernorm_gamma_beta
+
+.. autofunction:: tt_lib.tensor.tilize_with_zero_padding
+
+.. autofunction:: tt_lib.tensor.tilize_conv_activation
+
+.. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
