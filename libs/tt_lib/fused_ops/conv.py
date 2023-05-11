@@ -10,12 +10,13 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     assert(len(conv_params) == 8)
     K, C, R, S, U, V, P_H, P_W = [conv_params[i] for i in range(8)]
     weights_shape = [K,C,R,S]
+    weights_channels_padded_shape = [K,_nearest_32(C),R,S]
     weight_untiled = tensor.Tensor(
         weight,
         weights_shape,
         tensor.DataType.BFLOAT16,
         tensor.Layout.ROW_MAJOR
-    )
+    ).pad(weights_channels_padded_shape, (0,0,0,0), 0)
     weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(weight_untiled)
     weight_on_device = weight_tiled_.to(device)
     if bias is None:

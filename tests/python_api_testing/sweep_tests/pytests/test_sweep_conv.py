@@ -7,11 +7,11 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 
 import numpy as np
-
 import tt_lib as ttl
 from tt_lib.utils import _nearest_32
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from python_api_testing.conv.pytorch_conv_tb import TestLevel, generate_conv_tb_with_pytorch_golden, generate_conv_tb
+from tests.python_api_testing.conv.conv_utils import create_conv_act_tensor, create_conv_weight_tensor
 
 import torch
 from time import sleep
@@ -48,25 +48,15 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     mm_output_shape = [1,1,_nearest_32(OH*OW),K]
 
     A_pyt = pytorch_inputs_and_golden[0]
-    A_ = ttl.tensor.Tensor(
-        torch.flatten(A_pyt).tolist(),
-        a_activation_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR)
-    A_cl = A_.to(ttl.tensor.Layout.CHANNELS_LAST)
-    A = A_cl.to(device, ttl.tensor.MemoryConfig(False, 0))
+    A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
+    A_cl_data = A_cl_host.data()
+    A = A_cl_host.to(device, ttl.tensor.MemoryConfig(False, 0))
 
     # Prepare weights
     B_pyt = pytorch_inputs_and_golden[1]
-    B_ = ttl.tensor.Tensor(
-        torch.flatten(B_pyt).tolist(),
-        b_weights_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR
-    )
-    B_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(B_)
-    assert(B_tiled_.shape() == [1, 1, C*R*S, K])
-    B_tiled = B_tiled_.to(device)
+    B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S)
+    assert(B_tiled_host.shape() == [1, 1, _nearest_32(C)*R*S, _nearest_32(K)])
+    B_tiled = B_tiled_host.to(device)
     if(conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE):
         print("Ran test till tensor creation only. Did not run full op compute.")
         return True
@@ -79,7 +69,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     out_pytorch = torch.tensor(out.to(host).data()).reshape(mm_output_shape)
     ttl.device.CloseDevice(device)
     # remove padding
-    out_pytorch = out_pytorch[:, :, 0 : (OH * OW), :]
+    out_pytorch = out_pytorch[:, :, 0 : (OH * OW), 0 : K]
 
     # Convert matmul output layout to conv output layout
     out_tr = torch.transpose(out_pytorch, 2, 3)

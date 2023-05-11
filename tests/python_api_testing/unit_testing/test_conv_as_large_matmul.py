@@ -10,6 +10,7 @@ import numpy as np
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, convert_weights_2d_matrix
 from python_api_testing.models.utility_functions import print_diff_argmax, is_close, comp_pcc
+from tests.python_api_testing.conv.conv_unit_test_utils import create_conv_act_tensor, create_conv_weight_tensor
 import torch
 
 @pytest.mark.parametrize(
@@ -36,7 +37,8 @@ import torch
         #(16, 6, 5, 5, 1, 1, 1, 1, 0, 0),
         # simple conv
         #(32, 32, 10, 10, 3, 3, 1, 1, 0, 0),
-
+        # channels = 3 padding
+        (32, 3, 5, 5, 1, 1, 1, 1, 0, 0),
         # Hat = 1, Wat = 1, Wbt = 1
         (32, 32, 5, 5, 1, 1, 1, 1, 0, 0),
         # Hat = 2, Wat = 1, Wbt = 1
@@ -70,26 +72,14 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
     mm_output_shape = [1,1,_nearest_32(OH*OW),_nearest_32(K)]
     torch.manual_seed(0)
     A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
-    A_ = ttl.tensor.Tensor(
-        torch.flatten(A_pyt).tolist(),
-        a_activation_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR)
-    A_cl = A_.to(ttl.tensor.Layout.CHANNELS_LAST)
-    A_cl_data = A_cl.data()
-    A = A_cl.to(device, ttl.tensor.MemoryConfig(False, 0))
+    A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
+    A_cl_data = A_cl_host.data()
+    A = A_cl_host.to(device, ttl.tensor.MemoryConfig(False, 0))
 
     # Prepare weights
     B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
-    B_ = ttl.tensor.Tensor(
-        torch.flatten(B_pyt).tolist(),
-        b_weights_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR
-    )
-    B_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(B_)
-    B_tiled = B_tiled_.to(device)
-
+    B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S)
+    B_tiled = B_tiled_host.to(device)
     # Calculate conv result with golden result. Run Pytorch conv
     out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w))
 
@@ -105,14 +95,14 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
     out_pytorch_padded = torch.tensor(out.data()).reshape(mm_output_shape)
 
     #Run pytorch matmul
-    mm_input_shape = [1, 1, _nearest_32(OH*OW), _nearest_32(C*R*S)]
-    mm_weight_shape = [1, 1, _nearest_32(C*R*S), _nearest_32(K)]
+    mm_input_shape = [1, 1, _nearest_32(OH*OW), _nearest_32(C)*R*S]
+    mm_weight_shape = [1, 1, _nearest_32(C)*R*S, _nearest_32(K)]
     mm_output_shape = [1,1,_nearest_32(OH*OW),_nearest_32(K)]
     # Call DTX pass to transform A
-    A_transformed_data = ttl.dtx.evaluate(A_cl_data, ttl.dtx.conv_transform([C,H,W], [R,S,stride_h,stride_w,pad_h,pad_w], [(0,1,2),(mm_input_shape[2], mm_input_shape[3])], 1), mm_input_shape)
+    A_transformed_data = ttl.dtx.evaluate(A_cl_data, ttl.dtx.conv_transform([_nearest_32(C),H,W], [R,S,stride_h,stride_w,pad_h,pad_w], [(0,1,2),(mm_input_shape[2], mm_input_shape[3])], 1), mm_input_shape)
     A_transformed_pytorch_tensor = torch.tensor(A_transformed_data).reshape(mm_input_shape)
-    B_rm = B_tiled_.to(ttl.tensor.Layout.ROW_MAJOR)
-    assert(B_rm.shape() == [1, 1, _nearest_32(C*R*S), _nearest_32(K)])
+    B_rm = B_tiled_host.to(ttl.tensor.Layout.ROW_MAJOR)
+    assert(B_rm.shape() == [1, 1, _nearest_32(C)*R*S, _nearest_32(K)])
     B_data = B_rm.data()
     B_pytorch_tensor = torch.tensor(B_data).reshape(mm_weight_shape)
     out_mm_pytorch_padded = torch.matmul(A_transformed_pytorch_tensor, B_pytorch_tensor)
@@ -123,11 +113,12 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
     out_mm_tr = torch.transpose(out_mm_pytorch, 2, 3)
     assert(list(out_mm_tr.shape) == [1,1,K,(OH*OW)])
     out_mm_result = out_mm_tr.reshape([1,K,OH,OW])
-    # compare mm cpu with conv pytorch
+    # compare dtx + mm cpu with conv pytorch
     assert(out_mm_result.shape == out_golden.shape)
     passing_pcc, output_pcc = comp_pcc(out_golden, out_mm_result, 0.99)
     assert passing_pcc
 
+    #Compare tt conv op output with dtx + mm cpu output
     assert(out_pytorch_padded.shape == out_mm_pytorch_padded.shape)
     passing_pcc, output_pcc = comp_pcc(out_mm_pytorch_padded, out_pytorch_padded, 0.99)
     assert passing_pcc

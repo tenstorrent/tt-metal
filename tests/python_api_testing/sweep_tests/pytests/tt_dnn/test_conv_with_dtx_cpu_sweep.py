@@ -11,7 +11,7 @@ import tt_lib as ttl
 from tt_lib.utils import blocked_mm_with_conv_act, _nearest_32
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from python_api_testing.conv.pytorch_conv_tb import TestLevel, generate_conv_tb_with_pytorch_golden, generate_conv_tb
-
+from tests.python_api_testing.conv.conv_utils import create_conv_act_tensor, create_conv_weight_tensor
 import torch
 
 def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
@@ -42,21 +42,12 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     mm_output_shape = [1,1,_nearest_32(OH*OW),_nearest_32(K)]
 
     A_pyt = pytorch_inputs_and_golden[0]
-    A_ = ttl.tensor.Tensor(
-        torch.flatten(A_pyt).tolist(),
-        a_activation_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR)
-    A_cl = A_.to(ttl.tensor.Layout.CHANNELS_LAST)
+    A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
 
     # Prepare weights
     B_pyt = pytorch_inputs_and_golden[1]
-    B_ = ttl.tensor.Tensor(
-        torch.flatten(B_pyt).tolist(),
-        b_weights_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR
-    )
+    B_tiled_ = create_conv_weight_tensor(B_pyt, K, C, R, S)
+    B_tiled_data = B_tiled_.data()
     if(conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE):
         return True
     assert(conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE)
@@ -64,7 +55,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     # Call DTX pass to transform A
     matrix_activation_h_tiles = (int) (_nearest_32(OH*OW) / 32)
     matrix_weight_w_tiles = (int) (_nearest_32(K) / 32)
-    matrix_activation_w_tiles = (int) (_nearest_32(C*R*S)/32)
+    matrix_activation_w_tiles = (int) (_nearest_32(C)*R*S/32)
     # hardcode num of blocks
     num_blocks_in0_w = matrix_activation_w_tiles
     num_blocks_in0_h = matrix_activation_h_tiles
@@ -73,13 +64,11 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     in0_block_w = 1
     in1_block_w = 1
     dim_order = [0,1,2]
-    in0_block_width_datums = (int) (_nearest_32(C*R*S)/num_blocks_in0_w)
+    in0_block_width_datums = (int) (_nearest_32(C)*R*S/num_blocks_in0_w)
     in0_block_height_datums = (int) (_nearest_32(OH*OW)/num_blocks_in0_h)
     block_shape_yx = [in0_block_height_datums, in0_block_width_datums]
-    address_map = ttl.dtx.conv_transform([C,H,W], [R,S,stride_h,stride_w,pad_h,pad_w], (dim_order,block_shape_yx), 1)
+    address_map = ttl.dtx.conv_transform([_nearest_32(C),H,W], [R,S,stride_h,stride_w,pad_h,pad_w], (dim_order,block_shape_yx), 1)
 
-    B_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(B_)
-    B_tiled_data = B_tiled_.data()
     in1_block_h = in0_block_w
     in1_tile_stride_h = matrix_weight_w_tiles
     in1_block_stride_h = matrix_weight_w_tiles * in1_block_h
