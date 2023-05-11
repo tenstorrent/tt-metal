@@ -392,7 +392,7 @@ void generate_binary_for_risc(
     // default ARCH_NAME is grayskull in Makefile
     TT_ASSERT( (arch_name.compare("grayskull") == 0) || (arch_name.compare("wormhole") == 0) || (arch_name.compare("wormhole_b0") == 0) );
 
-    log_info(tt::LogBuildKernels, "Compiling RISCID={}", risc_id);
+    log_trace(tt::LogBuildKernels, "Compiling RISCID={}", risc_id);
 
     // this is in the top-level outdir because "/ncrisc" is deleted by make clean, but we log the output of make clean as well
     string log_file = fs::absolute(out_dir_path).string() + "/risc_build_" + RISCID_to_string(risc_id) + ".log";
@@ -622,7 +622,7 @@ void generate_src_for_triscs(
     // Note: Dirs (and descriptors) must be created by a prior call of generate_descriptors()
     // So, this call currently doesn't work in isolation
 
-    log_info(tt::LogBuildKernels, "Generating defines for TRISCs");
+    log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
     string hlk_file_name = topts->hlk_desc.get_hlk_file_name();
     auto hlk_defines = topts->hlk_defines;

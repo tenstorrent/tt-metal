@@ -49,7 +49,7 @@ bool dram_rdwr_check(tt_cluster *cluster, unsigned start_address, std::size_t da
                 expected_vec,
                 dram_core,
                 start_address); // write to address
-            log_info(tt::LogTest, "Done writing to chip_id={} channel={} sub_channel={} start_address={}",
+            log_debug(tt::LogTest, "Done writing to chip_id={} channel={} sub_channel={} start_address={}",
                 chip_id,
                 channel,
                 sub_channel,
@@ -69,7 +69,7 @@ bool dram_rdwr_check(tt_cluster *cluster, unsigned start_address, std::size_t da
                 sub_channel,
                 start_address);
             cluster->read_dram_vec(actual_vec, dram_core, start_address, data_size); // read size is in bytes
-            log_info(tt::LogTest, "Done reading from chip_id={} channel={} sub_channel={} start_address={}",
+            log_debug(tt::LogTest, "Done reading from chip_id={} channel={} sub_channel={} start_address={}",
                 chip_id,
                 channel,
                 sub_channel,
@@ -80,13 +80,13 @@ bool dram_rdwr_check(tt_cluster *cluster, unsigned start_address, std::size_t da
 
             all_are_equal &= are_equal;
             if (are_equal){
-                log_info(tt::LogVerif, "chip_id {} channel {} sub_channel {} has passed",
+                log_debug(tt::LogTest, "chip_id {} channel {} sub_channel {} has passed",
                     chip_id,
                     channel,
                     sub_channel);
             }
             else {
-                log_info(tt::LogVerif, "chip_id {} channel {} sub_channel {} has not passed",
+                log_error(tt::LogTest, "chip_id {} channel {} sub_channel {} has not passed",
                     chip_id,
                     channel,
                     sub_channel);
@@ -137,7 +137,7 @@ int main(int argc, char** argv)
 
         for (int chunk_num = 0; chunk_num < total_chunks; chunk_num++) {
             int start_address = chunk_size * chunk_num;
-            log_info(tt::LogTest, "Testing chunk #{}/{}", chunk_num + 1, total_chunks);
+            log_debug(tt::LogTest, "Testing chunk #{}/{}", chunk_num + 1, total_chunks);
             TT_ASSERT(dram_rdwr_check(cluster, start_address, chunk_size));
         }
 

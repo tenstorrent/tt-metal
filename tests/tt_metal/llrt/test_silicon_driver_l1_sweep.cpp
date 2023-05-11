@@ -21,25 +21,25 @@ bool l1_rdwr_check(tt_cluster *cluster, unsigned start_address, std::size_t data
     bool all_are_equal = true;
     constexpr int chip_id = 0;
     for (const tt::llrt::WorkerCore worker_core : tt::llrt::get_worker_cores_from_cluster(cluster, chip_id)) {
-        log_info(tt::LogTest, "Writing to core {}...", worker_core.str());
+        log_debug(tt::LogTest, "Writing to core {}...", worker_core.str());
         cluster->write_dram_vec(expected_vec, worker_core, start_address); // write to address
-        log_info(tt::LogTest, "Wrote to core {}.", worker_core.str());
+        log_debug(tt::LogTest, "Wrote to core {}.", worker_core.str());
     }
 
     for (const tt::llrt::WorkerCore worker_core : tt::llrt::get_worker_cores_from_cluster(cluster, chip_id)) {
         cluster->read_dram_vec(actual_vec, worker_core, start_address, data_size); // read size is in bytes
-        log_info(tt::LogTest, "expected vec size = {}", expected_vec.size());
-        log_info(tt::LogTest, "actual vec size   = {}", actual_vec.size());
+        log_debug(tt::LogTest, "expected vec size = {}", expected_vec.size());
+        log_debug(tt::LogTest, "actual vec size   = {}", actual_vec.size());
         bool are_equal = actual_vec == expected_vec;
 
         all_are_equal &= are_equal;
         if (are_equal){
-            log_info(tt::LogTest, "Core {} has passed", worker_core.str());
+            log_debug(tt::LogTest, "Core {} has passed", worker_core.str());
         }
         else {
             for (int i = 0; i < vec_size; i++) {
                 if (actual_vec[i] != expected_vec[i]) {
-                    log_info(tt::LogTest, "Mismatch expected_vec[{}]={} != actual_vec[{}]={}",
+                    log_error(tt::LogTest, "Mismatch expected_vec[{}]={} != actual_vec[{}]={}",
                     i, expected_vec[i],
                     i, actual_vec[i]);
                 }
