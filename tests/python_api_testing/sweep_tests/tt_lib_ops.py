@@ -1149,6 +1149,7 @@ def reshape(x, pcie_slot, *args, **kwargs):
 ################################################
 def datacopy(x, pcie_slot, *args, **kwargs):
     ttl_tensor_dtype = kwargs.get("dtype", ttl.tensor.DataType.BFLOAT16)
+    ttl_tensor_memory_config = kwargs.get("memory_config", ttl.tensor.MemoryConfig())
 
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
@@ -1163,7 +1164,7 @@ def datacopy(x, pcie_slot, *args, **kwargs):
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)
-            .to(device)
+            .to(device, ttl_tensor_memory_config)
         )
 
         output = torch.Tensor(
@@ -1220,7 +1221,6 @@ def unpad(x, pcie_slot, *args, **kwargs):
 
 
 def pad_to_tile(x, pcie_slot, *args, **kwargs):
-
     assert "pad_value" in kwargs
 
     pad_value = kwargs["pad_value"]

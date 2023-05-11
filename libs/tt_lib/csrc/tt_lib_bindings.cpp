@@ -79,6 +79,10 @@ void TensorModule(py::module &m_tensor) {
         .value("UINT32", DataType::UINT32)
         .value("BFLOAT8_B", DataType::BFLOAT8_B);
 
+    py::enum_<BufferType>(m_tensor, "BufferType")
+        .value("DRAM", BufferType::DRAM)
+        .value("L1", BufferType::L1);
+
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
         There are eight DRAM memory banks on TT Accelerator device, indexed as 0, 1, 2, ..., 7.
@@ -87,12 +91,13 @@ void TensorModule(py::module &m_tensor) {
     pyMemoryConfig
         .def(
             py::init<>(
-                [](bool interleaved, int dram_channel) {
-                    return MemoryConfig{.interleaved=interleaved, dram_channel=dram_channel};
+                [](bool interleaved, int bank_id, BufferType buffer_type) {
+                    return MemoryConfig{.interleaved=interleaved, bank_id=bank_id, buffer_type=buffer_type};
                 }
             ),
             py::arg("interleaved") = true,
-            py::arg("dram_channel") = -1, R"doc(
+            py::arg("bank_id") = -1,
+            py::arg("buffer_type") = BufferType::DRAM, R"doc(
                 Create MemoryConfig class.
                 If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
                 Otherwise, tensor data will be stored in a DRAM bank selected by dram_channel (valid values are 0, 1, ..., 7).
@@ -105,7 +110,8 @@ void TensorModule(py::module &m_tensor) {
             )doc"
         )
         .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
-        .def_readonly("dram_channel", &MemoryConfig::dram_channel, "DRAM channel holding tensor data. Only used when tensor is not interleaved");
+        .def_readonly("bank_id", &MemoryConfig::bank_id, "DRAM channel holding tensor data. Only used when tensor is not interleaved")
+        .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1");
 
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
     // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
@@ -668,6 +674,16 @@ void TensorModule(py::module &m_tensor) {
             .. code-block:: python
 
                 layout = tt_tensor.layout()
+
+        )doc")
+        .def("buffer_type", [](const Tensor &self) {
+            return self.buffer_type();
+        }, R"doc(
+            Get buffer type of TT Tensor.
+
+            .. code-block:: python
+
+                buffer_type = tt_tensor.buffer_type()
 
         )doc");
 

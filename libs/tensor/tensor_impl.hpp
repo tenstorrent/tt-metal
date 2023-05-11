@@ -327,7 +327,7 @@ inline std::vector<T> initialize_row_major_tensor_data(const std::array<uint32_t
 
 std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape);
 
-void allocate_dram_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
+void allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================

@@ -21,7 +21,18 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
 @pytest.mark.parametrize(
     "dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B)
 )
-def test_run_datacopy_test(input_shapes, pcie_slot, dtype, function_level_defaults):
+@pytest.mark.parametrize(
+    "memory_config",
+    (
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(False, 1, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(False, 1, ttl.tensor.BufferType.L1),
+    ),
+)
+def test_run_datacopy_test(
+    input_shapes, pcie_slot, dtype, memory_config, function_level_defaults
+):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
@@ -39,5 +50,5 @@ def test_run_datacopy_test(input_shapes, pcie_slot, dtype, function_level_defaul
         datagen_func,
         comparison_func,
         pcie_slot,
-        {"dtype": dtype},
+        {"dtype": dtype, "memory_config": memory_config},
     )

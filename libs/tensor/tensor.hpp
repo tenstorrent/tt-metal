@@ -40,7 +40,8 @@ enum class DataType {
 
 struct MemoryConfig {
     bool interleaved = true;    // Interleave the data across multiple DRAM banks
-    int dram_channel = -1;      // If interleaved is false this has to be specified
+    int bank_id = -1;           // If interleaved is false this has to be specified
+    BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
 };
 
 // Forward declarations
@@ -49,7 +50,7 @@ class Tensor;
 namespace tensor_impl {
     void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
-    void allocate_dram_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
+    void allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
     template <typename T>
     void write_data(Tensor &tensor, std::vector<T> &data);
@@ -145,6 +146,8 @@ class Tensor {
 
         bool interleaved() const;
 
+        BufferType buffer_type() const { return mem_config_.buffer_type; };
+
         // Size in bytes of a single element held in tensor
         uint32_t element_size() const;
 
@@ -157,7 +160,7 @@ class Tensor {
 
         friend void tensor_impl::allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
-        friend void tensor_impl::allocate_dram_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
+        friend void tensor_impl::allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
         template <typename T>
         friend void tensor_impl::write_data(Tensor &tensor, std::vector<T> &data);
