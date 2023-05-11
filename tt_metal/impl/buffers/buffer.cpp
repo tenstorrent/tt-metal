@@ -10,14 +10,59 @@ namespace tt_metal {
 Buffer::Buffer(Device *device, uint32_t size, uint32_t address, uint32_t starting_bank_id, uint32_t page_size, const BufferType buffer_type)
     : device_(device), size_(size), address_(address), starting_bank_id_(starting_bank_id), page_size_(page_size), buffer_type_(buffer_type) {
     this->bank_id_to_relative_address_ = this->device_->allocator_->allocate_buffer(starting_bank_id, size, page_size, address, buffer_type);
+    TT_ASSERT(this->bank_id_to_relative_address_.find(this->starting_bank_id_) != this->bank_id_to_relative_address_.end());
 }
 
 Buffer::Buffer(Device *device, uint32_t size, uint32_t starting_bank_id, uint32_t page_size, const BufferType buffer_type)
     : device_(device), size_(size), address_(std::numeric_limits<uint32_t>::max()), starting_bank_id_(starting_bank_id), page_size_(page_size), buffer_type_(buffer_type) {
-    this->bank_id_to_relative_address_ = this->device_->allocator_->allocate_buffer(starting_bank_id, size, page_size, buffer_type);
-    TT_ASSERT(this->bank_id_to_relative_address_.find(starting_bank_id) != this->bank_id_to_relative_address_.end());
-    this->address_ = this->bank_id_to_relative_address_.at(starting_bank_id).absolute_address();
+    this->allocate();
     TT_ASSERT(this->address_ != std::numeric_limits<uint32_t>::max());
+}
+
+Buffer::Buffer(const Buffer &other)
+    : device_(other.device_), size_(other.size_), address_(std::numeric_limits<uint32_t>::max()), starting_bank_id_(other.starting_bank_id_), page_size_(other.page_size_), buffer_type_(other.buffer_type_) {
+    this->allocate();
+    TT_ASSERT(this->address_ != std::numeric_limits<uint32_t>::max());
+}
+
+Buffer &Buffer::operator=(const Buffer &other) {
+    if (this != &other) {
+        this->device_ = other.device_;
+        this->size_ = other.size_;
+        this->starting_bank_id_ = other.starting_bank_id_;
+        this->page_size_ = other.page_size_;
+        this->buffer_type_ = other.buffer_type_;
+        this->allocate();
+    }
+    return *this;
+}
+
+Buffer::Buffer(Buffer &&other)
+    : device_(other.device_), size_(other.size_), address_(other.address_), starting_bank_id_(other.starting_bank_id_), page_size_(other.page_size_), buffer_type_(other.buffer_type_), bank_id_to_relative_address_(other.bank_id_to_relative_address_) {
+    other.bank_id_to_relative_address_.clear();
+    other.device_ = nullptr;
+}
+
+Buffer &Buffer::operator=(Buffer &&other) {
+    if (this != &other) {
+        this->device_ = other.device_;
+        this->size_ = other.size_;
+        this->address_ = other.address_;
+        this->starting_bank_id_ = other.starting_bank_id_;
+        this->page_size_ = other.page_size_;
+        this->buffer_type_ = other.buffer_type_;
+        this->bank_id_to_relative_address_ = other.bank_id_to_relative_address_;
+        other.bank_id_to_relative_address_.clear();
+        other.device_ = nullptr;
+    }
+    return *this;
+}
+
+void Buffer::allocate() {
+    TT_ASSERT(this->device_ != nullptr);
+    this->bank_id_to_relative_address_ = this->device_->allocator_->allocate_buffer(this->starting_bank_id_, this->size_, this->page_size_, this->buffer_type_);
+    TT_ASSERT(this->bank_id_to_relative_address_.find(this->starting_bank_id_) != this->bank_id_to_relative_address_.end());
+    this->address_ = this->bank_id_to_relative_address_.at(this->starting_bank_id_).absolute_address();
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {

@@ -24,6 +24,12 @@ class Buffer {
 
     Buffer(Device *device, uint32_t size, uint32_t starting_bank_id, uint32_t page_size, const BufferType buffer_type);
 
+    Buffer(const Buffer &other);
+    Buffer& operator=(const Buffer &other);
+
+    Buffer(Buffer &&other);
+    Buffer& operator=(Buffer &&other);
+
     ~Buffer();
 
     Device *device() const { return device_; }
@@ -51,6 +57,8 @@ class Buffer {
     uint32_t page_address(uint32_t bank_id, uint32_t page_index) const;
 
    private:
+    void allocate();
+
     void deallocate();
     friend void DeallocateBuffer(Buffer &buffer);
 
