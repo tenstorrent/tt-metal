@@ -9,6 +9,7 @@ import numpy as np
 import os
 import yaml
 import torch
+from loguru import logger
 from libs import tt_lib as ttl
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -47,10 +48,10 @@ def run_large_matmul(Ha, Wa, Wb):
     out_pytorch = torch.tensor(out.to(host).data()).reshape(out_shape)
     ttl.device.CloseDevice(device)
     golden_pytorch = torch.matmul(a,b)
-    assert(out_pytorch.shape == golden_pytorch.shape)
+    assert(out_pytorch.shape == golden_pytorch.shape), f"Shape mismatch: actual: {out_pytorch.shape}, expected: {golden_pytorch.shape}"
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch, 0.99)
-    print("Passing=", passing_pcc)
-    print("Output pcc=", output_pcc)
+    logger.debug("Passing=", passing_pcc)
+    logger.debug("Output pcc=", output_pcc)
     assert passing_pcc
 
 
@@ -61,8 +62,8 @@ def test_run_sweep_large_matmul_test():
     with open(os.path.join(os.environ['TT_METAL_HOME'], 'tests/python_api_testing/conv/generated_mm_tb.yaml'), 'r') as file:
         mm_tb = yaml.safe_load(file)
     for [Ha,Wa,Wb] in mm_tb[0]["MM test params [M,K,N]"]:
-        print("Testing MM with - ")
-        print("   Act shape - " + str(Ha) + "," + str(Wa))
-        print("   Weight shape - " + str(Wa) + "," + str(Wb))
+        logger.debug("Testing MM with - ")
+        logger.debug("   Act shape - " + str(Ha) + "," + str(Wa))
+        logger.debug("   Weight shape - " + str(Wa) + "," + str(Wb))
         run_large_matmul(Ha, Wa, Wb)
-    print("All " + str(len(mm_tb[0]["MM test params [M,K,N]"])) + " tests passed!")
+    logger.info("All " + str(len(mm_tb[0]["MM test params [M,K,N]"])) + " tests passed!")

@@ -316,7 +316,7 @@ Tensor large_bmm(const Tensor& a, const Tensor& b, bool tilize_act, bool untiliz
     //     bmm_op_utils::get_parallelization_strategy(a, b) == BmmOpParallelizationStrategy::SINGLE_CORE,
     //     "Only single core large_bmm supported so far");
     if (bmm_op_utils::get_parallelization_strategy(a, b) != BmmOpParallelizationStrategy::SINGLE_CORE) {
-        std::cout << "WARNING: Only single core mode supported for large_bmm. Falling back to single core." << std::endl;
+        log_warning("WARNING: Only single core mode supported for large_bmm. Falling back to single core.");
     }
     return large_bmm_single_core(a, b, tilize_act, untilize_out);
 }

@@ -245,7 +245,6 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program* program, tt_metal::Device
 // TODO(whoever gets a chance!): Refactor this so it's a part of matmul_single_core_... keeping it
 // independent for now as it's easier for me to progress
 Tensor large_bmm_single_core_single_block_(const Tensor& a, const Tensor &b, bool tilize_a, bool untilize_out) {
-    std::cout << "In single core single block " << std::endl;
     const auto [Ba, Ca, Ha, Wa] = a.shape();
     const auto [Bb, Cb, Hb, Wb] = b.shape();
 

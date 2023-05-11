@@ -558,8 +558,8 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_block_info(uint32_t M, uint32_t
     uint32_t max_in1_bytes = 50 * 1024;
     uint32_t max_in0_tiles = max_in0_bytes / single_tile_size_bytes;
     uint32_t max_in1_tiles = max_in1_bytes / single_tile_size_bytes;
-    std::cout << "max_in0_block_tiles=" << max_in0_tiles << std::endl;
-    std::cout << "max_in1_block_tiles=" << max_in1_tiles << std::endl;
+    tt::log_debug("max_in0_block_tiles={}", max_in0_tiles);
+    tt::log_debug("max_in1_block_tiles={}", max_in1_tiles);
     uint32_t num_blocks = 1;
     uint32_t in_block_w = K;
     assert(M <= max_in0_tiles && N <= max_in1_tiles);
@@ -569,13 +569,13 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_block_info(uint32_t M, uint32_t
         assert(num_blocks <= K);
         in_block_w = K / num_blocks;
     }
-    std::cout << "Num blocks=" << num_blocks << std::endl;
-    std::cout << "K block size=" << in_block_w << std::endl;
+    tt::log_debug("Num blocks={}", num_blocks);
+    tt::log_debug("K block size={}", in_block_w);
 
     // Constraint 2: output should fit in L1
     uint32_t max_out_bytes = 120 * 1024;
     uint32_t max_out_tiles = max_out_bytes / single_tile_size_bytes;
-    std::cout << "max_out_block_tiles=" << max_out_tiles << std::endl;
+    tt::log_debug("max_out_block_tiles={}", max_out_tiles);
     assert (M*N <= max_out_tiles);
 
     // Constraint 3: output should should fit in half DST (8 tiles). If not, divide into output sublocks
@@ -606,8 +606,8 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_block_info(uint32_t M, uint32_t
             divide_h_next = true;
         }
     }
-    std::cout << "out_subblock_h=" << out_subblock_h << std::endl;
-    std::cout << "out_subblock_w=" << out_subblock_w << std::endl;
+    log_debug("out_subblock_h={}", out_subblock_h);
+    log_debug("out_subblock_w={}", out_subblock_w);
     return std::make_tuple(num_blocks, out_subblock_h, out_subblock_w);
 }
 
@@ -663,9 +663,9 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_act,
         uint32_t Hat = Ha / TILE_HEIGHT;
         uint32_t Wat = Wa / TILE_WIDTH;
         uint32_t Wbt = Wb / TILE_WIDTH;
-        std::cout << "Hat (M in tiles)=" << Hat << std::endl;
-        std::cout << "Wat (K in tiles)=" << Wat << std::endl;
-        std::cout << "Wbt (N in tiles)=" << Wbt << std::endl;
+        log_debug("Hat (M in tiles)={}", Hat);
+        log_debug("Wat (K in tiles)={}", Wat);
+        log_debug("Wbt (N in tiles)={}", Wbt);
 
         // out
         uint32_t out_row_size = Wb * 2;
@@ -704,9 +704,11 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_act,
         uint32_t in1_block_w = out_subblock_w * in1_num_subblocks;
         uint32_t in1_block_h = in0_block_w;
 
-        // For debug, uncomment this
+        // For debug, change these log_debug and uncomment this
 
-/*         std::cout << "in0 information" << std::endl;
+/*      rk: Intentional syntax error - people who want this should take the time
+        to change this logging to log_debug (preferably debug)
+        std::cout << "in0 information" << std::endl;
         std::cout << "\t in0_dram_addr: " << in0_dram_addr << std::endl;
         std::cout << "\t in0_row_size: " << in0_row_size << std::endl;
         std::cout << "\t in0_block_w: " << in0_block_w << std::endl;
