@@ -17,8 +17,6 @@ from python_api_testing.models.bert.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import comp_pcc, comp_allclose
 
-device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-
 class TtBertEncoder(torch.nn.Module):
     def __init__(self, config, encoder_idx, state_dict, device):
         super().__init__()
@@ -71,7 +69,7 @@ class PytorchBertEncoder(torch.nn.Module):
 
 def run_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
 
-    #device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
