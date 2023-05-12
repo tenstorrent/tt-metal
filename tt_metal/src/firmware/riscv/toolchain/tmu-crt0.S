@@ -7,37 +7,8 @@ _start:
 # produce an empty word at a known location
   j 1f
 .balign 4, 0 # in case j is 2-byte compressed insn
-TEST_MAILBOX:
-.global TEST_MAILBOX
-.word 0
-
-# Small mailbox to allow for logging from firmware
-FWLOG_MAILBOX:
-.global FWLOG_MAILBOX
-.word 0
-.word 0
-.word 0
-.word 0
-.word 0
-FWEVENT_MAILBOX:
-.global FWEVENT_MAILBOX
-.word 0
-
-FW_TEST_RESULT:
-.global FW_TEST_RESULT
-.space 64
-
-WALL_CLOCK_MAILBOX:
-.global WALL_CLOCK_MAILBOX
-.space 16 # 64-bit start, 64-bit end. AICLK cycles
-
-DEBUG_MAILBOX:
-.global DEBUG_MAILBOX
-.space 256
-
-CQ_MAILBOX:
-.global CQ_MAILBOX
-.space 4
+PLACEHOLDER_REMOVE_ME:
+.space 372
 
 # STOP. Do not add new fields here. Put them immediately before CRT_START.
 

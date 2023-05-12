@@ -21,7 +21,7 @@ constexpr static uint32_t ENABLE_CORE_DONE_VALUE = 0;
 constexpr static int DONE_VALUE = 1;
 
 constexpr static uint32_t TRISC_BASE = l1_mem::address_map::TRISC_BASE;
-constexpr static uint32_t TRISC_L1_MAILBOX_OFFSET = l1_mem::address_map::TRISC_L1_MAILBOX_OFFSET;
+constexpr static uint32_t TRISC_L1_MAILBOX_OFFSET = TEST_MAILBOX_ADDRESS;
 
 constexpr static uint32_t trisc_sizes[3] = {
     l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE};

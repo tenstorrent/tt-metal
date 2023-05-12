@@ -7,6 +7,7 @@
 #include <string>
 
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+#include "dev_mem_map.h"
 #include "l1_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 
@@ -45,7 +46,7 @@ struct CompileDefines {
 struct TriscParams {
     // TODO: commonize this with runtime_common.hpp?
     uint32_t TRISC_BASE { l1_mem::address_map::TRISC_BASE };
-    uint32_t TRISC_L1_MAILBOX_OFFSET { l1_mem::address_map::TRISC_L1_MAILBOX_OFFSET };
+    uint32_t TRISC_L1_MAILBOX_OFFSET { TEST_MAILBOX_ADDRESS };
     uint32_t trisc_sizes[3] = { l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE };
     uint32_t trisc_mailbox_addresses[3] = {
         TRISC_BASE + TRISC_L1_MAILBOX_OFFSET,

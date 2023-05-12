@@ -17,7 +17,7 @@
 // TODO: commonize this w/ the runtime -- it's the same configs
 // these consts must be constexprs
 constexpr uint32_t TRISC_BASE = l1_mem::address_map::TRISC_BASE;
-constexpr uint32_t TRISC_L1_MAILBOX_OFFSET = l1_mem::address_map::TRISC_L1_MAILBOX_OFFSET;
+constexpr uint32_t TRISC_L1_MAILBOX_OFFSET = TEST_MAILBOX_ADDRESS;
 
 constexpr uint32_t trisc_sizes[3] = {
     l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE};
@@ -144,7 +144,7 @@ void set_trisc_address() {
     volatile uint32_t* cfg_regs = core.cfg_regs_base(0);
 
     // cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = l1_mem::address_map::NCRISC_FIRMWARE_BASE;
-    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = l1_mem::address_map::NCRISC_IRAM_MEM_BASE;  // NCRISC IRAM
+    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = NCRISC_IRAM_MEM_BASE;  // NCRISC IRAM
     cfg_regs[TRISC_RESET_PC_SEC0_PC_ADDR32] = l1_mem::address_map::TRISC_BASE;
     cfg_regs[TRISC_RESET_PC_SEC1_PC_ADDR32] = l1_mem::address_map::TRISC_BASE + l1_mem::address_map::TRISC0_SIZE;
     cfg_regs[TRISC_RESET_PC_SEC2_PC_ADDR32] =
@@ -282,7 +282,7 @@ inline void notify_host_kernel_finished() {
 
 void local_mem_copy() {
     volatile uint* l1_local_mem_start_addr;
-    volatile uint* local_mem_start_addr = (volatile uint*)LOCAL_MEM_BASE_ADDR;
+    volatile uint* local_mem_start_addr = (volatile uint*)LOCAL_MEM_BASE;
 
     // Removed gating conditional here since getting maybe-unitialized error under
     // 'DEBUG_MODE=1' compilation. It should have been an assert anyway.
@@ -340,7 +340,7 @@ int main() {
         deassert_trisc_reset();
     }
 
-    if ((uint)l1_mem::address_map::RISC_LOCAL_MEM_BASE == ((uint)__local_mem_rodata_end_addr & 0xfff00000)) {
+    if ((uint)LOCAL_MEM_BASE == ((uint)__local_mem_rodata_end_addr & 0xfff00000)) {
         local_mem_copy();
     }
 

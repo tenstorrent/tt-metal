@@ -48,15 +48,6 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SPACE_BASE = OVERLAY_BLOB_BASE + OVERLAY_BLOB_SIZE + EPOCH_RUNTIME_CONFIG_SIZE + TILE_HEADER_BUF_SIZE;
   static constexpr std::int32_t BRISC_LOCAL_MEM_BASE = DATA_BUFFER_SPACE_BASE; // Only used during init.
 
-  // Trisc Mailboxes
-  static constexpr std::int32_t TRISC_L1_MAILBOX_OFFSET = 4;
-  static constexpr std::int32_t BRISC_L1_MAILBOX_OFFSET = 4;
-  static constexpr std::int32_t NRISC_L1_MAILBOX_OFFSET = 4;
-  static constexpr std::int32_t WALL_CLOCK_MAILBOX_BASE = 96;
-  static constexpr std::int32_t DEBUG_MAILBOX_BUF_BASE  = 112;
-
-  static constexpr std::int32_t DEBUG_MAILBOX_BUF_SIZE  = 64; // For each T0/T1/T2/FW
-
   // Upper 2KB of local space is used as debug buffer
   static constexpr std::int32_t DEBUG_BUFFER_SIZE  = 2 * 1024;
   static constexpr std::int32_t TRISC0_DEBUG_BUFFER_BASE  = TRISC0_LOCAL_MEM_BASE + DEBUG_BUFFER_SIZE;
@@ -65,13 +56,6 @@ struct address_map {
 
   static constexpr std::int32_t MAX_SIZE = 1464 * 1024; // 1464 KB
   static constexpr std::int32_t MAX_L1_LOADING_SIZE = MAX_SIZE;
-
-  static constexpr std::int32_t RISC_LOCAL_MEM_BASE = 0xffb00000; // Actaul local memory address as seen from risc firmware
-                                                                   // As part of the init risc firmware will copy local memory data from
-                                                                   // l1 locations listed above into internal local memory that starts
-                                                                   // at RISC_LOCAL_MEM_BASE address
-
-  static constexpr std::int32_t NCRISC_IRAM_MEM_BASE = 0xffc00000; // NCRISC instruction RAM base address
 
   // Perf buffer (FIXME - update once location of the perf data buffer is finalized)
   static constexpr std::int32_t PERF_BUF_SIZE = FIRMWARE_SIZE - BRISC_FIRMWARE_SIZE - ZEROS_SIZE;

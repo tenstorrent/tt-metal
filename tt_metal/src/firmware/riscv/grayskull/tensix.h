@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <tensix_types.h>
 #include "cfg_defines.h"
+#include "dev_mem_map.h"
 
 // Convenience and type defines
 typedef std::uint32_t uint;
@@ -14,14 +15,6 @@ typedef std::uint8_t byte;
 #define MAX_THREADS 3 // max number of threads supported by single core
 
 #define MAX_PACKERS 4 // number of packers in the design
-
-#define TEST_MAILBOX_ADDRESS      ( 4 )
-#define ENABLE_CORE_MAILBOX      ( 32 )
-#define WALL_CLOCK_MAILBOX_ADDRESS 96
-#define DEBUG_MAILBOX_ADDRESS 112
-#define DEBUG_MAILBOX_SIZE 64
-#define CQ_MAILBOX_ADDRESS 368 // byte address
-#define CQ_MAILBOX_SIZE 4 // byte size
 
 // TODO: use this in firmware.cc
 #define MEMORY_WORD_SIZE_IN_BYTES ( 16 )
@@ -41,11 +34,6 @@ typedef std::uint8_t byte;
 // RISC-V Address map definition (hardware)
 
 // TODO: Consider redefining these as uint32_t rather then #defines
-
-#define L0_BASE             0xFFC00000  // 0xFFC00000 - 0xFFDFFFFF
-#define L1_BASE             0x0         // 0x00000000 - 0xFFBFFFFF
-
-#define LOCAL_MEM_SIZE      4096
 
 // Reads and writes here access the tensix core register set. Each register is four bytes, but subword reads are supported through byte enables.
 // Register indices and contents are defined in local_regs.yaml.
@@ -80,8 +68,6 @@ typedef std::uint8_t byte;
 #define L1_KERNEL_BASE      0x1F000      // This is a 128-bit address
 const static uint32_t L1_MATH_KERNEL_BASE = 0x1E000;      // This is a 128-bit address
 #define L1_L0_DUMP          0x1D000      // This is a 128-bit address
-
-#define LOCAL_MEM_BASE_ADDR             0xFFB00000
 
 // TDMA register base
 #define RISCV_TDMA_REGS_START_ADDR      0xFFB11000
