@@ -8,6 +8,7 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
+from conftest import model_location_generator_
 import time
 from libs import tt_lib as ttl
 from python_api_testing.models.bert.embeddings import PytorchEmbeddings
@@ -78,17 +79,6 @@ class TtBertForQuestionAnswering(torch.nn.Module):
         profiler.end("_qa_linear")
 
         return hidden_states
-
-
-def model_location_generator_(rel_path):
-    internal_weka_path = Path("/mnt/MLPerf")
-    has_internal_weka = (internal_weka_path / "bit_error_tests").exists()
-
-    if has_internal_weka:
-        return Path("/mnt/MLPerf") / rel_path
-    else:
-        return Path("/opt/tt-metal-models") / rel_path
-
 
 def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
 

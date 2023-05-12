@@ -9,10 +9,14 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
+from conftest import model_location_generator_
 from libs import tt_lib as ttl
 from python_api_testing.models.bert_large_perf.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert_large_perf.ffn import TtFeedForwardModel
 from python_api_testing.models.bert_large_perf.fused_ops.add_and_norm import AddAndNorm
+from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
 from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import comp_pcc, comp_allclose, profiler
@@ -22,14 +26,18 @@ class TtBertEncoder(torch.nn.Module):
     def __init__(self, config, encoder_idx, state_dict, var_scaler, device):
         super().__init__()
         hidden_dim = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"]).shape[-1]
+        self.device = device
 
         # MHA part
         self.mha = TtMultiHeadAttentionModel(config, encoder_idx, state_dict, device)
-        attention_output_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.dense.weight"])
-        attention_output_weight = ttl.tensor.Tensor(attention_output_weight.reshape(-1).tolist(), attention_output_weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
-        attention_output_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.dense.bias"])
-        attention_output_bias = ttl.tensor.Tensor(attention_output_bias.reshape(-1).tolist(), attention_output_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
-        self.attention_output = Linear(hidden_dim, hidden_dim, attention_output_weight, attention_output_bias, device)
+
+        self.attention_output_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.dense.weight"])
+        self.attention_output_weight = ttl.tensor.Tensor(self.attention_output_weight.reshape(-1).tolist(), self.attention_output_weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
+        self.attention_output_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.dense.bias"])
+        self.attention_output_bias = ttl.tensor.Tensor(self.attention_output_bias.reshape(-1).tolist(), self.attention_output_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
+
+        # Weights pre-transposed on host​. No on-the fly transpose of W.
+        self.attention_output_weight = ttl.tensor.transpose(self.attention_output_weight)
 
         # MHA layernorm part
         gamma0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.weight"]
@@ -52,38 +60,40 @@ class TtBertEncoder(torch.nn.Module):
         ffn_beta = ttl.tensor.Tensor(ffn_beta.reshape(-1).tolist(), ffn_beta.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
         self.ffn_add_and_norm = AddAndNorm(ffn_gamma, ffn_beta, config.layer_norm_eps, var_scaler, config.hidden_size, config.hidden_size, device)
 
+    def op11_mm_plus_bias(self, mha_res, attention_output_weight, attention_output_bias):
+        # profiler.start("__op11_mm_plus_bias")
+        output = ttl.tensor.matmul(mha_res, attention_output_weight)
+        mha_out = ttl.tensor.bcast(output, attention_output_bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+        # profiler.end("__op11_mm_plus_bias")
+
+        return mha_out
+
+    def op12_add_layernorm(self, activation, mha_out):
+        # profiler.start("__op12_add_layernorm")
+        mha_out_add_and_norm = self.mha_add_and_norm(activation, mha_out)
+        # profiler.end("__op12_add_layernorm")
+
+        return mha_out_add_and_norm
+
+    def op15_add_layernorm(self, mha_out_add_and_norm, ffn_out):
+        # profiler.start("__op15_add_layernorm")
+        ffn_out_add_and_norm = self.ffn_add_and_norm(mha_out_add_and_norm, ffn_out)
+        # profiler.end("__op15_add_layernorm")
+
+        return ffn_out_add_and_norm
+
     def forward(self, activation, attention_mask=None):
 
         # MHA - OP1 - OP10 ------------------------------->
-        #profiler.start("__mha")
         mha_res = self.mha(activation, attention_mask)
-        #profiler.end("__mha")
-        # MHA - OP1 - OP10 <-------------------------------
 
-        # attention_output - OP11 ------------------------>
-        #profiler.start("__attention_output")
-        mha_out = self.attention_output(mha_res)
-        #profiler.end("__attention_output")
-        # attention_output - OP11 <------------------------
-
-        # Add + LayerNorm - OP12 ------------------------>
-        #profiler.start("__mha_add_and_norm")
-        mha_out_add_and_norm = self.mha_add_and_norm(activation, mha_out)
-        #profiler.end("__mha_add_and_norm")
-        # Add + LayerNorm - OP12 <------------------------
+        mha_out = self.op11_mm_plus_bias(mha_res, self.attention_output_weight, self.attention_output_bias)
+        mha_out_add_and_norm = self.op12_add_layernorm(activation, mha_out)
 
         # FFN - OP13 - OP14 ----------------------------->
-        #profiler.start("__ffn")
         ffn_out = self.ffn(mha_out_add_and_norm)
-        #profiler.end("__ffn")
-        # FFN - OP13 - OP14 <-----------------------------
 
-        # Add + LayerNorm - OP15 ------------------------>
-        #profiler.start("__ffn_out_add_and_norm")
-        ffn_out_add_and_norm = self.ffn_add_and_norm(mha_out_add_and_norm, ffn_out)
-        #profiler.end("__ffn_out_add_and_norm")
-        # Add + LayerNorm - OP15 <------------------------
-
+        ffn_out_add_and_norm = self.op15_add_layernorm(mha_out_add_and_norm, ffn_out)
         return ffn_out_add_and_norm
 
 
@@ -112,7 +122,7 @@ def run_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc, mode
     config = hugging_face_reference_model.config
     var_scaler = create_var_scaler(seq_len, config.hidden_size, config.layer_norm_eps, device)
 
-    tt_bert_encoder_model = TtBertEncoder(hugging_face_reference_model.config, 0, hugging_face_reference_model.state_dict(), device)
+    tt_bert_encoder_model = TtBertEncoder(hugging_face_reference_model.config, 0, hugging_face_reference_model.state_dict(), var_scaler, device)
     pytorch_bert_model = PytorchBertEncoder(hugging_face_reference_model)
 
     # Prepare input
@@ -128,16 +138,17 @@ def run_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc, mode
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input).to(host)
     tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(tt_out.shape())
 
-    ttl.device.CloseDevice(device)
+    # ttl.device.CloseDevice(device)
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
+
     _, output = comp_allclose(pytorch_out, tt_out, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
     logger.info(f"Output {output}")
+
     if not passing:
         logger.error(f"Output PCC < {pcc}")
 
-    # assert np.allclose(pytorch_out.detach().numpy(), tt_out.numpy(), 1e-5, 0.17)
 
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka,  pcc",
@@ -148,5 +159,8 @@ def run_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc, mode
     ),
 )
 def test_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
-
     run_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator)
+
+
+if __name__ == "__main__":
+    run_bert_encoder_inference("phiyodr/bert-large-finetuned-squad2", 1, 384, True, 0.99, model_location_generator_)

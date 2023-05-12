@@ -6,39 +6,55 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
 
 import torch
 from transformers import BertForQuestionAnswering
-
+from conftest import model_location_generator_
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear as TtLinear
 from utility_functions import comp_pcc, comp_allclose
+
 
 def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):
 
-    # FF1 init
-    ff1 = TtLinear(
-        hidden_dim, ffn_dim, ff1_weighta, ff1_biasa, device
-    )
+    # Weights pre-transposed on host​. No on-the fly transpose of W.
+    ff1_weighta = ttl.tensor.transpose(ff1_weighta)
+    ff2_weighta = ttl.tensor.transpose(ff2_weighta)
 
-    ff1_out_activation_fn = ttl.tensor.gelu
+    # activation = [1, 9, 384, 1024]
+    # ff1_weighta = [1, 1, 1024, 4096]
+    # output = [1, 9, 384, 4096]
+    def op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
+        # profiler.start("___op13_MM_bias_gelu")
+        output = ttl.tensor.matmul(activation, ff1_weighta)
+        output_plus_bias = ttl.tensor.bcast(output, ff1_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+        output_plus_bias_act = ttl.tensor.gelu(output_plus_bias)
+        # profiler.end("___op13_MM_bias_gelu")
 
-    # FF2 init
-    ff2 = TtLinear(
-        ffn_dim, hidden_dim, ff2_weighta, ff2_biasa, device
-    )
+        return output_plus_bias_act
+
+    # activation = [1, 9, 384, 4096]
+    # ff2_weighta = [1, 1, 4096, 1024]
+    # output = [1, 9, 384, 1024]
+    def op14_MM_bias(activation, ff2_weighta, ff2_biasa):
+        # profiler.start("___op14_MM_bias")
+        output = ttl.tensor.matmul(activation, ff2_weighta)
+        output_plus_bias = ttl.tensor.bcast(output, ff2_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+        # profiler.end("___op14_MM_bias")
+
+        return output_plus_bias
 
     def feed_forward_(activation):
-        # ff1
-        ff1_output_plus_bias = ff1(activation)
-        ff1_output_plus_bias_act = ff1_out_activation_fn(ff1_output_plus_bias)
+        # profiler.start("__ffn")
+        ff1_output_plus_bias_act = op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa)
+        ff2_output_plus_bias = op14_MM_bias(ff1_output_plus_bias_act, ff2_weighta, ff2_biasa)
+        # profiler.end("__ffn")
 
-        # ff2
-        ff2_output_plus_bias = ff2(ff1_output_plus_bias_act)
         return ff2_output_plus_bias
 
     return feed_forward_
+
 
 class TtFeedForwardModel(torch.nn.Module):
     def __init__(self, encoder_idx, state_dict, device):
@@ -76,6 +92,7 @@ class TtFeedForwardModel(torch.nn.Module):
     def forward(self, activation):
         return self.ffn(activation)
 
+
 class PytorchFeedForwardModel(torch.nn.Module):
     def __init__(self, hugging_face_reference_model):
         super().__init__()
@@ -84,6 +101,7 @@ class PytorchFeedForwardModel(torch.nn.Module):
 
     def forward(self, x):
         return self.ff2(self.ff1(x))
+
 
 def summarize_stats(t, name):
     mean = t.mean()
@@ -96,6 +114,7 @@ def summarize_stats(t, name):
     print(f"mag {mag}")
     print(f"max {max}")
     print()
+
 
 def run_ffn_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
 
@@ -130,25 +149,13 @@ def run_ffn_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
+
     _, output = comp_allclose(pytorch_out, tt_out, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
     logger.info(f"Output {output}")
+
     if not passing:
         logger.error(f"Output PCC < {pcc}")
-    # # Summarizing weight statistics
-    # print("Summarizing stats for weights")
-    # state_dict = hugging_face_reference_model.state_dict()
 
-    # summarize_stats(state_dict["bert.encoder.layer.0.intermediate.dense.weight"], "ff1 weight")
-    # summarize_stats(state_dict["bert.encoder.layer.0.intermediate.dense.bias"], "ff1 bias")
-    # summarize_stats(state_dict["bert.encoder.layer.0.output.dense.weight"], "ff2 weight")
-    # summarize_stats(state_dict["bert.encoder.layer.0.output.dense.weight"], "ff2 bias")
-
-    # # Summarize output statistics
-    # print("Summarizing stats for outputs")
-    # summarize_stats(pytorch_out, "pytorch output")
-    # summarize_stats(tt_out, "tt output")
-    # summarize_stats(abs(pytorch_out - tt_out), "absolute difference in outputs")
-    return
 
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka,  pcc",
@@ -159,5 +166,8 @@ def run_ffn_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
     ),
 )
 def test_ffn_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
-
     run_ffn_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator)
+
+
+if __name__ == "__main__":
+    test_ffn_inference("phiyodr/bert-large-finetuned-squad2", 1, 384, True, 0.99, model_location_generator_)

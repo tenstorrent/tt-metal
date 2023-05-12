@@ -4,17 +4,18 @@ import torchvision.transforms as transforms
 from pathlib import Path
 
 
+def model_location_generator_(rel_path):
+    internal_weka_path = Path("/mnt/MLPerf")
+    has_internal_weka = (internal_weka_path / "bit_error_tests").exists()
+
+    if has_internal_weka:
+        return Path("/mnt/MLPerf") / rel_path
+    else:
+        return Path("/opt/tt-metal-models") / rel_path
+
+
 @pytest.fixture(scope="session")
 def model_location_generator():
-    def model_location_generator_(rel_path):
-        internal_weka_path = Path("/mnt/MLPerf")
-        has_internal_weka = (internal_weka_path / "bit_error_tests").exists()
-
-        if has_internal_weka:
-            return Path("/mnt/MLPerf") / rel_path
-        else:
-            return Path("/opt/tt-metal-models") / rel_path
-
     return model_location_generator_
 
 

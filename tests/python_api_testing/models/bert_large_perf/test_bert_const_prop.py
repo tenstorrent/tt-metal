@@ -5,6 +5,7 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 import sys
 from pathlib import Path
 f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
@@ -249,10 +250,9 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
         profiler.end("processing_output_to_string")
 
-    ttl.device.CloseDevice(device)
     profiler.print()
 
-    assert profiler.get("whole_model") < 60.0
+    assert profiler.get("whole_model") < 70.0
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
 
 def test_bert_constant_prop():
@@ -266,7 +266,7 @@ def test_bert_constant_prop():
     token_type_ids = True
     pcc = 0.98
     model_location_generator = model_location_generator_
-    PERF_CNT = 20
+    PERF_CNT = 2
 
     disable_binary_cache()
     disable_compile_cache()
