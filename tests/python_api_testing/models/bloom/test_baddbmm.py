@@ -45,7 +45,7 @@ def run_baddbmm_test(device):
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 
     print_diff_argmax(pt_out, tt_out_converted)
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.64)
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.99)
 
     print(comp_allclose(pt_out, tt_out_converted))
     print(pcc_message)

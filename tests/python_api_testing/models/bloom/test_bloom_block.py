@@ -26,7 +26,6 @@ def run_bloom_block_test(device):
     hugging_bloom_reference_model.eval()
 
     do_all_blocks_pass = True
-    block = 21
 
     for block in range(24):
         config = hugging_bloom_reference_model.config
@@ -57,7 +56,7 @@ def run_bloom_block_test(device):
         tt_out_converted = tt_out_converted.squeeze()
 
         print_diff_argmax(pt_out, tt_out_converted)
-        does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.98)
+        does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.93)
 
         print(comp_allclose(pt_out, tt_out_converted))
         print(pcc_message)

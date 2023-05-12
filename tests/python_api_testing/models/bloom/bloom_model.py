@@ -442,9 +442,9 @@ class TtBloomModel(torch.nn.Module):
             past_key_values_length=past_key_values_length,
         )
 
-        print(hidden_states.shape())
-        print(causal_mask.shape)
-        print(alibi.shape)
+        #print(hidden_states.shape())
+        #print(causal_mask.shape)
+        #print(alibi.shape)
 
         print(f"Num blocks {self.n_layer}")
         i = 0

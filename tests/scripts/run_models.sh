@@ -46,3 +46,8 @@ env pytest tests/python_api_testing/models/whisper -k whisper_for_conditional_ge
 
 env pytest tests/python_api_testing/models/LeNet -k LeNet
 env pytest tests/python_api_testing/models/ConvNet_MNIST -k  mnist
+
+env pytest tests/python_api_testing/models/bloom -k bloom_mlp
+env pytest tests/python_api_testing/models/bloom -k bloom_attention
+env pytest tests/python_api_testing/models/bloom -k bloom_block
+env pytest tests/python_api_testing/models/bloom -k bloom_gelu_forward
