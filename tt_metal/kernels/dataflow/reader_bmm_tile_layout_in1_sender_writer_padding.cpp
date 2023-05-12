@@ -191,10 +191,8 @@ void kernel_main() {
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;
         }
-    }
 
-    // WRITER
-    for (uint32_t b = 0; b < batch; b++) {
+        // WRITER
         uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
         for(uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h; sbh++) {
             uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;

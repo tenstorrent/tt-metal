@@ -110,10 +110,8 @@ void kernel_main() {
 
             cb_push_back(cb_id_in1, in1_block_num_tiles);
         }
-    }
 
-    // WRITER
-    for (uint32_t b = 0; b < batch; b++) {
+        // WRITER
         uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
         for(uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h; sbh++) {
             uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
