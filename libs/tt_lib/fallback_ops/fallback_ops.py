@@ -9,7 +9,7 @@ def full(size: List[int], fill_value: float) -> ttl_tensor.Tensor:
     """
     Creates a ``tt_lib.tensor.Tensor`` of size ``size`` filled with ``fill_value``.
     """
-    return torch.full(size, fill_value)
+    return torch.full(size, fill_value, dtype=torch.float32)
 
 
 @convert_tt_tensors_wrapper
@@ -45,6 +45,8 @@ def conv2d(
     """
     Applies a 2D convolution over an input image composed of several input planes.
     """
+    if bias is not None:
+        bias = torch.reshape(bias, (bias.shape[-1],))
     return torch.nn.functional.conv2d(
         input, weight, bias, stride, padding, dilation, groups
     )
@@ -61,7 +63,17 @@ def group_norm(
     """
     Applies Group Normalization for last certain number of dimensions.
     """
-    return torch.nn.functional.group_norm(input, num_groups, weight, bias, eps)
+    return torch.nn.functional.group_norm(
+        input,
+        num_groups,
+        weight.reshape(
+            input.shape[1],
+        ),
+        bias.reshape(
+            input.shape[1],
+        ),
+        eps,
+    )
 
 
 @convert_tt_tensors_wrapper
@@ -75,7 +87,18 @@ def layer_norm(
     """
     Applies Layer Normalization for last certain number of dimensions.
     """
-    return torch.nn.functional.layer_norm(input, normalized_shape, weight, bias, eps)
+    if isinstance(normalized_shape, int):
+        normalized_shape = [normalized_shape]
+
+    assert list(weight.shape[-len(normalized_shape) :]) == list(normalized_shape)
+    assert list(bias.shape[-len(normalized_shape) :]) == list(normalized_shape)
+    return torch.nn.functional.layer_norm(
+        input,
+        normalized_shape,
+        weight.reshape(normalized_shape),
+        bias.reshape(normalized_shape),
+        eps,
+    )
 
 
 @convert_tt_tensors_wrapper
@@ -192,7 +215,7 @@ class Conv2d(torch.nn.Module):
             padding_mode,
         )
         self.pt_fallback.weight = torch.nn.Parameter(weights)
-        self.pt_fallback.bias = torch.nn.Parameter(biases)
+        self.pt_fallback.bias = torch.nn.Parameter(biases.reshape((biases.shape[-1],)))
 
     @convert_tt_tensors_wrapper
     def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
@@ -219,6 +242,12 @@ class GroupNorm(torch.nn.Module):
         affine: bool = True,
     ):
         super().__init__()
+        weights = weights.reshape(
+            num_channels,
+        )
+        biases = biases.reshape(
+            num_channels,
+        )
         self.pt_fallback = torch.nn.GroupNorm(num_groups, num_channels, eps, affine)
         self.pt_fallback.weight = torch.nn.Parameter(weights)
         self.pt_fallback.bias = torch.nn.Parameter(biases)
@@ -248,9 +277,14 @@ class LayerNorm(torch.nn.Module):
         elementwise_affine: bool = True,
     ):
         super().__init__()
+        if isinstance(normalized_shape, int):
+            normalized_shape = [normalized_shape]
+
+        assert list(weights.shape[-len(normalized_shape) :]) == list(normalized_shape)
+        assert list(biases.shape[-len(normalized_shape) :]) == list(normalized_shape)
         self.pt_fallback = torch.nn.LayerNorm(normalized_shape, eps, elementwise_affine)
-        self.pt_fallback.weight = torch.nn.Parameter(weights)
-        self.pt_fallback.bias = torch.nn.Parameter(biases)
+        self.pt_fallback.weight = torch.nn.Parameter(weights.reshape(normalized_shape))
+        self.pt_fallback.bias = torch.nn.Parameter(biases.reshape(normalized_shape))
 
     @convert_tt_tensors_wrapper
     def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
