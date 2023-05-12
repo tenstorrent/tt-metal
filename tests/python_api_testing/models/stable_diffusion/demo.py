@@ -21,7 +21,6 @@ from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
 from utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
-from utility_functions import enable_binary_cache, enable_compile_cache
 from libs import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 
@@ -33,15 +32,13 @@ def constant_prop_time_embeddings(timesteps, sample, time_proj):
     return t_emb
 
 
-def demo():
+def demo(scheduler_type="LMSD"):
 
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 1)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
-    # enable_binary_cache()
-    # enable_compile_cache()
 
     # 1. Load t`he autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
@@ -54,16 +51,22 @@ def demo():
     unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
     torch_unet = unet
     # 4. load the K-LMS scheduler with some fitting parameters.
-    scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    #scheduler = PNDMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    #scheduler = HeunDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    #scheduler = DPMSolverMultistepScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+    if scheduler_type == "LMSD":
+        scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+    elif scheduler_type == "PNDM":
+        scheduler = PNDMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+    elif scheduler_type == "Heun":
+        scheduler = HeunDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+    elif scheduler_type == "DPMM":
+        scheduler = DPMSolverMultistepScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+    else:
+        assert False, "Only LMSD, PNDM, Heun, and DPMM schedulers are supported"
 
     torch_device = "cpu"
     vae.to(torch_device)
     text_encoder.to(torch_device)
     unet.to(torch_device)
-    print(unet)
+
     state_dict = torch_unet.state_dict()
     tt_unet = tt_unet_condition(sample_size = 64,
                                 in_channels = 4,
@@ -207,4 +210,3 @@ year = {2022},
 note = {[https://huggingface.co/blog/rlhf](https://huggingface.co/blog/stable_diffusion)},
 }
 '''
-demo()

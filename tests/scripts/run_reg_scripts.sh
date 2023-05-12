@@ -30,9 +30,3 @@ env python tests/scripts/run_tt_metal.py
 
 # Please put model runs in here from now on - thank you
 ./tests/scripts/run_models.sh
-
-env pytest tests/python_api_testing/models/stable_diffusion -k residual_block
-env pytest tests/python_api_testing/models/stable_diffusion/CLIP -k CLIPMLP
-env pytest tests/python_api_testing/models/stable_diffusion/fused_ops -k feedforward
-env pytest tests/python_api_testing/models/stable_diffusion/fused_ops -k silu
-env pytest tests/python_api_testing/models/stable_diffusion/fused_ops -k up_and_down_block

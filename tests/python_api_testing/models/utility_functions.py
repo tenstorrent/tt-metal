@@ -330,13 +330,3 @@ def torch_to_tt_tensor(py_tensor, device):
     )
 
     return tt_tensor
-
-def print_corr_coef(x: torch.Tensor, y: torch.Tensor):
-    x = torch.reshape(x, (-1, ))
-    y = torch.reshape(y, (-1, ))
-
-    input = torch.stack((x, y))
-
-    corrval = torch.corrcoef(input)
-    print(f"Corr coef:")
-    print(f"{corrval}")

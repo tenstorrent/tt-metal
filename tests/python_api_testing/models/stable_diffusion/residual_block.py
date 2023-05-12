@@ -148,19 +148,6 @@ class TtResnetBlock2D(nn.Module):
 
         if temb is not None and self.time_embedding_norm == "scale_shift":
             assert False, "Time Embedding Norm is not implemented"
-            # To be removed in the next refactoring process
-            # temb = tt_to_torch_tensor(temb, self.host)
-            # scale, shift = torch.chunk(temb, 2, dim=1)
-            # temb = torch_to_tt_tensor(temb, self.device)
-            # shift = torch_to_tt_tensor(shift, self.device)
-            # scale = torch_to_tt_tensor(scale, self.device)
-
-            # ones = torch.ones(scale.shape)
-            # ones = torch_to_tt_tensor(ones, self.device)
-
-            # scale = ttl.tensor.add(ones, scale)
-            # hidden_states = ttl.tensor.mul(hidden_states, scale)
-            # hidden_states = ttl.tensor.add(hidden_states, shift)
 
         hidden_states = self.nonlinearity(hidden_states)
         hidden_states = self.conv2(hidden_states)

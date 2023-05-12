@@ -55,8 +55,6 @@ def test_run_downsample2d_inference():
     tt_out = tt_down(tt_input)
     tt_output = tt_to_torch_tensor(tt_out, host)
 
-    print(comp_allclose_and_pcc(torch_output, tt_output))
-
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
     ttl.device.CloseDevice(device)

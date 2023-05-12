@@ -13,8 +13,6 @@ import torch.nn.functional as F
 import torch
 
 from libs import tt_lib as ttl
-from utility_functions import pad_weight, tilize_to_list, print_diff_argmax, torch_to_tt_tensor, tt_to_torch_tensor, print_corr_coef
-from utility_functions import comp_allclose_and_pcc
 from python_api_testing.models.stable_diffusion.utils import make_linear
 from libs.tt_lib.fallback_ops import fallback_ops
 

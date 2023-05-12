@@ -22,7 +22,6 @@ from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tenso
 from unet_2d_blocks import TtCrossAttnDownBlock2D
 
 
-
 def test_run_cross_attn_down_block_inference():
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
@@ -52,7 +51,6 @@ def test_run_cross_attn_down_block_inference():
         use_linear_projection = False
         only_cross_attention = False
         upcast_attention = False
-        ##### end of cross att down blck #####
         sample_shape =  [2, 320, 64, 64]
         temb_shape =  [1, 1, 2, 1280] # original: 2, 1280
         encoder_hidden_states_shape =  [1, 2, 77, 768] # original: 2, 77, 768
@@ -115,14 +113,6 @@ def test_run_cross_attn_down_block_inference():
         attention_mask=attention_mask,
         cross_attention_kwargs=cross_attention_kwargs
         )
-
-    # for i in range(len(list_out)):
-    #     tt_o = tt_to_torch_tensor(list_out[i], host)
-    #     torch_o = torch_list_out[i]
-    #     import pdb; pdb.set_trace()
-    #     logger.info(comp_allclose_and_pcc(torch_o, tt_o))
-    #     print(f"this is {i}th iteration results")
-
 
     tt_output = tt_to_torch_tensor(tt_output, host)
 

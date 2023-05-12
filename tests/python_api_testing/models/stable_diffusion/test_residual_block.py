@@ -17,16 +17,13 @@ from loguru import logger
 
 from libs import tt_lib as ttl
 from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
-from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tensor_rm, enable_binary_cache, enable_compile_cache
+from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tensor_rm
 from residual_block import TtResnetBlock2D
 
 
 
 def test_run_resnet_inference():
     # setup pytorch model
-
-    enable_binary_cache()
-    enable_compile_cache()
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
 
     unet = pipe.unet
@@ -89,5 +86,3 @@ def test_run_resnet_inference():
     ttl.device.CloseDevice(device)
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
-
-test_run_resnet_inference()

@@ -11,6 +11,19 @@ cd $TT_METAL_HOME
 
 export PYTHONPATH=$TT_METAL_HOME
 
+env pytest tests/python_api_testing/models/stable_diffusion/test_feedforward.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_embedding.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_cross_attention.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_cross_attn_down_block.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_downblock_2d.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_downsample_2d.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_residual_block.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_transformers.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_unet_mid_block.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_upblock_2d.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_upsample_2d.py
+env pytest tests/python_api_testing/models/stable_diffusion/test_upsample_nearest2d.py
+
 env pytest tests/python_api_testing/models/bert/bert_encoder.py -k bert_encoder
 env pytest tests/python_api_testing/models/bert -k bert_question_and_answering
 env pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k bert_large

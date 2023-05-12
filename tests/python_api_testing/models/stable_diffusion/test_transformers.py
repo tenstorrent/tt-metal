@@ -65,8 +65,6 @@ def test_run_basic_transformer_inference():
     unet.eval()
     state_dict = unet.state_dict()
     basic_transformer = pipe.unet.down_blocks[0].attentions[0].transformer_blocks[0]
-    # print(basic_transformer)
-    # assert False
     torch_output = basic_transformer(input.squeeze(0), encoder_hidden_states.squeeze(0))
 
     # Initialize the device

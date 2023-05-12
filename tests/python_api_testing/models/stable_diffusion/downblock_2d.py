@@ -64,9 +64,7 @@ class TtDownBlock2D(nn.Module):
                 )
             )
 
-        # self.resnets = nn.ModuleList(resnets)
         self.resnets = resnets
-        print('resnets:', self.resnets)
 
         if add_downsample:
             self.downsamplers = [TtDownsample2D(out_channels, use_conv=True, out_channels=out_channels, padding=downsample_padding, name="op", state_dict=self.state_dict, base_address=f"{base_address}.downsamplers.0")]
@@ -79,16 +77,6 @@ class TtDownBlock2D(nn.Module):
         output_states = ()
 
         for resnet in self.resnets:
-            # if self.training and self.gradient_checkpointing:
-            #     assert False, "we do not support training"
-            #     # def create_custom_forward(module):
-            #     #     def custom_forward(*inputs):
-            #     #         return module(*inputs)
-
-            #     #     return custom_forward
-
-            #     # hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(resnet), hidden_states, temb)
-            # else:
             hidden_states = resnet(hidden_states, temb)
 
             output_states += (hidden_states,)

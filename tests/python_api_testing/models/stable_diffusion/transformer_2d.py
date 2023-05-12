@@ -114,10 +114,8 @@ class TtBasicTransformerBlock(nn.Module):
 
         if self.use_ada_layer_norm:
             assert False, "AdaLayerNorm not supported and not used in stable diffusion"
-            # self.norm1 = AdaLayerNorm(dim, num_embeds_ada_norm)
         elif self.use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
-            # self.norm1 = AdaLayerNormZero(dim, num_embeds_ada_norm)
         else:
             norm1_weights = state_dict[f"{base_address}.norm1.weight"]
             norm1_bias = state_dict[f"{base_address}.norm1.bias"]
@@ -160,12 +158,9 @@ class TtBasicTransformerBlock(nn.Module):
     ):
         if self.use_ada_layer_norm:
             assert False, "AdaLayerNorm not supported and not used in stable diffusion"
-            # norm_hidden_states = self.norm1(hidden_states, timestep)
         elif self.use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
-            # norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(
-                # hidden_states, timestep, class_labels, hidden_dtype=hidden_states.dtype
-            # )
+
         else:
             norm_hidden_states = self.norm1(hidden_states)
 
@@ -184,7 +179,6 @@ class TtBasicTransformerBlock(nn.Module):
 
         if self.use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
-            # attn_output = gate_msa.unsqueeze(1) * attn_output
 
         hidden_states = ttl.tensor.add(attn_output, hidden_states)
         if self.attn2 is not None:
@@ -206,29 +200,15 @@ class TtBasicTransformerBlock(nn.Module):
         norm_hidden_states = self.norm3(hidden_states)
         if self.use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
-            # norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
         ff_output = self.ff(norm_hidden_states)
 
         if self.use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
-            # ff_output = gate_mlp.unsqueeze(1) * ff_output
 
         hidden_states = ttl.tensor.add(ff_output, hidden_states)
         return hidden_states
 
 
-
-
-
-########################################################################################################################################################################
-########################################################################################################################################################################
-########################################################################################################################################################################
-########################################################################################################################################################################
-#################################################################### transformer model #################################################################################
-########################################################################################################################################################################
-########################################################################################################################################################################
-########################################################################################################################################################################
-########################################################################################################################################################################
 
 
 class TtTransformer2DModel(nn.Module):

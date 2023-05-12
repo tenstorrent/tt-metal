@@ -25,13 +25,16 @@ class TtDownsample2D(nn.Module):
     A downsampling layer with an optional convolution.
 
     Parameters:
-        channels: channels in the inputs and outputs.
-        use_conv: a bool determining if a convolution is applied.
-        out_channels:
-        padding:
+        channels (`int`): channels in the inputs and outputs.
+        use_conv (`bool`, *optional*, defaults to False): a bool determining if a convolution is applied.
+        out_channels (`int`, *optional*, defaults to channels):
+        padding (`int`, *optional*, defaults to 1): padding before conv
+        name (`str`, *optional*, defaults to "conv"): picks the type of conv used
+        base_address (`str`, *optional*, defaults to ""): required for loading weights
+        state_dict (`Dict`, *optional*, defaults to None): Dictionary of the weights
     """
 
-    def __init__(self, channels, use_conv=False, out_channels=None, padding=1, name="conv", base_address='down_blocks.0.downsamplers.0', state_dict=None):
+    def __init__(self, channels: int, use_conv: bool=False, out_channels=None, padding=1, name="conv", base_address="", state_dict=None):
         super().__init__()
         self.base_address = base_address
         self.state_dict=state_dict
@@ -52,7 +55,6 @@ class TtDownsample2D(nn.Module):
             assert False, " we don't support AvgPool2d, and we should not need it either"
             conv = nn.AvgPool2d(kernel_size=stride, stride=stride)
 
-        # TODO(Suraj, Patrick) - clean up after weight dicts are correctly renamed
         if name == "conv":
             self.Conv2d_0 = conv
             self.conv = conv

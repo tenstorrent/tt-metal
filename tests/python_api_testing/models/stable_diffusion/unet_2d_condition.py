@@ -413,10 +413,12 @@ class UNet2DConditionModel(nn.Module):
             [`~models.unet_2d_condition.UNet2DConditionOutput`] if `return_dict` is True, otherwise a `tuple`. When
             returning a tuple, the first element is the sample tensor.
         """
-        # By default samples have to be AT least a multiple of the overall upsampling factor.
-        # The overall upsampling factor is equal to 2 ** (# num of upsampling layears).
-        # However, the upsampling interpolation output size can be forced to fit any upsampling size
-        # on the fly if necessary.
+        """
+            By default samples have to be AT least a multiple of the overall upsampling factor.
+            The overall upsampling factor is equal to 2 ** (# num of upsampling layears).
+            However, the upsampling interpolation output size can be forced to fit any upsampling size
+            on the fly if necessary.
+        """
         default_overall_up_factor = 2**self.num_upsamplers
 
         # upsample size should be forwarded when sample is not a multiple of `default_overall_up_factor`
@@ -440,23 +442,12 @@ class UNet2DConditionModel(nn.Module):
 
         # 1. time
         timesteps = timestep
-        # Note: keep this code; this is constant propped currently!
 
-        # if not torch.is_tensor(timesteps):
-        #     # TODO: this requires sync between CPU and GPU. So try to pass timesteps as tensors if you can
-        #     # This would be a good case for the `match` statement (Python 3.10+)
-        #     is_mps = sample.device.type == "mps"
-        #     if isinstance(timestep, float):
-        #         dtype = torch.float32 if is_mps else torch.float64
-        #     else:
-        #         dtype = torch.int32 if is_mps else torch.int64
-        #     timesteps = torch.tensor([timesteps], dtype=dtype, device=sample.device)
-        # elif len(timesteps.shape) == 0:
-        #     timesteps = timesteps[None].to(sample.device) # None: IS ON TORCH
 
         # # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         # timesteps = timesteps.expand(sample.shape[0]) # Nonte: IS ON TORCH
 
+        # Note: keep this code for future references; this is constant propped currently!
         # t_emb = self.time_proj(timesteps)
 
         # timesteps does not contain any weights and will always return f32 tensors
