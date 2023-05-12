@@ -10,4 +10,3 @@ __firmware_stack_size = 1024;
 __local_mem_rodata_start_addr = ORIGIN(LOCAL_DATA_MEM);
 
 INCLUDE "brisc-sections.ld"
-INCLUDE "tensix-address.ld"

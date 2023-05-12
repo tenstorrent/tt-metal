@@ -10,4 +10,3 @@ __firmware_stack_size = 256;
 __local_mem_rodata_start_addr = ORIGIN(LOCAL_DATA_MEM_TRISC);
 
 INCLUDE "tensix-sections.ld"
-INCLUDE "tensix-address.ld"

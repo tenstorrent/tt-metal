@@ -47,6 +47,7 @@ struct address_map {
   static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1 * 1024 * 1024;  // XXXX delete, used for relocating high memory on load
 
   // Perf buffer (FIXME - update once location of the perf data buffer is finalized)
+  // XXXX pk - put this in brisc.cc as a global variable with exported symbols for other kernels
   static constexpr std::int32_t PERF_BUF_SIZE = FIRMWARE_SIZE - BRISC_FIRMWARE_SIZE - ZEROS_SIZE;
   static constexpr std::int32_t TRISC_PERF_BUF_SIZE_LEVEL_0 = 640; // smaller buffer size for limited logging
   static constexpr std::int32_t NCRISC_PERF_BUF_SIZE_LEVEL_0 = 640; // smaller buffer size for limited logging

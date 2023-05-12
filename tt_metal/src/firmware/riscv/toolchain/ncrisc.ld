@@ -12,4 +12,3 @@ __firmware_stack_size = 1024;
 __local_mem_rodata_start_addr = ORIGIN(LOCAL_DATA_MEM_NOCRISC);
 
 INCLUDE "ncrisc-sections.ld"
-INCLUDE "tensix-address.ld"

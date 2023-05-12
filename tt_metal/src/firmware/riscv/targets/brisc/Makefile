@@ -31,8 +31,6 @@ ifeq ($(DEBUG_MODE),1)
 	LINKER_SCRIPT_NAME = brisc-debug.ld
 endif
 
-LINKER_SECTIONS_PREFIX = brisc
-
 # -fno-tree-loop-distribute-patterns is needed to prevent memset from being instantiated which gets forced in L0, which can get called from L1 functions
 OPT_FLAGS = -flto -ffast-math -Os -g -fno-tree-loop-distribute-patterns
 

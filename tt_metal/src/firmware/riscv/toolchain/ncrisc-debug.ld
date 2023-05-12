@@ -11,4 +11,3 @@ __firmware_start = ORIGIN(NOCRISC_L1_CODE);
 __firmware_stack_size = 1024;
 
 INCLUDE "ncrisc-sections.ld"
-INCLUDE "tensix-address.ld"

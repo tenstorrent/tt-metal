@@ -12,4 +12,3 @@ __firmware_stack_size = 1024;
 __firmware_global_pointer = ORIGIN(ERISC_DATA) + 2048;
 
 INCLUDE "erisc-sections.ld"
-INCLUDE "tensix-address.ld"

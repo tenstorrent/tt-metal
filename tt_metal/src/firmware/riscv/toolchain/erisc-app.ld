@@ -10,4 +10,3 @@ __firmware_global_pointer = ORIGIN(ERISC_DATA) + 2048;
 
 
 INCLUDE "erisc-app-sections.ld"
-INCLUDE "tensix-address.ld"

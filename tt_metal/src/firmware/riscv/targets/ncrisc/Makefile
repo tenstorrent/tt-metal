@@ -50,7 +50,6 @@ LINKER_SCRIPT_NAME = ncrisc.ld
 # ifeq ($(DEBUG_MODE),1)
 # 	LINKER_SCRIPT_NAME = ncrisc-debug.ld
 # endif
-LINKER_SECTIONS_PREFIX = ncrisc
 
 # uncomment to enable detailed logging in NCRISC post code for waveform debug
 # DEFINES = -D ENABLE_NCRISC_DEBUG_POST_CODES
