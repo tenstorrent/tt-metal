@@ -12,7 +12,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // transpose is unused, math is adjusted to take into account srca face layout when transpose=true 
-inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uint32_t rt_dim, const std::uint32_t ct_dim, const std::uint32_t kt_dim) {
+inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim) {
 
     const bool reuse_a = ct_dim >= rt_dim;
     constexpr uint replay_buf_prog_len = 12;
@@ -102,67 +102,8 @@ inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
     llk_unpack_AB_matmul_hw_configure<is_fp32_dest_acc_en>(&unpack_AB_matmul_params);
 }
 
-inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0) {
-    llk_unpack_AB_matmul_mop_config(transpose != 0, 0, 1, 0); //always reuse src_a
-    // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
-    // on WH, the unpacker performs both transpose of faces as well as transpose each face.
-    // the former is configured in mop, the latter is configured in cfg register in hw_configure
-    // in large matmul, datacopy will disable the transpose of faces, so we need it turn it back on for matmul.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
-
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
-    TTI_SETADCXX(0b11, TILE_WIDTH*TILE_HEIGHT-1, 0x0);
-}
-
-inline void llk_unpack_AB_matmul(
-    std::uint32_t operandA, std::uint32_t operandB, std::uint32_t tile_index_a, std::uint32_t tile_index_b, std::uint32_t ct_dim=1) {
-    std::uint32_t inputA = get_operand_id(operandA);
-    std::uint32_t inputB = get_operand_id(operandB);
-    std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;
-    std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], tile_index_a);
-    std::uint32_t address_a = base_address_a + offset_address_a;
-    std::uint32_t base_address_b = operands[inputB].f.fifo_rd_ptr;
-    std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], tile_index_b);
-    std::uint32_t address_b = base_address_b + offset_address_b;
-
-    volatile uint *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
-
-    // Wait for free context
-    wait_for_next_context(2);
-
-    semaphore_post(semaphore::UNPACK_SYNC);  // Trisc::SEMPOST for context acquire
-
-    // Program unpacker 1 base address
-    if (0 == unp_cfg_context) {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b; 
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_a;
-    } else {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
-        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_a;
-    } 
-
-#if SKIP_UNP1 == 1
-    TTI_NOP;
-#else
-    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-#endif    
-
-    TT_MOP(0, ct_dim - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
-    
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-    // Switch unpacker config context
-    switch_config_context(unp_cfg_context);
-
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
-
-}
-
-inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose, const std::uint32_t rt_dim, const std::uint32_t ct_dim, const std::uint32_t kt_dim) {
-    llk_unpack_AB_matmul_mop_config(transpose != 0, rt_dim, ct_dim, kt_dim);
+inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+    llk_unpack_AB_matmul_mop_config(transpose != 0, ct_dim, rt_dim, kt_dim);
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure
@@ -175,7 +116,7 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose, const std::
 
 inline void llk_unpack_AB_matmul(
     std::uint32_t operandA, std::uint32_t operandB, std::uint32_t tile_index_a, std::uint32_t tile_index_b,
-    const std::uint32_t rt_dim, const std::uint32_t ct_dim, const std::uint32_t kt_dim) {
+    const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
 
     volatile uint *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 

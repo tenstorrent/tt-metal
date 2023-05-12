@@ -18,23 +18,7 @@ inline void matmul_configure_addrmod();
 inline void matmul_configure_mop();
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul(uint dst_index, bool transpose = false, const std::uint32_t ct_dim=1) {
-    for (uint ct=0; ct<ct_dim; ct++) {
-        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index+ct);
-
-        ckernel_template::run(instrn_buffer);
-
-        /* 
-            Clear srcB at end of re-use (once per u block row)
-        */
-        if(ct == (ct_dim-1)) {
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-        }
-    }    
-}
-
-template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul(uint dst_index, const bool transpose, const std::uint32_t rt_dim, const std::uint32_t ct_dim, const std::uint32_t kt_dim) {
+inline void llk_math_matmul(uint dst_index, const bool transpose=false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     const bool reuse_a = ct_dim>=rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; //reuse-dim
@@ -150,7 +134,7 @@ inline void matmul_configure_addrmod(bool transpose) {
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void matmul_configure_mop(bool transpose, const std::uint32_t rt_dim, const std::uint32_t ct_dim, const std::uint32_t kt_dim) {
+inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim) {
 
     // NOTE1: srca increment values are different for transpose=true
     // NOTE2: same instructions are run for RowMajor with different addr_mods
@@ -222,15 +206,8 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t rt_dim, con
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_init(std::uint32_t transpose=0) {
+inline void llk_math_matmul_init(std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     matmul_configure_addrmod<NUM_FIDELITY_PHASES, FaceLayout>(transpose);
-    matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0, 0, 1, 0);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
-
-template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_init(std::uint32_t transpose, const std::uint32_t rt_dim, const std::uint32_t ct_dim, const std::uint32_t kt_dim) {
-    matmul_configure_addrmod<NUM_FIDELITY_PHASES, FaceLayout>(transpose);
-    matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0, rt_dim, ct_dim, kt_dim);
+    matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0, ct_dim, rt_dim, kt_dim);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
