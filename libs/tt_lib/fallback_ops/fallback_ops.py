@@ -7,7 +7,15 @@ from .. import tensor as ttl_tensor
 @convert_tt_tensors_wrapper
 def full(size: List[int], fill_value: float) -> ttl_tensor.Tensor:
     """
-    Creates a ``tt_lib.tensor.Tensor`` of size ``size`` filled with ``fill_value``.
+    Creates a ``tt_lib.tensor.Tensor`` of shape ``size`` filled with ``fill_value`` value.
+
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                             | Data type   | Valid range     | Required |
+    +============+=========================================+=============+=================+==========+
+    | size       | Shape of output tensor                  | List[int]   | list of 4 ints  | Yes      |
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    | fill_value | Value with which to fill output tensor  | float       |                 | Yes      |
+    +------------+-----------------------------------------+-------------+-----------------+----------+
     """
     return torch.full(size, fill_value, dtype=torch.float32)
 
@@ -17,7 +25,21 @@ def reshape(
     input: ttl_tensor.Tensor, N: int, C: int, H: int, W: int
 ) -> ttl_tensor.Tensor:
     """
-    Returns a new ``tt_lib.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape.
+    Returns a new ``tt_lib.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | N          | Size of the first dimension of output tensor  | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | C          | Size of the second dimension of output tensor | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | H          | Size of the third dimension of output tensor  | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | W          | Size of the fourth dimension of output tensor | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.reshape(input, (N, C, H, W))
 
@@ -28,6 +50,21 @@ def chunk(
 ) -> List[ttl_tensor.Tensor]:
     """
     Attempts to split a ``tt_lib.tensor.Tensor`` into the specified number of chunks. Each chunk is a new copy of part of the input tensor.
+
+    If the tensor size along the given dimension ``dim`` is divisible by ``chunks``, all returned chunks will be the same size.
+
+    If the tensor size along the given dimension ``dim`` is not divisible by ``chunks``, all returned chunks will be the same size, except the last one. If such division is not possible, this function may return fewer than the specified number of chunks.
+
+    +------------+--------------------------------------------+-------------+---------------------------+----------+
+    | Argument   | Description                                | Data type   | Valid range               | Required |
+    +============+============================================+=============+===========================+==========+
+    | input      | Input tensor                               | Tensor      |                           | Yes      |
+    +------------+--------------------------------------------+-------------+---------------------------+----------+
+    | chunks     | Number of chunks to return                 | int         |                           | Yes      |
+    +------------+--------------------------------------------+-------------+---------------------------+----------+
+    | dim        | Dimension along which to split the tensor  | int         | 0, 1, 2, 3 (default is 0) | No       |
+    +------------+--------------------------------------------+-------------+---------------------------+----------+
+
     """
     return torch.chunk(input, chunks, dim)
 
@@ -44,6 +81,27 @@ def conv2d(
 ) -> ttl_tensor.Tensor:
     """
     Applies a 2D convolution over an input image composed of several input planes.
+
+    +------------+-----------------------------------------------------------------------+-----------------------------+------------------------------------+----------+
+    | Argument   | Description                                                           | Data type                   | Valid range                        | Required |
+    +============+=======================================================================+=============================+====================================+==========+
+    | input      | Input tensor                                                          | Tensor                      |                                    | Yes      |
+    +------------+-----------------------------------------------------------------------+-----------------------------+------------------------------------+----------+
+    | weight     | Weights tensor                                                        | Tensor                      |                                    | Yes      |
+    +------------+-----------------------------------------------------------------------+-----------------------------+------------------------------------+----------+
+    | bias       | Bias tensor                                                           | Tensor                      |                                    | No       |
+    +------------+-----------------------------------------------------------------------+-----------------------------+------------------------------------+----------+
+    | strides    | Stride of the convolution                                             | int or tuple[int] (size 2)  | positive ints (default value is 1) | No       |
+    +------------+-----------------------------------------------------------------------+-----------------------------+------------------------------------+----------+
+    | padding    | Padding added to all four sides of the input                          | int or tuple[int] (size 2)  | positive ints (default value is 0) | No       |
+    |            |                                                                       |                             |                                    |          |
+    |            |                                                                       | or string                   | for string `valid` or `same`       |          |
+    +------------+-----------------------------------------------------------------------+-----------------------------+------------------------------------+----------+
+    | dilation   | Spacing between kernel elements                                       | int or (int, int)           | positive ints (default value is 1) | No       |
+    +------------+-----------------------------------------------------------------------+-----------------------------+------------------------------------+----------+
+    | groups     | Number of blocked connections from input channels to output channels  | int                         | positive ints (default value is 1) | No       |
+    +------------+-----------------------------------------------------------------------+-----------------------------+------------------------------------+----------+
+
     """
     if bias is not None:
         bias = torch.reshape(bias, (bias.shape[-1],))
@@ -60,8 +118,25 @@ def group_norm(
     bias: Optional[ttl_tensor.Tensor] = None,
     eps: float = 1e-05,
 ) -> ttl_tensor.Tensor:
-    """
-    Applies Group Normalization for last certain number of dimensions.
+    r"""
+    Applies Group Normalization over a mini-batch of inputs as described in the paper `Group Normalization <https://arxiv.org/abs/1803.08494>`_.
+
+    .. math::
+        y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta
+
+    +------------+----------------------------------------------------------+-----------+--------------------------------------------------------------+----------+
+    | Argument   | Description                                              | Data type | Valid range                                                  | Required |
+    +============+==========================================================+===========+==============================================================+==========+
+    | input      | Input tensor                                             | Tensor    |                                                              | Yes      |
+    +------------+----------------------------------------------------------+-----------+--------------------------------------------------------------+----------+
+    | num_groups | Number of groups to separate the input channels into     | int       | int, such that number of channels in input is divisble by it | Yes      |
+    +------------+----------------------------------------------------------+-----------+--------------------------------------------------------------+----------+
+    | weight     | Weight tensor :math:`\gamma`                             | Tensor    |                                                              | No       |
+    +------------+----------------------------------------------------------+-----------+--------------------------------------------------------------+----------+
+    | bias       | Bias tensor :math:`\beta`                                | Tensor    |                                                              | No       |
+    +------------+----------------------------------------------------------+-----------+--------------------------------------------------------------+----------+
+    | eps        | A value added to the denominator for numerical stability | float     | default value is 1e-05                                       | No       |
+    +------------+----------------------------------------------------------+-----------+--------------------------------------------------------------+----------+
     """
     return torch.nn.functional.group_norm(
         input,
@@ -84,8 +159,25 @@ def layer_norm(
     bias: Optional[ttl_tensor.Tensor] = None,
     eps: float = 1e-05,
 ) -> ttl_tensor.Tensor:
-    """
-    Applies Layer Normalization for last certain number of dimensions.
+    r"""
+    Applies Layer Normalization over a mini-batch of inputs as described in the paper `Layer Normalization <https://arxiv.org/abs/1607.06450>`__
+
+    .. math::
+        y = \frac{x - \text{E}[x]}{\sqrt{\text{Var}[x] + \epsilon}} * \gamma + \beta
+
+    +------------------+----------------------------------------------------------+------------------+-------------------------+----------+
+    | Argument         | Description                                              | Data type        | Valid range             | Required |
+    +==================+==========================================================+==================+=========================+==========+
+    | input            | Input tensor                                             | Tensor           |                         | Yes      |
+    +------------------+----------------------------------------------------------+------------------+-------------------------+----------+
+    | normalized_shape | Shape over which to normalize                            | int or List[int] |                         | Yes      |
+    +------------------+----------------------------------------------------------+------------------+-------------------------+----------+
+    | weight           | Weight tensor :math:`\gamma`                             | Tensor           |                         | No       |
+    +------------------+----------------------------------------------------------+------------------+-------------------------+----------+
+    | bias             | Bias tensor :math:`\beta`                                | Tensor           |                         | No       |
+    +------------------+----------------------------------------------------------+------------------+-------------------------+----------+
+    | eps              | A value added to the denominator for numerical stability | float            | default value is 1e-05  | No       |
+    +------------------+----------------------------------------------------------+------------------+-------------------------+----------+
     """
     if isinstance(normalized_shape, int):
         normalized_shape = [normalized_shape]
@@ -108,8 +200,26 @@ def pad(
     mode: str = "constant",
     value: Optional[int] = None,
 ) -> ttl_tensor.Tensor:
-    """
+    r"""
     Pads tensor.
+
+    ``pad`` determines how much padding to add.
+
+    Values in ``pad`` specify padding starting from the last dimension of input tensor ``input`` and moving forward.
+
+    ``pad`` is and m-elements tuple, where m/2 is less of equal to  input dimensions and m is even.
+
+    +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | Argument         | Description                                               | Data type        | Valid range                                                               | Required |
+    +==================+===========================================================+==================+===========================================================================+==========+
+    | input            | Input tensor                                              | Tensor           |                                                                           | Yes      |
+    +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | pad              | The padding size by which to pad some dimensions of input | Tuple[int]       |                                                                           | Yes      |
+    +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | mode             | Padding mode                                              | sring            | `constant`, `reflect`, `replicate`, or `circular` (default is `constant`) | No       |
+    +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | value            | Fill value for `constant` padding                         | int              | default is 0                                                              | No       |
+    +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
     """
     return torch.nn.functional.pad(input, pad, mode, value)
 
@@ -122,24 +232,52 @@ def repeat_interleave(
     *,
     output_size: Optional[int] = None
 ) -> ttl_tensor.Tensor:
-    """
-    Repeat elements of a tensor.
+    r"""
+    Returns a tensor with repeated elements of input tensor ``input``.
+
+    +------------------+-------------------------------------------------------------+------------------+--------------+----------+
+    | Argument         | Description                                                 | Data type        | Valid range  | Required |
+    +==================+=============================================================+==================+==============+==========+
+    | input            | Input tensor                                                | Tensor           |              | Yes      |
+    +------------------+-------------------------------------------------------------+------------------+--------------+----------+
+    | repeats          | The number of repetitions for each element                  | Tensor or int    |              | Yes      |
+    +------------------+-------------------------------------------------------------+------------------+--------------+----------+
+    | dim              | The dimension along which to repeat values                  | int              |              | No       |
+    +------------------+-------------------------------------------------------------+------------------+--------------+----------+
+    | output_size      | Total output size for the given axis ( e.g. sum of repeats) | int              |              | No       |
+    +------------------+-------------------------------------------------------------+------------------+--------------+----------+
     """
     return torch.repeat_interleave(input, repeats, dim, output_size=output_size)
 
 
 @convert_tt_tensors_wrapper
 def concat(tensors: List[ttl_tensor.Tensor], dim: int = 0) -> ttl_tensor.Tensor:
-    """
-    Concatenates the given sequence of ``seq`` tensors in the given dimension. All tensors must either have the same shape (except in the concatenating dimension) or be empty.
+    r"""
+    Concatenates input tensors in list ``tensors`` on provided dimension ``dim``.
+
+    All tensors must either have the same shape (except in the concatenating dimension) or be empty.
+
+    +------------------+-------------------------------------------+------------------+------------------------------+----------+
+    | Argument         | Description                               | Data type        | Valid range                  | Required |
+    +==================+===========================================+==================+==============================+==========+
+    | tensors          | Input tensors                             | List[Tensor]     |                              | Yes      |
+    +------------------+-------------------------------------------+------------------+------------------------------+----------+
+    | dim              | The dimension along which to concatenate  | int              | 0, 1, 2, or 3 (default is 0) | No       |
+    +------------------+-------------------------------------------+------------------+------------------------------+----------+
     """
     return torch.concat(tensors, dim)
 
 
 @convert_tt_tensors_wrapper
 def sigmoid(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
-    """
+    r"""
     Computes the logitistic sigmoid on the elements of ``input``.
+
+    +------------------+-------------------------------------------+------------------+------------------------------+----------+
+    | Argument         | Description                               | Data type        | Valid range                  | Required |
+    +==================+===========================================+==================+==============================+==========+
+    | input            | Input tensor                              | Tensor           |                              | Yes      |
+    +------------------+-------------------------------------------+------------------+------------------------------+----------+
     """
     return torch.sigmoid(input)
 
@@ -152,6 +290,12 @@ def silu(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
 
     .. math::
         \text{silu}(x) = x * \sigma(x), \text{where } \sigma(x) \text{ is the logistic sigmoid.}
+
+    +------------------+-------------------------------------------+------------------+------------------------------+----------+
+    | Argument         | Description                               | Data type        | Valid range                  | Required |
+    +==================+===========================================+==================+==============================+==========+
+    | input            | Input tensor                              | Tensor           |                              | Yes      |
+    +------------------+-------------------------------------------+------------------+------------------------------+----------+
     """
     return torch.nn.functional.silu(input)
 
@@ -159,23 +303,29 @@ def silu(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
 @convert_tt_tensors_wrapper
 def softmax(input: ttl_tensor.Tensor, dim: Optional[int] = None) -> ttl_tensor.Tensor:
     r"""
-    Applies a softmax function.
+    Applies a softmax function to input tensor ``input``.
 
     Softmax is defined as:
 
-    :math:`\text{Softmax}(x_{i}) = \frac{\exp(x_i)}{\sum_j \exp(x_j)}`
+    .. math::
+        \text{Softmax}(x_{i}) = \frac{\exp(x_i)}{\sum_j \exp(x_j)}
 
-    It is applied to all slices along dim, and will re-scale them so that the elements
-    lie in the range `[0, 1]` and sum to 1.
+    It is applied to all slices along dim, and will re-scale them so that the elements lie in the range `[0, 1]` and sum to 1.
 
+    +------------------+--------------------------------------------------+------------------+------------------------------+----------+
+    | Argument         | Description                                      | Data type        | Valid range                  | Required |
+    +==================+==================================================+==================+==============================+==========+
+    | input            | Input tensor                                     | Tensor           |                              | Yes      |
+    +------------------+--------------------------------------------------+------------------+------------------------------+----------+
+    | dim              | A dimension along which Softmax will be computed | int              | 0, 1, 2, or 3                | No       |
+    +------------------+--------------------------------------------------+------------------+------------------------------+----------+
     """
     return torch.nn.functional.softmax(input, dim)
 
 
 class Conv2d(torch.nn.Module):
     r"""
-    Applies a 2D convolution over an input signal composed of several input
-    planes.
+    Applies a 2D convolution over an input signal composed of several input planes.
 
     In the simplest case, the output value of the layer with input size
     :math:`(N, C_{\text{in}}, H, W)` and output :math:`(N, C_{\text{out}}, H_{\text{out}}, W_{\text{out}})`
@@ -185,6 +335,38 @@ class Conv2d(torch.nn.Module):
         \text{out}(N_i, C_{\text{out}_j}) = \text{bias}(C_{\text{out}_j}) +
         \sum_{k = 0}^{C_{\text{in}} - 1} \text{weight}(C_{\text{out}_j}, k) \star \text{input}(N_i, k)
 
+    where :math:`\star` is a valid 2D cross-correlation operator, :math:`N` is batch size, :math:`C` denotes the number of channels,
+    :math:`H` is a height of input planes in pixels, and :math:`W` is width in pixels.
+
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | Argument         | Description                                                          | Data type         | Valid range                                    | Required |
+    +==================+======================================================================+===================+================================================+==========+
+    | weights          | Weights tensor                                                       | Tensor            |                                                | Yes      |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | biases           | Bias tensor                                                          | Tensor            |                                                | Yes      |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | in_channels      | Number of channels in the input image                                | int               |                                                | Yes      |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | out_channels     | Number of channels produced by the convolution                       | int               |                                                | Yes      |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | kernel_size      | Size of the convolving kernel                                        | int or Tuple[int] |                                                | Yes      |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | stride           | Stride of the convolution                                            | int or Tuple[int] | default is 1                                   | No       |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | padding          | Padding added to all four sides of the input                         | int or Tuple[int] | default is 0                                   | No       |
+    |                  |                                                                      |                   |                                                |          |
+    |                  |                                                                      | or string         | ‘valid’ or ‘same’                              |          |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | dilation         | Spacing between kernel elements                                      | int or Tuple[int] | default is 1                                   | No       |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | groups           | Number of blocked connections from input channels to output channels | int               | default is 1                                   | No       |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | bias             | If `True`, adds a learnable bias to the output                       | bool              | default is `True`                              | No       |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
+    | padding_mode     | Padding mode                                                         | string            | `zeros`, `reflect`, `replicate`, or `circular` | No       |
+    |                  |                                                                      |                   |                                                |          |
+    |                  |                                                                      |                   | default is `zeros`                             |          |
+    +------------------+----------------------------------------------------------------------+-------------------+------------------------------------------------+----------+
     """
 
     @convert_tt_tensors_wrapper
@@ -229,6 +411,24 @@ class GroupNorm(torch.nn.Module):
 
     .. math::
         y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta
+
+    ``affine`` is a boolean value that when set to `True`, this module has lernable per-channel affine parameters initialized to ones (for weights) and zeros (for biases).
+
+    +------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | Argument         | Description                                                          | Data type         | Valid range       | Required |
+    +==================+======================================================================+===================+===================+==========+
+    | weights          | Weights tensor                                                       | Tensor            |                   | Yes      |
+    +------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | biases           | Bias tensor                                                          | Tensor            |                   | Yes      |
+    +------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | num_groups       | Number of groups to separate the channels into                       | int               |                   | Yes      |
+    +------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | num_channels     | Number of channels expected in input                                 | int               |                   | Yes      |
+    +------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | eps              | A value added to the denominator for numerical stability             | float             | default is 1e-05  | No       |
+    +------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | affine           | Controls initialization of weights and biases                        | bool              | default is `True` | No       |
+    +------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
     """
 
     @convert_tt_tensors_wrapper
@@ -259,12 +459,26 @@ class GroupNorm(torch.nn.Module):
 
 class LayerNorm(torch.nn.Module):
     r"""
-    Applies Layer Normalization over a mini-batch of inputs as described in
-    the paper `Layer Normalization <https://arxiv.org/abs/1607.06450>`__
+    Applies Layer Normalization over a mini-batch of inputs as described in the paper `Layer Normalization <https://arxiv.org/abs/1607.06450>`__
 
     .. math::
-        y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta
+        y = \frac{x - \text{E}[x]}{\sqrt{\text{Var}[x] + \epsilon}} * \gamma + \beta
 
+    ``elementwise_affine`` is a boolean value that when set to `True`, this module has lernable per-element affine parameters initialized to ones (for weights) and zeros (for biases).
+
+    +--------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | Argument           | Description                                                          | Data type         | Valid range       | Required |
+    +====================+======================================================================+===================+===================+==========+
+    | weights            | Weights tensor                                                       | Tensor            |                   | Yes      |
+    +--------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | biases             | Bias tensor                                                          | Tensor            |                   | Yes      |
+    +--------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | normalized_shape   | Shape over which to normalize                                        | int or List[int]  |                   | Yes      |
+    +--------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | eps                | A value added to the denominator for numerical stability             | float             | default is 1e-05  | No       |
+    +--------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | elementwise_affine | Controls initialization of weights and biases                        | bool              | default is `True` | No       |
+    +--------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
     """
 
     @convert_tt_tensors_wrapper
