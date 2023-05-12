@@ -167,7 +167,6 @@ void set_risc_reset_vector() {
 
 void l1_to_ncrisc_iram_copy() {
     // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
-    // NOTE: NCRISC_L1_SCRATCH_BASE (part of NCRISC_FIRMWARE_BASE) is used as NCRISC scratch after NCRISC is loaded
     tdma_xmov(
         TDMA_MOVER0,
         (l1_mem::address_map::NCRISC_FIRMWARE_BASE) >> 4,
