@@ -72,7 +72,7 @@ build : $(OUTPUT_DIR)
 	@$(PRINT_SUCCESS)
 
 include $(FIRMWARE_RISCV_DIR)/toolchain/riscv.mk
-ck_common_prereqs: $(OUTPUT_DIR) $(OUTPUT_DIR)/ckernel.o $(OUTPUT_DIR)/ckernel_template.o $(OUTPUT_DIR)/ckernel_main.o $(OUTPUT_DIR)/ckernel_perf_unpack_pack.o $(OUTPUT_DIR)/ckernel.fwlog $(EXTRA_OBJECTS)
+ck_common_prereqs: $(OUTPUT_DIR) $(OUTPUT_DIR)/ckernel.o $(OUTPUT_DIR)/ckernel_template.o $(OUTPUT_DIR)/ckernel_main.o $(OUTPUT_DIR)/ckernel_perf_unpack_pack.o $(EXTRA_OBJECTS)
 
 clean:
 	rm -rf out
