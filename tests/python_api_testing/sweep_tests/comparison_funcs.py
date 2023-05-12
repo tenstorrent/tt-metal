@@ -30,37 +30,38 @@ def get_atol_rtol_pcc(golden, calculated):
     # if torch.any(torch.isneginf(golden)) or torch.any(torch.isneginf(calculated)):
     #    raise RuntimeError(f"Tensor overflow to negative infinity: \n{golden}\n{calculated}")
 
-    # For now, mask all infs and nans so that we check the rest... TODO
-    golden = golden.clone()
-    golden[
-        torch.logical_or(
-            torch.isnan(golden),
-            torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-        )
-    ] = 0
-    calculated = calculated.clone()
-    calculated[
-        torch.logical_or(
-            torch.isnan(calculated),
-            torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-        )
-    ] = 0
+    else:
+        # For now, mask all infs and nans so that we check the rest... TODO
+        golden = golden.clone()
+        golden[
+            torch.logical_or(
+                torch.isnan(golden),
+                torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
+            )
+        ] = 0
+        calculated = calculated.clone()
+        calculated[
+            torch.logical_or(
+                torch.isnan(calculated),
+                torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
+            )
+        ] = 0
 
-    if torch.equal(golden, calculated):
-        cal_pcc = 1.0
+        if torch.equal(golden, calculated):
+            cal_pcc = 1.0
 
-    if golden.dtype == torch.bfloat16:
-        golden = golden.type(torch.float32)
-        calculated = calculated.type(torch.float32)
-    cal_pcc = np.min(
-        np.ma.corrcoef(
-            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
+        if golden.dtype == torch.bfloat16:
+            golden = golden.type(torch.float32)
+            calculated = calculated.type(torch.float32)
+        cal_pcc = np.min(
+            np.ma.corrcoef(
+                np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
+                np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
+            )
         )
-    )
 
-    if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-        cal_pcc = 1.0
+        if isinstance(cal_pcc, np.ma.core.MaskedConstant):
+            cal_pcc = 1.0
 
     return (
         cal_atol,
