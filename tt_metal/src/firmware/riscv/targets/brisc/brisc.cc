@@ -153,18 +153,6 @@ void set_trisc_address() {
     cfg_regs[NCRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0x1;
 }
 
-// Brisc implements risc_reset_vector since Brisc will reset Ncrisc.
-void set_risc_reset_vector() {
-    volatile uint32_t* cfg_regs = core.cfg_regs_base(0);
-    volatile uint32_t* risc_reset_req = (volatile uint32_t*)l1_mem::address_map::NCRISC_L1_CONTEXT_BASE;
-
-    // Address of ncrisc context restore routine.
-    // Upon exiting reset, we need to restore ncrisc context so that it can resume program execution.
-    // ncrisc puts the address of context restore routine @ 0x5024.
-    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = risc_reset_req[1];
-    cfg_regs[NCRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0x1;
-}
-
 void l1_to_ncrisc_iram_copy() {
     // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
     tdma_xmov(
@@ -397,7 +385,7 @@ int main() {
 #endif
 
     while (true) {
-        risc_reset_check();
     }
+
     return 0;
 }

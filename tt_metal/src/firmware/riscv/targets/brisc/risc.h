@@ -22,7 +22,6 @@ inline void RISC_POST_STATUS(uint32_t status) {
   ptr[0] = status;
 }
 
-void set_risc_reset_vector();
 void risc_reset_check();
 
 #define RISC_EPOCH_INFO_PTR EPOCH_INFO_PTR

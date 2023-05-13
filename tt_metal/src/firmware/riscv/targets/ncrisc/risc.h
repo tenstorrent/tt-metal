@@ -23,7 +23,6 @@ inline __attribute__((always_inline)) void RISC_POST_DEBUG(uint32_t info) {
 #endif
 }
 
-void set_risc_reset_vector();
 uint8_t risc_streams_kernels_done();
 
 #define RISC_EPOCH_INFO_PTR EPOCH_INFO_PTR

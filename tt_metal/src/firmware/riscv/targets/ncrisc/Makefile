@@ -13,7 +13,6 @@ DEFINES =
 SOURCES = \
 	ncrisc.cc \
 	context.cc \
-	contextASM.S \
 	$(TT_METAL_HOME)/src/firmware/riscv/common/risc_common.cc \
 
 

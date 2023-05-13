@@ -164,7 +164,6 @@ inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsig
   return r;
 }
 
-void risc_reset_check();
 void risc_init();
 void replicate(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32_t chunk_size_bytes, uint32_t times_to_replicate);
 void __attribute__((section("code_l1"))) replicate_l1(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32_t chunk_size_bytes, uint32_t times_to_replicate);

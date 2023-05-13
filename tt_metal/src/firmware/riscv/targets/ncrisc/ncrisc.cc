@@ -34,13 +34,6 @@ uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 
-// Ncrisc does not implement set_risc_reset_vector since Ncrisc requests Brisc
-// to reset ncrisc. This function is implemented in Brisc.
-void set_risc_reset_vector()
-{
-
-}
-
 inline void record_mailbox_value(uint16_t event_value) {
   if (mailbox_index < mailbox_end) {
     debug_mailbox_base[mailbox_index] = event_value;

@@ -3,25 +3,6 @@
 #include "noc_nonblocking_api.h"
 #include "stream_interface.h"
 
-void risc_reset_check()
-{
-  volatile uint32_t *risc_reset_req = (volatile uint32_t *)l1_mem::address_map::NCRISC_L1_CONTEXT_BASE;
-  if (risc_reset_req[0] == 1)
-  {
-    risc_reset_req[0] = 0;
-    // Assert NCRISC reset
-    uint32_t temp = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
-    temp |= 0x40000;
-    WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, temp);
-    set_risc_reset_vector();
-
-    // Deassert NCRISC reset
-    temp = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
-    temp &= 0xFFFBFFFF;
-    WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, temp);
-  }
-}
-
 void risc_init() {
   for (uint32_t n = 0; n < NUM_NOCS; n++) {
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);

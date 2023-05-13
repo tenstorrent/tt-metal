@@ -455,10 +455,10 @@ void generate_binary_for_risc(
     vector<string> bobjl = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0.o"};
     vector<string> bcwds = {"",        "",              "",            "",      "",                  ""};
 
-    vector<string> ncpps = {"ncrisc.cc", "context.cc", "contextASM.S", "risc_common.cc", "risc_chip_specific.c", "substitutes.cpp", "tmu-crt0.S"};
-    vector<string> nobjs = {"ncrisc.o",  "context.o",  "contextASM.o", "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"};
-    vector<string> nobjl = {"ncrisc.o",  "context.o",  "contextASM.o", "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"};
-    vector<string> ncwds = {"",  "",  "", "",  "", "",   ""};
+    vector<string> ncpps = {"ncrisc.cc", "context.cc", "risc_common.cc", "risc_chip_specific.c", "substitutes.cpp", "tmu-crt0.S"};
+    vector<string> nobjs = {"ncrisc.o",  "context.o",  "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"};
+    vector<string> nobjl = {"ncrisc.o",  "context.o",  "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"};
+    vector<string> ncwds = {"",  "",  "", "",  "", ""};
 
     vector<string> tcpps = {"src/ckernel.cc", "src/ckernel_template.cc", "src/ckernel_main.cc", "substitutes.cpp", "tmu-crt0.S" };
     vector<string> tobjs = {"ckernel.o",      "ckernel_template.o",      "ckernel_main.o",      "substitutes.o",   "tmu-crt0.o" };
@@ -471,9 +471,9 @@ void generate_binary_for_risc(
     switch (risc_id) {
         case RISCID::NC:
             ncwds[0] = "tt_metal/src/firmware/riscv/targets/ncrisc";
-            ncwds[3] = "tt_metal/src/firmware/riscv/common";
-            ncwds[4] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "";
-            ncwds[5] = "tt_metal/src/firmware/riscv/toolchain";
+            ncwds[2] = "tt_metal/src/firmware/riscv/common";
+            ncwds[3] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "";
+            ncwds[4] = "tt_metal/src/firmware/riscv/toolchain";
             cpps = move(ncpps); objs = move(nobjs); cwds = move(ncwds);
             objls = move(nobjl);
         break;
