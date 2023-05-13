@@ -38,12 +38,6 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SPACE_BASE = TRISC2_BASE + TRISC2_SIZE;
   static constexpr std::int32_t BRISC_LOCAL_MEM_BASE = DATA_BUFFER_SPACE_BASE; // Only used during init.
 
-  // Upper 2KB of local space is used as debug buffer
-  static constexpr std::int32_t DEBUG_BUFFER_SIZE  = 2 * 1024;
-  static constexpr std::int32_t TRISC0_DEBUG_BUFFER_BASE  = TRISC0_LOCAL_MEM_BASE + DEBUG_BUFFER_SIZE;
-  static constexpr std::int32_t TRISC1_DEBUG_BUFFER_BASE  = TRISC1_LOCAL_MEM_BASE + DEBUG_BUFFER_SIZE;
-  static constexpr std::int32_t TRISC2_DEBUG_BUFFER_BASE  = TRISC2_LOCAL_MEM_BASE + DEBUG_BUFFER_SIZE;
-
   static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1464 * 1024; // 1464 KB
 
   // Perf buffer (FIXME - update once location of the perf data buffer is finalized)

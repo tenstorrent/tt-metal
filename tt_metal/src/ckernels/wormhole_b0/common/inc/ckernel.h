@@ -445,15 +445,7 @@ inline void clear_mailbox_values(uint16_t value = 0) {
 }
 
 inline void debug_dump(uint8_t *data, uint32_t byte_size) {
-  for (uint32_t i = 0; i < byte_size; i++) {
-    if ((((uint32_t) debug_buffer)&(l1_mem::address_map::DEBUG_BUFFER_SIZE-1)) ==
-         l1_mem::address_map::DEBUG_BUFFER_SIZE-1) {
-       *(debug_buffer) = 0xff; //overflow detected
-    } else {
-       *debug_buffer = data[i];
-       debug_buffer++;
-    }
-  }
+    // TODO(pk) re-implement
 }
 
 inline void llk_get_next_op_info(tt::op_info_t& op_info_struct) {

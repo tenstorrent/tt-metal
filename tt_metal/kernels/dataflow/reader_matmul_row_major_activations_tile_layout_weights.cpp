@@ -65,9 +65,6 @@ void kernel_main() {
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
-    volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
-    // mbox[0] = 5;
-
     uint32_t row_offset = 0;
     int some_var = 0;
     for(uint32_t b = 0; b < num_blocks; b++) {
@@ -90,7 +87,6 @@ void kernel_main() {
             }
             noc_async_read_barrier();
         }
-        // mbox[0] = b;
         row_offset = (row_offset + in0_partial_row_size) % in0_row_size;
 
         uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;

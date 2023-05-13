@@ -33,8 +33,6 @@ inline void pack_row(uint32_t num_tiles_to_pack, uint32_t cb_id) {
 }
 
 inline void reblock_and_untilize_output(uint32_t out_subblock_h, uint32_t out_block_w, uint32_t reblock_cb_id, uint32_t untilize_cb_id) {
-    // volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC1_DEBUG_BUFFER_BASE);
-    // mbox[0] = out_block_w;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
         // Can only push row because the CB can only fit
         // one row
@@ -47,16 +45,12 @@ inline void pack_block_and_untilize(
     uint32_t in0_num_subblocks, uint32_t in1_num_subblocks,
     uint32_t out_subblock_num_tiles, uint32_t out_subblock_h, uint32_t out_block_w,
     uint32_t interm_cb_id, uint32_t reblock_cb_id) {
-    // volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC1_DEBUG_BUFFER_BASE);
-    volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
-
 
     for (uint32_t in0_subblock = 0U; in0_subblock < in0_num_subblocks; in0_subblock++) {
         for (uint32_t in1_subblock = 0U; in1_subblock < in1_num_subblocks; in1_subblock++) {
             llk_packer_wait_for_math_done();
 
             llk_wait_for_free_tiles<false,false,false>(interm_cb_id, out_subblock_num_tiles);
-            mbox[0] = 5;
             for (uint32_t i = 0U; i < out_subblock_num_tiles; i++) {
                 llk_pack<false, SyncHalf, false >(i, interm_cb_id);
             }

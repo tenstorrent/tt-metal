@@ -31,8 +31,6 @@ void reblock_and_untilize(
     uint32_t interm_cb_id,
     uint32_t reblock_cb_id) {
 
-    volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
-
     // Wait for a row of subblocks such that the total width matches
     // the out block width. Must wait for a whole row of subblocks to arrive
     // before we can proceed.

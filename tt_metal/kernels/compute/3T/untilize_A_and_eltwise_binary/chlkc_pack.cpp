@@ -13,7 +13,6 @@ llk_pack_init();
 llk_pack_hw_configure_disaggregated<false>(16);
 llk_setup_outputs();
 llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>();
-volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
 
 for (uint32_t block = 0; block < per_core_num_blocks; block++) {
     for (uint32_t r = 0; r < per_core_block_r_tiles; r++) {

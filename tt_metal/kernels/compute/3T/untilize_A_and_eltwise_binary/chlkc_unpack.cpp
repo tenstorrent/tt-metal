@@ -16,8 +16,6 @@ llk_setup_operands();
 llk_unpack_AB_hw_configure_disaggregated<BroadcastType::NONE>(0,1);
 // llk_unpack_untilize_hw_configure_disaggregated(0);
 
-// volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
-
 // llk_unpack_untilize_init(0);
 for (uint32_t block = 0U; block < per_core_num_blocks; ++block) {
   for (uint32_t r = 0; r < per_core_block_r_tiles; r++) {

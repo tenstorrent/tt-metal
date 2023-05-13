@@ -110,16 +110,7 @@ inline void allocate_debug_mailbox_buffer() {
 }
 
 inline void allocate_debug_buffer() {
-   std::int32_t debug_buffer_addr;
-   if ((uint32_t)__firmware_start == (uint32_t)l1_mem::address_map::TRISC0_BASE) {
-      debug_buffer_addr = l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE;
-   } else if ((uint32_t) __firmware_start == (uint32_t)l1_mem::address_map::TRISC1_BASE) {
-      debug_buffer_addr = l1_mem::address_map::TRISC1_DEBUG_BUFFER_BASE;
-   } else {
-      debug_buffer_addr = l1_mem::address_map::TRISC2_DEBUG_BUFFER_BASE;
-   }
-   debug_buffer = reinterpret_cast<volatile uint8_t *>(debug_buffer_addr);
-   debug_buffer[l1_mem::address_map::DEBUG_BUFFER_SIZE-1]=0x0;
+    // TODO(PK) reimplement debug buffer
 }
 
 } // namespace ckernel

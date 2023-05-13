@@ -7,8 +7,6 @@
 namespace NAMESPACE {
 void MAIN {
 
-    volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
-
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
     //UNPACK(( DPRINT << "Block count=" << U32(per_core_block_cnt) << " tile count=" << per_core_block_tile_cnt << ENDL() ));

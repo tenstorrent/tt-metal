@@ -22,8 +22,6 @@ inline void tilize_activation(
 
 inline void reblock_and_untilize_output(uint32_t out_subblock_h, uint32_t out_block_w) {
     llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>();
-    volatile uint32_t* mbox = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC0_DEBUG_BUFFER_BASE);
-    volatile uint32_t* mbox2 = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::TRISC1_DEBUG_BUFFER_BASE);
 
     for (uint32_t i = 0; i < out_subblock_h; i++) {
         for (int j = 0; j < 2; j++) {
