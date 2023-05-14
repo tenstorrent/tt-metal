@@ -37,16 +37,16 @@ public:
         const uint32_t addr[] = { TENSIX_MAILBOX1_BASE, TENSIX_MAILBOX2_BASE, TENSIX_MAILBOX3_BASE };
         return reinterpret_cast<uint32_t*>(addr[thread_id]);
     }
-    static volatile uint32_t &test_mailbox() { return *(uint32_t *)TEST_MAILBOX_ADDRESS; }
+    static volatile uint32_t &test_mailbox() { return *(uint32_t *)MEM_TEST_MAILBOX_ADDRESS; }
 
     static volatile uint64_t *wall_clock_mailbox()
     {
-        return (uint64_t *)WALL_CLOCK_MAILBOX_ADDRESS;
+        return (uint64_t *)MEM_WALL_CLOCK_MAILBOX_ADDRESS;
     }
 
     static volatile uint32_t *debug_mailbox()
     {
-        return (uint32_t *)DEBUG_MAILBOX_ADDRESS;
+        return (uint32_t *)MEM_DEBUG_MAILBOX_ADDRESS;
     }
 
     static void ex_setc16(uint addr, uint val, vptr_uint instrn_buf) { ::ex_setc16(addr, val, instrn_buf); }

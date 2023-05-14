@@ -108,16 +108,16 @@ memory memory::from_discontiguous_risc_hex(std::istream& in, memory::risc_type_t
   read_discontiguous_hex_file(in, [&](memory::address_t word_addr, memory::word_t value) {
     if (result.size() == 0) {  // first call
       // Remap local memory address to temp location in l1
-      if ((is_trisc || is_ncrisc) && (((word_addr << 2) & 0xfff00000) == LOCAL_MEM_BASE)) {
+      if ((is_trisc || is_ncrisc) && (((word_addr << 2) & 0xfff00000) == MEM_LOCAL_BASE)) {
         word_addr = (word_addr & ((l1_mem::address_map::MAX_L1_LOADING_SIZE >> 2) - 1)) + risc_l1_local_memory_base_addr;
-      } else if ((is_ncrisc) && (((word_addr << 2) & 0xfff00000) == NCRISC_IRAM_MEM_BASE)) {
-        word_addr = (word_addr & ((l1_mem::address_map::MAX_L1_LOADING_SIZE >> 2) - 1)) + (l1_mem::address_map::NCRISC_FIRMWARE_BASE >> 2);
+      } else if ((is_ncrisc) && (((word_addr << 2) & 0xfff00000) == MEM_NCRISC_IRAM_BASE)) {
+        word_addr = (word_addr & ((l1_mem::address_map::MAX_L1_LOADING_SIZE >> 2) - 1)) + (MEM_NCRISC_FIRMWARE_BASE >> 2);
       }
       if (is_ncrisc) {
         // For ncrisc, first block of hex data is L1 resident and goes @ address 0x9000. But the base address for ncrisc
         // hex image in L1 has to be 0x5000 which maps to l1_mem::address_map::NCRISC_FIRMWARE_BASE and is 16 KB in size
         // from 0x5000 to 0x8FFF in L1. Followed by L1 residend ncrisc code @ 0x9000 in L1.
-        result = memory(l1_mem::address_map::NCRISC_FIRMWARE_BASE, word_size);
+        result = memory(MEM_NCRISC_FIRMWARE_BASE, word_size);
       } else {
         result = memory(word_addr * word_size, word_size);
       }
@@ -125,10 +125,10 @@ memory memory::from_discontiguous_risc_hex(std::istream& in, memory::risc_type_t
     // Remap local memory address from hex into location in l1 where copy of the local  memory content resides.
     // During *risc init firmware will copy data from l1 into local memory
     // During brisc init firmware will use DMA to copy ncrisc firmware to l1 to iram
-    if (((word_addr << 2) & 0xfff00000) == LOCAL_MEM_BASE) {
+    if (((word_addr << 2) & 0xfff00000) == MEM_LOCAL_BASE) {
        word_addr = (word_addr & ((l1_mem::address_map::MAX_L1_LOADING_SIZE >> 2) - 1)) + risc_l1_local_memory_base_addr;
-    } else if ((is_ncrisc) && (((word_addr << 2) & 0xfff00000) == NCRISC_IRAM_MEM_BASE)) {
-       word_addr = (word_addr & ((l1_mem::address_map::MAX_L1_LOADING_SIZE >> 2) - 1)) + (l1_mem::address_map::NCRISC_FIRMWARE_BASE >> 2);
+    } else if ((is_ncrisc) && (((word_addr << 2) & 0xfff00000) == MEM_NCRISC_IRAM_BASE)) {
+       word_addr = (word_addr & ((l1_mem::address_map::MAX_L1_LOADING_SIZE >> 2) - 1)) + (MEM_NCRISC_FIRMWARE_BASE >> 2);
     }
 
     if (result.limit_word() <= word_addr) {

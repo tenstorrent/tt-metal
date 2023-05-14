@@ -25,7 +25,7 @@ TOOLCHAIN := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 include $(TT_METAL_HOME)/tt_metal/common/common.mk
 
-SFPI ?= $(TT_METAL_HOME)/src/ckernels/sfpi
+SFPI ?= $(TT_METAL_HOME)/tt_metal/src/ckernels/sfpi
 RISCV_TOOLS_PREFIX := $(SFPI)/compiler/bin/riscv32-unknown-elf-
 # RISCV_TOOLS_PREFIX := /home/software/risc-v/riscv64-unknown-elf-gcc-8.3.0-2020.04.0-x86_64-linux-ubuntu14/bin/riscv64-unknown-elf-
 CXX := $(CCACHE) $(RISCV_TOOLS_PREFIX)g++
@@ -78,20 +78,17 @@ TRISC_L0_EN ?= 0
 ARCH := -march=rv32i -mabi=ilp32 $(ARCH_FLAG)
 # ARCH := -march=rv32i -mabi=ilp32
 LINKER_SCRIPT_NAME ?= tensix.ld
-LINKER_SCRIPT := $(TOOLCHAIN)/$(LINKER_SCRIPT_NAME)
+LINKER_SCRIPT_SRC := $(TOOLCHAIN)/$(LINKER_SCRIPT_NAME)
 DEFS := -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=$(TRISC_L0_EN)
 
 ARCH_NAME ?= grayskull
 
 OUTPUT_DIR ?= $(TT_METAL_HOME)/build/src/firmware/riscv/targets/$(FIRMWARE_NAME)/out
+LINKER_SCRIPT := $(OUTPUT_DIR)/$(LINKER_SCRIPT_NAME)
 GEN_DIR := gen
 FIRMWARE_NAME ?= firmware
 INFO_NAME ?= $(FIRMWARE_NAME)
 FIRMWARE_START ?= 0
-TRISC0_SIZE ?= 16384
-TRISC1_SIZE ?= 16384
-TRISC2_SIZE ?= 16384
-TRISC_BASE  ?= 27648
 
 # All objects are dumped into out, so we don't support two source files in different directories with the same name.
 ifneq ($(words $(sort $(SOURCES))),$(words $(sort $(notdir $(SOURCES)))))
@@ -104,17 +101,17 @@ SOURCE_DIRS := $(filter-out ./,$(sort $(dir $(SOURCES))))
 INCLUDES := $(INCLUDES) -I "$(TT_METAL_HOME)" -I "$(TT_METAL_HOME)/tt_metal" -I "$(SFPI)/include" -I "$(TT_METAL_HOME)/src/firmware/riscv/common" $(addprefix -iquote ,$(SOURCE_DIRS)) -iquote .
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole"
-  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole/noc"
-  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole/wormhole_b0_defines"
+  INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole"
+  INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole/noc"
+  INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole/wormhole_b0_defines"
 else
-  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/grayskull/grayskull_defines"
-  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/grayskull"
-  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/grayskull/noc"
+  INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/grayskull/grayskull_defines"
+  INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/grayskull"
+  INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/grayskull/noc"
 endif
 
 ifeq ("$(ARCH_NAME)", "wormhole")
-  INCLUDES += $(INCLUDES) -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole/wormhole_a0_defines"
+  INCLUDES += -I "$(TT_METAL_HOME)/src/firmware/riscv/wormhole/wormhole_a0_defines"
 endif
 
 # These are deferred so I can adjust DEP_FLAGS in the dependency-generation-only rules
@@ -122,7 +119,6 @@ CXXFLAGS = $(ARCH) $(DEP_FLAGS) $(OPT_FLAGS) $(CXX_LANG_FLAGS) $(DEFINES) $(DEFS
 CFLAGS = $(ARCH) $(DEP_FLAGS) $(OPT_FLAGS) $(C_LANG_FLAGS) $(DEFINES) $(DEFS) $(INCLUDES)
 
 LDFLAGS := $(ARCH) $(OPT_FLAGS) -Wl,--gc-sections -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--defsym=__firmware_start=$(FIRMWARE_START) \
--Wl,--defsym=__trisc_base=$(TRISC_BASE) -Wl,--defsym=__trisc0_size=$(TRISC0_SIZE) -Wl,--defsym=__trisc1_size=$(TRISC1_SIZE) -Wl,--defsym=__trisc2_size=$(TRISC2_SIZE) \
 -T$(LINKER_SCRIPT) -L$(TOOLCHAIN) -nostartfiles
 
 OUTFW := $(OUTPUT_DIR)/$(FIRMWARE_NAME)
@@ -165,6 +161,9 @@ ifeq ($(DEBUG_MODE),1)
 	endif
 endif
 
+$(OUTPUT_DIR)/%.ld: %.ld | $(OUTPUT_DIR)
+	$(CXX) $(DEFINES) $(DEFS) $(INCLUDES) -E -P -x c -o $@ $<
+
 $(OUTPUT_DIR)/%.d: %.c | $(OUTPUT_DIR)
 	$(CXX) $(CXXFLAGS) -x c++ -c -o $@ $<
 
@@ -183,7 +182,6 @@ $(GEN_DIR)/%.asm.h: %.asm | $(GEN_DIR)
 	$(TDMA_ASSEMBLER) --out-array $@ $<
 
 $(OUTPUT_DIR):
-	@echo MKDIR $@
 	-mkdir -p $@
 
 # Assemble RISC-V sources using C compiler

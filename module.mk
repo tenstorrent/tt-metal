@@ -84,6 +84,7 @@ endif
 LIBS_TO_BUILD = \
 	common \
 	src/ckernels \
+	src/firmware \
 	build_kernels_for_riscv \
 	device \
 	llrt \

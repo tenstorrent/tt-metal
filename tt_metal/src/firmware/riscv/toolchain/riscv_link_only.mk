@@ -1,7 +1,7 @@
 all:: # Always first to guarantee all is the default goal.
 
 
-SFPI ?= $(TT_METAL_HOME)/src/ckernels/sfpi
+SFPI ?= $(TT_METAL_HOME)/tt_metal/src/ckernels/sfpi
 
 ifeq ($(RELEASE), 1)
 TOOLCHAIN := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
@@ -27,16 +27,13 @@ ARCH_FLAG := "-mwormhole"
 endif
 ARCH := -march=rv32i $(ARCH_FLAG) -mabi=ilp32
 LINKER_SCRIPT_NAME ?= tensix.ld
-LINKER_SCRIPT := $(TOOLCHAIN)/$(LINKER_SCRIPT_NAME)
+LINKER_SCRIPT_SRC := $(TOOLCHAIN)/$(LINKER_SCRIPT_NAME)
 
 OUTPUT_DIR ?= out
+LINKER_SCRIPT := $(OUTPUT_DIR)/$(LINKER_SCRIPT_NAME)
 FIRMWARE_NAME ?= firmware
 INFO_NAME ?= $(FIRMWARE_NAME)
 FIRMWARE_START ?= 0
-TRISC0_SIZE ?= 16384
-TRISC1_SIZE ?= 16384
-TRISC2_SIZE ?= 16384
-TRISC_BASE  ?= 27648
 
 # All objects are dumped into out, so we don't support two source files in different directories with the same name.
 ifneq ($(words $(sort $(SOURCES))),$(words $(sort $(notdir $(SOURCES)))))
@@ -44,7 +41,6 @@ $(error $$(SOURCES) contains a duplicate filename)
 endif
 
 LDFLAGS := $(ARCH) $(OPT_FLAGS) -Wl,--gc-sections -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--defsym=__firmware_start=$(FIRMWARE_START) \
--Wl,--defsym=__trisc_base=$(TRISC_BASE) -Wl,--defsym=__trisc0_size=$(TRISC0_SIZE) -Wl,--defsym=__trisc1_size=$(TRISC1_SIZE) -Wl,--defsym=__trisc2_size=$(TRISC2_SIZE) \
 -T$(LINKER_SCRIPT) -L$(TOOLCHAIN) -nostartfiles
 
 OUTFW := $(OUTPUT_DIR)/$(FIRMWARE_NAME)
@@ -58,6 +54,12 @@ OBJECTS := $(addprefix $(CKERNELS_COMMON_OUT_DIR)/, $(addsuffix .o,$(basename $(
 
 # vpath % $(subst $(space),:,$(TOOLCHAIN) $(SOURCE_DIRS) $(TT_METAL_HOME)/src/ckernels/$(ARCH_NAME)/common/out)
 
+ifeq ("$(ARCH_NAME)", "wormhole_b0")
+  INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole"
+else
+  INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/grayskull"
+endif
+
 #FIXME: removing bin generation for now, as it is not used
 ifeq ($(MAKE_FW_MAP),1)
 all:: extras $(OUTFW).hex  $(OUTFW).map #$(OUTFW).bin
@@ -66,6 +68,12 @@ else
 all:: extras $(OUTFW).hex #$(OUTFW).bin
 	@$(PRINT_SUCCESS)
 endif
+
+$(OUTPUT_DIR):
+	-mkdir -p $@
+
+$(LINKER_SCRIPT): $(LINKER_SCRIPT_SRC) | $(OUTPUT_DIR)
+	$(CXX) $(DEFINES) $(DEFS) $(INCLUDES) -E -P -x c -o $@ $<
 
 # Link using C++ compiler
 $(OUTFW).elf: $(OBJECTS) $(EXTRA_OBJECTS) $(LINKER_SCRIPT)

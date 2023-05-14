@@ -1,6 +1,6 @@
 
 CKERNELS_DIR = $(TT_METAL_HOME)/src/ckernels
-FIRMWARE_RISCV_DIR  = $(TT_METAL_HOME)/src/firmware/riscv
+FIRMWARE_RISCV_DIR  = $(TT_METAL_HOME)/tt_metal/src/firmware/riscv
 COMPILED_KERNELS_DIR?=$(CKERNELS_DIR)/$(ARCH_NAME)/src/out
 COMPILED_KERNELS_DIR_FINAL= $(COMPILED_KERNELS_DIR)/
 UNUSED_COMPILED_KERNELS_DIR=$(CKERNELS_DIR)/$(ARCH_NAME)/src/blank/out/
@@ -76,6 +76,8 @@ all :: $(OUTPUT_DIR)/$(FIRMWARE_NAME).hex $(OUTPUT_DIR)/$(FIRMWARE_NAME).map $(O
 else
 all :: $(OUTPUT_DIR)/$(FIRMWARE_NAME).hex $(OUTPUT_DIR)/ckernel.fwlog $(OUTPUT_DIR)/firmware-decodedline.txt $(OUTPUT_DIR)/firmware-debuginfo.txt $(OUTPUT_DIR)/firmware-symbols.txt
 endif
+
+linker_scripts: $(LINKER_SCRIPT)
 
 clean :
 	rm -rfd $(OUTPUT_DIR)

@@ -297,9 +297,9 @@ std::unique_ptr<tt_SocDescriptor> load_soc_descriptor_from_yaml(std::string devi
   fdesc.close();
 
   YAML::Node device_descriptor_yaml = YAML::LoadFile(device_descriptor_file_path);
-  std::vector<std::size_t> trisc_sizes = {l1_mem::address_map::TRISC0_SIZE,
-                                          l1_mem::address_map::TRISC1_SIZE,
-                                          l1_mem::address_map::TRISC2_SIZE};  // TODO: Read trisc size from yaml
+  std::vector<std::size_t> trisc_sizes = {MEM_TRISC0_SIZE,
+                                          MEM_TRISC1_SIZE,
+                                          MEM_TRISC2_SIZE};  // TODO: Read trisc size from yaml
 
   auto grid_size_x = device_descriptor_yaml["grid"]["x_size"].as<int>();
   auto grid_size_y = device_descriptor_yaml["grid"]["y_size"].as<int>();

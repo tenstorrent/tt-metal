@@ -23,18 +23,38 @@
 
 /////////////
 // RISC-V Address map definition (hardware)
-#define L1_MEM_BASE           0x0         // 0x00000000 - 0xFFBFFFFF
-#define LOCAL_MEM_BASE        0xFFB00000
-#define L0_MEM_BASE           0xFFC00000  // 0xFFC00000 - 0xFFDFFFFF
-#define NCRISC_IRAM_MEM_BASE  0xFFC00000
+#define MEM_L1_BASE           0x0
+#define MEM_L1_SIZE           (1024 * 1024)
 
-#define LOCAL_MEM_SIZE        4096
+#define MEM_LOCAL_BASE        0xFFB00000
+#define MEM_LOCAL_SIZE        (4 * 1024)
+#define MEM_TRISC_LOCAL_SIZE  (2 * 1024)
+
+#define MEM_L0_BASE           0xFFC00000
+#define MEM_NCRISC_IRAM_BASE  0xFFC00000
+#define MEM_NCRISC_IRAM_SIZE  (16 * 1024)
 
 /////////////
 // Mailboxes
-#define TEST_MAILBOX_ADDRESS       4
-#define ENABLE_CORE_MAILBOX        32
-#define WALL_CLOCK_MAILBOX_ADDRESS 96
-#define DEBUG_MAILBOX_ADDRESS      112
-#define DEBUG_MAILBOX_SIZE         64
-#define CQ_MAILBOX_ADDRESS         368
+#define MEM_TEST_MAILBOX_ADDRESS       4
+#define MEM_ENABLE_CORE_MAILBOX        32
+#define MEM_WALL_CLOCK_MAILBOX_ADDRESS 96
+#define MEM_DEBUG_MAILBOX_ADDRESS      112
+#define MEM_DEBUG_MAILBOX_SIZE         64
+#define MEM_CQ_MAILBOX_ADDRESS         368
+
+
+/////////////
+// Firmware/kernel code holes
+#define MEM_BRISC_FIRMWARE_SIZE        (20 * 1024)
+#define MEM_BRISC_FIRMWARE_CODE_SIZE   ( 7 * 1024 + 512)
+#define MEM_NCRISC_FIRMWARE_SIZE       (32 * 1024)
+#define MEM_TRISC0_SIZE                (20 * 1024)
+#define MEM_TRISC1_SIZE                (16 * 1024)
+#define MEM_TRISC2_SIZE                (20 * 1024)
+
+#define MEM_BRISC_FIRMWARE_BASE        0
+#define MEM_NCRISC_FIRMWARE_BASE       (MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE)
+#define MEM_TRISC0_BASE                (MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE)
+#define MEM_TRISC1_BASE                (MEM_TRISC0_BASE + MEM_TRISC0_SIZE)
+#define MEM_TRISC2_BASE                (MEM_TRISC1_BASE + MEM_TRISC1_SIZE)

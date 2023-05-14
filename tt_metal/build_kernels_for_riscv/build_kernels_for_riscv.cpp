@@ -45,9 +45,9 @@ struct CompileDefines {
 
 struct TriscParams {
     // TODO: commonize this with runtime_common.hpp?
-    uint32_t TRISC_BASE { l1_mem::address_map::TRISC_BASE };
-    uint32_t TRISC_L1_MAILBOX_OFFSET { TEST_MAILBOX_ADDRESS };
-    uint32_t trisc_sizes[3] = { l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE };
+    uint32_t TRISC_BASE { MEM_TRISC0_BASE };
+    uint32_t TRISC_L1_MAILBOX_OFFSET { MEM_TEST_MAILBOX_ADDRESS };
+    uint32_t trisc_sizes[3] = { MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE };
     uint32_t trisc_mailbox_addresses[3] = {
         TRISC_BASE + TRISC_L1_MAILBOX_OFFSET,
         TRISC_BASE + trisc_sizes[0] + TRISC_L1_MAILBOX_OFFSET,
@@ -61,7 +61,6 @@ struct TriscParams {
         }
         return 0;
     }
-    int32_t get_trisc_base(RISCID id) { if (id >= RISCID::TR0 && id <= RISCID::TR2) { return TRISC_BASE; } return 0; }
     int32_t get_mailbox_addr(RISCID id) const {
         switch (id) {
             case RISCID::TR0:
@@ -305,26 +304,10 @@ struct CompileContext {
                           " -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--defsym=__firmware_start=0 "
                           " -nostartfiles -g";
         if (defs.is_trisc()) {
-            linkopts += " -Wl,--defsym=__trisc_base=" + to_string(TriscParams().get_trisc_base(defs.hwthread));
-            linkopts += " -Wl,--defsym=__trisc0_size=" + to_string(TriscParams().get_trisc_size(RISCID::TR0));
-            linkopts += " -Wl,--defsym=__trisc1_size=" + to_string(TriscParams().get_trisc_size(RISCID::TR1));
-            linkopts += " -Wl,--defsym=__trisc2_size=" + to_string(TriscParams().get_trisc_size(RISCID::TR2));
             linkopts += " -fno-exceptions"; // TODO(AP): odd that this was not present for brisc in the Makefile
-        } else if (defs.is_brisc() || defs.is_ncrisc()) {
-            if (0) {
-                string tr0_size = to_string(TriscParams().get_trisc_size(RISCID::TR0));
-                string tr1_size = to_string(TriscParams().get_trisc_size(RISCID::TR1));
-                string tr2_size = to_string(TriscParams().get_trisc_size(RISCID::TR2));
-                string tr_base = to_string(TriscParams().TRISC_BASE);
-                std::cout << "BR params: base=" << tr_base << " tr0s=" << tr0_size << " tr1s=" << tr1_size << " tr2s=" << tr2_size << std::endl;
-                linkopts += " -Wl,--defsym=__trisc_base="+tr_base+" -Wl,--defsym=__trisc0_size="+tr0_size+" -Wl,--defsym=__trisc1_size="+tr1_size+
-                            " -Wl,--defsym=__trisc2_size=" +tr2_size + " ";
-            } else {
-                // TODO(AP): unclear which is correct
-                linkopts += " -Wl,--defsym=__trisc_base=27648 -Wl,--defsym=__trisc0_size=16384 -Wl,--defsym=__trisc1_size=16384 -Wl,--defsym=__trisc2_size=16384 ";
-            }
-            if (defs.is_brisc()) // TODO(AP): not on ncrisc, why?
-                linkopts += " -fno-tree-loop-distribute-patterns";
+        } else if (defs.is_brisc()) {
+            // TODO(AP): not on ncrisc, why?
+            linkopts += " -fno-tree-loop-distribute-patterns";
         }
 
         if (getenv("TT_KERNEL_LINKER_MAP") != nullptr) {
@@ -338,20 +321,20 @@ struct CompileContext {
         switch  (defs.hwthread) {
             case RISCID::NC:
             link_str += " -Os";
-            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/ncrisc.ld "; break;
+            link_str += " -T" + home_ + "build/src/firmware/riscv/targets/ncrisc/out/ncrisc.ld "; break;
             case RISCID::TR0:
             link_str += " -O3";
-            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/trisc0.ld "; break;
+            link_str += " -T" + home_ + "build/src/ckernels/out/trisc0.ld "; break;
             case RISCID::TR1:
             link_str += " -O3";
-            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/trisc1.ld "; break;
+            link_str += " -T" + home_ + "build/src/ckernels/out/trisc1.ld "; break;
             case RISCID::TR2:
             link_str += " -O3";
-            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/trisc2.ld "; break;
+            link_str += " -T" + home_ + "build/src/ckernels/out/trisc2.ld "; break;
             default:
             TT_ASSERT(defs.hwthread == RISCID::BR);
             link_str += " -Os";
-            link_str += " -T" + home_ + "/tt_metal/src/firmware/riscv/toolchain/brisc.ld "; break;
+            link_str += " -T" + home_ + "build/src/firmware/riscv/targets/brisc/out/brisc.ld "; break;
         }
         for (auto oname: obj_names)
             link_str += hk + hwthread_name + oname;

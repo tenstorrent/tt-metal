@@ -54,7 +54,7 @@ void tt_cluster::dump_wall_clock_mailbox(std::string output_dir) {
             output_path += to_string(device_id) + ".yaml";
             tt::log_info(tt::LogLLRuntime, "Reading wall-clock mailbox for device {}, output yaml path {}", device_id, output_path);
             std::ofstream output_file(output_path);
-            const int mailbox_base_addr = WALL_CLOCK_MAILBOX_ADDRESS;
+            const int mailbox_base_addr = MEM_WALL_CLOCK_MAILBOX_ADDRESS;
             const int num_mailbox_32_regs = 4;
             const int mailbox_size = num_mailbox_32_regs * 4;
             for (auto &worker_core : get_soc_desc(device_id).workers) {
@@ -334,12 +334,12 @@ void tt_cluster::wait_for_completion(std::string output_dir) {
                 bool is_core_busy = device_idle_cores.at(device_id).find(core) == device_idle_cores.at(device_id).end();
                 if (is_core_busy) {
                     // check for core done
-                    read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), l1_mem::address_map::NCRISC_FIRMWARE_BASE + 4, 4);
+                    read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), MEM_NCRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS, 4);
                     bool is_core_done = (mem_vector.at(0) == 1) or (mem_vector.at(0) == 0xabcd1234);
                     if (is_core_done) {
                         device_idle_cores.at(device_id).insert(core);
                         // check for stream assertions
-                        read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), l1_mem::address_map::FIRMWARE_BASE + 4, 4);
+                        read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), MEM_BRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS, 4);
                         if (mem_vector.at(0) == 0xdeeeaaad) {
                             log_fatal(tt::LogDevice, "Device {} stream assertions detected from core {}-{}", device_id, core.x, core.y);
                         }
@@ -579,8 +579,8 @@ void tt_cluster::dump_debug_mailbox(std::string output_dir) {
 
             std::vector<std::string> debug_mailboxes = {"T0", "T1", "T2", "Ncrisc"};
 
-            const int mailbox_base_addr = DEBUG_MAILBOX_ADDRESS;
-            const int mailbox_size = DEBUG_MAILBOX_SIZE;
+            const int mailbox_base_addr = MEM_DEBUG_MAILBOX_ADDRESS;
+            const int mailbox_size = MEM_DEBUG_MAILBOX_SIZE;
             for (auto &worker_core : get_soc_desc(device_id).workers) {
                 int core_x = worker_core.x;
                 int core_y = worker_core.y;

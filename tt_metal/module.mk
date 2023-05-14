@@ -14,6 +14,7 @@ endif
 
 include $(TT_METAL_HOME)/tt_metal/common/module.mk
 include $(TT_METAL_HOME)/tt_metal/device/module.mk
+include $(TT_METAL_HOME)/tt_metal/src/firmware/module.mk
 include $(TT_METAL_HOME)/tt_metal/src/ckernels/module.mk
 include $(TT_METAL_HOME)/tt_metal/tools/module.mk
 include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/module.mk

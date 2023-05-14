@@ -88,6 +88,8 @@ endif
 KERNEL_COMPILE_TIME_ARGS := $(filter KERNEL_COMPILE_TIME_ARG_%,$(.VARIABLES))
 DEFINES += $(foreach var,$(KERNEL_COMPILE_TIME_ARGS),-D$(var)=$($(var)))
 
+linker_scripts: $(LINKER_SCRIPT)
+
 all:: $(OUTPUT_DIR)/ncrisc.hex $(OUTPUT_DIR)/ncrisc.map $(OUTPUT_DIR)/ncrisc.fwlog $(OUTPUT_DIR)/ncrisc-decodedline.txt $(OUTPUT_DIR)/ncrisc-debuginfo.txt $(OUTPUT_DIR)/ncrisc-symbols.txt
 
 clean::

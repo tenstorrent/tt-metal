@@ -25,7 +25,7 @@ void tt_rnd_set_seed(int seed) {
 
 bool run_dram_copy(tt_cluster *cluster, int chip_id, const tt_xy_pair& core, const int dram_src_channel_id, const int dram_dst_channel_id) {
 
-    uint64_t test_mailbox_addr = l1_mem::address_map::FIRMWARE_BASE + TEST_MAILBOX_ADDRESS;
+    uint64_t test_mailbox_addr = MEM_BRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS;
     constexpr int INIT_VALUE = 69;
     constexpr int DONE_VALUE = 1;
 

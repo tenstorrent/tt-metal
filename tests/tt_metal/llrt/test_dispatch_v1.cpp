@@ -172,11 +172,11 @@ tuple<uint32_t, uint64_t, uint32_t> create_kernel_transfer_info(
     uint32_t kernel_id, DramConfig &dram_config, uint32_t &l1_src) {
     uint32_t write_addr;
     switch (kernel_id) {
-        case 0: write_addr = l1_mem::address_map::FIRMWARE_BASE; break;
-        case 1: write_addr = l1_mem::address_map::NCRISC_FIRMWARE_BASE; break;
-        case 2: write_addr = l1_mem::address_map::TRISC0_BASE; break;
-        case 3: write_addr = l1_mem::address_map::TRISC1_BASE; break;
-        case 4: write_addr = l1_mem::address_map::TRISC2_BASE; break;
+        case 0: write_addr = MEM_BRISC_FIRMWARE_BASE; break;
+        case 1: write_addr = MEM_NCRISC_FIRMWARE_BASE; break;
+        case 2: write_addr = MEM_TRISC0_BASE; break;
+        case 3: write_addr = MEM_TRISC1_BASE; break;
+        case 4: write_addr = MEM_TRISC2_BASE; break;
         default: TT_ASSERT(false, "Invalid kernel_id");
     }
 

@@ -12,19 +12,18 @@
 #include "llrt_common/tiles.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 
-constexpr static uint64_t TEST_MAILBOX_ADDR = l1_mem::address_map::FIRMWARE_BASE + TEST_MAILBOX_ADDRESS;
-constexpr static uint64_t ENABLE_CORE_MAILBOX_ADDR = l1_mem::address_map::FIRMWARE_BASE + ENABLE_CORE_MAILBOX;
-constexpr static uint64_t TEST_MAILBOX_ADDR_NCRISC = l1_mem::address_map::NCRISC_FIRMWARE_BASE + TEST_MAILBOX_ADDRESS;
+constexpr static uint64_t TEST_MAILBOX_ADDR = MEM_BRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS;
+constexpr static uint64_t ENABLE_CORE_MAILBOX_ADDR = MEM_BRISC_FIRMWARE_BASE + MEM_ENABLE_CORE_MAILBOX;
+constexpr static uint64_t TEST_MAILBOX_ADDR_NCRISC = MEM_NCRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS;
 constexpr static int INIT_VALUE = 42;
 constexpr static uint32_t ENABLE_CORE_ENABLE_VALUE = 1;
 constexpr static uint32_t ENABLE_CORE_DONE_VALUE = 0;
 constexpr static int DONE_VALUE = 1;
 
-constexpr static uint32_t TRISC_BASE = l1_mem::address_map::TRISC_BASE;
-constexpr static uint32_t TRISC_L1_MAILBOX_OFFSET = TEST_MAILBOX_ADDRESS;
+constexpr static uint32_t TRISC_BASE = MEM_TRISC0_BASE;
+constexpr static uint32_t TRISC_L1_MAILBOX_OFFSET = MEM_TEST_MAILBOX_ADDRESS;
 
-constexpr static uint32_t trisc_sizes[3] = {
-    l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE};
+constexpr static uint32_t trisc_sizes[3] = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};
 
 constexpr static uint32_t trisc_mailbox_addresses[3] = {
     TRISC_BASE + TRISC_L1_MAILBOX_OFFSET,

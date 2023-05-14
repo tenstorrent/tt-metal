@@ -25,8 +25,8 @@ void tt_rnd_set_seed(int seed) {
 
 bool run_dram_copy_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) {
 
-    uint64_t test_mailbox_addr_brisc = l1_mem::address_map::FIRMWARE_BASE + TEST_MAILBOX_ADDRESS;
-    uint64_t test_mailbox_addr_ncrisc = l1_mem::address_map::NCRISC_FIRMWARE_BASE + TEST_MAILBOX_ADDRESS;
+    uint64_t test_mailbox_addr_brisc = MEM_BRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS;
+    uint64_t test_mailbox_addr_ncrisc = MEM_NCRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS;
 
     constexpr int INIT_VALUE = 69;
     constexpr int DONE_VALUE = 1;

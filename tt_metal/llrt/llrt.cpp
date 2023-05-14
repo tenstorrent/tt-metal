@@ -182,19 +182,19 @@ bool test_load_write_read_risc_binary(
 
     assert(is_worker_core(cluster, core, chip_id));
 
+    log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
     std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id);  // 0 = BRISC, 1 = NCRISC
 
-    log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
-    auto fwsize = riscv_id == 0 ? l1_mem::address_map::BRISC_FIRMWARE_SIZE : l1_mem::address_map::NCRISC_FIRMWARE_SIZE;
+    auto fwsize = riscv_id == 0 ? MEM_BRISC_FIRMWARE_CODE_SIZE : MEM_NCRISC_FIRMWARE_SIZE;
     if (hex_vec.size() * 4 >= fwsize && riscv_id != 0) // TODO(AP): what should this check be on BRISC?
         std::cout << "WARNING: Hex size=" << hex_vec.size()*4 << " core=" << riscv_id << " path=" << hex_file_path << std::endl;
     // PROF_END("get_risc")
 
     uint64_t addr = 0;
     switch (riscv_id) {
-        case 0: addr = l1_mem::address_map::FIRMWARE_BASE; break;         //  BRISC binary addr in L1
-        case 1: addr = l1_mem::address_map::NCRISC_FIRMWARE_BASE; break;  // NCRISC binary addr in L1
+        case 0: addr = MEM_BRISC_FIRMWARE_BASE; break;
+        case 1: addr = MEM_NCRISC_FIRMWARE_BASE; break;
         default: std::cout << "Unknown rsicv_id = " << riscv_id << std::endl; exit(1);
     }
 
@@ -227,9 +227,9 @@ bool test_load_write_read_trisc_binary(
 
     uint32_t fwsize = 0, fwaddr = 0;
     switch (triscv_id) {
-        case 0: fwaddr = l1_mem::address_map::TRISC0_BASE; fwsize = l1_mem::address_map::TRISC0_SIZE; break;
-        case 1: fwaddr = l1_mem::address_map::TRISC1_BASE; fwsize = l1_mem::address_map::TRISC1_SIZE; break;
-        case 2: fwaddr = l1_mem::address_map::TRISC2_BASE; fwsize = l1_mem::address_map::TRISC2_SIZE; break;
+        case 0: fwaddr = MEM_TRISC0_BASE; fwsize = MEM_TRISC0_SIZE; break;
+        case 1: fwaddr = MEM_TRISC1_BASE; fwsize = MEM_TRISC1_SIZE; break;
+        case 2: fwaddr = MEM_TRISC2_BASE; fwsize = MEM_TRISC2_SIZE; break;
         default: std::cout << "Unknown triscv_id = " << triscv_id << std::endl; exit(1);
     }
 
@@ -404,7 +404,7 @@ void setup_riscs_on_specified_core(
             core.str());
     };
 
-    initialize_and_check_test_mailbox(TEST_MAILBOX_ADDRESS);
+    initialize_and_check_test_mailbox(MEM_TEST_MAILBOX_ADDRESS);
 
     if (!involves_ncrisc) {
         disable_ncrisc(cluster, chip_id, core);

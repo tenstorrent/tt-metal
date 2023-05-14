@@ -12,7 +12,7 @@
 
 bool run_brisc_and_triscs(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) {
 
-    uint64_t brisc_test_mailbox_addr = l1_mem::address_map::FIRMWARE_BASE + TEST_MAILBOX_ADDRESS;
+    uint64_t brisc_test_mailbox_addr = MEM_BRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS;
 
     constexpr int INIT_VALUE = 42;
     constexpr int DONE_VALUE = 1;
