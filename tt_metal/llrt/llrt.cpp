@@ -205,7 +205,7 @@ bool test_load_write_read_risc_binary(
     write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr);  // PROF_BEGIN("write_risc")
     log_debug(tt::LogLLRuntime, "wrote hex to the core");          // PROF_END("write_risc")
 
-    if (std::getenv("TT_KERNEL_READBACK_DISABLE") == nullptr) {
+    if (std::getenv("TT_KERNEL_READBACK_ENABLE") != nullptr) {
         std::vector<uint32_t> read_hex_vec;  // PROF_BEGIN("read_risc")
         read_hex_vec = read_hex_vec_from_core(
             cluster, chip_id, core, addr, hex_vec.size() * sizeof(uint32_t));  // size to read in Bytes
@@ -242,7 +242,7 @@ bool test_load_write_read_trisc_binary(
     if (hex_vec.size() * 4 > fwsize)
         std::cout << "WARNING: Hex size=" << hex_vec.size()*4 << " trisc core=" << triscv_id << " path=" << hex_file_path << std::endl;
 
-    if (std::getenv("TT_KERNEL_READBACK_DISABLE") == nullptr) {
+    if (std::getenv("TT_KERNEL_READBACK_ENABLE") != nullptr) {
         std::vector<uint32_t> read_hex_vec;  // PROF_BEGIN("trisc_read_back")
         read_hex_vec = read_hex_vec_from_core(
             cluster, chip_id, core, fwaddr, hex_vec.size() * sizeof(uint32_t));     // size to read in Bytes
