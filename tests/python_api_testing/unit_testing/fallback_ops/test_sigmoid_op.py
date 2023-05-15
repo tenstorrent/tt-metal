@@ -25,7 +25,7 @@ def test_sigmoid_fallback(input_shape, on_device):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
-    x = torch.randn(input_shape).to(torch.bfloat16)
+    x = torch.randn(input_shape).bfloat16().float()
     pt_out = torch.sigmoid(x)
 
     # Test on host RM
@@ -43,7 +43,7 @@ def test_sigmoid_fallback(input_shape, on_device):
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
-    comp_pass, _ = comp_pcc(pt_out, output)
+    comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass

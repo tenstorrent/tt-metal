@@ -21,7 +21,7 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
-    x = torch.randn(input_shape).to(torch.bfloat16)
+    x = torch.randn(input_shape).bfloat16().float()
     pt_out = torch.chunk(x, chunks, dim)
 
     # Test on host RM
@@ -41,7 +41,7 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device):
         tt_output = torch.Tensor(
             tt_out[i].to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
         ).reshape(tt_out[i].shape())
-        comp_pass, _ = comp_pcc(pt_output, tt_output)
+        comp_pass, _ = comp_pcc(pt_output, tt_output, 0.9999)
         _, comp_out = comp_allclose_and_pcc(pt_output, tt_output)
         logger.info(comp_out)
         assert comp_pass

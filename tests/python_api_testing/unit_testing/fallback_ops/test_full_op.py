@@ -18,7 +18,7 @@ def test_full_fallback(input_shape, fill_value):
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-
+    fill_value = torch.Tensor([fill_value]).bfloat16().float().item()
     pt_out = torch.full(input_shape, fill_value)
 
     t0 = fallback_ops.full(input_shape, fill_value)
@@ -26,7 +26,7 @@ def test_full_fallback(input_shape, fill_value):
     output = torch.Tensor(t0.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t0.shape()
     )
-    comp_pass, _ = comp_pcc(pt_out, output)
+    comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass

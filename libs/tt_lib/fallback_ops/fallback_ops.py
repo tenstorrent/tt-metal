@@ -138,15 +138,15 @@ def group_norm(
     | eps        | A value added to the denominator for numerical stability | float     | default value is 1e-05                                       | No       |
     +------------+----------------------------------------------------------+-----------+--------------------------------------------------------------+----------+
     """
+    if weight is not None:
+        weight = weight.reshape(input.shape[1])
+    if bias is not None:
+        bias = bias.reshape(input.shape[1])
     return torch.nn.functional.group_norm(
         input,
         num_groups,
-        weight.reshape(
-            input.shape[1],
-        ),
-        bias.reshape(
-            input.shape[1],
-        ),
+        weight,
+        bias,
         eps,
     )
 
@@ -182,13 +182,19 @@ def layer_norm(
     if isinstance(normalized_shape, int):
         normalized_shape = [normalized_shape]
 
-    assert list(weight.shape[-len(normalized_shape) :]) == list(normalized_shape)
-    assert list(bias.shape[-len(normalized_shape) :]) == list(normalized_shape)
+    if weight is not None:
+        assert list(weight.shape[-len(normalized_shape) :]) == list(normalized_shape)
+        weight = weight.reshape(normalized_shape)
+
+    if bias is not None:
+        assert list(bias.shape[-len(normalized_shape) :]) == list(normalized_shape)
+        bias = bias.reshape(normalized_shape)
+
     return torch.nn.functional.layer_norm(
         input,
         normalized_shape,
-        weight.reshape(normalized_shape),
-        bias.reshape(normalized_shape),
+        weight,
+        bias,
         eps,
     )
 
@@ -373,7 +379,7 @@ class Conv2d(torch.nn.Module):
     def __init__(
         self,
         weights: ttl_tensor.Tensor,
-        biases: ttl_tensor.Tensor,
+        biases: Union[ttl_tensor.Tensor, None],
         in_channels: int,
         out_channels: int,
         kernel_size: Union[int, Tuple],
@@ -397,7 +403,11 @@ class Conv2d(torch.nn.Module):
             padding_mode,
         )
         self.pt_fallback.weight = torch.nn.Parameter(weights)
-        self.pt_fallback.bias = torch.nn.Parameter(biases.reshape((biases.shape[-1],)))
+        self.pt_fallback.bias = (
+            torch.nn.Parameter(biases.reshape((biases.shape[-1],)))
+            if biases is not None
+            else biases
+        )
 
     @convert_tt_tensors_wrapper
     def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:

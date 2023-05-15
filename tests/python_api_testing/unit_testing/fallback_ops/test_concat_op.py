@@ -40,7 +40,7 @@ def test_concat_fallback(input_shapes, dim, on_device):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
-    xs = [torch.randn(input_shape).to(torch.bfloat16) for input_shape in input_shapes]
+    xs = [torch.randn(input_shape).bfloat16().float() for input_shape in input_shapes]
     pt_out = torch.concat(xs, dim)
 
     # Test on host RM
@@ -61,7 +61,7 @@ def test_concat_fallback(input_shapes, dim, on_device):
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
-    comp_pass, _ = comp_pcc(pt_out, output)
+    comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass

@@ -32,6 +32,26 @@ import pytest
             4,
             True,
         ),
+        (
+            torch.Size([1, 3, 6, 4]),
+            torch.Size([3, 3, 6, 4]),
+            None,
+            1,
+            0,
+            1,
+            1,
+            False,
+        ),
+        (
+            torch.Size([1, 4, 32, 16]),
+            torch.Size([4, 1, 32, 16]),
+            None,
+            1,
+            0,
+            1,
+            4,
+            True,
+        ),
     ),
 )
 def test_conv2d_fallback(
@@ -42,11 +62,21 @@ def test_conv2d_fallback(
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
-    x = torch.randn(input_shape).to(torch.bfloat16)
-    w = torch.randn(weight_shape).to(torch.bfloat16)
-    b = torch.randn(bias_shape).to(torch.bfloat16)
+    x = torch.randn(input_shape).bfloat16().float()
+    w = torch.randn(weight_shape).bfloat16().float()
+    b = (
+        torch.randn(bias_shape).bfloat16().float()
+        if bias_shape is not None
+        else bias_shape
+    )
     pt_out = torch.conv2d(
-        x, w, torch.reshape(b, (b.shape[-1],)), stride, padding, dilation, groups
+        x,
+        w,
+        torch.reshape(b, (b.shape[-1],)) if b is not None else b,
+        stride,
+        padding,
+        dilation,
+        groups,
     )
 
     # Test on host RM
@@ -68,21 +98,24 @@ def test_conv2d_fallback(
     if on_device:
         w0 = w0.to(device)
 
-    b0 = ttl.tensor.Tensor(
-        b.reshape(-1).tolist(),
-        b.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-    if on_device:
-        b0 = b0.to(device)
+    if b is not None:
+        b0 = ttl.tensor.Tensor(
+            b.reshape(-1).tolist(),
+            b.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        if on_device:
+            b0 = b0.to(device)
+    else:
+        b0 = b
 
     t1 = fallback_ops.conv2d(t0, w0, b0, stride, padding, dilation, groups)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
-    comp_pass, _ = comp_pcc(pt_out, output)
+    comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
@@ -123,6 +156,36 @@ def test_conv2d_fallback(
             "zeros",
             True,
         ),
+        (
+            torch.Size([1, 3, 6, 4]),
+            torch.Size([3, 3, 6, 4]),
+            None,
+            3,
+            3,
+            1,
+            1,
+            0,
+            1,
+            1,
+            False,
+            "zeros",
+            False,
+        ),
+        (
+            torch.Size([1, 4, 6, 4]),
+            torch.Size([4, 1, 6, 4]),
+            None,
+            4,
+            4,
+            1,
+            1,
+            0,
+            1,
+            4,
+            False,
+            "zeros",
+            True,
+        ),
     ),
 )
 def test_Conv2d_fallback(
@@ -145,9 +208,13 @@ def test_Conv2d_fallback(
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
-    x = torch.randn(input_shape).to(torch.bfloat16)
-    w = torch.randn(weight_shape).to(torch.bfloat16)
-    b = torch.randn(bias_shape).to(torch.bfloat16)
+    x = torch.randn(input_shape).bfloat16().float()
+    w = torch.randn(weight_shape).bfloat16().float()
+    b = (
+        torch.randn(bias_shape).bfloat16().float()
+        if bias_shape is not None
+        else bias_shape
+    )
     pt_nn = torch.nn.Conv2d(
         in_channels,
         out_channels,
@@ -159,8 +226,17 @@ def test_Conv2d_fallback(
         bias,
         padding_mode,
     )
+
     pt_nn.weight = torch.nn.Parameter(w)
-    pt_nn.bias = torch.nn.Parameter(b.reshape((b.shape[-1])))
+    if not bias and bias_shape is not None:
+        logger.warning(
+            "Bias set to false but trying to set a bias tensor, Ignoring specified bias tensor"
+        )
+    if bias:
+        pt_nn.bias = (
+            torch.nn.Parameter(b.reshape((b.shape[-1]))) if b is not None else b
+        )
+
     pt_out = pt_nn(x)
 
     # Test on host RM
@@ -182,18 +258,21 @@ def test_Conv2d_fallback(
     if on_device:
         w0 = w0.to(device)
 
-    b0 = ttl.tensor.Tensor(
-        b.reshape(-1).tolist(),
-        b.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-    if on_device:
-        b0 = b0.to(device)
+    if b is not None:
+        b0 = ttl.tensor.Tensor(
+            b.reshape(-1).tolist(),
+            b.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        if on_device:
+            b0 = b0.to(device)
+    else:
+        b0 = None
 
     tt_nn = fallback_ops.Conv2d(
         w0,
-        b0,
+        b0 if bias else None,
         in_channels,
         out_channels,
         kernel_size,
@@ -204,12 +283,13 @@ def test_Conv2d_fallback(
         bias,
         padding_mode,
     )
+
     t1 = tt_nn(t0)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
-    comp_pass, _ = comp_pcc(pt_out, output)
+    comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
