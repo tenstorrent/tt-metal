@@ -10,7 +10,7 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 from transformers import BertForQuestionAnswering
-from conftest import model_location_generator_
+from tests.python_api_testing.models.conftest import model_location_generator_
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import comp_pcc, comp_allclose

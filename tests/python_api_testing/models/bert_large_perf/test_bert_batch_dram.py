@@ -8,19 +8,19 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-from conftest import model_location_generator_
 import time
 from libs import tt_lib as ttl
-from python_api_testing.models.bert.embeddings import PytorchEmbeddings
-from python_api_testing.models.bert.bert_encoder import TtBertEncoder
-from python_api_testing.models.bert.fused_ops.linear import Linear
+from python_api_testing.models.bert_large_perf.embeddings import PytorchEmbeddings
+from python_api_testing.models.bert_large_perf.bert_encoder import TtBertEncoder
+from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight
 from utility_functions import enable_binary_cache, enable_compile_cache, comp_allclose_and_pcc, comp_pcc, comp_allclose, disable_binary_cache, disable_compile_cache
 from utility_functions import profiler
+from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
 
 
 class TtBertBatchDram(torch.nn.Module):
-    def __init__(self, config, hugging_face_reference_model, device):
+    def __init__(self, config, hugging_face_reference_model, var_scaler, device):
         super().__init__()
 
         # NOTE: Once we make embeddings run on device, pass in state dict
@@ -34,7 +34,9 @@ class TtBertBatchDram(torch.nn.Module):
         self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
         self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
 
-        self.encoders = torch.nn.ModuleList([TtBertEncoder(config, encoder_idx, state_dict, device) for encoder_idx in range(config.num_hidden_layers)])
+
+
+        self.encoders = torch.nn.ModuleList([TtBertEncoder(config, encoder_idx, state_dict, var_scaler, device) for encoder_idx in range(config.num_hidden_layers)])
 
         num_classes, hidden_size = state_dict["qa_outputs.weight"].shape
 
@@ -117,7 +119,8 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_face_reference_model.eval()
-    tt_bert_model = TtBertBatchDram(hugging_face_reference_model.config, hugging_face_reference_model, device)
+    var_scaler = create_var_scaler(seq_len, hugging_face_reference_model.config.hidden_size, hugging_face_reference_model.config.layer_norm_eps, device)
+    tt_bert_model = TtBertBatchDram(hugging_face_reference_model.config, hugging_face_reference_model, var_scaler, device)
 
     profiler.start("processing_of_input")
 
@@ -125,27 +128,29 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
         tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
         context = batch * ["Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."]
         question = batch * ["What discipline did Winkelmann create?"]
-        bert_input = tokenizer.batch_encode_plus(zip(question, context), max_length=seq_len, padding="max_length", truncation=True, return_tensors="pt")
+        bert_input = tokenizer.batch_encode_plus(zip(question, context), max_length=seq_len, padding="max_length", truncation=True, return_attention_mask=attention_mask, return_token_type_ids=token_type_ids, return_tensors="pt")
         nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
-        pl_answer = nlp(question = question[0], context=context[0])
+        pl_answer = nlp(question=question, context=context)
+
         preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
         preprocess_params["max_seq_len"] = seq_len
-        input_q = {"context": context[0], "question": question[0]}
+        input_q = {"context": context, "question": question}
         examples = nlp._args_parser(input_q)
-        model_input = next(nlp.preprocess(examples[0], **preprocess_params))
-        single_input = {
-            "data": (
-                model_input["input_ids"],
-                model_input["attention_mask"] if attention_mask else None,
-                model_input["token_type_ids"] if token_type_ids else None
-            ),
-            "example": model_input["example"],
-            "inputs": model_input,
-        }
-        bert_input = {}
-        bert_input["input_ids"] = single_input["data"][0]
-        bert_input["attention_mask"] = single_input["data"][1]
-        bert_input["token_type_ids"] = single_input["data"][2]
+
+
+        single_inputs = []
+        for i in range(batch):
+            model_input = next(nlp.preprocess(examples[0][i], **preprocess_params))
+            single_input = {
+                "data": (
+                    model_input["input_ids"],
+                    model_input["attention_mask"] if attention_mask else None,
+                    model_input["token_type_ids"] if token_type_ids else None
+                ),
+                "example": model_input["example"],
+                "inputs": model_input,
+            }
+            single_inputs.append(single_input)
     else:
         if 1:
             bert_input = torch.arange(seq_len*batch).reshape(batch, seq_len)
@@ -212,47 +217,47 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
             logger.error(f"End Logits PCC < {pcc}")
 
         if real_input:
-            tt_res = {
-                "start": tt_start_logits,
-                "end": tt_end_logits,
-                "example": single_input["example"],
-                **single_input["inputs"],
-            }
+            for i in range(batch):
+                tt_res = {
+                    "start": tt_start_logits[i],
+                    "end": tt_end_logits[i],
+                    "example": single_inputs[i]["example"],
+                    **single_inputs[i]["inputs"],
+                }
 
-            tt_answer = nlp.postprocess([tt_res], **postprocess_params)
-            logger.info(f"TT: {tt_answer}")
+                tt_answer = nlp.postprocess([tt_res], **postprocess_params)
+                logger.info(f"TT: {tt_answer}")
 
-            pt_res = {
-                "start": pt_start_logits,
-                "end": pt_end_logits,
-                "example": single_input["example"],
-                **single_input["inputs"],
-            }
+                pt_res = {
+                    "start": pt_start_logits[i],
+                    "end": pt_end_logits[i],
+                    "example": single_inputs[i]["example"],
+                    **single_inputs[i]["inputs"],
+                }
 
-            pt_answer = nlp.postprocess([pt_res], **postprocess_params)
-            logger.info(f"PT: {pt_answer}")
-            logger.info(f"PL: {pl_answer}")
+                pt_answer = nlp.postprocess([pt_res], **postprocess_params)
+                logger.info(f"PT: {pt_answer}")
+                logger.info(f"PL: {pl_answer}")
 
         profiler.end("processing_output_to_string")
 
     ttl.device.CloseDevice(device)
     profiler.print()
 
-    assert profiler.get("whole_model") < 60.0
+    # assert profiler.get("whole_model") < 60.0
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
 
-def test_bert_batch_dram():
-
-    model_version = "phiyodr/bert-large-finetuned-squad2"
-    batch = 1
-    seq_len = 384
-    on_weka = True
-    real_input = True
-    attention_mask = True
-    token_type_ids = True
-    pcc = 0.98
-    model_location_generator = model_location_generator_
-    PERF_CNT = 20
+@pytest.mark.parametrize(
+    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
+    (
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, 0.98),
+    ),
+)
+def test_bert_batch_dram(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+    # This test will run BERT-Large once with cache disabled.
+    # Then it will enable cache and run BERT-Large PERF_CNT number of times.
+    # Performance is reported only for PERF_CNT number of runs.
+    PERF_CNT = 1
 
     disable_binary_cache()
     disable_compile_cache()

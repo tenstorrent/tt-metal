@@ -11,7 +11,7 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-from conftest import model_location_generator_
+from tests.python_api_testing.models.conftest import model_location_generator_
 from libs import tt_lib as ttl
 from python_api_testing.models.bert_large_perf.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert_large_perf.ffn import TtFeedForwardModel
