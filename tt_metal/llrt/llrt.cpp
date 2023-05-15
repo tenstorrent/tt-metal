@@ -22,8 +22,6 @@ using std::uint32_t;
 using std::unordered_map;
 using std::vector;
 
-bool llrt_enable_binary_cache = true;
-
 struct HexNameToMemVectorCache {
     using lock = std::unique_lock<std::mutex>;
     // maps from RisckCacheMapKey to hex file path
@@ -52,11 +50,9 @@ struct HexNameToMemVectorCache {
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
 vector<uint32_t> get_risc_binary(string path, uint32_t id, bool id_is_trisc) {
-    if (llrt_enable_binary_cache && HexNameToMemVectorCache::inst().exists(path)) {
+    if (HexNameToMemVectorCache::inst().exists(path)) {
         // std::cout << "-- HEX2MEM CACHE HIT FOR " << path << std::endl;
         return HexNameToMemVectorCache::inst().get(path);
-    } else {
-        // std::cout << "-- HEX2MEM CACHE MISS FOR " << path << std::endl;
     }
 
     string path_to_bin = path;
@@ -81,8 +77,8 @@ vector<uint32_t> get_risc_binary(string path, uint32_t id, bool id_is_trisc) {
         mem = std::move(ll_api::memory::from_discontiguous_risc_hex(
             hex_istream, id == 1 ? ll_api::memory::NCRISC : ll_api::memory::BRISC));
 
-    if (llrt_enable_binary_cache)
-        HexNameToMemVectorCache::inst().add(path, mem.get_content());
+    // add this path to binary cache
+    HexNameToMemVectorCache::inst().add(path, mem.get_content());
 
     return mem.get_content();
 }

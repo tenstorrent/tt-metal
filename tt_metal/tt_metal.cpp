@@ -13,9 +13,6 @@
 using std::unique_lock;
 using std::mutex;
 
-namespace tt { namespace llrt {
-extern bool llrt_enable_binary_cache;
-} }
 namespace tt {
 
 namespace tt_metal {
@@ -23,15 +20,9 @@ namespace tt_metal {
 static Profiler tt_metal_profiler = Profiler();
 
 bool enable_compile_cache = false;
-int force_recompiles = 0;
 void EnableCompileCache() { enable_compile_cache = true; }
 void DisableCompileCache() { enable_compile_cache = false; }
 bool GetCompileCacheEnabled() { return enable_compile_cache; }
-void SetForceRecompiles(int newval) { enable_compile_cache = true; force_recompiles = newval; }
-int  GetForceRecompiles() { return force_recompiles; }
-void EnableBinaryCache() { tt::llrt::llrt_enable_binary_cache = true; }
-void DisableBinaryCache() { tt::llrt::llrt_enable_binary_cache = false; }
-bool GetBinaryCacheEnabled() { return tt::llrt::llrt_enable_binary_cache; }
 
 void DumpHostProfileResults(std::string name_prepend){
     tt_metal_profiler.dumpHostResults(name_prepend);
@@ -710,17 +701,19 @@ bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
             continue;
         }
 
-        // TODO(AP): this is a hack to speed up the debugging process
         bool path_exists = false;
+        // check if persistent compile cache is enabled, if so, check if the path is exists
+        // if path exists we assume that the complied kernel is there and is valid and up to date
+        // This is obviously an incorrect assumption (because there's no checking performed)
+        // but allows to improve iteration speed.
         if (enable_compile_cache)
             path_exists = std::filesystem::exists(op_path); // PROF_END("CCGEN_PREAMBLE")
-        if (!path_exists || force_recompiles > 0) {
+        if (!path_exists) {
             //if (enable_compile_cache)
             //    cout << "======= Compiling" << std::endl;
             // PROF_BEGIN("CCGEN_BIN")
             GenerateBinaries(device, &dummy_op, op_path, profile_kernel, kernel_group, logical_core);
             // PROF_END("CCGEN_BIN")
-            force_recompiles = std::max(0, force_recompiles-1);
         } else {
             //if (enable_compile_cache)
             //    cout << "======= Skipping compiling..." << std::endl;

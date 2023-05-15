@@ -91,17 +91,6 @@ def get_oom_of_float(float_lst):
     return ooms
 
 
-def get_FR():
-    # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    return ttl.device.GetForceRecompiles()
-
-
-def set_FR(new_val):
-    # TODO(AP): a hacky workflow where we manually set force recompile counter before every kernel from python
-    ttl.device.SetForceRecompiles(new_val)
-    print("Force recompiles=", get_FR())
-
-
 def ttP(x, count=4, offset=0, stride=1):
     if type(x) == torch.Tensor:
         t1 = x.reshape(-1)
@@ -119,44 +108,23 @@ def ttP(x, count=4, offset=0, stride=1):
 
 def enable_compile_cache():
     """
-    Enables the compiler caching.
+    Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
     """
     ttl.device.EnableCompileCache()
 
 
 def disable_compile_cache():
     """
-    Disables the compiler caching.
+    Disables persistent compiled kernel caching. This is the default state.
     """
     ttl.device.DisableCompileCache()
 
 
 def get_compile_cache_enabled():
     """
-    Returns the current state of compile cache on/off switch.
+    Returns the current state of persistent compile cache on/off switch.
     """
     return ttl.device.GetCompileCacheEnabled()
-
-
-def enable_binary_cache():
-    """
-    Enables the binary loading cache.
-    """
-    ttl.device.EnableBinaryCache()
-
-
-def disable_binary_cache():
-    """
-    Disables the binary loading cache.
-    """
-    ttl.device.DisableBinaryCache()
-
-
-def get_binary_cache_enabled():
-    """
-    Returns the current state of binary loading cache on/off switch.
-    """
-    return ttl.device.GetBinaryCacheEnabled()
 
 
 def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):

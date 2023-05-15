@@ -15,9 +15,9 @@ from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.bert_encoder import TtBertEncoder
 from python_api_testing.models.bert.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight
-from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled, comp_pcc, comp_allclose
+from utility_functions import enable_compile_cache, get_compile_cache_enabled, comp_pcc, comp_allclose
 from utility_functions import profiler
-from utility_functions import disable_binary_cache, disable_compile_cache
+from utility_functions import disable_compile_cache
 
 
 class TtBertForQuestionAnswering(torch.nn.Module):

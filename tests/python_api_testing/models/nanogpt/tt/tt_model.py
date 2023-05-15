@@ -27,10 +27,9 @@ from python_api_testing.fused_ops.add_and_norm import AddAndNorm
 from python_api_testing.fused_ops.linear import Linear as ttLinear
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax, print_diff_tt_pyt, ttP
 from utility_functions import tt2torch, tt2torch_rm
-from utility_functions import enable_compile_cache, enable_binary_cache
-from utility_functions import disable_compile_cache, disable_binary_cache
-from utility_functions import get_binary_cache_enabled, get_compile_cache_enabled
-from utility_functions import get_FR, set_FR
+from utility_functions import enable_compile_cache
+from utility_functions import disable_compile_cache
+from utility_functions import get_compile_cache_enabled
 from utility_functions import roundup32
 from fused_ops.softmax import softmax
 
@@ -320,7 +319,6 @@ class TTGPT(nn.Module):
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
-        #enable_binary_cache()
         #enable_compile_cache()
         torch.manual_seed(2) # must match the seed in ref model.py for same results, due to multinomial()
         for _ in range(max_new_tokens):

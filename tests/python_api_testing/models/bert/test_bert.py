@@ -16,7 +16,7 @@ from python_api_testing.models.bert.ffn import TtFeedForwardModel
 from python_api_testing.models.bert.bert_encoder import TtBertEncoder
 from python_api_testing.models.bert.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled, comp_allclose_and_pcc, comp_pcc, comp_allclose
+from utility_functions import enable_compile_cache, get_compile_cache_enabled, comp_allclose_and_pcc, comp_pcc, comp_allclose
 
 class TtBertShared(torch.nn.Module):
     @abstractmethod
@@ -214,12 +214,10 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 )
 def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
 
-    # enable_binary_cache()
     # enable_compile_cache()
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator)
 
 if __name__ == "__main__":
-    # enable_binary_cache()
     # enable_compile_cache()
     #run_bert_question_and_answering_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.99)
     run_bert_question_and_answering_inference("phiyodr/bert-large-finetuned-squad2", 1, 128, True, True, 0.85) # Placeholder PCC until issues are resolved

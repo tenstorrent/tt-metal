@@ -21,7 +21,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, SequenceClass
 from collections import OrderedDict
 
 from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, print_diff_argmax
-from utility_functions import enable_binary_cache, enable_compile_cache, get_compile_cache_enabled, get_binary_cache_enabled
+from utility_functions import enable_compile_cache, get_compile_cache_enabled
 
 from python_api_testing.models.llama.llama_utils import *
 from python_api_testing.models.llama.llama_causallm import LlamaForCausalLM

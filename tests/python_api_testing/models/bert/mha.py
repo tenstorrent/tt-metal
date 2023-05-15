@@ -17,7 +17,7 @@ from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from python_api_testing.models.bert.fused_ops.linear import Linear as TtLinear
 from libs.tt_lib.fused_ops.softmax import softmax
-from utility_functions import get_FR, set_FR, enable_compile_cache, enable_binary_cache, comp_pcc, comp_allclose
+from utility_functions import enable_compile_cache, comp_pcc, comp_allclose
 
 def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     assert isinstance(num_heads, int) and num_heads > 0
@@ -208,7 +208,6 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
 )
 def test_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
 
-    # enable_binary_cache()
     # enable_compile_cache()
 
     run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator)

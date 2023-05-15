@@ -17,7 +17,7 @@ from tests.python_api_testing.models.conftest import model_location_generator_
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from libs.tt_lib.fused_ops.softmax import softmax
-from utility_functions import get_FR, set_FR, enable_compile_cache, enable_binary_cache, comp_pcc, comp_allclose, profiler
+from utility_functions import enable_compile_cache, comp_pcc, comp_allclose, profiler
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
@@ -307,7 +307,6 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
 )
 def test_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
 
-    # enable_binary_cache()
     # enable_compile_cache()
 
     run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator)

@@ -18,9 +18,9 @@ from python_api_testing.models.bert_large_perf.bert_encoder import TtBertEncoder
 from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
 from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
 from libs.tt_lib.utils import pad_activation, pad_weight
-from utility_functions import enable_binary_cache, enable_compile_cache
+from utility_functions import enable_compile_cache
 from utility_functions import profiler
-from utility_functions import disable_binary_cache, disable_compile_cache
+from utility_functions import disable_compile_cache
 
 
 

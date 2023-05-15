@@ -16,7 +16,7 @@ from python_api_testing.models.bert_large_perf.bert_encoder import TtBertEncoder
 from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
 from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
 from libs.tt_lib.utils import pad_activation, pad_weight
-from utility_functions import enable_binary_cache, enable_compile_cache, comp_allclose_and_pcc, comp_pcc, comp_allclose, disable_binary_cache, disable_compile_cache
+from utility_functions import enable_compile_cache, comp_allclose_and_pcc, comp_pcc, comp_allclose, disable_compile_cache
 from utility_functions import profiler
 
 
@@ -188,7 +188,6 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
-    enable_binary_cache()
     enable_compile_cache()
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
