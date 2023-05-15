@@ -668,11 +668,12 @@ inline Tensor unpad(const Tensor &tensor, const std::array<uint32_t, 4> &output_
 // ======================================================================================
 template <typename T>
 inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) {
-    auto data_ptr_to_print = tensor.data_ptr();
     if (not tensor.on_host()) {
         auto temp_tensor = to_host<T>(tensor);
-        data_ptr_to_print = temp_tensor.data_ptr();
+        print<T>(temp_tensor, print_layout, pretty_print);
+        return;
     }
+    auto data_ptr_to_print = tensor.data_ptr();
     auto data_vec = *reinterpret_cast<std::vector<T>*>(data_ptr_to_print);
 
     switch (tensor.layout()) {
