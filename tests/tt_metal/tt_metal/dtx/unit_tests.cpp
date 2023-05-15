@@ -542,6 +542,14 @@ bool test_channels_last_to_2D_matrix_conv1x1() {
     return pass;
 }
 
+bool test_run_conv_transform_no_evaluate() {
+    vector<int> shape = {32, 14, 14};
+    vector<int> conv_params = {1,1,1,1,0,0};
+    DataTransformations * dtx = conv_transform(shape, conv_params, {{-1},{-1}});
+    delete dtx;
+    return true;
+}
+
 bool test_high_level_pass_and_evaluate() {
     vector<int> shape = {2, 2, 2};
     auto dtx = simple_high_level_pass(shape);
@@ -812,6 +820,9 @@ void run_dtx_tests() {
 
     pass &= test_pad_and_block_passes();
     printf("test_pad_and_block_passes - %d\n\n", pass);
+
+    pass &= test_run_conv_transform_no_evaluate();
+    printf("test_run_conv_transform_no_evaluate - %d\n\n", pass);
 
     if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
     else cout << "TESTS FAILED\n\n\n" << endl;

@@ -92,8 +92,6 @@ DataTransformations * reverse_and_combine_transformations(DataTransformations * 
         exit(0);
     }
 
-    DataTransformations * combined = new DataTransformations();
-
     // STEP 2: Reverse the left transformation
     DataTransformations * fw_dtx = dtx_left;
 
@@ -153,7 +151,6 @@ DataTransformations * reverse_and_combine_transformations(DataTransformations * 
 
 
     return bck_dtx;
-    //return combined;
 }
 
 bool optimize_away_transpose(DataTransformations * dtx) {
@@ -161,6 +158,8 @@ bool optimize_away_transpose(DataTransformations * dtx) {
 
     for (int t=0; t<dtx->transformations.size()-1; t++) {
         if (dtx->transformations[t]->opcode == dtx->transformations[t+1]->opcode) {
+            delete dtx->transformations[t+1];
+            delete dtx->transformations[t];
             dtx->transformations.erase(dtx->transformations.begin() + t+1);
             dtx->transformations.erase(dtx->transformations.begin() + t);
         }
@@ -168,6 +167,8 @@ bool optimize_away_transpose(DataTransformations * dtx) {
 
     for (int t=0; t<dtx->transformations.size()-1; t++) {
         if (dtx->transformations[t]->opcode == dtx->transformations[t+1]->opcode) {
+            delete dtx->transformations[t+1];
+            delete dtx->transformations[t];
             dtx->transformations.erase(dtx->transformations.begin() + t+1);
             dtx->transformations.erase(dtx->transformations.begin() + t);
         }
@@ -175,6 +176,8 @@ bool optimize_away_transpose(DataTransformations * dtx) {
 
     for (int t=0; t<dtx->transformations.size()-1; t++) {
         if (dtx->transformations[t]->opcode == dtx->transformations[t+1]->opcode) {
+            delete dtx->transformations[t+1];
+            delete dtx->transformations[t];
             dtx->transformations.erase(dtx->transformations.begin() + t+1);
             dtx->transformations.erase(dtx->transformations.begin() + t);
         }

@@ -400,7 +400,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     assert(total_bytes % n_blocks == 0);
     uint32_t in0_block_size_bytes = total_bytes / n_blocks;
     assert(in0_block_size_bytes == block_size_bytes);
-    //delete dtx;
+    delete dtx;
     tt_metal::Program *program = new tt_metal::Program();
     tt_xy_pair core = {0, 0};
     //tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});

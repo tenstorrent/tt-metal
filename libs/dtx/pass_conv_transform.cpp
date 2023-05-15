@@ -59,7 +59,10 @@ DataTransformations * conv_transform(vector<int> shape, vector<int> conv_params,
     //combined->print();
     pass &= generate_transfer_addresses(combined);
     //combined->print();
+    // TODO: Not deleting "dtx_right" causes memory leak. Fix it.
+    // Cannot delete "dtx_right" because it contains raw pointers that are shared with the "combined" object.
+    // Fix it by adding smart pointers and use move semantics to transfer ownership from "dtx_right" to "combined"
     //delete dtx_right;
-    //delete dtx_left;
+    delete dtx_left;
     return combined;
 }

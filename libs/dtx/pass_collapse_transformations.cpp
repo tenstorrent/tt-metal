@@ -76,8 +76,9 @@ bool collapse_transformations(DataTransformations * dtx) {
                                                                         new_src_group,
                                                                         new_dst);
                                 if (DEBUG) cout << s(16) << "NEW OVERLAP TENSOR PAIR: " << overlap_tp->get_string() << endl;
-                                resolved_tensor_pairs.push_back(new TensorPair(new_src, new_src_group, new_dst));
+                                resolved_tensor_pairs.push_back(overlap_tp);
                             }
+                            delete overlap;
                         }
                     }
                     else {
@@ -92,9 +93,10 @@ bool collapse_transformations(DataTransformations * dtx) {
             } // for-loop: producer_groupidx
 
             // Update all TensorPairs in the consumer node, for this group
+            consumer_node->groups[consumer_group_idx]->delete_tensor_pairs();
             consumer_node->groups[consumer_group_idx]->tensor_pairs = resolved_tensor_pairs;
         }
-
+        delete dtx->transformations[dtx->transformations.size() - 2];
         dtx->transformations.erase(dtx->transformations.end() - 2);
 
     } // while: transformations > 2

@@ -80,12 +80,8 @@ class TensorPair {
         string get_short_string();
         void print_string();
         ~TensorPair() {
-            if(src_tensor) {
-                delete src_tensor;
-            }
-            if(dst_tensor) {
-                delete dst_tensor;
-            }
+            delete src_tensor;
+            delete dst_tensor;
         }
 };
 
@@ -112,17 +108,21 @@ class TensorPairGroup {
     int address;                // Address of buffer this is stored in (L1 or DRAM)
     vector<int> core = {-1,-1}; // Tensix core
     int streaming_id;           // The sequence order that's loaded into a CB or Buffer
-    ~TensorPairGroup() {
+    void delete_tensor_pairs() {
         for(auto tp : tensor_pairs) {
-            if(tp)
-                delete tp;
+            delete tp;
         }
         tensor_pairs.clear();
+    }
+    void delete_transfers() {
         for(auto tr : transfers) {
-            if(tr)
-                delete tr;
+            delete tr;
         }
         transfers.clear();
+    }
+    ~TensorPairGroup() {
+        delete_tensor_pairs();
+        delete_transfers();
     }
 };
 
@@ -147,13 +147,14 @@ class TransformationNode {
     }
 
     void print(int s);
-
-    ~TransformationNode() {
+    void delete_groups() {
         for(auto g : groups) {
-            if (g)
-                delete g;
+            delete g;
         }
         groups.clear();
+    }
+    ~TransformationNode() {
+        delete_groups();
     }
 };
 
@@ -188,6 +189,12 @@ class DataTransformations {
     // Passes - to be moved out
     void resolve_transformations();     // Collapse TXs
     bool compare_to_golden(TransformationNode * golden);
+    ~DataTransformations() {
+        for(auto t : transformations) {
+            delete t;
+        }
+        transformations.clear();
+    }
 
 };
 
