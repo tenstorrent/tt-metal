@@ -2,7 +2,7 @@
 
 void read_trisc_debug_mailbox(tt_cluster* cluster, int chip_id, const tt_xy_pair core, uint16_t trisc_id, uint32_t index = 0) {
     std::uint32_t debug_mailbox_addr;
-    debug_mailbox_addr = MEM_DEBUG_MAILBOX_ADDRESS + trisc_id;
+    debug_mailbox_addr = MEM_DEBUG_MAILBOX_ADDRESS + trisc_id * MEM_DEBUG_MAILBOX_SIZE;
     assert(trisc_id >= 0 && trisc_id <= 2);
 
     debug_mailbox_addr += (index * (sizeof(uint32_t)));

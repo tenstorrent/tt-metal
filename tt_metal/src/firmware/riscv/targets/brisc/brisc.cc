@@ -245,7 +245,7 @@ void device_setup() {
     // bool debugger_en = debugger::is_enabled();
 
     // Initialize debug mailbox to 0s
-    for (int i = 0; i < MEM_DEBUG_MAILBOX_SIZE; i++) core.debug_mailbox()[i] = 0;
+    for (int i = 0; i < MEM_DEBUG_MAILBOX_SIZE; i++) ((uint32_t *)MEM_DEBUG_MAILBOX_ADDRESS)[i] = 0;
 
     // Read counter at start
     core.wall_clock_mailbox()[0] = core.read_wall_clock();
