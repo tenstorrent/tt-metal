@@ -3,6 +3,21 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+vector<uint32_t> generate_address_map(DataTransformations * dtx) {
+    assert(dtx->transformations.size() == 2);
+    assert(dtx->transformations.back()->groups[0]->transfers.size() > 0);
+    // copy transfer addresses into a vector
+    std::vector<uint32_t> address_map;
+
+    // Generate address map
+    for(auto transfer : dtx->transformations.back()->groups[0]->transfers){
+        address_map.push_back(transfer->src_address);
+        address_map.push_back(transfer->dst_address);
+        address_map.push_back(transfer->size);
+        address_map.push_back(transfer->pad);
+    }
+    return address_map;
+}
 vector<float> evaluate(vector<float> data, std::vector<uint32_t> address_map, vector<int> output_shape) {
     auto data_transformed_size = vector_product(output_shape);
     vector<float> data_transformed(data_transformed_size, 0);

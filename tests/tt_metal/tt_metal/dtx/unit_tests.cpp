@@ -543,10 +543,9 @@ bool test_channels_last_to_2D_matrix_conv1x1() {
 }
 
 bool test_run_conv_transform_no_evaluate() {
-    vector<int> shape = {32, 14, 14};
+    vector<int> shape = {32, 8, 8};
     vector<int> conv_params = {1,1,1,1,0,0};
-    DataTransformations * dtx = conv_transform(shape, conv_params, {{-1},{-1}});
-    delete dtx;
+    auto address_map = conv_transform(shape, conv_params, {{0,1,2},{64,32}}, 1);
     return true;
 }
 
@@ -554,7 +553,7 @@ bool test_high_level_pass_and_evaluate() {
     vector<int> shape = {2, 2, 2};
     auto dtx = simple_high_level_pass(shape);
     vector<float> data = {1, 2, 3, 4, 5, 6, 7, 8};
-    vector<float> data_transformed = evaluate(data, dtx);
+    vector<float> data_transformed = evaluate(data, generate_address_map(dtx), shape);
     vector<float> golden_data = {1, 2, 5, 6, 3, 4, 7, 8};
     return data_transformed == golden_data;
 }
@@ -571,6 +570,7 @@ bool test_padding_pass_(vector<int> shape, vector<int> pad_to_nearest, vector<fl
     node0->groups[0]->shape = shape;
     dtx_right->transformations.push_back(node0);
     pass &= pad_2d_matrix(dtx_right, pad_to_nearest);
+    auto padded_shape = dtx_right->transformations.back()->groups[0]->shape;
     //dtx_right->print();
     //exit(1);
     pass &= row_major_memory_store(dtx_right);
@@ -586,7 +586,8 @@ bool test_padding_pass_(vector<int> shape, vector<int> pad_to_nearest, vector<fl
     //cout << "\n\nDTX_COLLAPSED" << endl;
     //combined->print();
     pass &= generate_transfer_addresses(combined);
-    vector<float> data_transformed = evaluate(input_data, combined);
+
+    vector<float> data_transformed = evaluate(input_data, generate_address_map(combined), padded_shape);
     return data_transformed == golden_data;
 }
 
@@ -638,7 +639,7 @@ bool test_block_2d_matrix_pass_(vector<int> shape, vector<int> block_shape, vect
     //cout << "\n\nDTX_COLLAPSED" << endl;
     //combined->print();
     pass &= generate_transfer_addresses(combined);
-    vector<float> data_transformed = evaluate(input_data, combined);
+    vector<float> data_transformed = evaluate(input_data, generate_address_map(combined), shape);
     return data_transformed == golden_data;
 }
 
@@ -727,7 +728,8 @@ bool test_pad_and_block_passes_(vector<int> shape, vector<int> pad_to_nearest, v
     //cout << "\n\nDTX_COLLAPSED" << endl;
     combined->print();
     pass &= generate_transfer_addresses(combined);
-    vector<float> data_transformed = evaluate(input_data, combined);
+    auto output_shape = combined->transformations.back()->groups[0]->shape;
+    vector<float> data_transformed = evaluate(input_data, generate_address_map(combined), output_shape);
     return data_transformed == golden_data;
 }
 bool test_pad_and_block_passes() {

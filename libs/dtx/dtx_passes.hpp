@@ -122,7 +122,7 @@ bool convert_tensor_layout_rowmajor_2_channelslast(DataTransformations * dtx);
 // ========================================================
 //             PART 6: HIGH LEVEL PASSES
 // ========================================================
-
+vector<uint32_t> generate_address_map(DataTransformations * dtx);
 vector<float> evaluate(vector<float> data, vector<uint32_t> address_map, vector<int> output_shape);
 DataTransformations * simple_high_level_pass(vector<int> shape);
 
