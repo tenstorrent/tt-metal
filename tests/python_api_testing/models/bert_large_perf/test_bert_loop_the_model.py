@@ -17,7 +17,7 @@ from python_api_testing.models.bert.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight
 from utility_functions import enable_compile_cache, get_compile_cache_enabled, comp_pcc, comp_allclose
 from utility_functions import profiler
-from utility_functions import disable_binary_cache, disable_compile_cache
+from utility_functions import disable_compile_cache
 
 
 class TtBertForQuestionAnswering(torch.nn.Module):
@@ -228,7 +228,6 @@ def test_bert_large_loop_the_model():
     model_location_generator = model_location_generator_
     PERF_CNT = 20
 
-    disable_binary_cache()
     disable_compile_cache()
 
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)

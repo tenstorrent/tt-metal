@@ -221,7 +221,6 @@ def test_bert_large_baseline_perf():
     model_location_generator = model_location_generator_
     PERF_CNT = 1
 
-    disable_binary_cache()
     disable_compile_cache()
 
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)
