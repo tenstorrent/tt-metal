@@ -16,7 +16,7 @@ from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pc
 from vgg import *
 
 
-_batch_size = 16
+_batch_size = 1
 
 
 def test_vgg16_inference(imagenet_sample_input):
@@ -33,8 +33,8 @@ def test_vgg16_inference(imagenet_sample_input):
         torch_vgg.eval()
 
         state_dict = torch_vgg.state_dict()
-
-        tt_vgg = vgg16(device, host, state_dict)
+        # TODO: enable conv on tt device after adding fast dtx transform
+        tt_vgg = vgg16(device, host, state_dict, disable_conv_on_tt_device=True)
 
 
         torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)

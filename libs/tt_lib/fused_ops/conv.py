@@ -7,8 +7,10 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     Returns a function that performs a Convolution.
     bias is optional. If provided, it must be in tiled layout
     """
-    assert(len(conv_params) == 8)
-    K, C, R, S, U, V, P_H, P_W = [conv_params[i] for i in range(8)]
+    assert(len(conv_params) == 10)
+    K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
+    if dilation != 1 or groups != 1:
+        return None
     weights_shape = [K,C,R,S]
     weights_channels_padded_shape = [K,_nearest_32(C),R,S]
     weight_untiled = tensor.Tensor(
@@ -20,15 +22,16 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(weight_untiled)
     weight_on_device = weight_tiled_.to(device)
     if bias is None:
-        bias = None
+        bias_on_device = None
     else:
-        bias = tensor.Tensor(
+        bias_shape = [1,1,1,K]
+        bias_ = tensor.Tensor(
             bias,
-            [1, 1, 1, K],
+            bias_shape,
             tensor.DataType.BFLOAT16,
-            tensor.Layout.ROW_MAJOR,
-            device
+            tensor.Layout.ROW_MAJOR
         )
+        bias_on_device = bias_.to(device)
 
     def conv_(activation):
         [_,_,H,W] = activation.shape()
@@ -39,9 +42,10 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
 
         assert(output.shape() == conv_as_mm_output_shape)
 
-        if bias is not None:
-            assert False # unsupported
-            output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
+        if bias_on_device is not None:
+            print(str(output.shape()))
+            print(str(bias_on_device.shape()))
+            output_plus_bias = tensor.bcast(output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
             return output_plus_bias
 
         return output

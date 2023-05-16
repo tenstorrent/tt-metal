@@ -19,7 +19,7 @@ from libs import tt_lib as ttl
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from libs.tt_lib.utils import pad_weight
 from typing import List, Union, Optional, Dict, cast
-
+from python_api_testing.models.conv_on_device_utils import is_conv_supported_on_device, run_conv_on_device_wrapper
 num_classes = 1000
 
 class TtVGG(nn.Module):
@@ -71,6 +71,7 @@ class TtVGG(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.shape[0]
+        assert(batch_size == 1)
         for layer in self.features:
             if layer is ttl.tensor.relu:
                 # pad
@@ -93,7 +94,7 @@ class TtVGG(nn.Module):
         return x
 
 
-def make_layers(cfg: List[Union[str, int]], batch_norm: bool = False, state_dict=None, base_address="features") -> nn.Sequential:
+def make_layers(cfg: List[Union[str, int]], batch_norm: bool = False, state_dict=None, base_address="features", device=None, host=None, disable_conv_on_tt_device=True) -> nn.Sequential:
     layers: List = []
     in_channels = 3
 
@@ -103,17 +104,22 @@ def make_layers(cfg: List[Union[str, int]], batch_norm: bool = False, state_dict
 
         else:
             v = cast(int, v)
-            conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
-
-            if batch_norm:
+            if not batch_norm:
+                ind = len(layers)
+                conv2d_params = [v, in_channels, 3, 3, 1, 1, 1, 1, 1, 1]
+                if not disable_conv_on_tt_device and is_conv_supported_on_device(conv2d_params):
+                    assert device is not None
+                    conv2d_weight = state_dict[f"{base_address}.{ind}.weight"]
+                    conv2d_bias = state_dict[f"{base_address}.{ind}.bias"].tolist()
+                    conv2d = run_conv_on_device_wrapper(conv2d_weight.reshape(-1).tolist(), conv2d_params, device, host, conv2d_bias)
+                else:
+                    conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
+                    conv2d.weight = nn.Parameter(state_dict[f"{base_address}.{ind}.weight"])
+                    conv2d.bias = nn.Parameter(state_dict[f"{base_address}.{ind}.bias"])
+                layers += [conv2d, ttl.tensor.relu]
+            else:
                 assert False, "we do not support batchnorm"
                 layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
-            else:
-
-                layers += [conv2d, ttl.tensor.relu]
-                ind = len(layers) - 2
-                conv2d.weight = nn.Parameter(state_dict[f"{base_address}.{ind}.weight"])
-                conv2d.bias = nn.Parameter(state_dict[f"{base_address}.{ind}.bias"])
             in_channels = v
 
     return layers
@@ -127,7 +133,7 @@ cfgs: Dict[str, List[Union[str, int]]] = {
 }
 
 
-def vgg16(device, host, state_dict, base_address="") -> TtVGG:
+def vgg16(device, host, state_dict, base_address="", disable_conv_on_tt_device=True) -> TtVGG:
 
-    model = TtVGG(make_layers(cfgs["D"], batch_norm=False, state_dict=state_dict), init_weights=False, device=device, host=host, state_dict=state_dict)
+    model = TtVGG(make_layers(cfgs["D"], batch_norm=False, state_dict=state_dict, device=device, host=host, disable_conv_on_tt_device=disable_conv_on_tt_device), init_weights=False, device=device, host=host, state_dict=state_dict)
     return model

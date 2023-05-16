@@ -11,15 +11,13 @@ from typing import Type, Union, Optional, List, Callable
 import torch
 import torch.nn as nn
 
-from utils import conv3x3, conv1x1, fold_bn_to_conv, can_run_conv_on_device, run_conv_on_tt_device
-from utility_functions import tt2torch_tensor, torch2tt_tensor
+from utils import conv3x3, conv1x1, fold_bn_to_conv
+from utility_functions import pad_by_zero, unpad_from_zero
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from libs import tt_lib as ttl
 from python_api_testing.fused_ops.linear import Linear as TtLinear
 from python_api_testing.fused_ops.softmax import softmax as TtSoftmax
-from python_api_testing.fused_ops.conv import conv as TtConv
-from utils import pad_by_zero, unpad_from_zero
-
+from python_api_testing.models.conv_on_device_utils import is_conv_supported_on_device, run_conv_on_device_wrapper
 
 class Bottleneck(nn.Module):
     # Bottleneck in torchvision places the stride for downsampling at 3x3 convolution(self.conv2)
@@ -45,6 +43,8 @@ class Bottleneck(nn.Module):
         state_dict = None,
         base_address = None,
         fold_batchnorm = False,
+        downsample_conv_on_tt = None,
+        norm_layer_after_downsample_conv_on_tt = None,
     ) -> None:
         super().__init__()
         self.host = host
@@ -52,15 +52,19 @@ class Bottleneck(nn.Module):
         self.state_dict = state_dict
         self.base_address = base_address
         self.fold_batchnorm = fold_batchnorm
+        self.downsample_conv_on_tt = downsample_conv_on_tt
+        self.norm_layer_after_downsample_conv_on_tt = norm_layer_after_downsample_conv_on_tt
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         width = int(planes * (base_width / 64.0)) * groups
         # Both self.conv2 and self.downsample layers downsample the input when stride != 1
-        self.conv1 = conv1x1(inplanes, width, state_dict=state_dict, base_address=f"{base_address}.conv1")
 
         conv1_weight = state_dict[f"{base_address}.conv1.weight"]
-        self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0]
-        self.conv1_on_tt = TtConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device)
+        self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0, dilation, groups]
+        if not self.fold_batchnorm and is_conv_supported_on_device(self.conv1_params):
+            self.conv1 = run_conv_on_device_wrapper(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, self.host)
+        else:
+            self.conv1 = conv1x1(inplanes, width, state_dict=state_dict, base_address=f"{base_address}.conv1")
 
         self.bn1 = norm_layer(width)
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
@@ -70,10 +74,12 @@ class Bottleneck(nn.Module):
         self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
         self.bn1.eval()
 
-        self.conv2 = conv3x3(width, width, stride, groups, dilation, state_dict=state_dict, base_address=f"{base_address}.conv2")
         conv2_weight = state_dict[f"{base_address}.conv2.weight"]
-        self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1]
-        self.conv2_on_tt = TtConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device)
+        self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
+        if not self.fold_batchnorm and is_conv_supported_on_device(self.conv2_params):
+            self.conv2 = run_conv_on_device_wrapper(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, self.host)
+        else:
+            self.conv2 = conv3x3(width, width, stride, groups, dilation, state_dict=state_dict, base_address=f"{base_address}.conv2")
 
         self.bn2 = norm_layer(width)
         self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
@@ -83,10 +89,12 @@ class Bottleneck(nn.Module):
         self.bn2.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False)
         self.bn2.eval()
 
-        self.conv3 = conv1x1(width, planes * self.expansion, state_dict=state_dict, base_address=f"{base_address}.conv3")
         conv3_weight = state_dict[f"{base_address}.conv3.weight"]
-        self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0]
-        self.conv3_on_tt = TtConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device)
+        self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
+        if not self.fold_batchnorm and is_conv_supported_on_device(self.conv3_params):
+            self.conv3 = run_conv_on_device_wrapper(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, self.host)
+        else:
+            self.conv3 = conv1x1(width, planes * self.expansion, state_dict=state_dict, base_address=f"{base_address}.conv3")
 
         self.bn3 = norm_layer(planes * self.expansion)
         self.bn3.weight = nn.Parameter(state_dict[f"{self.base_address}.bn3.weight"])
@@ -111,39 +119,30 @@ class Bottleneck(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         identity = x
-        if (not self.fold_batchnorm) and can_run_conv_on_device(list(x.size()), self.conv1_params):
-            print("Conv on tt device. (A)")
-            out = run_conv_on_tt_device(x, self.conv1_on_tt, self.conv1_params, self.device, self.host)
-        else:
-            print("Conv on CPU.(A)")
-            out = self.conv1(x)
+        out = self.conv1(x)
         out = self.bn1(out)
 
         out, initial_shape = pad_by_zero(out, self.device)
 
         out = self.relu(out)
         out = unpad_from_zero(out, initial_shape, self.host)
-        if (not self.fold_batchnorm) and can_run_conv_on_device(list(out.size()), self.conv2_params):
-            print("Conv on tt device. (B)")
-            out = run_conv_on_tt_device(out, self.conv2_on_tt, self.conv2_params, self.device, self.host)
-        else:
-            print("Conv on CPU.(B)")
-            out = self.conv2(out)
+        out = self.conv2(out)
         out = self.bn2(out)
 
         out, initial_shape = pad_by_zero(out, self.device)
         out = self.relu(out)
         out = unpad_from_zero(out, initial_shape, self.host)
-        if (not self.fold_batchnorm) and can_run_conv_on_device(list(out.size()), self.conv3_params):
-            print("Conv on tt device. (C)")
-            out = run_conv_on_tt_device(out, self.conv3_on_tt, self.conv3_params, self.device, self.host)
-        else:
-            print("Conv on CPU.(C)")
-            out = self.conv3(out)
+        out = self.conv3(out)
         out = self.bn3(out)
 
-        if self.downsample is not None:
+        if self.downsample_conv_on_tt is not None:
+            print("Running downsample conv on tt")
+            identity = self.downsample_conv_on_tt(x)
+            assert self.norm_layer_after_downsample_conv_on_tt is not None
+            identity = self.norm_layer_after_downsample_conv_on_tt(identity)
+        elif self.downsample is not None:
             identity = self.downsample(x)
+
         out, out_initial_shape = pad_by_zero(out, self.device)
         identity, identity_initial_shape = pad_by_zero(identity, self.device)
 
@@ -173,12 +172,16 @@ class BasicBlock(nn.Module):
         state_dict = None,
         base_address = None,
         fold_batchnorm = False,
+        downsample_conv_on_tt = None,
+        norm_layer_after_downsample_conv_on_tt = None,
     ) -> None:
         super().__init__()
         self.device = device
         self.host = host
         self.base_address = base_address
         self.fold_batchnorm = fold_batchnorm
+        self.downsample_conv_on_tt = downsample_conv_on_tt
+        self.norm_layer_after_downsample_conv_on_tt = norm_layer_after_downsample_conv_on_tt
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         if groups != 1 or base_width != 64:
@@ -186,11 +189,13 @@ class BasicBlock(nn.Module):
         if dilation > 1:
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
-        self.conv1 = conv3x3(inplanes, planes, stride, state_dict=state_dict, base_address=f"{base_address}.conv1")
 
         conv1_weight = state_dict[f"{base_address}.conv1.weight"]
-        self.conv1_params = [planes, inplanes, 3, 3, stride, stride, 1, 1]
-        self.conv1_on_tt = TtConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device)
+        self.conv1_params = [planes, inplanes, 3, 3, stride, stride, 1, 1, dilation, groups]
+        if not self.fold_batchnorm and is_conv_supported_on_device(self.conv1_params):
+            self.conv1 = run_conv_on_device_wrapper(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, self.host)
+        else:
+            self.conv1 = conv3x3(inplanes, planes, stride, state_dict=state_dict, base_address=f"{base_address}.conv1")
 
         self.bn1 = norm_layer(planes)
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
@@ -201,11 +206,13 @@ class BasicBlock(nn.Module):
         self.bn1.eval()
 
         self.relu = ttl.tensor.relu
-        self.conv2 = conv3x3(planes, planes, state_dict=state_dict, base_address=f"{base_address}.conv2")
 
         conv2_weight = state_dict[f"{base_address}.conv2.weight"]
-        self.conv2_params = [planes, planes, 3, 3, 1, 1, 1, 1]
-        self.conv2_on_tt = TtConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device)
+        self.conv2_params = [planes, planes, 3, 3, 1, 1, 1, 1, dilation, groups]
+        if not self.fold_batchnorm and is_conv_supported_on_device(self.conv2_params):
+            self.conv2 = run_conv_on_device_wrapper(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, self.host)
+        else:
+            self.conv2 = conv3x3(planes, planes, state_dict=state_dict, base_address=f"{base_address}.conv2")
 
         self.bn2 = norm_layer(planes)
 
@@ -228,12 +235,7 @@ class BasicBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         identity = x
-        if (not self.fold_batchnorm) and can_run_conv_on_device(list(x.size()), self.conv1_params):
-            print("Conv on tt device. (B)")
-            out = run_conv_on_tt_device(x, self.conv1_on_tt, self.conv1_params, self.device, self.host)
-        else:
-            print("Conv on CPU.(B)")
-            out = self.conv1(x)
+        out = self.conv1(x)
         if not self.fold_batchnorm:
             out = self.bn1(out)
         # pad
@@ -243,16 +245,16 @@ class BasicBlock(nn.Module):
         # unpad
         out = unpad_from_zero(out, initial_shape, self.host)
 
-        if (not self.fold_batchnorm) and can_run_conv_on_device(list(out.size()), self.conv2_params):
-            print("Conv on tt device. (C)")
-            out = run_conv_on_tt_device(out, self.conv2_on_tt, self.conv2_params, self.device, self.host)
-        else:
-            print("Conv on CPU.(C)")
-            out = self.conv2(out)
+        out = self.conv2(out)
         if not self.fold_batchnorm:
             out = self.bn2(out)
 
-        if self.downsample is not None:
+        if self.downsample_conv_on_tt is not None:
+            print("Running downsample conv on tt")
+            identity = self.downsample_conv_on_tt(x)
+            assert self.norm_layer_after_downsample_conv_on_tt is not None
+            identity = self.norm_layer_after_downsample_conv_on_tt(identity)
+        elif self.downsample is not None:
             identity = self.downsample(x)
 
         identity, identity_initial_shape = pad_by_zero(identity, self.device)
@@ -310,8 +312,9 @@ class ResNet(nn.Module):
         self.conv1.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}conv1.weight"])
 
         conv1_weight = state_dict[f"{self.base_address_with_dot}conv1.weight"]
-        self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3]
-        self.conv1_on_tt = TtConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device)
+        self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
+        if not self.fold_batchnorm and is_conv_supported_on_device(self.conv1_params):
+            self.conv1 = run_conv_on_device_wrapper(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, self.host)
 
         self.bn1 = norm_layer(self.inplanes) # batch norm
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.weight"])
@@ -356,6 +359,8 @@ class ResNet(nn.Module):
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
+        self.downsample_conv_on_tt = None
+        self.norm_layer_after_downsample_conv_on_tt = None
         if dilate:
             self.dilation *= stride
             stride = 1
@@ -376,9 +381,10 @@ class ResNet(nn.Module):
                 nl,
             )
             downsample_conv_weight = state_dict[f"{self.base_address_with_dot}{name}.0.downsample.0.weight"]
-            self.downsample_params = [planes * block.expansion, self.inplanes, 1, 1, stride, stride, 0, 0]
-            self.downsample_conv_on_tt = TtConv(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device)
-
+            self.downsample_params = [planes * block.expansion, self.inplanes, 1, 1, stride, stride, 0, 0, self.dilation, 1]
+            if not self.fold_batchnorm and is_conv_supported_on_device(self.downsample_params):
+                self.downsample_conv_on_tt = run_conv_on_device_wrapper(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, self.host)
+                self.norm_layer_after_downsample_conv_on_tt = nl
 
         layers = []
         layers.append(
@@ -396,6 +402,8 @@ class ResNet(nn.Module):
                 state_dict=self.state_dict,
                 base_address=f"{self.base_address_with_dot}{name}.0",
                 fold_batchnorm=self.fold_batchnorm,
+                downsample_conv_on_tt=self.downsample_conv_on_tt,
+                norm_layer_after_downsample_conv_on_tt=self.norm_layer_after_downsample_conv_on_tt
             )
         )
         self.inplanes = planes * block.expansion
@@ -419,12 +427,7 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
-        if (not self.fold_batchnorm) and can_run_conv_on_device(list(x.size()), self.conv1_params):
-            print("Conv on tt device.")
-            x = run_conv_on_tt_device(x, self.conv1_on_tt, self.conv1_params, self.device, self.host)
-        else:
-            print("Conv on CPU.(A)")
-            x = self.conv1(x)
+        x = self.conv1(x)
         if not self.fold_batchnorm:
             x = self.bn1(x)
 

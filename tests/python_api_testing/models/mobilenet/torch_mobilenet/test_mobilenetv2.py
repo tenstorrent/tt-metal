@@ -19,26 +19,32 @@ import pytest
 
 from libs import tt_lib as ttl
 from utility_functions import comp_allclose_and_pcc, comp_pcc
-
+from libs import tt_lib as ttl
 from mobilenetv2 import MobileNetV2Model as TtMobileNetv2Model
 
 _batch_size = 1
 
-@pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
+@pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', 'Ops Fused'])
 def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input):
     image = imagenet_sample_input
     batch_size = _batch_size
     with torch.no_grad():
-
+        # Initialize the device
+        device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+        ttl.device.InitializeDevice(device)
+        host = ttl.device.GetHost()
         image_processor = transformers.AutoImageProcessor.from_pretrained("google/mobilenet_v2_1.0_224")
         torch_model = transformers.MobileNetV2Model.from_pretrained("google/mobilenet_v2_1.0_224")
 
         torch_model.eval()
 
         state_dict = torch_model.state_dict()
-        tt_model = TtMobileNetv2Model(config=torch_model.config, state_dict=state_dict)
+        if not fuse_ops:
+            # TODO(nshanker): enable running of conv on tt device. Currently, it results in low PCC = 0.97 so it is disabled.
+            tt_model = TtMobileNetv2Model(config=torch_model.config, state_dict=state_dict, device=device, host=host, disable_conv_on_tt_device=True)
+        else:
+            tt_model = TtMobileNetv2Model(config=torch_model.config, state_dict=state_dict)
         tt_model.eval()
-
 
         if fuse_ops:
             modules_to_fuse = [["conv_stem.first_conv.convolution", "conv_stem.first_conv.normalization"]]
