@@ -15,7 +15,7 @@ CircularBuffer::CircularBuffer(
     uint32_t size_in_bytes,
     DataFormat data_format) :
     device_(device), logical_core_(logical_core), buffer_index_(buffer_index), num_tiles_(num_tiles), size_(size_in_bytes), address_(0), data_format_(data_format), allocated_on_device_(true) {
-    this->address_ = device->allocator_->allocate_circular_buffer(logical_core, size_in_bytes);
+    this->address_ = allocator::allocate_circular_buffer(*device->allocator_, logical_core, size_in_bytes);
 }
 
 CircularBuffer::CircularBuffer(
@@ -39,7 +39,7 @@ tt_xy_pair CircularBuffer::noc_coordinates() const {
 }
 
 void CircularBuffer::reserve() {
-    auto address = this->device_->allocator_->allocate_circular_buffer(this->logical_core_, this->size_, this->address_);
+    auto address = allocator::allocate_circular_buffer(*this->device_->allocator_, this->logical_core_, this->size_, this->address_);
     TT_ASSERT(address == this->address_);
 }
 
@@ -50,7 +50,7 @@ void CircularBuffer::deallocate() {
         }
         auto bank_ids = this->device_->bank_ids_from_logical_core(this->logical_core_);
         TT_ASSERT(bank_ids.size() == 1);
-        this->device_->allocator_->deallocate_buffer(bank_ids.at(0), this->address_, BufferType::L1);
+        allocator::deallocate_buffer(*this->device_->allocator_, bank_ids.at(0), this->address_, BufferType::L1);
         this->allocated_on_device_ = false;
     }
 }

@@ -262,7 +262,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format) {
-    uint32_t l1_address = device->allocator_->get_address_for_circular_buffers_across_core_range(core_range, size_in_bytes);
+    uint32_t l1_address = allocator::get_address_for_circular_buffers_across_core_range(*device->allocator_, core_range, size_in_bytes);
     std::vector<CircularBuffer *> circular_buffers;
     auto start_core = core_range.first;
     auto end_core = core_range.second;

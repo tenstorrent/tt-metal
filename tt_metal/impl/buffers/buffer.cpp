@@ -9,7 +9,8 @@ namespace tt_metal {
 
 Buffer::Buffer(Device *device, uint32_t size, uint32_t address, uint32_t starting_bank_id, uint32_t page_size, const BufferType buffer_type)
     : device_(device), size_(size), address_(address), starting_bank_id_(starting_bank_id), page_size_(page_size), buffer_type_(buffer_type) {
-    this->bank_id_to_relative_address_ = this->device_->allocator_->allocate_buffer(starting_bank_id, size, page_size, address, buffer_type);
+    TT_ASSERT(this->device_ != nullptr and this->device_->allocator_ != nullptr);
+    this->bank_id_to_relative_address_ = allocator::allocate_buffer_at_address(*this->device_->allocator_, starting_bank_id, size, page_size, address, buffer_type);
     TT_ASSERT(this->bank_id_to_relative_address_.find(this->starting_bank_id_) != this->bank_id_to_relative_address_.end());
 }
 
@@ -60,7 +61,11 @@ Buffer &Buffer::operator=(Buffer &&other) {
 
 void Buffer::allocate() {
     TT_ASSERT(this->device_ != nullptr);
-    this->bank_id_to_relative_address_ = this->device_->allocator_->allocate_buffer(this->starting_bank_id_, this->size_, this->page_size_, this->buffer_type_);
+    bool bottom_up = true;
+    if (this->device_->allocator_scheme() == MemoryAllocator::L1_BANKING and this->buffer_type_ == BufferType::L1) {
+        bottom_up = false;
+    }
+    this->bank_id_to_relative_address_ = allocator::allocate_buffer(*this->device_->allocator_, this->starting_bank_id_, this->size_, this->page_size_, this->buffer_type_, bottom_up);
     TT_ASSERT(this->bank_id_to_relative_address_.find(this->starting_bank_id_) != this->bank_id_to_relative_address_.end());
     this->address_ = this->bank_id_to_relative_address_.at(this->starting_bank_id_).absolute_address();
 }
@@ -120,9 +125,10 @@ void Buffer::deallocate() {
     if (this->device_ == nullptr or this->device_->closed_) {
         return;
     }
+    TT_ASSERT(this->device_->allocator_ != nullptr);
     for (auto &[bank_id, relative_address] : this->bank_id_to_relative_address_) {
         uint32_t abs_addr = relative_address.offset_bytes + relative_address.relative_address;
-        this->device_->allocator_->deallocate_buffer(bank_id, abs_addr, this->buffer_type_);
+        allocator::deallocate_buffer(*this->device_->allocator_, bank_id, abs_addr, this->buffer_type_);
     }
     this->bank_id_to_relative_address_.clear();
 }

@@ -191,7 +191,8 @@ bool run_sfpu_test(string sfpu_name) {
         }
 
         pass &= tt_metal::CloseDevice(device);;
-        delete device;
+        // TODO (abhullar): Uplift when raw ptr usages are removed. Commenting out delete for now because device needs to outlive buffers
+        //delete device;
 
     } catch (const std::exception &e) {
         pass = false;

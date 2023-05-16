@@ -49,7 +49,7 @@ bool Device::close() {
     llrt::assert_reset_for_all_chips(cluster_);
     cluster_->close_device();
     cluster_ = nullptr;
-    this->allocator_->clear();
+    allocator::clear(*this->allocator_);
     this->closed_ = true;
     return true;
 }
@@ -122,27 +122,27 @@ void Device::check_allocator_is_initialized() const {
 
 uint32_t Device::num_banks(const BufferType &buffer_type) const {
     this->check_allocator_is_initialized();
-    return this->allocator_->num_banks(buffer_type);
+    return allocator::num_banks(*this->allocator_, buffer_type);
 }
 
 uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
     this->check_allocator_is_initialized();
-    return this->allocator_->dram_channel_from_bank_id(bank_id);
+    return allocator::dram_channel_from_bank_id(*this->allocator_, bank_id);
 }
 
 tt_xy_pair Device::logical_core_from_bank_id(uint32_t bank_id) const {
     this->check_allocator_is_initialized();
-    return this->allocator_->logical_core_from_bank_id(bank_id);
+    return allocator::logical_core_from_bank_id(*this->allocator_, bank_id);
 }
 
 std::vector<uint32_t> Device::bank_ids_from_dram_channel(uint32_t dram_channel) const {
     this->check_allocator_is_initialized();
-    return this->allocator_->bank_ids_from_dram_channel(dram_channel);
+    return allocator::bank_ids_from_dram_channel(*this->allocator_, dram_channel);
 }
 
 std::vector<uint32_t> Device::bank_ids_from_logical_core(const tt_xy_pair &logical_core) const {
     this->check_allocator_is_initialized();
-    return this->allocator_->bank_ids_from_logical_core(logical_core);
+    return allocator::bank_ids_from_logical_core(*this->allocator_, logical_core);
 }
 
 }  // namespace tt_metal

@@ -22,6 +22,8 @@ class Algorithm {
         return factor * alignment_;
     }
 
+    uint32_t max_size_bytes() const { return max_size_bytes_; }
+
     virtual void init() = 0;
 
     virtual std::vector<std::pair<uint32_t, uint32_t>> available_addresses(uint32_t size_bytes) const = 0;
