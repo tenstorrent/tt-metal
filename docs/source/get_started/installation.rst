@@ -12,7 +12,20 @@ jvasiljevic@tenstorrent.com, dcapalija@tenstorrent.com.
 Running TT-Metal on a cloud machine
 -----------------------------------
 
-Run the following commands to set up the TT-Metal project:
+First, run a command to set up the target architecture of your build.
+
+::
+
+    export ARCH_NAME=<arch name>
+
+where ``<arch name>`` is your target, which could be:
+
+- ``grayskull``
+- ``wormhole_b0``
+
+etc...
+
+Then, run the following commands to set up the TT-Metal project:
 
 ::
 
