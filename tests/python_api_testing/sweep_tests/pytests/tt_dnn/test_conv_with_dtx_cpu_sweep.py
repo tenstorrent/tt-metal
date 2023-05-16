@@ -30,8 +30,6 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     stride_w = ctp.stride_w;
     pad_h = ctp.pad_h;
     pad_w = ctp.pad_w;
-    # check if params are valid
-    assert (H - R + 2 * pad_h) >= 1 and (W - S + 2 * pad_w) >= 1
     OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
     OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
 

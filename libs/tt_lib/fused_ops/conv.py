@@ -30,9 +30,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
         )
 
     def conv_(activation):
-        # check if params are valid
         [_,_,H,W] = activation.shape()
-        assert (H - R + 2 * P_H) >= 1 and (W - S + 2 * P_W) >= 1
         OH = ((int) ((H - R + 2 * P_H) / U)) + 1
         OW = ((int) ((W - S + 2 * P_W) / V)) + 1
         conv_as_mm_output_shape = [1,1,_nearest_32(OH*OW),_nearest_32(K)]

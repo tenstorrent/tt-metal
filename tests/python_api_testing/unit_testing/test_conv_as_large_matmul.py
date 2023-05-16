@@ -65,8 +65,6 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
 
     a_activation_shape = [1,C,H,W]
     b_weights_shape = [K,C,R,S]
-    # check if params are valid
-    assert (H - R + 2 * pad_h) >= 1 and (W - S + 2 * pad_w) >= 1
     OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
     OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
     mm_output_shape = [1,1,_nearest_32(OH*OW),_nearest_32(K)]

@@ -58,6 +58,10 @@ class Bottleneck(nn.Module):
         # Both self.conv2 and self.downsample layers downsample the input when stride != 1
         self.conv1 = conv1x1(inplanes, width, state_dict=state_dict, base_address=f"{base_address}.conv1")
 
+        conv1_weight = state_dict[f"{base_address}.conv1.weight"]
+        self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0]
+        self.conv1_on_tt = TtConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device)
+
         self.bn1 = norm_layer(width)
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
         self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address}.bn1.bias"])
@@ -67,6 +71,9 @@ class Bottleneck(nn.Module):
         self.bn1.eval()
 
         self.conv2 = conv3x3(width, width, stride, groups, dilation, state_dict=state_dict, base_address=f"{base_address}.conv2")
+        conv2_weight = state_dict[f"{base_address}.conv2.weight"]
+        self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1]
+        self.conv2_on_tt = TtConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device)
 
         self.bn2 = norm_layer(width)
         self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
@@ -77,6 +84,9 @@ class Bottleneck(nn.Module):
         self.bn2.eval()
 
         self.conv3 = conv1x1(width, planes * self.expansion, state_dict=state_dict, base_address=f"{base_address}.conv3")
+        conv3_weight = state_dict[f"{base_address}.conv3.weight"]
+        self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0]
+        self.conv3_on_tt = TtConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device)
 
         self.bn3 = norm_layer(planes * self.expansion)
         self.bn3.weight = nn.Parameter(state_dict[f"{self.base_address}.bn3.weight"])
@@ -90,7 +100,7 @@ class Bottleneck(nn.Module):
         self.downsample = downsample
         self.stride = stride
 
-        if not self.fold_batchnorm:
+        if self.fold_batchnorm:
             self.conv1.weight, self.conv1.bias = fold_bn_to_conv(self.conv1, self.bn1)
             self.conv2.weight, self.conv2.bias = fold_bn_to_conv(self.conv2, self.bn2)
             self.conv3.weight, self.conv3.bias = fold_bn_to_conv(self.conv3, self.bn3)
@@ -101,23 +111,35 @@ class Bottleneck(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         identity = x
-
-        out = self.conv1(x)
+        if (not self.fold_batchnorm) and can_run_conv_on_device(list(x.size()), self.conv1_params):
+            print("Conv on tt device. (A)")
+            out = run_conv_on_tt_device(x, self.conv1_on_tt, self.conv1_params, self.device, self.host)
+        else:
+            print("Conv on CPU.(A)")
+            out = self.conv1(x)
         out = self.bn1(out)
 
         out, initial_shape = pad_by_zero(out, self.device)
 
         out = self.relu(out)
         out = unpad_from_zero(out, initial_shape, self.host)
-
-        out = self.conv2(out)
+        if (not self.fold_batchnorm) and can_run_conv_on_device(list(out.size()), self.conv2_params):
+            print("Conv on tt device. (B)")
+            out = run_conv_on_tt_device(out, self.conv2_on_tt, self.conv2_params, self.device, self.host)
+        else:
+            print("Conv on CPU.(B)")
+            out = self.conv2(out)
         out = self.bn2(out)
 
         out, initial_shape = pad_by_zero(out, self.device)
         out = self.relu(out)
         out = unpad_from_zero(out, initial_shape, self.host)
-
-        out = self.conv3(out)
+        if (not self.fold_batchnorm) and can_run_conv_on_device(list(out.size()), self.conv3_params):
+            print("Conv on tt device. (C)")
+            out = run_conv_on_tt_device(out, self.conv3_on_tt, self.conv3_params, self.device, self.host)
+        else:
+            print("Conv on CPU.(C)")
+            out = self.conv3(out)
         out = self.bn3(out)
 
         if self.downsample is not None:

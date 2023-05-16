@@ -36,8 +36,6 @@ import torch
     ),
 )
 def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
-    # check if params are valid
-    assert (H - R + 2 * pad_h) >= 1 and (W - S + 2 * pad_w) >= 1
     OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
     OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
 
