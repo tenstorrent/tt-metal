@@ -443,8 +443,6 @@ inline vFloat calculate_gelu_core(vFloat in)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_gelu()
 {
-    // vFloat half = 0.5f;
-    constexpr int lut_mode = 2; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE2
 
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
@@ -466,10 +464,9 @@ inline void calculate_gelu()
         //dst_reg[0] = result;
 
         vFloat in = dst_reg[0];
-        vFloat abs_in = sfpi::abs(in);
         vFloat half = vConstFloatPrgm0;
         vFloat half_in = in * half;
-        vFloat result = lut2(abs_in, l0, l1, l2, l4, l5, l6, lut_mode);
+        vFloat result = lut2_sign(in, l0, l1, l2, l4, l5, l6);
         result = half_in + result;
         
         dst_reg[0] = result;
