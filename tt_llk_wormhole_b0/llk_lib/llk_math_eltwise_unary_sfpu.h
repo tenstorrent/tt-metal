@@ -17,15 +17,18 @@ void static_assert_sfpu_type_dependent() {
     static_assert(sfpu_type == SfpuType::unused, "sfpu_type exception");
 }
 // local function declarations
+template <SfpuType sfpu_op>
 inline void eltwise_unary_sfpu_configure_addrmod(){
     // NOTE: this kernel is typically used in conjunction with
     //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
     //       that doesn't conflict!
+
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }.set(ADDR_MOD_3);
+
 }
 inline void eltwise_unary_sfpu_configure_mop();
 
@@ -84,7 +87,7 @@ inline void llk_math_eltwise_unary_sfpu(
 template <SfpuType sfpu_op, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_init(
     uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0) {
-    eltwise_unary_sfpu_configure_addrmod();
+    eltwise_unary_sfpu_configure_addrmod< sfpu_op >();
     if constexpr (sfpu_op == SfpuType::dropout) {
         sfpu::sfpu_init<APPROXIMATE>(sfpu_op, param2);
     } else {

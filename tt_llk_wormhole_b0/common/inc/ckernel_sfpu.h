@@ -13,6 +13,22 @@ namespace ckernel
 namespace sfpu
 {
 
+
+inline void sfpu_load_imm32(const uint dest, const uint val)
+{
+        TT_SFPLOADI(dest, 0xA, (val & 0xFFFF));  // insmod == A will write the lower bits, and not affect the upper bits; 
+        TT_SFPLOADI(dest, 0x8, (val>>16) & 0xFFFF);  // insmod == 8 will write the upper bits, and not affect the lower bits; 
+}
+
+inline void sfpu_load_config32(const uint dest, const uint upper16, const uint lower16)
+{
+        // registers 11 through 14 are programmable "constants" which are shared across all 4 rows
+        // They are updated only through the CONFIG path, which uses LREG[0] first and then copies it to the desired register location
+        TTI_SFPLOADI(0, 0xA, lower16);  // insmod == A will write the lower bits, and not affect the upper bits; 
+        TTI_SFPLOADI(0, 0x8, upper16);  // insmod == 8 will write the upper bits, and not affect the lower bits; 
+        TTI_SFPCONFIG(0, dest, 0); 
+} 
+
 sfpi_inline vInt sfpu_is_fp16_zero(const vFloat& v, uint exponent_size_8)
 {
     if (exponent_size_8) {
@@ -117,6 +133,9 @@ template <bool APPROXIMATION_MODE>
 inline void configure_programmable_constants(SfpuType operation)
 {
     switch (operation) {
+    case SfpuType::gelu:
+        vConstFloatPrgm0 = 0.5f;
+        break;
     case SfpuType::exponential:
         if (APPROXIMATION_MODE) {
             vConstFloatPrgm0 = 1.442695f; // ln2_recip
@@ -125,6 +144,8 @@ inline void configure_programmable_constants(SfpuType operation)
             break;
         }
 
+
+       
         // Fall through
     case SfpuType::gelu_derivative:
         vConstFloatPrgm2 = 0.863281f;
@@ -247,12 +268,42 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
         }
         break;
     case SfpuType::gelu:
-        imm0 = 0x18FF;
-        imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
-        imm2 = 0xFF00;
-        TTI_SFPLOADI(0, 2, imm0);
-        TTI_SFPLOADI(1, 2, imm1);
-        TTI_SFPLOADI(2, 2, imm2);
+        // //SG: FIXME
+        // imm0 = 0x18FF;
+        // imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
+        // imm2 = 0xFF00;
+        // TTI_SFPLOADI(0, 2, imm0);
+        // TTI_SFPLOADI(1, 2, imm1);
+        // TTI_SFPLOADI(2, 2, imm2);
+
+        // // >= 3.0f
+        // lreg2_hi=0.50;//3800
+        // lreg6_hi=0.0f;//7c00
+        // // 2.0f -> 3.0f
+        // lreg2_lo= 0.5402f;//3852
+        // lreg6_lo= -0.1194f;//AFA4
+        // // 1.5f -> 2.0f
+        // lreg1_hi= .6099f; //38E1
+        // lreg5_hi= -.2635f; //B437
+        // // 1.0f -> 1.5f
+        // lreg1_lo=0.6189;//38F3
+        // lreg5_lo=-.2797;//B479
+        // // 0.5f -> 1.0f
+        // lreg0_hi=.4939f;//37E7
+        // lreg4_hi=-.1605f;//B122
+        // // 0.0f -> 0.5f
+        // lreg0_lo=0.1928f;//322B
+        // lreg4_lo=-0.0150f;//A3AE
+        sfpu_load_imm32(0,0x37E7322B);
+        sfpu_load_imm32(4,0xB122A3AE);
+
+
+        sfpu_load_imm32(1,0x38E138F3);
+        sfpu_load_imm32(5,0xB437B479);
+
+        sfpu_load_imm32(2,0x38003852);
+        sfpu_load_imm32(6,0x7c00afa4);
+
         break;
     case SfpuType::dropout:
         init_dropout_seed(param0);
@@ -392,29 +443,55 @@ inline vFloat calculate_gelu_core(vFloat in)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_gelu()
 {
+    // vFloat half = 0.5f;
+    constexpr int lut_mode = 2; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE2
+
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
     vUInt l2 = l_reg[LRegs::LReg2];
-    vFloat half = 0.5f;
+    vUInt l4 = l_reg[LRegs::LReg4];
+    vUInt l5 = l_reg[LRegs::LReg5];
+    vUInt l6 = l_reg[LRegs::LReg6];
 
     #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
+        // vFloat in = dst_reg[0];
+        // vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
+
+        // vFloat half_in = in * half;
+        // result = lut(result, l0, l1, l2);
+        // result = half_in * result + half_in;
+
+        //dst_reg[0] = result;
+
         vFloat in = dst_reg[0];
-        vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
-
+        vFloat abs_in = sfpi::abs(in);
+        vFloat half = vConstFloatPrgm0;
         vFloat half_in = in * half;
-        result = lut(result, l0, l1, l2);
-        result = half_in * result + half_in;
-
+        vFloat result = lut2(abs_in, l0, l1, l2, l4, l5, l6, lut_mode);
+        result = half_in + result;
+        
         dst_reg[0] = result;
 
         dst_reg++;
+
+        // dst_reg++;
+        //TTI_SFPLOAD(3, 0, 1/*load addr mode*/,0);    // load from dest
+        ////TTI_SFPMUL(3,11,9,7,0);           // lreg7 = 0.5*lreg3
+        //TTI_SFPLUTFP32(7, 2);                // lreg7= LUT(3)
+        //TTI_SFPMAD(3,12,7,3,0);            // lreg3 = 0.5*lreg3+lregm7
+        //TTI_SFPSTORE(3, 0, 3/*store_addr_mod3*/, 0);   // and INCRWC by 4 using mode 3
     }
 
     l_reg[LRegs::LReg0] = l0;
     l_reg[LRegs::LReg1] = l1;
     l_reg[LRegs::LReg2] = l2;
+    l_reg[LRegs::LReg4] = l4;
+    l_reg[LRegs::LReg5] = l5;
+    l_reg[LRegs::LReg6] = l6;
+
+
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
