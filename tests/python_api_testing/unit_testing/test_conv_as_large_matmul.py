@@ -111,7 +111,7 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
     mm_weight_shape = [1, 1, _nearest_32(C*R*S), _nearest_32(K)]
     mm_output_shape = [1,1,_nearest_32(OH*OW),_nearest_32(K)]
     # Call DTX pass to transform A
-    A_transformed_data = ttl.dtx.evaluate(A_cl_data, ttl.dtx.conv_transform([C,H,W], [R,S,stride_h,stride_w,pad_h,pad_w], ([-1],[-1])))
+    A_transformed_data = ttl.dtx.evaluate(A_cl_data, ttl.dtx.conv_transform([C,H,W], [R,S,stride_h,stride_w,pad_h,pad_w], [(0,1,2),(mm_input_shape[2], mm_input_shape[3])], 1), mm_input_shape)
     A_transformed_pytorch_tensor = torch.tensor(A_transformed_data).reshape(mm_input_shape)
     B_rm = B_tiled_.to(ttl.tensor.Layout.ROW_MAJOR)
     assert(B_rm.shape() == [1, 1, _nearest_32(C*R*S), _nearest_32(K)])

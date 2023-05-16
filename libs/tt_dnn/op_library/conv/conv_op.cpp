@@ -306,6 +306,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     bool pass = true;
     TT_ASSERT(a.layout() == Layout::CHANNELS_LAST, "Conv activation should be in channels last layout");
     TT_ASSERT(a.shape()[0] == 1, "Only batch size 1 supported.");
+    uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     uint32_t activation_C = a.shape()[1];
     //TT_ASSERT(activation_C % TILE_WIDTH == 0, "Channel depth must be divisible by tile width(32).");
     // Compute the 2d matrix shape
@@ -349,7 +350,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     // compute block size of input, weight and subblock size of the output
     //auto [num_blocks_in0_h, num_blocks_in0_w, num_blocks_in1_w, out_subblock_h, out_subblock_w] = compute_conv_op_block_info(Hat, Wat, Wbt);
 
-    // Uncomment below to hard code block size to 1 tile
+    // Hard code block size to 1 tile
     uint32_t num_blocks_in0_h = Hat;
     uint32_t num_blocks_in0_w = Wat;
     uint32_t num_blocks_in1_w = Wbt;
@@ -361,52 +362,19 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     uint32_t in0_block_w_datums = Wa / num_blocks_in0_w;
     uint32_t in0_block_h = Hat / num_blocks_in0_h;
     uint32_t in0_block_h_datums = Ha / num_blocks_in0_h;
+    uint32_t in0_block_size_bytes = in0_block_h_datums * in0_block_h_datums * num_bytes_of_df; // 2 bytes for bfloat16
     std::pair<vector<int>,vector<int>> block_info;
     block_info.first = {0,1,2};
     block_info.second = {(int)in0_block_h_datums, (int)in0_block_w_datums};
+    // DTX conv activation transform
+    std::vector<uint32_t> address_map = conv_transform(shape, conv_params, block_info, num_bytes_of_df);
 
-    DataTransformations * dtx = conv_transform(shape, conv_params, block_info);
-
-    // copy transfer addresses into a vector
-    std::vector<uint32_t> address_map;
-    uint32_t t_bytes = 0;
-
-    // Generate address map for reader kernel
-    TT_ASSERT(dtx->transformations.size() == 2, "DTX transformations not collapsed.");
-    TT_ASSERT(dtx->transformations.back()->groups[0]->transfers.size() > 0, "Addresses not generated in DTX.");
-    uint32_t block_size_bytes = in0_block_h_datums * in0_block_w_datums * 2;
-    uint32_t b_bytes = 0;
-    uint32_t n_blocks = 0;
-    for(auto transfer : dtx->transformations.back()->groups[0]->transfers){
-        assert(transfer->size*2 % 32 == 0);
-        assert(transfer->src_address*2 % 32 == 0);
-        assert(transfer->dst_address*2 % 32 == 0);
-        address_map.push_back(transfer->src_address*2);
-        address_map.push_back(transfer->dst_address*2);
-        address_map.push_back(transfer->size*2);
-        address_map.push_back(transfer->pad);
-
-        t_bytes += transfer->size*2;
-        b_bytes += transfer->size*2;
-        if(b_bytes == block_size_bytes) {
-            b_bytes = 0;
-            n_blocks++;
-        }
-    }
-    uint32_t total_bytes = num_rows * num_cols * 2; // 2 for bfloat16
-    assert(b_bytes == 0);
-    assert(n_blocks == num_blocks_in0_h*num_blocks_in0_w);
-    assert(total_bytes == t_bytes);
-    assert(total_bytes % n_blocks == 0);
-    uint32_t in0_block_size_bytes = total_bytes / n_blocks;
-    assert(in0_block_size_bytes == block_size_bytes);
-    delete dtx;
     tt_metal::Program *program = new tt_metal::Program();
     tt_xy_pair core = {0, 0};
     //tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
 
 
-    uint32_t single_tile_size = 2 * 1024; // TODO(agrebenisan): Refactor on df
+    uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0, "Buffer size of tensor b must be divisible by single_tile_size (aka divisible by sizeof(df) * 1024)");
@@ -432,7 +400,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     uint32_t out_dram_noc_y = out_dram_noc_xy.y;
 
     // out
-    uint32_t out_row_size = Wb * 2;
+    uint32_t out_row_size = Wb * num_bytes_of_df;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
     TT_ASSERT(out_subblock_num_tiles <= 8, "Need to ensure that matmul partials fit in dst");
@@ -499,7 +467,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
         in1_block_h * in1_block_w,
         in0_block_h * in1_block_w,
         in1_block_w,
-        2,
+        num_bytes_of_df,
         untilize_out);
 
     uint32_t in1_tensor_stride_h = Wbt;
@@ -538,11 +506,11 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
         writer_rt_args = {
             out_dram_addr,
             in0_block_h_datums,
-            in1_block_w*TILE_WIDTH*2, // 2 for bytes per datum
+            in1_block_w*TILE_WIDTH*num_bytes_of_df,
             1,
             num_blocks_in0_h,
             num_blocks_in1_w,
-            Wb*2
+            Wb*num_bytes_of_df
         };
     } else {
         assert(false && "Tiled output unsupported");
@@ -622,7 +590,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteToDeviceL1(device, core, address_map_l1_addr, address_map);
 
-        pass &= tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::LaunchKernels(device, program);
 
 
     TT_ASSERT(pass);

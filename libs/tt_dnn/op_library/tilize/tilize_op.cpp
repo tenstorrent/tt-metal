@@ -346,21 +346,11 @@ Tensor tilize_conv_activation(const Tensor &a, bool conv1x1 = false) {
         R = 1;
         S = 1;
     }
-    DataTransformations * dtx = conv_transform(shape, {R,S,1,1,0,0}, {{-1},{-1}});
     uint32_t num_rows = (uint32_t) (a.shape()[2] - R + 1) * (a.shape()[3] - R + 1);
     num_rows = ceil((double)num_rows / (double)TILE_HEIGHT) * TILE_HEIGHT;
     uint32_t num_cols = (uint32_t) a.shape()[1]*R*S;
-
-    // copy transfer addresses into a vector
-    std::vector<uint32_t> address_map;
-    uint32_t t_bytes = 0;
-    for(auto transfer : dtx->transformations.back()->groups[0]->transfers){
-        address_map.push_back(transfer->src_address*2); // 2 for bfloat16
-        address_map.push_back(transfer->dst_address*2);
-        address_map.push_back(transfer->size*2);
-        address_map.push_back(transfer->pad);
-        t_bytes += transfer->size*2;
-    }
+    num_cols = ceil((double)num_cols / (double)TILE_WIDTH) * TILE_WIDTH;
+    std::vector<uint32_t> address_map = conv_transform(shape, {R,S,1,1,0,0}, {{0,1,2},{(int) num_rows, (int) num_cols}}, 2);
 
     tt_metal::Program *program = new tt_metal::Program();
     tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
@@ -380,7 +370,6 @@ Tensor tilize_conv_activation(const Tensor &a, bool conv1x1 = false) {
     uint32_t num_tiles_r = num_rows / TILE_HEIGHT;
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
     uint32_t total_bytes = num_rows * num_cols * 2; // 2 for bfloat16
-    assert(total_bytes == t_bytes);
     uint32_t row_size = num_cols * 2; // 2 for bfloat16
 
     auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();

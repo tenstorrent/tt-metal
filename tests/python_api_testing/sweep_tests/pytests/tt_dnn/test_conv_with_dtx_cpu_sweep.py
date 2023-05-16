@@ -78,7 +78,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     in0_block_width_datums = (int) (_nearest_32(C*R*S)/num_blocks_in0_w)
     in0_block_height_datums = (int) (_nearest_32(OH*OW)/num_blocks_in0_h)
     block_shape_yx = [in0_block_height_datums, in0_block_width_datums]
-    address_map = ttl.dtx.generate_address_map(ttl.dtx.conv_transform([C,H,W], [R,S,stride_h,stride_w,pad_h,pad_w], (dim_order,block_shape_yx)))
+    address_map = ttl.dtx.conv_transform([C,H,W], [R,S,stride_h,stride_w,pad_h,pad_w], (dim_order,block_shape_yx), 1)
 
     B_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(B_)
     B_tiled_data = B_tiled_.data()

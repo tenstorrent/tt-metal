@@ -55,7 +55,10 @@ vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order,
 
 bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<int> block_shape_yx) {
     bool DEBUG = false;
+    assert(dim_order.size() == 3);
     assert(block_shape_yx.size() == 2);
+    assert(block_shape_yx[0] > 0);
+    assert(block_shape_yx[1] > 0);
     if (DEBUG) cout << "\n\nPASS: Block 2d matrix" << endl;
 
     // Identify producer TX & Consumer

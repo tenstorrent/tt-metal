@@ -1371,37 +1371,21 @@ void DeviceModule(py::module &m_device) {
 
 void DTXModule(py::module &m_dtx) {
     auto pyDataTransformations = py::class_<DataTransformations>(m_dtx, "DataTransformations", "Class describing the data transformations.");
-    m_dtx.def("evaluate", [](vector<float> data, DataTransformations * dtx){
-        return evaluate(data, dtx);
+    m_dtx.def("evaluate", [](vector<float> data, vector<uint32_t> address_map, vector<int> output_shape){
+        return evaluate(data, address_map, output_shape);
     }, R"doc(
         Evaluates data transformation on host cpu.
         +------------------+----------------------------+-----------------------+-------------+----------+
         | Argument         | Description                 | Data type            | Valid range | Required |
         +==================+=============================+======================+=============+==========+
         | data             | Input data to transform     | vector of floats     |             | Yes      |
-        | DataTransformations* | List of data transformations |  Pointer to dtx object |      | Yes      |
+        | address_map      | address mapping from src to dst  |  vector of uint32_t |      | Yes      |
+        | output shape     | shape of the dst tensor |  vector of int |      | Yes      |
         +------------------+-----------------------------+----------------------+-------------+----------+
     )doc");
-    m_dtx.def("generate_address_map", [](DataTransformations * dtx){
-        return generate_address_map(dtx);
-    }, R"doc(
-        Generates address map.
-        +------------------+----------------------------+-----------------------+-------------+----------+
-        | Argument         | Description                 | Data type            | Valid range | Required |
-        +==================+=============================+======================+=============+==========+
-        | DataTransformations*             | Data transform object    |     |             | Yes      |
-        +------------------+-----------------------------+----------------------+-------------+----------+
-    )doc");
-    m_dtx.def("conv_transform", [](vector<int> shape, vector<int> conv_params, std::pair<vector<int>,vector<int>> block_info){
-        return conv_transform(shape, conv_params, block_info);
-    }, R"doc(
-        Evaluates data transformation on host cpu.
-        +------------------+----------------------------+-----------------------+-------------+----------+
-        | Argument         | Description                 | Data type            | Valid range | Required |
-        +==================+=============================+======================+=============+==========+
-        | data             | Input data to transform     | vector of floats     |             | Yes      |
-        +------------------+-----------------------------+----------------------+-------------+----------+
-    )doc");
+    m_dtx.def("conv_transform", [](vector<int> shape, vector<int> conv_params, std::pair<vector<int>,vector<int>> block_info, uint32_t num_bytes_of_df){
+        return conv_transform(shape, conv_params, block_info, num_bytes_of_df);
+    });
 }
 
 } // end namespace tt_metal
