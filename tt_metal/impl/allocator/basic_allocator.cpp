@@ -8,12 +8,17 @@ namespace tt_metal {
 BasicAllocator::BasicAllocator(const tt_SocDescriptor &soc_desc)
     : Allocator(
         soc_desc,
-        {.dram=allocator::init_one_bank_per_channel_manager, .l1=allocator::init_one_bank_per_l1_manager},
         {
-            .dram=allocator::allocate_buffer_one_bank_per_storage_unit,
-            .dram_at_address=allocator::allocate_buffer_at_address_one_bank_per_storage_unit,
-            .l1=allocator::allocate_buffer_one_bank_per_storage_unit,
-            .l1_at_address=allocator::allocate_buffer_at_address_one_bank_per_storage_unit
+            .dram = {
+                .init=allocator::init_one_bank_per_channel,
+                .alloc=allocator::alloc_one_bank_per_storage_unit,
+                .alloc_at_addr=allocator::alloc_at_addr_one_bank_per_storage_unit
+            },
+            .l1 = {
+                .init=allocator::init_one_bank_per_l1,
+                .alloc=allocator::alloc_one_bank_per_storage_unit,
+                .alloc_at_addr=allocator::alloc_at_addr_one_bank_per_storage_unit
+            }
         }
     ) {}
 

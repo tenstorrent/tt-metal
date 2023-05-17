@@ -75,7 +75,7 @@ void validate_l1_addresses(BankManager &bank_manager, BankIdToRelativeAddress &b
     }
 }
 
-BankIdToRelativeAddress allocate_l1_buffer_compute_and_storage_scheme(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up) {
+BankIdToRelativeAddress alloc_in_compute_and_storage_l1(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up) {
     static constexpr uint32_t storage_core_bank_size = 512 * 1024;
     static constexpr uint32_t num_banks_per_storage_core = 2;
     static constexpr uint32_t total_storage_size = num_banks_per_storage_core * storage_core_bank_size;
@@ -126,7 +126,7 @@ BankIdToRelativeAddress allocate_l1_buffer_compute_and_storage_scheme(BankManage
     return bank_to_address;
 }
 
-BankIdToRelativeAddress allocate_l1_buffer_at_address_compute_and_storage_scheme(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address) {
+BankIdToRelativeAddress alloc_at_addr_in_compute_and_storage(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address) {
     static constexpr uint32_t storage_core_bank_size = 512 * 1024;
     static constexpr uint32_t num_banks_per_storage_core = 2;
 
@@ -153,12 +153,17 @@ BankIdToRelativeAddress allocate_l1_buffer_at_address_compute_and_storage_scheme
 L1BankingAllocator::L1BankingAllocator(const tt_SocDescriptor &soc_desc)
     : Allocator(
         soc_desc,
-        {.dram=allocator::init_one_bank_per_channel_manager, .l1=allocator::init_compute_and_storage_l1_bank_manager},
         {
-            .dram=allocator::allocate_buffer_one_bank_per_storage_unit,
-            .dram_at_address=allocator::allocate_buffer_at_address_one_bank_per_storage_unit,
-            .l1=allocator::allocate_l1_buffer_compute_and_storage_scheme,
-            .l1_at_address=allocator::allocate_l1_buffer_at_address_compute_and_storage_scheme
+            .dram = {
+                .init=allocator::init_one_bank_per_channel,
+                .alloc=allocator::alloc_one_bank_per_storage_unit,
+                .alloc_at_addr=allocator::alloc_at_addr_one_bank_per_storage_unit
+            },
+            .l1 = {
+                .init=allocator::init_compute_and_storage_l1_bank_manager,
+                .alloc=allocator::alloc_in_compute_and_storage_l1,
+                .alloc_at_addr=allocator::alloc_at_addr_in_compute_and_storage
+            }
         }
     ) {}
 

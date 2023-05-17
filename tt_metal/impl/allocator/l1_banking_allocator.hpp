@@ -19,9 +19,9 @@ namespace allocator {
 
 void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const tt_SocDescriptor &soc_desc);
 
-BankIdToRelativeAddress allocate_l1_buffer_compute_and_storage_scheme(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up);
+BankIdToRelativeAddress alloc_in_compute_and_storage_l1(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up);
 
-BankIdToRelativeAddress allocate_l1_buffer_at_address_compute_and_storage_scheme(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address);
+BankIdToRelativeAddress alloc_at_addr_in_compute_and_storage(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address);
 
 }   // namespace allocator
 

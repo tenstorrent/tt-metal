@@ -26,7 +26,7 @@ struct AddressDescriptor {
     uint32_t offset_bytes;
     uint32_t relative_address;
 
-    uint32_t absolute_address() const {
+    uint32_t absolute_address()     const {
         return offset_bytes + relative_address;
     }
 };
@@ -105,14 +105,22 @@ void populate_candidate_address_ranges(
     std::function<bool(const std::pair<uint32_t, uint32_t> &)> filter = accept_all_address_ranges
 );
 
-void init_one_bank_per_channel_manager(Allocator &allocator, const tt_SocDescriptor &soc_desc);
-
-void init_one_bank_per_l1_manager(Allocator &allocator, const tt_SocDescriptor &soc_desc);
-
-struct InitializationFunctions {
-    std::function<void(Allocator &, const tt_SocDescriptor &)> dram;
-    std::function<void(Allocator &, const tt_SocDescriptor &)> l1;
+struct InitAndAllocFuncs {
+    std::function<void(Allocator &, const tt_SocDescriptor &)> init;
+    std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, bool)> alloc;
+    std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, uint32_t)> alloc_at_addr;
 };
+
+// Holds callback functions required by allocators that specify how to initialize the bank managers and what the allocation scheme
+// is for a given storage substrate
+struct AllocDescriptor {
+    InitAndAllocFuncs dram;
+    InitAndAllocFuncs l1;
+};
+
+void init_one_bank_per_channel(Allocator &allocator, const tt_SocDescriptor &soc_desc);
+
+void init_one_bank_per_l1(Allocator &allocator, const tt_SocDescriptor &soc_desc);
 
 uint32_t num_banks(const Allocator &allocator, const BufferType &buffer_type);
 
@@ -124,16 +132,9 @@ std::vector<uint32_t> bank_ids_from_dram_channel(const Allocator &allocator, uin
 
 std::vector<uint32_t> bank_ids_from_logical_core(const Allocator &allocator, const tt_xy_pair &logical_core);
 
-BankIdToRelativeAddress allocate_buffer_one_bank_per_storage_unit(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up);
+BankIdToRelativeAddress alloc_one_bank_per_storage_unit(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up);
 
-BankIdToRelativeAddress allocate_buffer_at_address_one_bank_per_storage_unit(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address);
-
-struct AllocationFunctions {
-    std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, bool)> dram;
-    std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, uint32_t)> dram_at_address;
-    std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, bool)> l1;
-    std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, uint32_t)> l1_at_address;
-};
+BankIdToRelativeAddress alloc_at_addr_one_bank_per_storage_unit(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address);
 
 BankIdToRelativeAddress allocate_buffer(Allocator &allocator, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up);
 
@@ -153,7 +154,7 @@ uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator
 }  // namespace allocator
 
 struct Allocator {
-    Allocator(const tt_SocDescriptor &soc_desc, const allocator::InitializationFunctions &initializers, const allocator::AllocationFunctions &allocators);
+    Allocator(const tt_SocDescriptor &soc_desc, const allocator::AllocDescriptor &alloc_descriptor);
 
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;
@@ -163,8 +164,8 @@ struct Allocator {
     std::unordered_map<uint32_t, tt_xy_pair> bank_id_to_logical_core;
     std::unordered_map<tt_xy_pair, std::vector<uint32_t>> logical_core_to_bank_ids;
 
-    // Callbacks to invoke when allocation is requested
-    allocator::AllocationFunctions allocation_functions;
+    // Callbacks to invoke during initialization and allocation
+    allocator::AllocDescriptor descriptor;
 };
 
 }  // namespace tt_metal
