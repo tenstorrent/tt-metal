@@ -21,8 +21,7 @@ Welcome to TT-Metal documentation!
 .. toctree::
    :caption: Libraries
 
-   libraries/tensor
-   libraries/tt_dnn
+   libraries/index
 
 .. toctree::
    :caption: Frameworks
