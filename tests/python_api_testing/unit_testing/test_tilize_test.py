@@ -40,6 +40,8 @@ def test_run_tilize_test(nb, nc, nh, nw):
 
     tilized_inp = tilize(inp.reshape(*shape))
 
+    del b
+
     ttl.device.CloseDevice(device)
     assert (
         abs(tilized_inp - c) < 0.02

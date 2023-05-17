@@ -44,4 +44,6 @@ def test_repeat_interleave_fallback(input_shape, repeats, dim, on_device):
     logger.info(comp_out)
     assert comp_pass
 
+    del t1
+
     ttl.device.CloseDevice(device)

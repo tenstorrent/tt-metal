@@ -64,6 +64,9 @@ def run_tilize_matmul_test(M, K, N):
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     print("Passing=", passing_pcc)
     print("Output pcc=", output_pcc)
+
+    del t2
+
     ttl.device.CloseDevice(device)
     assert passing_pcc
 

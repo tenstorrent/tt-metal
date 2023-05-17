@@ -50,4 +50,6 @@ def test_transpose_hc():
     transposed_ref = x.permute(0, 2, 1, 3)
     print_diff_argmax(tt_got_back, transposed_ref)
 
+    del xtt
+
     ttl.device.CloseDevice(device)

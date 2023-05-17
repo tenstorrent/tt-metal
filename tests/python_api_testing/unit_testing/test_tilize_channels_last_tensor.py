@@ -36,4 +36,7 @@ def test_tilize_channels_last_tensor():
     assert (
         abs(golden_pt_tensor - tt_res_array) < 0.02
     ).all(), "Max abs difference for tilize can be 0.02 due to bfloat conversions"
+
+    del tt_res
+
     ttl.device.CloseDevice(device)

@@ -47,4 +47,6 @@ def test_pad_fallback(input_shape, pad, mode, value, on_device):
     logger.info(comp_out)
     assert comp_pass
 
+    del t1
+
     ttl.device.CloseDevice(device)

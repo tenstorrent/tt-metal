@@ -97,6 +97,9 @@ def test_tile_major_reshape():
 
     print("reshape() max absdiff=")
     print_diff_argmax(tt_got_back, x)
+
+    del xtt
+
     ttl.device.CloseDevice(device)
 
 def test_row_major_reshape():

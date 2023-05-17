@@ -46,4 +46,6 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device):
         logger.info(comp_out)
         assert comp_pass
 
+    del tt_out
+
     ttl.device.CloseDevice(device)

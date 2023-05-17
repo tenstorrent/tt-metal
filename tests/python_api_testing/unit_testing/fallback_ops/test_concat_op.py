@@ -66,4 +66,6 @@ def test_concat_fallback(input_shapes, dim, on_device):
     logger.info(comp_out)
     assert comp_pass
 
+    del t1
+
     ttl.device.CloseDevice(device)

@@ -45,7 +45,8 @@ def run_large_matmul(Ha, Wa, Wb):
 
     out = ttl.tensor.large_bmm(tta, ttb, True, True)
     out_shape = [1,1,Ha,Wb]
-    out_pytorch = torch.tensor(out.to(host).data()).reshape(out_shape)
+    out = out.to(host)
+    out_pytorch = torch.tensor(out.data()).reshape(out_shape)
     ttl.device.CloseDevice(device)
     golden_pytorch = torch.matmul(a,b)
     assert(out_pytorch.shape == golden_pytorch.shape), f"Shape mismatch: actual: {out_pytorch.shape}, expected: {golden_pytorch.shape}"

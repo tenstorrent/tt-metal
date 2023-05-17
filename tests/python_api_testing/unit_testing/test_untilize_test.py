@@ -41,4 +41,7 @@ def test_run_untilize_test(nb, nc, nh, nw):
     assert (
         abs(untilized_inp - c) < 0.02
     ).all(), "Max abs difference for untilize can be 0.02 due to bfloat conversions"
+
+    del b
+
     ttl.device.CloseDevice(device)

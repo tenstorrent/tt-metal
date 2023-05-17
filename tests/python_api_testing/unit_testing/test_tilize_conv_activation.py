@@ -48,6 +48,9 @@ def run_tilize_conv_act_test(C, H, W, R, S):
     # untilize and remove padding
     A_ut = untilize(pyt_got_back)[:, :, 0 : (OH * OW), :]
     A_golden = convert_act_2d_matrix(A_pyt, R, S, 1, 1, 0, 0)
+
+    del A_t
+
     ttl.device.CloseDevice(device)
     assert A_ut.shape == A_golden.shape
     print(abs(A_golden - A_ut).max())

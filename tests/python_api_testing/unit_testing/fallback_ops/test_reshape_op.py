@@ -47,4 +47,6 @@ def test_reshape_fallback(input_shape, output_shape, on_device):
     logger.info(comp_out)
     assert comp_pass
 
+    del t1
+
     ttl.device.CloseDevice(device)

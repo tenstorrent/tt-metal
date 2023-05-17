@@ -214,4 +214,6 @@ def test_Conv2d_fallback(
     logger.info(comp_out)
     assert comp_pass
 
+    del t1
+
     ttl.device.CloseDevice(device)

@@ -103,6 +103,8 @@ def test_layer_norm_fallback(
     logger.info(comp_out)
     assert comp_pass
 
+    del t1
+
     ttl.device.CloseDevice(device)
 
 
@@ -207,5 +209,7 @@ def test_LayerNorm_fallback(
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
+
+    del t1
 
     ttl.device.CloseDevice(device)

@@ -107,6 +107,8 @@ def test_group_norm_fallback(
     logger.info(comp_out)
     assert comp_pass
 
+    del t1
+
     ttl.device.CloseDevice(device)
 
 
@@ -226,5 +228,7 @@ def test_GroupNorm_fallback(
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
+
+    del t1
 
     ttl.device.CloseDevice(device)

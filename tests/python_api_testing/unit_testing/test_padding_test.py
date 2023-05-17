@@ -162,6 +162,10 @@ def test_run_padding_and_add_test(
 
     assert torch.allclose(out_pt, out_ref, rtol=1e-2)
 
+    del out_dev
+
+    ttl.device.CloseDevice(device)
+
 
 @pytest.mark.parametrize(
     "input_tensor_shape,  pad_value",
@@ -301,3 +305,7 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value):
     print("\n", out_ref)
 
     assert torch.allclose(out_pt, out_ref, rtol=1e-2)
+
+    del out_dev
+
+    ttl.device.CloseDevice(device)

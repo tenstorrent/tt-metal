@@ -48,4 +48,6 @@ def test_sigmoid_fallback(input_shape, on_device):
     logger.info(comp_out)
     assert comp_pass
 
+    del t1
+
     ttl.device.CloseDevice(device)

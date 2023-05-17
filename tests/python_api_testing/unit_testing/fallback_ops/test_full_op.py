@@ -31,4 +31,6 @@ def test_full_fallback(input_shape, fill_value):
     logger.info(comp_out)
     assert comp_pass
 
+    del t0
+
     ttl.device.CloseDevice(device)
