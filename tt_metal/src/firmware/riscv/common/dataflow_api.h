@@ -632,12 +632,47 @@ struct InterleavedAddrGenFast {
 
         while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF));
 
-        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr); // dst_addr
-        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
-        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_noc_xy);
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr); // (uint32_t)src_addr
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_noc_xy); // src_addr >> 32
         NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, this->page_size); // len_bytes
         NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
         noc_reads_num_issued[loading_noc] += 1;
+    }
+
+    FORCE_INLINE
+    void noc_async_write_tile(const uint32_t id, uint32_t src_addr) const {
+        uint32_t dest_addr;
+        uint32_t dest_noc_xy;
+
+        if constexpr (DRAM) {
+            uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
+            dest_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) + this->bank_base_address;
+            dest_noc_xy = dram_bank_to_noc_xy[bank_id];
+        } else {
+            uint32_t bank_id = id & (NUM_L1_BANKS - 1);
+            dest_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) + this->bank_base_address;
+            dest_addr += l1_bank_to_l1_offset[bank_id];
+            dest_noc_xy = l1_bank_to_noc_xy[bank_id];
+        }
+
+        while (!ncrisc_noc_fast_write_ok(loading_noc, NCRISC_WR_REG_CMD_BUF));
+        uint32_t noc_cmd_field =
+          NOC_CMD_CPY | NOC_CMD_WR |
+          NOC_CMD_VC_STATIC  |
+          NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+          0x0 | // (linked ? NOC_CMD_VC_LINKED : 0x0)
+          0x0 | // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+          NOC_CMD_RESP_MARKED;
+
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_CTRL, noc_cmd_field);
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_RET_ADDR_LO, dest_addr); // (uint32_t)dest_addr
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_RET_ADDR_MID, dest_noc_xy); // dest_addr >> 32
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_AT_LEN_BE, this->page_size); // len_bytes
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        noc_nonposted_writes_num_issued[loading_noc] += 1;
+        noc_nonposted_writes_acked[loading_noc] += 1; // num_dests
     }
 
 };
@@ -735,9 +770,6 @@ void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr,
                                         size);
 }
 
-/**
- * Fill me in
- */
 template <bool DRAM>
 FORCE_INLINE
 void noc_async_read_tile(const uint32_t id, const InterleavedAddrGenFast<DRAM>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0) {
@@ -747,6 +779,7 @@ void noc_async_read_tile(const uint32_t id, const InterleavedAddrGenFast<DRAM>& 
     */
     s.noc_async_read_tile(id, dst_local_l1_addr, offset);
 }
+
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the
  * Tensix core executing this function call. The destination is specified using
@@ -769,6 +802,12 @@ FORCE_INLINE
 void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr,  std::uint32_t size) {
         ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, src_local_l1_addr, dst_noc_addr, size,
                             NOC_UNICAST_WRITE_VC, false, false, 1);
+}
+
+template <bool DRAM>
+FORCE_INLINE
+void noc_async_write_tile(const uint32_t id, const InterleavedAddrGenFast<DRAM>& s, std::uint32_t src_local_l1_addr) {
+    s.noc_async_write_tile(id, src_local_l1_addr);
 }
 
 FORCE_INLINE
