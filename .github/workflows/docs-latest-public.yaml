@@ -2,7 +2,7 @@ name: Deploy latest docs to GitHub pages
 
 on:
   push:
-    branches: ["main", "rkim/702-external-docs"]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
     env:
       DOCS_VERSION: latest
     runs-on:
-      group: cloud-docs
+      group: corporate-docs
     steps:
       - uses: actions/checkout@v3
         with:
