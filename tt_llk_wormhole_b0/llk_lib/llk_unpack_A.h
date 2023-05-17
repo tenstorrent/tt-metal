@@ -14,6 +14,8 @@ using namespace ckernel::unpacker;
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_unpack_A_mop_config(bool transpose_of_faces) {
 
+    static_assert(!((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
+
     if constexpr (BType == BroadcastType::COL) {
 #if SKIP_UNP0 == 1
         static constexpr uint unpack_srca = TT_OP_NOP;
@@ -27,14 +29,12 @@ inline void llk_unpack_A_mop_config(bool transpose_of_faces) {
 #if SKIP_UNP1 == 1
         static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
-        static constexpr uint unpack_srcb = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ?
-            TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID) : 
-            TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
         static constexpr uint unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
         if constexpr (acc_to_dest) {
             ckernel_unpack_template tmp = ckernel_unpack_template(
-                false,  // src B
+                false,
                 true,   // halo - just used for 4 unpacks
                 unpack_srcb,
                 unpack_srca,
@@ -68,9 +68,7 @@ inline void llk_unpack_A_mop_config(bool transpose_of_faces) {
 #if SKIP_UNP1 == 1
         static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
-        static constexpr uint unpack_srcb = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ?
-            TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID) : 
-            TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
         static constexpr uint unpack_srcb_clear_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 0, 0b0001);
         if constexpr (acc_to_dest) {
@@ -140,18 +138,20 @@ inline void llk_unpack_A_mop_config(bool transpose_of_faces) {
 #endif
 #if SKIP_UNP1 == 1
                 static constexpr uint unpack_srcb = TT_OP_NOP;
+                static constexpr uint unpack_srcb_set_dvalid = TT_OP_NOP;
 #else
                 static constexpr uint unpack_srcb = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ?
-                    TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID) : 
+                    TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC) : 
                     TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID); //WA for tenstorrent/budabackend#1230
 #endif
                ckernel_unpack_template tmp = ckernel_unpack_template(
-                   true,   // src B
-                   false,  // halo - just used for 4 unpacks
+                   !(binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB),   // src B
+                   (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB),  // halo - just used for 4 unpacks
                    unpack_srca,
-                   0,
-                   0,
-                   0,
+                   unpack_srcb,
+                   (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? unpack_srcb_set_dvalid : TT_OP_NOP,
+                   TT_OP_NOP,
                    0,
                    unpack_srcb,
                    0);
