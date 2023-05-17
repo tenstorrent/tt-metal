@@ -46,12 +46,11 @@ struct CompileDefines {
 struct TriscParams {
     // TODO: commonize this with runtime_common.hpp?
     uint32_t TRISC_BASE { MEM_TRISC0_BASE };
-    uint32_t TRISC_L1_MAILBOX_OFFSET { MEM_TEST_MAILBOX_ADDRESS };
     uint32_t trisc_sizes[3] = { MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE };
     uint32_t trisc_mailbox_addresses[3] = {
-        TRISC_BASE + TRISC_L1_MAILBOX_OFFSET,
-        TRISC_BASE + trisc_sizes[0] + TRISC_L1_MAILBOX_OFFSET,
-        TRISC_BASE + trisc_sizes[0] + trisc_sizes[1] + TRISC_L1_MAILBOX_OFFSET};
+        MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET,
+        MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET,
+        MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET};
     int32_t get_trisc_size(RISCID id) const {
         switch (id) {
             case RISCID::TR0:
@@ -301,7 +300,7 @@ struct CompileContext {
     vector<string> get_link_cmd(const CompileDefines& defs, const string& hwthread_name, const vector<string>& obj_names)
     {
         string linkopts = " -march=rv32i -mabi=ilp32 -m" + get_string_aliased_arch_lowercase(defs.arch) + " -flto -ffast-math -Wl,--gc-sections"
-                          " -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--defsym=__firmware_start=0 "
+                          " -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 "
                           " -nostartfiles -g";
         if (defs.is_trisc()) {
             linkopts += " -fno-exceptions"; // TODO(AP): odd that this was not present for brisc in the Makefile

@@ -4,22 +4,6 @@
 
 _start:
 
-# produce an empty word at a known location
-  j 1f
-.balign 4, 0 # in case j is 2-byte compressed insn
-PLACEHOLDER_REMOVE_ME:
-.space 372
-
-# STOP. Do not add new fields here. Put them immediately before CRT_START.
-
-FIRMWARE_VERSION:
-.global FIRMWARE_VERSION
-# Prior to the introduction of FIRMWARE_VERSION, this location was occupied by the auipc gp instruction that follows.
-# Uncompressed instructions always have 11 as the low bits so pad the version with zeroes so that we can distinguish it
-# from an instruction.
-.word 1 << 2
-.word 0x5da30992 # special magic for FIRMWARE_VERSION, this must immediately follow the version word.
-
 CRT_START:
   # Initialize global pointer
   .option push
@@ -28,7 +12,7 @@ CRT_START:
   addi  gp, gp, %pcrel_lo(1b)
 
 /* set stack pointer */
-la sp, __stack_top
+  la sp, __stack_top
 
   # Clear the bss segment
   la      a0, __l1_bss_start

@@ -193,8 +193,27 @@ bool test_load_write_read_risc_binary(
 
     uint64_t addr = 0;
     switch (riscv_id) {
-        case 0: addr = MEM_BRISC_FIRMWARE_BASE; break;
-        case 1: addr = MEM_NCRISC_FIRMWARE_BASE; break;
+        case 0: addr = MEM_BRISC_FIRMWARE_BASE;
+            {
+                // Options for handling brisc fw not starting at mem[0]:
+                // 1) Program the register for the start address out of reset
+                // 2) Encode a jump in crt0 for mem[0]
+                // 3) Write the jump to mem[0] here
+                // This does #3.  #1 may be best, #2 gets messy (elf files
+                // drop any section before .init, crt0 needs ifdefs, etc)
+                vector<uint32_t> jump_to_fw;
+                uint32_t opcode = 0x6f; // jal
+                assert(MEM_BRISC_FIRMWARE_BASE < 0x0007ffff);
+                uint32_t offset = ((MEM_BRISC_FIRMWARE_BASE & 0x7fe) << 20) |
+                    ((MEM_BRISC_FIRMWARE_BASE & 0x800) << 9) |
+                    ((MEM_BRISC_FIRMWARE_BASE & 0xff000) << 0);
+                jump_to_fw.push_back(offset | opcode);
+                write_hex_vec_to_core(cluster, chip_id, core, jump_to_fw, 0);
+            }
+            break;
+
+        case 1: addr = MEM_NCRISC_FIRMWARE_BASE;
+            break;
         default: std::cout << "Unknown rsicv_id = " << riscv_id << std::endl; exit(1);
     }
 

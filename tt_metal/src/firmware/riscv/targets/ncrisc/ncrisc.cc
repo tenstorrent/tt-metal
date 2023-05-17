@@ -11,7 +11,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 volatile uint32_t local_mem_barrier;
-volatile uint32_t* test_mailbox_ptr = (volatile uint32_t*)(MEM_NCRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS);
+volatile uint32_t* test_mailbox_ptr = (volatile uint32_t*)(MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
 
 int post_index;
 

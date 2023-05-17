@@ -16,6 +16,7 @@ REGION_ALIAS("REGION_ZEROS", ZEROS)
 #endif
 
 __firmware_stack_size = 1024;
+__firmware_start = ORIGIN(BRISC_CODE);
 __local_mem_rodata_start_addr = ORIGIN(LOCAL_DATA_MEM);
 
 #include "brisc-sections.ld"

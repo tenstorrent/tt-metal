@@ -104,10 +104,12 @@ ifeq ("$(ARCH_NAME)", "wormhole_b0")
   INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole"
   INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole/noc"
   INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole/wormhole_b0_defines"
+  DEV_MEM_MAP := $(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole/dev_mem_map.h
 else
   INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/grayskull/grayskull_defines"
   INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/grayskull"
   INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/grayskull/noc"
+  DEV_MEM_MAP := $(TT_METAL_HOME)/tt_metal/src/firmware/riscv/$(ARCH_NAME)/dev_mem_map.h
 endif
 
 ifeq ("$(ARCH_NAME)", "wormhole")
@@ -161,7 +163,7 @@ ifeq ($(DEBUG_MODE),1)
 	endif
 endif
 
-$(OUTPUT_DIR)/%.ld: %.ld | $(OUTPUT_DIR)
+$(OUTPUT_DIR)/%.ld: %.ld $(DEV_MEM_MAP) | $(OUTPUT_DIR)
 	$(CXX) $(DEFINES) $(DEFS) $(INCLUDES) -E -P -x c -o $@ $<
 
 $(OUTPUT_DIR)/%.d: %.c | $(OUTPUT_DIR)

@@ -35,17 +35,8 @@
 #define MEM_NCRISC_IRAM_SIZE  (16 * 1024)
 
 /////////////
-// Mailboxes
-#define MEM_TEST_MAILBOX_ADDRESS       4
-#define MEM_ENABLE_CORE_MAILBOX        32
-#define MEM_WALL_CLOCK_MAILBOX_ADDRESS 96
-#define MEM_DEBUG_MAILBOX_ADDRESS      112
-#define MEM_DEBUG_MAILBOX_SIZE         64
-#define MEM_CQ_MAILBOX_ADDRESS         368
-
-
-/////////////
 // Firmware/kernel code holes
+#define MEM_BOOT_CODE_SIZE             4
 #define MEM_BRISC_FIRMWARE_SIZE        (20 * 1024)
 #define MEM_BRISC_FIRMWARE_CODE_SIZE   ( 7 * 1024 + 512)
 #define MEM_NCRISC_FIRMWARE_SIZE       (32 * 1024)
@@ -53,8 +44,26 @@
 #define MEM_TRISC1_SIZE                (16 * 1024)
 #define MEM_TRISC2_SIZE                (20 * 1024)
 
-#define MEM_BRISC_FIRMWARE_BASE        0
+#define MEM_BOOT_CODE_BASE             0
+#define MEM_MAILBOX_BASE               4
+#define MEM_BRISC_FIRMWARE_BASE        256
 #define MEM_NCRISC_FIRMWARE_BASE       (MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE)
 #define MEM_TRISC0_BASE                (MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE)
 #define MEM_TRISC1_BASE                (MEM_TRISC0_BASE + MEM_TRISC0_SIZE)
 #define MEM_TRISC2_BASE                (MEM_TRISC1_BASE + MEM_TRISC1_SIZE)
+
+/////////////
+// Mailboxes
+#define MEM_MAILBOX_BRISC_OFFSET       0
+#define MEM_MAILBOX_TRISC0_OFFSET      4
+#define MEM_MAILBOX_TRISC1_OFFSET      8
+#define MEM_MAILBOX_TRISC2_OFFSET      12
+#define MEM_MAILBOX_NCRISC_OFFSET      16
+#define MEM_TEST_MAILBOX_ADDRESS       (MEM_MAILBOX_BASE +   4) // 4 bytes * 5 cores
+#define MEM_FWLOG_MAILBOX_ADDRESS      (MEM_MAILBOX_BASE +  24) // 4 * 5 bytes * 5 cores
+#define MEM_FWEVENT_MAILBOX_ADDRESS    (MEM_MAILBOX_BASE + 124) // 4 bytes * 5 cores
+#define MEM_ENABLE_CORE_MAILBOX        (MEM_MAILBOX_BASE + 144) // 4 bytes * 1 core (brisc)
+#define MEM_WALL_CLOCK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 148) // 4 bytes * 1 core (brisc)
+#define MEM_DEBUG_MAILBOX_ADDRESS      (MEM_MAILBOX_BASE + 152) // 16 bytes * 4 cores (not brisc)
+#define MEM_DEBUG_MAILBOX_SIZE         64
+#define MEM_MAILBOX_END                (MEM_MAILBOX_BASE + 216)

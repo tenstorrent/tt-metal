@@ -19,15 +19,14 @@
 
 // TODO: commonize this w/ the runtime -- it's the same configs
 // these consts must be constexprs
-constexpr uint32_t TRISC_BASE = MEM_TRISC0_BASE;
-constexpr uint32_t TRISC_L1_MAILBOX_OFFSET = MEM_TEST_MAILBOX_ADDRESS;
+constexpr uint32_t TRISC_L1_MAILBOX_OFFSET = MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
 
 constexpr uint32_t trisc_sizes[3] = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};
 
 constexpr uint32_t trisc_mailbox_addresses[3] = {
-    MEM_TRISC0_BASE + TRISC_L1_MAILBOX_OFFSET,
-    MEM_TRISC0_BASE + trisc_sizes[0] + TRISC_L1_MAILBOX_OFFSET,
-    MEM_TRISC0_BASE + trisc_sizes[0] + trisc_sizes[1] + TRISC_L1_MAILBOX_OFFSET};
+    MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET,
+    MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET,
+    MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET};
 
 c_tensix_core core;
 
@@ -308,7 +307,7 @@ int main() {
 
 #if not defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)
     volatile uint32_t* enable_core_mailbox_ptr =
-        (volatile uint32_t*)(MEM_BRISC_FIRMWARE_BASE + MEM_ENABLE_CORE_MAILBOX);
+        (volatile uint32_t*)(MEM_ENABLE_CORE_MAILBOX);
     while (enable_core_mailbox_ptr[0] != 0x1);
 #endif
 
@@ -374,7 +373,7 @@ int main() {
     }
 
     volatile uint32_t* test_mailbox_ptr =
-        (volatile uint32_t*)(MEM_BRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS);
+        (volatile uint32_t*)(MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET);
     if (test_mailbox_ptr[0] != RISC_DETECTED_STREAM_ASSERT)
         test_mailbox_ptr[0] = 0x1;
 

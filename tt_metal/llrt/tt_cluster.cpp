@@ -334,12 +334,12 @@ void tt_cluster::wait_for_completion(std::string output_dir) {
                 bool is_core_busy = device_idle_cores.at(device_id).find(core) == device_idle_cores.at(device_id).end();
                 if (is_core_busy) {
                     // check for core done
-                    read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), MEM_NCRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS, 4);
+                    read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET, 4);
                     bool is_core_done = (mem_vector.at(0) == 1) or (mem_vector.at(0) == 0xabcd1234);
                     if (is_core_done) {
                         device_idle_cores.at(device_id).insert(core);
                         // check for stream assertions
-                        read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), MEM_BRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS, 4);
+                        read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET, 4);
                         if (mem_vector.at(0) == 0xdeeeaaad) {
                             log_fatal(tt::LogDevice, "Device {} stream assertions detected from core {}-{}", device_id, core.x, core.y);
                         }

@@ -20,6 +20,8 @@ OPT_FLAGS ?= -flto -ffast-math -O3 -g -fno-exceptions
 
 SOURCES ?= main.cpp
 
+ARCH_NAME ?= grayskull
+
 ifeq ($(ARCH_NAME),grayskull)
 ARCH_FLAG := "-mgrayskull"
 else ifeq ($(ARCH_NAME),wormhole_b0)
@@ -56,8 +58,10 @@ OBJECTS := $(addprefix $(CKERNELS_COMMON_OUT_DIR)/, $(addsuffix .o,$(basename $(
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
   INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole"
+  DEV_MEM_MAP := $(TT_METAL_HOME)/tt_metal/src/firmware/riscv/wormhole/dev_mem_map.h
 else
   INCLUDES += -I "$(TT_METAL_HOME)/tt_metal/src/firmware/riscv/grayskull"
+  DEV_MEM_MAP := $(TT_METAL_HOME)/tt_metal/src/firmware/riscv/$(ARCH_NAME)/dev_mem_map.h
 endif
 
 #FIXME: removing bin generation for now, as it is not used
@@ -72,7 +76,7 @@ endif
 $(OUTPUT_DIR):
 	-mkdir -p $@
 
-$(LINKER_SCRIPT): $(LINKER_SCRIPT_SRC) | $(OUTPUT_DIR)
+$(LINKER_SCRIPT): $(LINKER_SCRIPT_SRC) $(DEV_MEM_MAP) | $(OUTPUT_DIR)
 	$(CXX) $(DEFINES) $(DEFS) $(INCLUDES) -E -P -x c -o $@ $<
 
 # Link using C++ compiler

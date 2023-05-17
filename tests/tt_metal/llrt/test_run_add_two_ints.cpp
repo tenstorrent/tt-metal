@@ -12,7 +12,7 @@
 
 bool run_add_two_ints(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) {
 
-    uint64_t test_mailbox_addr = MEM_BRISC_FIRMWARE_BASE + MEM_TEST_MAILBOX_ADDRESS;
+    uint64_t test_mailbox_addr = MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
     constexpr int INIT_VALUE = 69;
     constexpr int DONE_VALUE = 1;
 
