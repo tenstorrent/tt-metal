@@ -38,7 +38,7 @@ std::vector<uint32_t> conv_transform(vector<int> shape, vector<int> conv_params,
     // Generate dtx output file name for the given parameters and check if the file already exists
     string dtx_output_file_name = get_dtx_output_file_name(shape, conv_params, block_shape, num_bytes_of_df);
     assert(std::getenv("TT_METAL_HOME"));
-    string dtx_file_path = ((string) std::getenv("TT_METAL_HOME")) + "/libs/dtx/dtx_conv_transform_outputs/" + dtx_output_file_name;
+    string dtx_file_path = ((string) std::getenv("TT_METAL_HOME")) + "/tt_metal/third_party/lfs/dtx_transform_outputs/" + dtx_output_file_name;
     std::ifstream file(dtx_file_path);
     if (file.is_open()) {
         std::cout << "DTX transform output file already exists! No need to run transform pass. Read address map." << std::endl;
@@ -143,6 +143,7 @@ std::vector<uint32_t> conv_transform(vector<int> shape, vector<int> conv_params,
     delete combined;
     // Save and cache dtx transform output to file
     std::ofstream outFile(dtx_file_path);
+    assert(outFile.is_open());
     for (const auto &v : address_map) outFile << to_string(v) << "\n";
     return address_map;
 }
