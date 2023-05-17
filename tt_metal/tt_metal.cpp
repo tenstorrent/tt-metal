@@ -635,6 +635,8 @@ size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const tt_xy_pair 
     }
     tt::utils::hash_combine(kg_compile_hash, kernel_group.riscv_0->compile_time_args_hash(logical_core));
     tt::utils::hash_combine(kg_compile_hash, kernel_group.riscv_1->compile_time_args_hash(logical_core));
+    tt::utils::hash_combine(kg_compile_hash, size_t(kernel_group.riscv_0->noc()));
+    tt::utils::hash_combine(kg_compile_hash, size_t(kernel_group.riscv_1->noc()));
     tt::utils::hash_combine(kg_compile_hash, std::hash<std::string>{}(op_name));
     // Add the device id into the compile hash to prevent clashes from simultaneous builds during multi-process runs
     tt::utils::hash_combine(kg_compile_hash, std::hash<int>{}(pcie_slot));
