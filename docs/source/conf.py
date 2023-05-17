@@ -71,6 +71,7 @@ exclude_patterns = []
 html_theme = 'sphinx_rtd_theme'
 html_logo = 'images/tt_logo.svg'
 html_favicon = 'images/cropped-favicon-32x32.png'
+html_baseurl = "/" + os.environ["DOCS_VERSION"]
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,

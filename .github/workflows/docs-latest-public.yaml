@@ -1,0 +1,51 @@
+name: Deploy latest docs to GitHub pages
+
+on:
+  push:
+    branches: ["main", "rkim/702-external-docs"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-deploy-docs:
+    env:
+      DOCS_VERSION: latest
+    runs-on:
+      group: cloud-docs
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+      - name: Build tt-metal
+        run: make build
+      - name: Activate and build docs
+        run: |
+          source build/python_env/bin/activate
+          cd docs/
+          make html
+      - name: Prepare artifact - move output
+        run: |
+          mkdir gh_pages
+          mv docs/build/html gh_pages/$DOCS_VERSION
+      - name: Prepare artifact - create .nojekyll
+        run: |
+          touch gh_pages/.nojekyll
+      - name: Prepare artifact - create root index
+        run: |
+          touch gh_pages/index.html
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v1
+        with:
+          path: "gh_pages"
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2

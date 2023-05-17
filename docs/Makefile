@@ -10,6 +10,7 @@ BUILDDIR      	= build
 DOXYGENDIR    	= doxygen_build
 HTMLDIR       	= $(BUILDDIR)/html
 PORT          	?= 8888
+DOCS_VERSION       	?= latest
 #TODO: Update when folder created on web server with updated name
 #PUBLIC_DOCDIR   = yyz-webservice-02:/var/www/html/docs/<PROJECT-NAME>
 BRANCH = $(shell git rev-parse --abbrev-ref HEAD)
@@ -30,7 +31,7 @@ clean:
 
 html:
 	@cd .. && doxygen
-	@$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
+	@DOCS_VERSION=$(DOCS_VERSION) $(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 
 server:
 	@echo "Navigate to: \033[4;33mlocalhost:$(PORT)/index.html\033[0m"
