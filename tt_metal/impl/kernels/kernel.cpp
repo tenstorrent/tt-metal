@@ -40,39 +40,25 @@ std::string Kernel::binary_path(const tt_xy_pair &logical_core) const {
     return binary_path_.at(logical_core);
 }
 
-std::vector<uint32_t> DataMovementKernel::compile_time_args(const tt_xy_pair &logical_core) const {
+std::vector<uint32_t> Kernel::compile_time_args(const tt_xy_pair &logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot access compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
-    return kernel_args_->compile_time_args(logical_core);
+    return kernel_args_.compile_time_args(logical_core);
 }
 
-std::vector<uint32_t> DataMovementKernel::runtime_args(const tt_xy_pair &logical_core) const {
+std::vector<uint32_t> Kernel::runtime_args(const tt_xy_pair &logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot access runtime args for " + name() + " because it is not on core " + logical_core.str());
     }
-    return kernel_args_->runtime_args(logical_core);
+    return kernel_args_.runtime_args(logical_core);
 }
 
-size_t DataMovementKernel::compile_time_args_hash(const tt_xy_pair &logical_core) const {
+size_t Kernel::compile_time_args_hash(const tt_xy_pair &logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
-    return DataMovementKernelArgsHash{logical_core}(*kernel_args_);
-}
-
-std::vector<uint32_t> ComputeKernel::compile_time_args(const tt_xy_pair &logical_core) const {
-    if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot access compile time args for " + name() + " because it is not on core " + logical_core.str());
-    }
-    return kernel_args_->compile_time_args(logical_core);
-}
-
-size_t ComputeKernel::compile_time_args_hash(const tt_xy_pair &logical_core) const {
-    if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
-    }
-    return ComputeKernelArgsHash{logical_core}(*kernel_args_);
+    return KernelArgsHash{logical_core}(kernel_args_);
 }
 
 size_t Kernel::define_args_hash(const tt_xy_pair& logical_core) const {
@@ -83,37 +69,32 @@ size_t Kernel::define_args_hash(const tt_xy_pair& logical_core) const {
 }
 
 
-void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
+void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
     if (kernel == nullptr) {
         return;
     }
-    kernel->configure_for_compilation(build_kernel_for_riscv_options, logical_core, out_dir_path);
+    kernel->configure_for_compilation(build_options, logical_core, out_dir_path);
+    kernel->set_binary_path(logical_core, out_dir_path);
 }
 
-void DataMovementKernel::configure_for_compilation(build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
+void DataMovementKernel::configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
     if (processor_ == DataMovementProcessor::RISCV_0) {
-        build_kernel_for_riscv_options->brisc_kernel_file_name = kernel_path_file_name_;
-        build_kernel_for_riscv_options->brisc_defines = defines_;
+        build_options.brisc_kernel_file_name = kernel_path_file_name_;
+        build_options.brisc_defines = defines_;
     }
     if (processor_ == DataMovementProcessor::RISCV_1) {
-        build_kernel_for_riscv_options->ncrisc_kernel_file_name = kernel_path_file_name_;
-        build_kernel_for_riscv_options->ncrisc_defines = defines_;
+        build_options.ncrisc_kernel_file_name = kernel_path_file_name_;
+        build_options.ncrisc_defines = defines_;
     }
-
-    set_binary_path(logical_core, out_dir_path);
 }
 
-void ComputeKernel::configure_for_compilation(build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
-    auto compute_kernel_args = kernel_args_->compile_time_args(logical_core);
-    // build_kernel_for_riscv_options->set_hlk_args_all_cores(compute_kernel_args, compute_kernel_args_size);
-    build_kernel_for_riscv_options->set_hlk_file_name_all_cores(kernel_path_file_name_);
-    build_kernel_for_riscv_options->set_hlk_math_fidelity_all_cores(math_fidelity_);
+void ComputeKernel::configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
+    build_options.set_hlk_file_name_all_cores(kernel_path_file_name_);
+    build_options.set_hlk_math_fidelity_all_cores(math_fidelity_);
     // TODO(AP): see issue #504
     //build_kernel_for_riscv_options->set_hlk_math_approx_mode_all_cores(math_approx_mode_);
-    build_kernel_for_riscv_options->fp32_dest_acc_en = fp32_dest_acc_en_;
-    build_kernel_for_riscv_options->hlk_defines = defines_;
-
-    set_binary_path(logical_core, out_dir_path);
+    build_options.fp32_dest_acc_en = fp32_dest_acc_en_;
+    build_options.hlk_defines = defines_;
 }
 
 void init_test_mailbox(Device *device, const tt_xy_pair &core, uint64_t test_mailbox_addr) {
@@ -132,22 +113,33 @@ void DataMovementKernel::write_runtime_args_to_device(Device *device, const tt_x
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
 
-    auto runtime_args = kernel_args_->runtime_args(logical_core);
+    auto runtime_args = kernel_args_.runtime_args(logical_core);
     uint32_t core_x = logical_core.x;
     uint32_t core_y = logical_core.y;
     runtime_args.push_back(core_x);
     runtime_args.push_back(core_y);
+    uint32_t runtime_args_size = runtime_args.size() * sizeof(uint32_t);
 
     uint64_t l1_arg_base;
+    uint64_t result_base;
     switch (processor_) {
         case DataMovementProcessor::RISCV_0:
             l1_arg_base = BRISC_L1_ARG_BASE;
+            result_base = BRISC_L1_RESULT_BASE;
             break;
         case DataMovementProcessor::RISCV_1:
             l1_arg_base = NCRISC_L1_ARG_BASE;
+            result_base = NCRISC_L1_RESULT_BASE;
             break;
         default:
             TT_THROW("Unexpected data movement processor type");
+    }
+
+    std::stringstream identifier;
+    identifier << processor_;
+    if (l1_arg_base + runtime_args_size >= result_base) {
+        TT_THROW(std::to_string(runtime_args_size / 1024) + "KB " + identifier.str()  + " runtime args targeting " + logical_core.str() + " are too large.\
+            Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
     }
 
     tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, runtime_args, l1_arg_base);
@@ -202,6 +194,24 @@ bool ComputeKernel::configure(Device *device, const tt_xy_pair &logical_core) co
     tt::llrt::enable_triscs(cluster, pcie_slot, worker_core);
 
     return pass;
+}
+
+std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor) {
+    switch (processor) {
+        case DataMovementProcessor::RISCV_0: os << "RISCV_0"; break;
+        case DataMovementProcessor::RISCV_1: os << "RISCV_1"; break;
+        default: TT_THROW("Unknown data movement processor");
+    }
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const KernelType& type) {
+    switch (type) {
+        case KernelType::DataMovement: os << "DataMovement"; break;
+        case KernelType::Compute: os << "Compute"; break;
+        default: TT_THROW("Unknown kernel type");
+    }
+    return os;
 }
 
 }  // namespace tt_metal

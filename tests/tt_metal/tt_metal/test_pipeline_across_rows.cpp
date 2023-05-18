@@ -229,7 +229,7 @@ int main(int argc, char **argv) {
                 receiver_kernel_name = "tt_metal/kernels/dataflow/receiver_intermediate_stage.cpp";
             }
 
-            tt_metal::DataMovementKernelArgs* receiver_kernel_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(cores[core_id], {cb_index, block_size_tiles});
+            tt_metal::KernelArgs receiver_kernel_compile_time_args = tt_metal::KernelArgs(cores[core_id], {cb_index, block_size_tiles});
             receiver_kernels.push_back(tt_metal::CreateDataMovementKernel(
                 program,
                 receiver_kernel_name,
@@ -244,7 +244,7 @@ int main(int argc, char **argv) {
             } else {
                 sender_kernel_name = "tt_metal/kernels/dataflow/sender_intermediate_stage.cpp";
             }
-            tt_metal::DataMovementKernelArgs* sender_kernel_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(cores[core_id], {cb_index, block_size_tiles});
+            tt_metal::KernelArgs sender_kernel_compile_time_args = tt_metal::KernelArgs(cores[core_id], {cb_index, block_size_tiles});
             sender_kernels.push_back(tt_metal::CreateDataMovementKernel(
                 program,
                 sender_kernel_name,

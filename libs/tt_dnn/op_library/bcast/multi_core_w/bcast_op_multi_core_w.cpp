@@ -117,7 +117,7 @@ Tensor bcast_multi_core_w(const Tensor &a, const Tensor &b, BcastOpMath::Enum bc
 			Ht, // Ht
 			Wt_per_core[i]  // Wt
 		};
-		tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+		tt_metal::KernelArgs compute_args = tt_metal::KernelArgs(core, compute_kernel_args);
 		bool fp32_dest_acc_en = false;
 		bool math_approx_mode = false;
 		auto bcast_kernel = tt_metal::CreateComputeKernel(

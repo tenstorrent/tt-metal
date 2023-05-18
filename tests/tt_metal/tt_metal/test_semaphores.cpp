@@ -62,7 +62,7 @@ void initialize_program(tt_metal::Device *device, tt_metal::Program *program, co
     vector<uint32_t> compute_kernel_args = {
         uint(num_tiles) // per_core_tile_cnt
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core_range, compute_kernel_args);
+    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core_range, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

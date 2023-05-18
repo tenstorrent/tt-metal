@@ -1,4 +1,4 @@
-ReadFromBuffer()
-================
+ReadFromBuffer
+===============
 
 .. doxygenfunction:: ReadFromBuffer

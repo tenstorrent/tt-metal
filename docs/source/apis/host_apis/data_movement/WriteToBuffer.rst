@@ -1,4 +1,4 @@
-WriteToBuffer()
-================
+WriteToBuffer
+==============
 
 .. doxygenfunction:: WriteToBuffer

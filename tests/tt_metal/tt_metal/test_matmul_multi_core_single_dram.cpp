@@ -273,7 +273,7 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
         uint(out_subblock_num_tiles)
     };
 
-    tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
+    tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(

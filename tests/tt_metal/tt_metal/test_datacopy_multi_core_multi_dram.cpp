@@ -167,7 +167,7 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
         uint(num_blocks_per_core)
     };
 
-    tt_metal::ComputeKernelArgs *eltwise_copy_block = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
+    tt_metal::KernelArgs eltwise_copy_block = tt_metal::KernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto compute_kernel = tt_metal::CreateComputeKernel(

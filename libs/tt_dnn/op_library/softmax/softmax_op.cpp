@@ -138,7 +138,7 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
         // if tpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
         // if tpc >= Ht then tpc should be a multiple of Ht
         vector<uint32_t> compute_args = { tpc, partHt, Wt };
-        ComputeKernelArgs *softmax_args = InitializeCompileTimeComputeKernelArgs(core, compute_args);
+        KernelArgs softmax_args = KernelArgs(core, compute_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = true;

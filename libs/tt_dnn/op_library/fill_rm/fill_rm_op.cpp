@@ -55,7 +55,7 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
     vector<uint32_t> compute_args = {
         0 // dummy
     };
-    tt_metal::ComputeKernelArgs *blank_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
+    tt_metal::KernelArgs blank_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

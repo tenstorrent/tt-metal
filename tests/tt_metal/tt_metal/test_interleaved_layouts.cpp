@@ -139,7 +139,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
             program,
             "tt_metal/kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
-            tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1}),
+            tt_metal::KernelArgs(core, {1}),
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
@@ -153,7 +153,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
         vector<uint32_t> compute_kernel_args = {
             uint(num_output_tiles)
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+        tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -331,7 +331,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
             program,
             "tt_metal/kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
-            tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1}),
+            tt_metal::KernelArgs(core, {1}),
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 
@@ -345,7 +345,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
         vector<uint32_t> compute_kernel_args = {
             uint(num_output_tiles)
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+        tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -474,7 +474,7 @@ bool test_interleaved_l1_datacopy() {
         program,
         "tt_metal/kernels/dataflow/reader_unary_8bank.cpp",
         core,
-        tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {not src_is_in_l1}),
+        tt_metal::KernelArgs(core, {not src_is_in_l1}),
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -482,13 +482,13 @@ bool test_interleaved_l1_datacopy() {
         program,
         "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
-        tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {not dst_is_in_l1}),
+        tt_metal::KernelArgs(core, {not dst_is_in_l1}),
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
 
     vector<uint32_t> compute_kernel_args = { num_pages };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

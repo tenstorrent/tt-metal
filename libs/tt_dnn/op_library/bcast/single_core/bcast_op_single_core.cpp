@@ -112,7 +112,7 @@ Tensor bcast_single_core(const Tensor &a, const Tensor &b, BcastOpMath::Enum bca
         Ht, // Ht
         Wt  // Wt
     };
-    tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+    tt_metal::KernelArgs compute_args = tt_metal::KernelArgs(core, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);

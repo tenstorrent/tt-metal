@@ -1,4 +1,4 @@
-CreateDevice()
-===============
+CreateDevice
+=============
 
 .. doxygenfunction:: CreateDevice

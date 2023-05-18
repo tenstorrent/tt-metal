@@ -84,7 +84,7 @@ Tensor untilize(const Tensor &a) {
     // Writer compile-time args
     bool stick_size_is_power_of_two = (ceil(log2(stick_size)) == floor(log2(stick_size)));
     vector<uint32_t> writer_kernel_args = {src0_dram_buffer->address(), num_sticks, stick_size};
-    DataMovementKernelArgs *compile_time_args;
+    KernelArgs compile_time_args;
     if (stick_size_is_power_of_two) {
         writer_kernel_args.push_back(log2(stick_size));
     }
@@ -109,7 +109,7 @@ Tensor untilize(const Tensor &a) {
         uint32_t(num_sticks / 32), // per_core_block_cnt
         uint32_t(a.shape()[3] / 32) // per_core_block_tile_cnt
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_args);
+    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

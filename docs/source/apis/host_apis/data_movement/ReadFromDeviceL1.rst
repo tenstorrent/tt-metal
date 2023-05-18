@@ -1,4 +1,4 @@
-ReadFromDeviceL1()
-==================
+ReadFromDeviceL1
+=================
 
 .. doxygenfunction:: ReadFromDeviceL1

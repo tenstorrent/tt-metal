@@ -1,4 +1,4 @@
-ReadFromDeviceDRAMChannel()
-===========================
+ReadFromDeviceDRAMChannel
+==========================
 
 .. doxygenfunction:: ReadFromDeviceDRAMChannel

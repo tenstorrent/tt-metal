@@ -7,11 +7,11 @@ namespace tt {
 
 namespace tt_metal {
 
-DataMovementKernelArgs::DataMovementKernelArgs(const tt_xy_pair &logical_core, const std::vector<uint32_t> &compile_time_args) {
+KernelArgs::KernelArgs(const tt_xy_pair &logical_core, const std::vector<uint32_t> &compile_time_args) {
     core_to_compile_time_args_.insert({logical_core, compile_time_args});
 }
 
-void DataMovementKernelArgs::set_kernel_args_map(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &args_spec, bool set_compile_time_args) {
+void KernelArgs::set_kernel_args_map(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &args_spec, bool set_compile_time_args) {
     for (auto index = 0; index < core_blocks.size(); index++) {
         auto core = core_blocks.at(index);
         auto args = args_spec.at(index);
@@ -27,6 +27,7 @@ void DataMovementKernelArgs::set_kernel_args_map(const CoreBlocks &core_blocks, 
             [this, args, set_compile_time_args](CoreRange core_range) {
                 auto start_core = core_range.first;
                 auto end_core = core_range.second;
+                TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
                 for (auto x = start_core.x; x <= end_core.x; x++) {
                     for (auto y = start_core.y; y <= end_core.y; y++) {
                         auto core_in_range = tt_xy_pair(x, y);
@@ -42,72 +43,61 @@ void DataMovementKernelArgs::set_kernel_args_map(const CoreBlocks &core_blocks, 
     }
 }
 
-DataMovementKernelArgs::DataMovementKernelArgs(
-    const CoreBlocks &core_blocks,
-    const std::vector<std::vector<uint32_t>> &compile_time_args_spec) {
-    TT_ASSERT(core_blocks.size() == compile_time_args_spec.size());
-    set_kernel_args_map(core_blocks, compile_time_args_spec, /*set_compile_time_args=*/true);
+KernelArgs::KernelArgs(const CoreRange &core_range, const std::vector<uint32_t> &compile_time_args) {
+    this->set_kernel_args_map({core_range}, {compile_time_args}, /*set_compile_time_args=*/true);
 }
 
-std::vector<uint32_t> DataMovementKernelArgs::compile_time_args(const tt_xy_pair &logical_core) const {
+KernelArgs::KernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args) {
+    TT_ASSERT(core_blocks.size() == compile_time_args.size());
+    this->set_kernel_args_map(core_blocks, compile_time_args, /*set_compile_time_args=*/true);
+}
+
+KernelArgs::KernelArgs(const KernelArgs &other) : core_to_compile_time_args_(other.core_to_compile_time_args_), core_to_runtime_args_(other.core_to_runtime_args_) {}
+
+KernelArgs &KernelArgs::operator=(const KernelArgs &other) {
+    if (this != &other) {
+        this->core_to_compile_time_args_ = other.core_to_compile_time_args_;
+        this->core_to_runtime_args_ = other.core_to_runtime_args_;
+    }
+    return *this;
+}
+
+KernelArgs::KernelArgs(KernelArgs &&other)
+    : core_to_compile_time_args_(other.core_to_compile_time_args_), core_to_runtime_args_(other.core_to_runtime_args_) {
+    other.core_to_compile_time_args_.clear();
+    other.core_to_runtime_args_.clear();
+}
+
+KernelArgs &KernelArgs::operator=(KernelArgs &&other) {
+    if (this != &other) {
+        this->core_to_compile_time_args_ = other.core_to_compile_time_args_;
+        this->core_to_runtime_args_ = other.core_to_runtime_args_;
+        other.core_to_compile_time_args_.clear();
+        other.core_to_runtime_args_.clear();
+    }
+    return *this;
+}
+
+std::vector<uint32_t> KernelArgs::compile_time_args(const tt_xy_pair &logical_core) const {
     if (core_to_compile_time_args_.find(logical_core) != core_to_compile_time_args_.end()) {
         return core_to_compile_time_args_.at(logical_core);
     }
     return {};
 }
 
-std::vector<uint32_t> DataMovementKernelArgs::runtime_args(const tt_xy_pair &logical_core) const {
+std::vector<uint32_t> KernelArgs::runtime_args(const tt_xy_pair &logical_core) const {
     if (core_to_runtime_args_.find(logical_core) != core_to_runtime_args_.end()) {
         return core_to_runtime_args_.at(logical_core);
     }
     return {};
 }
 
-void DataMovementKernelArgs::set_runtime_args(const tt_xy_pair &logical_core, const std::vector<uint32_t> &runtime_args) {
+void KernelArgs::set_runtime_args(const tt_xy_pair &logical_core, const std::vector<uint32_t> &runtime_args) {
     core_to_runtime_args_.insert_or_assign(logical_core, runtime_args);
 }
 
-ComputeKernelArgs::ComputeKernelArgs(const tt_xy_pair &logical_core, const std::vector<uint32_t> &compile_time_args) {
-    core_to_compile_time_args_.insert({logical_core, compile_time_args});
-}
-
-ComputeKernelArgs::ComputeKernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args_spec) {
-    TT_ASSERT(core_blocks.size() == compile_time_args_spec.size());
-    for (auto index = 0; index < core_blocks.size(); index++) {
-        auto core = core_blocks.at(index);
-        auto &compile_time_args = compile_time_args_spec.at(index);
-
-        std::visit(overloaded_core {
-            [this, compile_time_args](tt_xy_pair single_core) {
-                this->core_to_compile_time_args_.insert({single_core, compile_time_args});
-            },
-            [this, compile_time_args](CoreRange core_range) {
-                auto start_core = core_range.first;
-                auto end_core = core_range.second;
-                for (auto x = start_core.x; x <= end_core.x; x++) {
-                    for (auto y = start_core.y; y <= end_core.y; y++) {
-                        auto core_in_range = tt_xy_pair(x, y);
-                        this->core_to_compile_time_args_.insert({core_in_range, compile_time_args});
-                    }
-                }
-            }
-        }, core);
-    }
-}
-
-vector<uint32_t> ComputeKernelArgs::compile_time_args(const tt_xy_pair &logical_core) const {
-    if (core_to_compile_time_args_.find(logical_core) != core_to_compile_time_args_.end()) {
-        return core_to_compile_time_args_.at(logical_core);
-    }
-    return {};
-}
-
-size_t DataMovementKernelArgsHash::operator()(const DataMovementKernelArgs& dmk_args) const {
-    return tt::utils::vector_hash<uint32_t>{}(dmk_args.compile_time_args(logical_core));
-}
-
-size_t ComputeKernelArgsHash::operator()(const ComputeKernelArgs &ck_args) const {
-        return tt::utils::vector_hash<uint32_t>{}(ck_args.compile_time_args(logical_core));
+size_t KernelArgsHash::operator()(const KernelArgs& args) const {
+    return tt::utils::vector_hash<uint32_t>{}(args.compile_time_args(logical_core));
 }
 
 size_t KernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {

@@ -96,12 +96,12 @@ Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum b
 		);
 
 		bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-        tt_metal::DataMovementKernelArgs *reader_writer_compile_time_args;
+        tt_metal::KernelArgs reader_writer_compile_time_args;
         if (tile_size_is_power_of_two) {
             // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-            reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
+            reader_writer_compile_time_args = tt_metal::KernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
         } else {
-            reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {0, 0});
+            reader_writer_compile_time_args = tt_metal::KernelArgs(core, {0, 0});
         }
 		tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
 			program,
@@ -127,7 +127,7 @@ Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum b
 			1, // Ht
 			num_tiles_per_core[i]  // Wt
 		};
-		tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+		tt_metal::KernelArgs compute_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
 		bool fp32_dest_acc_en = false;
 		bool math_approx_mode = false;

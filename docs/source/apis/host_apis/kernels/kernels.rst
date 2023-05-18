@@ -2,7 +2,6 @@ Kernels
 =======
 
 .. toctree::
-  InitializeCompileTimeComputeKernelArgs
-  InitializeCompileTimeDataMovementKernelArgs
+  KernelArgs
   CreateComputeKernel
   CreateDataMovementKernel

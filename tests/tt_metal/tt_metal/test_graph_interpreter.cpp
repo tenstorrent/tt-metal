@@ -225,7 +225,7 @@ bool run_chained_sfpu_test(int chain_length) {
             uint(num_tiles),
             uint(chain_length)
         };
-        tt_metal::ComputeKernelArgs *graph_interpreter_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+        tt_metal::KernelArgs graph_interpreter_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -494,7 +494,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
             uint(chain_length)
         };
 
-        tt_metal::ComputeKernelArgs *graph_interpreter_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+        tt_metal::KernelArgs graph_interpreter_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -767,7 +767,7 @@ bool run_forked_binary_test() {
             uint(num_tiles),
             uint(chain_length)
         };
-        tt_metal::ComputeKernelArgs *graph_interpreter_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+        tt_metal::KernelArgs graph_interpreter_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;

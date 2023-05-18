@@ -145,7 +145,7 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
             DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
         vector<uint32_t> compute_args = { tpc, Wt, num_gamma_tiles>0, num_beta_tiles>0 };
-        ComputeKernelArgs *softmax_args = InitializeCompileTimeComputeKernelArgs(core, compute_args);
+        KernelArgs softmax_args = KernelArgs(core, compute_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = true;

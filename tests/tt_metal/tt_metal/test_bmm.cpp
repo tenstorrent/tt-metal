@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
-        auto reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
+        auto reader_writer_compile_time_args = tt_metal::KernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
         auto reader = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
             Nt // Nt
         };
 
-        tt_metal::ComputeKernelArgs *eltwise_binary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+        tt_metal::KernelArgs eltwise_binary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;

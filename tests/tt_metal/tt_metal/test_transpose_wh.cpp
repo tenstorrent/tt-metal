@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
         vector<uint32_t> compute_kernel_args = {
             uint(Ht*Wt*NC)
         };
-        tt_metal::ComputeKernelArgs *compute_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+        tt_metal::KernelArgs compute_args = tt_metal::KernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto reduce_w_compute_kernel = tt_metal::CreateComputeKernel(

@@ -103,12 +103,12 @@ tt_metal::Program * create_program_mcast_in0_in1(
 
     /* Old compile time args
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    tt_metal::DataMovementKernelArgs *reader_writer_compile_time_args;
+    tt_metal::KernelArgs reader_writer_compile_time_args;
     if (tile_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(all_cores, {1, (std::uint32_t)log2(single_tile_size)});
+        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {1, (std::uint32_t)log2(single_tile_size)});
     } else {
-        reader_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(all_cores, {0, 0});
+        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {0, 0});
     }
     */
 
@@ -133,7 +133,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
 
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
     std::uint32_t tile_size_pow2_exponent = tile_size_is_power_of_two ? (std::uint32_t)log2(single_tile_size) : 0;
-    tt_metal::DataMovementKernelArgs *in0_sender_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(
+    tt_metal::KernelArgs in0_sender_compile_time_args = tt_metal::KernelArgs(
         left_column, {
             // interleaved accessor args
             (std::uint32_t) tile_size_is_power_of_two,
@@ -161,7 +161,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
             (std::uint32_t)  B // batch
         }
     );
-    tt_metal::DataMovementKernelArgs *in1_sender_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(
+    tt_metal::KernelArgs in1_sender_writer_compile_time_args = tt_metal::KernelArgs(
         top_row, {
             // interleaved accessor args
             (std::uint32_t) tile_size_is_power_of_two,
@@ -205,7 +205,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
             (std::uint32_t)  M * N // MtNt
         }
     );
-    tt_metal::DataMovementKernelArgs *in0_receiver_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(
+    tt_metal::KernelArgs in0_receiver_compile_time_args = tt_metal::KernelArgs(
         all_except_left_column, {
             // in0 block args
             (std::uint32_t)  in0_block_w * per_core_M, // in0_block_num_tiles
@@ -219,7 +219,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
             (std::uint32_t)  B // batch
         }
     );
-    tt_metal::DataMovementKernelArgs *in1_receiver_writer_compile_time_args = tt_metal::InitializeCompileTimeDataMovementKernelArgs(
+    tt_metal::KernelArgs in1_receiver_writer_compile_time_args = tt_metal::KernelArgs(
         all_except_top_row, {
             // interleaved accessor args
             (std::uint32_t) tile_size_is_power_of_two,
@@ -368,7 +368,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
     };
 
     // Create compute kernel
-    tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
+    tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(

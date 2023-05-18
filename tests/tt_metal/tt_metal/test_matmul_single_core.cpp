@@ -315,7 +315,7 @@ int main(int argc, char **argv) {
             uint(out_subblock_num_tiles)
         };
 
-        tt_metal::ComputeKernelArgs *mm_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+        tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;

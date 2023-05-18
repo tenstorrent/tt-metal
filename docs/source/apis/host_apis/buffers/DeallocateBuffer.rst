@@ -1,4 +1,4 @@
-DeallocateBuffer()
-===========================
+DeallocateBuffer
+=================
 
 .. doxygenfunction:: DeallocateBuffer

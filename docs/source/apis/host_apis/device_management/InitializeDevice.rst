@@ -1,5 +1,5 @@
 
-InitializeDevice()
-===================
+InitializeDevice
+=================
 
 .. doxygenfunction:: InitializeDevice

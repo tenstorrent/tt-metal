@@ -1,5 +1,5 @@
 
-CloseDevice()
-===================
+CloseDevice
+=============
 
 .. doxygenfunction:: CloseDevice

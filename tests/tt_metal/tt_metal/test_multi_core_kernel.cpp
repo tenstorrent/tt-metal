@@ -27,7 +27,7 @@ tt_metal::Program *create_program(
     tt_metal::Device *device,
     uint32_t single_tile_size,
     const tt_metal::CoreRange &all_cores,
-    tt_metal::ComputeKernelArgs *eltwise_unary_args) {
+    const tt_metal::KernelArgs &eltwise_unary_args) {
     tt_metal::Program *program = new tt_metal::Program();
 
     tt_xy_pair start_core = all_cores.first;
@@ -282,7 +282,7 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(tt_metal::Device
     vector<uint32_t> compute_kernel_args = {
         uint(num_tiles) // per_core_tile_cnt
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
+    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(all_cores, compute_kernel_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile and Execute Program
@@ -348,7 +348,7 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     vector<uint32_t> compute_kernel_args = {
         uint(num_tiles) // per_core_tile_cnt
     };
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(all_cores, compute_kernel_args);
+    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(all_cores, compute_kernel_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile and Execute Program
@@ -435,7 +435,7 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     };
 
     // Difference in number of tiles read/written specified by different compile time args on compute kernel
-    tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(
+    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(
         core_blocks,
         compute_kernel_args_for_all_cores
     );

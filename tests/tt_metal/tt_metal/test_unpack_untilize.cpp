@@ -154,7 +154,7 @@ int main(int argc, char **argv) {
             1, // per_core_block_cnt
             uint(num_tiles_c) // per_core_block_tile_cnt
         };
-        tt_metal::ComputeKernelArgs *eltwise_unary_args = tt_metal::InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args);
+        tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
