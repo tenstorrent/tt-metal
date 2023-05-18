@@ -110,7 +110,7 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
 }
 
 template <PoolType type, ReduceDim dim>
-inline void llk_unpack_reduce(std::uint32_t operand, std::uint32_t tile_index) {
+inline void llk_unpack_reduce(const std::uint32_t operand, const std::uint32_t tile_index) {
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);

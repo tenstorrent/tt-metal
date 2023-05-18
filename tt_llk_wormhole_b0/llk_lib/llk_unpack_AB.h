@@ -108,7 +108,7 @@ inline void llk_unpack_AB_init(const std::uint32_t transpose=0, const std::uint3
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
-    std::uint32_t operandA, std::uint32_t operandB, std::uint32_t tile_index_a, std::uint32_t tile_index_b) {
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a, const std::uint32_t tile_index_b) {
     std::uint32_t inputA = get_operand_id(operandA);
     std::uint32_t inputB = get_operand_id(operandB);
     std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;
