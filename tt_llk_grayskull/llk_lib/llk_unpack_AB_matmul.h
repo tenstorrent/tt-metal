@@ -11,7 +11,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-inline void llk_unpack_AB_matmul_mop_config(bool transpose) {
+inline void llk_unpack_AB_matmul_mop_config(const bool transpose) {
     /*
     static constexpr uint unpack_srcb_top  = TT_OP_UNPACR(SrcB, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0,
     0, 0, 0, 1); static constexpr uint unpack_srcb_bot =  TT_OP_UNPACR(SrcB, 0b01000001, 0, 0, 0, 1, 1,
@@ -77,7 +77,9 @@ inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
 inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) { llk_unpack_AB_matmul_mop_config(transpose>0); }
 
 inline void llk_unpack_AB_matmul(
-    std::uint32_t operandA, std::uint32_t operandB, std::uint32_t tile_index_a, std::uint32_t tile_index_b, std::uint32_t ct_dim=1, std::uint32_t rt_dim=1, std::uint32_t kt_dim=1) {
+    const std::uint32_t operandA, const std::uint32_t operandB, 
+    const std::uint32_t tile_index_a, const std::uint32_t tile_index_b, 
+    const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     std::uint32_t inputA = get_operand_id(operandA);
     std::uint32_t inputB = get_operand_id(operandB);
 
