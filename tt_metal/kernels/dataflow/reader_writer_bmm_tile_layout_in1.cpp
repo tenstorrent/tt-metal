@@ -59,6 +59,14 @@ void kernel_main() {
     uint32_t MtNt                               = get_arg_val<uint32_t>(32); // if 0
     // Don't need batch; same as batch from READER args
 
+    // COMPILE TIME ARGS
+    // interleaved accessor args
+    constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
+    constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(2); // not used
+    constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(3);
+    constexpr uint32_t out_is_dram                        = get_compile_time_arg_val(4);
+
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different
     // bank-swizzling configurations
@@ -75,24 +83,25 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in1;
 
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
+    #define tile_size_is_pow2 tile_size_is_power_of_two == 1
+    #define in1_is_dram_bool in1_is_dram == 1
+    #define out_is_dram_bool out_is_dram == 1
     #if (tile_size_is_pow2)
-    constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<false> s1 = {
+    const InterleavedPow2AddrGen<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
-    const InterleavedPow2AddrGen<false> s = {
+    const InterleavedPow2AddrGen<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
         .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGenFast<false> s1 = {
+    const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = DataFormat::Bfp8_b
     };
-    const InterleavedAddrGenFast<false> s = {
+    const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = DataFormat::Bfp8_b

@@ -24,34 +24,35 @@ void kernel_main() {
     // interleaved accessor args
     constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
     constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
+    constexpr uint32_t out_is_dram                        = get_compile_time_arg_val(2);
 
     // READER
     // in1 block args
-    constexpr uint32_t in1_block_num_tiles                = get_compile_time_arg_val(2);
+    constexpr uint32_t in1_block_num_tiles                = get_compile_time_arg_val(3);
     // in0/in1 common args
-    constexpr uint32_t num_blocks                         = get_compile_time_arg_val(3);
+    constexpr uint32_t num_blocks                         = get_compile_time_arg_val(4);
     // in1 mcast args
-    constexpr uint32_t in1_mcast_sender_noc_y             = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_mcast_sender_noc_y             = get_compile_time_arg_val(5);
+    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(7);
     // batch args
-    constexpr uint32_t batch                              = get_compile_time_arg_val(7);
+    constexpr uint32_t batch                              = get_compile_time_arg_val(8);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_addr                    = get_compile_time_arg_val(8);
-    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(12);
+    constexpr uint32_t out_tensor_addr                    = get_compile_time_arg_val(9);
+    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(10);
+    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(11);
+    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(12);
+    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(13);
 
     // out subblock args
-    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(15);
+    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(14);
+    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(15);
+    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(16);
 
     // batch args
-    constexpr uint32_t MtNt                               = get_compile_time_arg_val(16); // if 0
+    constexpr uint32_t MtNt                               = get_compile_time_arg_val(17); // if 0
     // Don't need batch; same as batch from READER args
 
 
@@ -76,14 +77,15 @@ void kernel_main() {
 
     // WRITER
     #define tile_size_is_pow2 tile_size_is_power_of_two == 1
+    #define out_is_dram_bool out_is_dram == 1
     #if (tile_size_is_pow2)
     constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<false> s = {
+    const InterleavedPow2AddrGen<out_is_dram_bool> s = {
         .bank_base_address = out_tensor_addr,
         .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGenFast<false> s = {
+    const InterleavedAddrGenFast<out_is_dram_bool> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = DataFormat::Bfp8_b

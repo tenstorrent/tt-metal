@@ -1208,22 +1208,28 @@ void TensorModule(py::module &m_tensor) {
         | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
-    m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul, R"doc(
+    m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_fused_qkv non-batched matmul ``A x B`` with two tensors.
     )doc");
-    m_tensor.def("bert_large_ff1_matmul", &bert_large_ff1_matmul, R"doc(
+    m_tensor.def("bert_large_ff1_matmul", &bert_large_ff1_matmul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_ff1 non-batched matmul ``A x B`` with two tensors.
     )doc");
-    m_tensor.def("bert_large_ff2_matmul", &bert_large_ff2_matmul, R"doc(
+    m_tensor.def("bert_large_ff2_matmul", &bert_large_ff2_matmul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_ff2 non-batched matmul ``A x B`` with two tensors.
     )doc");
-    m_tensor.def("bert_large_selfout_matmul", &bert_large_selfout_matmul, R"doc(
+    m_tensor.def("bert_large_selfout_matmul", &bert_large_selfout_matmul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_selfout non-batched matmul ``A x B`` with two tensors.
     )doc");
-    m_tensor.def("bert_large_pre_softmax_bmm", &bert_large_pre_softmax_bmm, R"doc(
+    m_tensor.def("bert_large_pre_softmax_bmm", &bert_large_pre_softmax_bmm,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_pre_softmax_bmm batched matmul ``A x B`` with two tensors.
     )doc");
-    m_tensor.def("bert_large_post_softmax_bmm", &bert_large_post_softmax_bmm, R"doc(
+    m_tensor.def("bert_large_post_softmax_bmm", &bert_large_post_softmax_bmm,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_post_softmax_bmm batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("compute_conv_op_block_info", &compute_conv_op_block_info);

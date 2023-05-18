@@ -35,20 +35,20 @@ Tensor bmm_multi_core_reuse_padding  (const Tensor &A, const Tensor &B); // Only
 Tensor matmul_multi_core_reuse_mcast_padding (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
 Tensor bmm_multi_core_reuse_mcast_padding  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
 
-Tensor bert_large_fused_qkv_matmul(const Tensor& A, const Tensor& B);
-Tensor bert_large_ff1_matmul(const Tensor& A, const Tensor& B);
-Tensor bert_large_ff2_matmul(const Tensor& A, const Tensor& B);
-Tensor bert_large_selfout_matmul(const Tensor& A, const Tensor& B);
-Tensor bert_large_pre_softmax_bmm(const Tensor& A, const Tensor& B);
-Tensor bert_large_post_softmax_bmm(const Tensor& A, const Tensor& B);
+Tensor bert_large_fused_qkv_matmul(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
+Tensor bert_large_ff1_matmul(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
+Tensor bert_large_ff2_matmul(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
+Tensor bert_large_selfout_matmul(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
+Tensor bert_large_pre_softmax_bmm(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
+Tensor bert_large_post_softmax_bmm(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
 Tensor matmul_multi_core_reuse_mcast_padding_generalized(const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 Tensor bmm_multi_core_reuse_mcast_padding_generalized(const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 Tensor matmul_multi_core_reuse_generalized_bert_large  (const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
 Tensor bmm_multi_core_reuse_generalized_bert_large  (const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
-Tensor matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+Tensor matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 // bmm_multi_core_reuse_mcast_optimized_bert_large not used
 // matmul_multi_core_reuse_optimized_bert_large not used
-Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& A, const Tensor& B, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 }  // namespace tt_metal
 

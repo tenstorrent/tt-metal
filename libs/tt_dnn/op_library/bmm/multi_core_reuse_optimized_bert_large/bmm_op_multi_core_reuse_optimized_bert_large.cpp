@@ -22,7 +22,7 @@ tt_metal::Program * create_program(
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
-    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
+    tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
 ) {
 
     tt_metal::Program *program = new tt_metal::Program();
@@ -114,13 +114,20 @@ tt_metal::Program * create_program(
         );
 
         bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-        tt_metal::KernelArgs reader_writer_compile_time_args;
-        if (tile_size_is_power_of_two) {
-            // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-            reader_writer_compile_time_args = tt_metal::KernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
-        } else {
-            reader_writer_compile_time_args = tt_metal::KernelArgs(core, {0, 0});
-        }
+        std::uint32_t tile_size_pow2_exponent = tile_size_is_power_of_two ? (std::uint32_t)log2(single_tile_size) : 0;
+        bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        tt_metal::KernelArgs reader_writer_compile_time_args = tt_metal::KernelArgs(
+            core, {
+                // interleaved accessor args
+                (std::uint32_t) tile_size_is_power_of_two,
+                (std::uint32_t) tile_size_pow2_exponent,
+                (std::uint32_t) in0_is_dram,
+                (std::uint32_t) in1_is_dram,
+                (std::uint32_t) out_is_dram
+            }
+        );
 
         vector<uint32_t> compute_kernel_args = {
             in0_block_w, // in0_block_w
@@ -155,7 +162,7 @@ tt_metal::Program * create_program(
 
         // Write runtime args to device
         std::vector<uint32_t> mm_reader_args = {
-            (std::uint32_t)  in0_dram_addr, // in0_tensor_addr
+            (std::uint32_t)  in0_buffer->address(), // in0_tensor_addr
             (std::uint32_t)  K * per_core_M * (output_idx_y + output_idx_batch * num_block_rows_per_batch), // in0_tensor_start_tile_id
             (std::uint32_t)  1, // in0_tensor_stride_w
             (std::uint32_t)  K, // in0_tensor_stride_h
@@ -165,7 +172,7 @@ tt_metal::Program * create_program(
             (std::uint32_t)  per_core_M, // in0_block_h
             (std::uint32_t)  in0_block_w * per_core_M, //in0_block_num_tiles
 
-            (std::uint32_t)  in1_dram_addr, // in1_tensor_addr
+            (std::uint32_t)  in1_buffer->address(), // in1_tensor_addr
             (std::uint32_t)  per_core_N * (output_idx_x + K * output_idx_batch * num_block_cols_per_batch), //in1_tensor_start_tile_id
             (std::uint32_t)  1, // in1_tensor_stride_w
             (std::uint32_t)  N, // in1_tensor_stride_h
@@ -184,7 +191,7 @@ tt_metal::Program * create_program(
         };
 
         std::vector<uint32_t> writer_args = {
-            (std::uint32_t) out_dram_addr, // out_tensor_addr
+            (std::uint32_t) out_buffer->address(), // out_tensor_addr
             (std::uint32_t) output_idx_x * per_core_N + (output_idx_y + output_idx_batch * num_block_rows_per_batch) * per_core_M * N, // out_tensor_start_tile_id
             (std::uint32_t) 1, // out_tensor_stride_w
             (std::uint32_t) N,  // out_tensor_stride_h
@@ -288,7 +295,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, bool bcast_batch, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const MemoryConfig& mem_config, bool bcast_batch, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -313,8 +320,8 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
         log_warning("Input tensor datatype does not match target output dataformat. Defaulting to input dataformat.");
     }
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
-    tt_metal::Buffer *src1_dram_buffer = b.buffer();
+    tt_metal::Buffer *in0_buffer = a.buffer();
+    tt_metal::Buffer *in1_buffer = b.buffer();
     if (bcast_batch)
         TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     else {
@@ -322,8 +329,8 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
         TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
-    TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
-    TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0);
+    TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
+    TT_ASSERT(in1_buffer->size() % single_tile_size == 0);
 
     TT_ASSERT(ashape[3] == bshape[2], "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
@@ -360,13 +367,9 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
-    tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device, tt::tt_metal::MemoryConfig{true, -1, BufferType::L1});
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    uint32_t in0_dram_addr = src0_dram_buffer->address();
-    uint32_t in1_dram_addr = src1_dram_buffer->address();
-    uint32_t out_dram_addr = dst_dram_buffer->address();
+    tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device, mem_config);
+    tt_metal::Buffer *out_buffer = output.buffer();
+    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -382,7 +385,7 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
         in0_block_w,
         out_subblock_h, out_subblock_w,
         per_core_M, per_core_N,
-        in0_dram_addr, in1_dram_addr, out_dram_addr
+        in0_buffer, in1_buffer, out_buffer
     );
 
     ////////////////////////////////////////////////////////////////////////////
@@ -406,8 +409,8 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
 }
 
 // matmul_multi_core_reuse_optimized_bert_large not used
-Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
-    return matmul_multi_core_reuse_optimized_bert_large_(a, b, false, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+    return matmul_multi_core_reuse_optimized_bert_large_(a, b, mem_config, false, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 }  // namespace tt_metal

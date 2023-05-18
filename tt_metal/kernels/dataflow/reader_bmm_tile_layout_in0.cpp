@@ -39,6 +39,14 @@ void kernel_main() {
     uint32_t batch                              = get_arg_val<uint32_t>(19);
     uint32_t bcast_B                            = get_arg_val<uint32_t>(20);
 
+    // COMPILE TIME ARGS
+    // interleaved accessor args
+    constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
+    constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(2);
+    constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(3); // not used
+    constexpr uint32_t out_is_dram                        = get_compile_time_arg_val(4); // not used
+
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different
     // bank-swizzling configurations
@@ -51,15 +59,15 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
 
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
+    #define tile_size_is_pow2 tile_size_is_power_of_two == 1
+    #define in0_is_dram_bool in0_is_dram == 1
     #if (tile_size_is_pow2)
-    constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<false> s0 = {
+    const InterleavedPow2AddrGen<in0_is_dram_bool> s0 = {
         .bank_base_address = in0_tensor_addr,
         .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGenFast<false> s0 = {
+    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
         .bank_base_address = in0_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = DataFormat::Bfp8_b
