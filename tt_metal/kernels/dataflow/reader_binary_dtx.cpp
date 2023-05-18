@@ -28,12 +28,12 @@ void kernel_main() {
     volatile std::uint32_t* address_map = (volatile uint32_t*)(address_map_l1_addr);
 
     // Put zeroes in the zero buffer
-    constexpr uint32_t num_elements_in_zeros_buffer = l1_mem::address_map::ZEROS_SIZE / sizeof(uint32_t);
-    volatile uint32_t* zero_base_ptr = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::ZEROS_BASE);
+    constexpr uint32_t num_elements_in_zeros_buffer = MEM_ZEROS_SIZE / sizeof(uint32_t);
+    volatile uint32_t* zero_base_ptr = reinterpret_cast<volatile uint32_t*>(MEM_ZEROS_BASE);
     for (uint32_t zero_base_offset = 0; zero_base_offset < num_elements_in_zeros_buffer; zero_base_offset++) {
         *(zero_base_ptr + zero_base_offset) = 0;
     }
-    uint64_t zeros_base_noc_addr = get_noc_addr(l1_mem::address_map::ZEROS_BASE);
+    uint64_t zeros_base_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
 
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different
@@ -94,14 +94,14 @@ void kernel_main() {
                         // read zeroes from zero buffer
                         uint32_t dst_addr = l1_write_addr_in0 + dst_address;
                         uint32_t pad_size = read_size;
-                        if (pad_size <= l1_mem::address_map::ZEROS_SIZE) {
+                        if (pad_size <= MEM_ZEROS_SIZE) {
                             noc_async_read(zeros_base_noc_addr, dst_addr, pad_size);
                         }
                         else {
                             // padding size is bigger than the zero buffer size
                             // read from zero buffer multiple times
                             uint32_t zeros_to_read = pad_size;
-                            uint32_t zeros_read_size = l1_mem::address_map::ZEROS_SIZE;
+                            uint32_t zeros_read_size = MEM_ZEROS_SIZE;
                             while(zeros_to_read != 0) {
                                 noc_async_read(zeros_base_noc_addr, dst_addr, zeros_read_size);
                                 zeros_to_read -= zeros_read_size;

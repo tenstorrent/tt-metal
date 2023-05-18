@@ -15,12 +15,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
     volatile std::uint32_t* address_map = (volatile uint32_t*)(address_map_l1_addr);
-    constexpr uint32_t num_elements_in_zeros_buffer = l1_mem::address_map::ZEROS_SIZE / sizeof(uint32_t);
-    volatile uint32_t* zero_base_ptr = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::ZEROS_BASE);
+    constexpr uint32_t num_elements_in_zeros_buffer = MEM_ZEROS_SIZE / sizeof(uint32_t);
+    volatile uint32_t* zero_base_ptr = reinterpret_cast<volatile uint32_t*>(MEM_ZEROS_BASE);
     for (uint32_t zero_base_offset = 0; zero_base_offset < num_elements_in_zeros_buffer; zero_base_offset++) {
         *(zero_base_ptr + zero_base_offset) = 0;
     }
-    uint64_t zeros_base_noc_addr = get_noc_addr(l1_mem::address_map::ZEROS_BASE);
+    uint64_t zeros_base_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     uint32_t block_size_bytes = get_tile_size(cb_id_in0) * block_size_tiles;
     uint32_t row_size_bytes = 64 * block_size_tiles;
     uint32_t index = 0;

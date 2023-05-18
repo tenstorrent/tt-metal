@@ -38,15 +38,17 @@
 // Firmware/kernel code holes
 #define MEM_BOOT_CODE_SIZE             4
 #define MEM_BRISC_FIRMWARE_SIZE        (20 * 1024)
-#define MEM_BRISC_FIRMWARE_CODE_SIZE   ( 7 * 1024 + 512)
+#define MEM_BRISC_FIRMWARE_CODE_SIZE   ( 7 * 1024)
 #define MEM_NCRISC_FIRMWARE_SIZE       (32 * 1024)
 #define MEM_TRISC0_SIZE                (20 * 1024)
 #define MEM_TRISC1_SIZE                (16 * 1024)
 #define MEM_TRISC2_SIZE                (20 * 1024)
+#define MEM_ZEROS_SIZE                 512
 
 #define MEM_BOOT_CODE_BASE             0
 #define MEM_MAILBOX_BASE               4
-#define MEM_BRISC_FIRMWARE_BASE        256
+#define MEM_ZEROS_BASE                 2048
+#define MEM_BRISC_FIRMWARE_BASE        (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
 #define MEM_NCRISC_FIRMWARE_BASE       (MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE)
 #define MEM_TRISC0_BASE                (MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE)
 #define MEM_TRISC1_BASE                (MEM_TRISC0_BASE + MEM_TRISC0_SIZE)

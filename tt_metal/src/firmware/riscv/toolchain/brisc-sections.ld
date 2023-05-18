@@ -165,14 +165,6 @@ SECTIONS
     *(data_noinit)
   } > REGION_DATA
 
-  data_l1_zeros :
-  {
-    *(data_l1_zeros)
-    FILL(0x00000000)
-    . = 0x1FC;
-    LONG(0x00000000)
-  } > REGION_ZEROS
-
   l1_memory :
   {
     *(l1_memory)

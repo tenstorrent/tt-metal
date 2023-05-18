@@ -528,7 +528,6 @@ typedef enum {
 
 /////////////
 
-
 template <class T>
 inline T bitmask(unsigned int bits)
 {

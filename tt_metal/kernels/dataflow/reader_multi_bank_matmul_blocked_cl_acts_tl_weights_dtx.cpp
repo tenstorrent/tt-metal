@@ -31,12 +31,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
     volatile std::uint32_t* channels_address_map = (volatile uint32_t*)(address_map_l1_addr);
-    constexpr uint32_t num_elements_in_zeros_buffer = l1_mem::address_map::ZEROS_SIZE / sizeof(uint32_t);
-    volatile uint32_t* zero_base_ptr = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::ZEROS_BASE);
+    constexpr uint32_t num_elements_in_zeros_buffer = MEM_ZEROS_SIZE / sizeof(uint32_t);
+    volatile uint32_t* zero_base_ptr = reinterpret_cast<volatile uint32_t*>(MEM_ZEROS_BASE);
     for (uint32_t zero_base_offset = 0; zero_base_offset < num_elements_in_zeros_buffer; zero_base_offset++) {
         *(zero_base_ptr + zero_base_offset) = 0;
     }
-    uint64_t zeros_base_noc_addr = get_noc_addr(l1_mem::address_map::ZEROS_BASE);
+    uint64_t zeros_base_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
 
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different

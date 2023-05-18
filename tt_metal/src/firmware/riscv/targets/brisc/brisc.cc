@@ -202,6 +202,8 @@ void device_setup() {
 
     set_trisc_address();
 
+    wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
+
     volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
 
     if (*use_ncrisc) {

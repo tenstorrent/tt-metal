@@ -27,13 +27,13 @@ void kernel_main() {
     uint64_t replicate_dest_addr;
     uint32_t start_dram_addr_offset_for_tensor_row = 0;
 
-    constexpr uint32_t num_elements_in_zeros_buffer = l1_mem::address_map::ZEROS_SIZE / sizeof(uint32_t);
-    volatile uint32_t* zero_base_ptr = reinterpret_cast<volatile uint32_t*>(l1_mem::address_map::ZEROS_BASE);
+    constexpr uint32_t num_elements_in_zeros_buffer = MEM_ZEROS_SIZE / sizeof(uint32_t);
+    volatile uint32_t* zero_base_ptr = reinterpret_cast<volatile uint32_t*>(MEM_ZEROS_BASE);
     for (uint32_t zero_base_offset = 0; zero_base_offset < num_elements_in_zeros_buffer; zero_base_offset++) {
         *(zero_base_ptr + zero_base_offset) = 0;
     }
 
-    uint64_t zeros_base_noc_addr = get_noc_addr(l1_mem::address_map::ZEROS_BASE);
+    uint64_t zeros_base_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     for (uint32_t i = 0; i < num_tiles_r; i++) {
         for (uint32_t j = 0; j < 32; j++) {
             uint32_t src_addr_ = src_addr + start_dram_addr_offset_for_tensor_row;
