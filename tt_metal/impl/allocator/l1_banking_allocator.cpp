@@ -1,6 +1,7 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/hostdevcommon/bank_to_noc_coord_mapping.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
 #include <cmath>
@@ -22,6 +23,9 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const tt_Soc
 
     static constexpr uint32_t storage_core_bank_size = 512 * 1024;
     static constexpr uint32_t num_banks_per_storage_core = 2;
+    int expected_num_l1_banks = soc_desc.compute_and_storage_cores.size() + (num_banks_per_storage_core * soc_desc.storage_cores.size());
+    uint8_t shuffled_l1_bank_ids[expected_num_l1_banks];
+    init_shuffled_l1_bank_id_mapping(shuffled_l1_bank_ids);
 
     uint32_t bank_id = 0;
     for (uint32_t y = 0; y < soc_desc.worker_grid_size.y; y++) {
@@ -31,24 +35,26 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const tt_Soc
             uint32_t noc_y = soc_desc.worker_log_to_routing_y.at(y);
             tt_xy_pair noc_core = tt_xy_pair(noc_x, noc_y);
             if (in_core_category(soc_desc.compute_and_storage_cores, noc_core)) {
-                allocator.logical_core_to_bank_ids.insert({logical_core, {bank_id}});
-                allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
-                bank_id_to_descriptor.insert({bank_id, {.offset_bytes = UNRESERVED_BASE, .size_bytes = compute_core_bank_size}});
+                uint32_t remapped_bank_id = shuffled_l1_bank_ids[bank_id];
+                allocator.logical_core_to_bank_ids.insert({logical_core, {remapped_bank_id}});
+                allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
+                bank_id_to_descriptor.insert({remapped_bank_id, {.offset_bytes = UNRESERVED_BASE, .size_bytes = compute_core_bank_size}});
                 bank_id++;
             } else if (in_core_category(soc_desc.storage_cores, noc_core)) {
                 std::vector<uint32_t> bank_ids;
                 for (int storage_bank_index = 0; storage_bank_index < num_banks_per_storage_core; storage_bank_index++) {
-                    bank_ids.push_back(bank_id);
-                    allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
+                    uint32_t remapped_bank_id = shuffled_l1_bank_ids[bank_id];
+                    bank_ids.push_back(remapped_bank_id);
+                    allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
                     uint32_t storage_core_offset = storage_bank_index * storage_core_bank_size;
-                    bank_id_to_descriptor.insert({bank_id, {.offset_bytes = storage_core_offset, .size_bytes = storage_core_bank_size}});
+                    bank_id_to_descriptor.insert({remapped_bank_id, {.offset_bytes = storage_core_offset, .size_bytes = storage_core_bank_size}});
+
                     bank_id++;
                 }
                 allocator.logical_core_to_bank_ids.insert({logical_core, bank_ids});
             }
         }
     }
-    uint32_t expected_num_l1_banks = soc_desc.compute_and_storage_cores.size() + (num_banks_per_storage_core * soc_desc.storage_cores.size());
     TT_ASSERT(bank_id_to_descriptor.size() == expected_num_l1_banks);
     allocator.l1_manager = BankManager(bank_id_to_descriptor);
 }

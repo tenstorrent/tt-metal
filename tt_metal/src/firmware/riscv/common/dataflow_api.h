@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 
 #include "debug_print.h"
@@ -49,6 +50,8 @@ CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
 uint32_t dram_bank_to_noc_x[NUM_DRAM_BANKS];
 uint32_t dram_bank_to_noc_y[NUM_DRAM_BANKS];
 uint32_t dram_bank_to_noc_xy[NUM_DRAM_BANKS];
+
+uint8_t shuffled_l1_bank_ids[NUM_L1_BANKS];
 
 uint32_t l1_bank_to_noc_x[NUM_L1_BANKS];
 uint32_t l1_bank_to_noc_y[NUM_L1_BANKS];
@@ -125,14 +128,19 @@ void init_dram_bank_to_noc_coord_lookup_tables() {
 
 void init_l1_bank_to_noc_coord_lookup_tables() {
     int id = 0;
+    int remapped_id;
+
+    init_shuffled_l1_bank_id_mapping(shuffled_l1_bank_ids);
+
     // Single bank cores
     for (uint32_t y = 1; y < 11; y++) {
         if (y == 6) continue;
         for (uint32_t x = 1; x < 13; x++) {
-            l1_bank_to_noc_x[id] = x;
-            l1_bank_to_noc_y[id] = y;
-            l1_bank_to_noc_xy[id] = (NOC_Y(y) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
-            l1_bank_to_l1_offset[id] = 0;
+            remapped_id = shuffled_l1_bank_ids[id];
+            l1_bank_to_noc_x[remapped_id] = x;
+            l1_bank_to_noc_y[remapped_id] = y;
+            l1_bank_to_noc_xy[remapped_id] = (NOC_Y(y) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
+            l1_bank_to_l1_offset[remapped_id] = 0;
             id++;
         }
     }
@@ -140,17 +148,17 @@ void init_l1_bank_to_noc_coord_lookup_tables() {
     // Storage cores
     for (uint32_t x = 2; x < 13; x++) {
         if (x == 7) continue;
-        // DPRINT << "ID: " << id << ", NOCX: " << x << ", NOCY: " << 12 << ENDL();
-        l1_bank_to_noc_x[id] = x;
-        l1_bank_to_noc_y[id] = 11;
-        l1_bank_to_noc_xy[id] = (NOC_Y(11) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
-        l1_bank_to_l1_offset[id] = -512 * 1024; // Bank 0 of storage core allocated top down from 512KB
+        remapped_id = shuffled_l1_bank_ids[id];
+        l1_bank_to_noc_x[remapped_id] = x;
+        l1_bank_to_noc_y[remapped_id] = 11;
+        l1_bank_to_noc_xy[remapped_id] = (NOC_Y(11) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
+        l1_bank_to_l1_offset[remapped_id] = -512 * 1024; // Bank 0 of storage core allocated top down from 512KB
         id++;
-        // DPRINT << "ID: " << id << ", NOCX: " << x << ", NOCY: " << 12 << ENDL();
-        l1_bank_to_noc_x[id] = x;
-        l1_bank_to_noc_y[id] = 11;
-        l1_bank_to_noc_xy[id] = (NOC_Y(11) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
-        l1_bank_to_l1_offset[id] = 0; // Bank 1 of storage core allocated top down from 1MB, like all other worker cores
+        remapped_id = shuffled_l1_bank_ids[id];
+        l1_bank_to_noc_x[remapped_id] = x;
+        l1_bank_to_noc_y[remapped_id] = 11;
+        l1_bank_to_noc_xy[remapped_id] = (NOC_Y(11) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
+        l1_bank_to_l1_offset[remapped_id] = 0; // Bank 1 of storage core allocated top down from 1MB, like all other worker cores
         id++;
     }
 }

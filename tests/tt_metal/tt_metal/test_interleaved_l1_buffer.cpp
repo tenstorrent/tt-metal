@@ -12,10 +12,10 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages, uint32_t page_size) {
+bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int num_pages_two, uint32_t page_size) {
     bool pass = true;
 
-    uint32_t buffer_size = num_pages * page_size;
+    uint32_t buffer_size = num_pages_one * page_size;
     uint32_t starting_bank_id = 0;
 
     auto interleaved_buffer = tt_metal::Buffer(device, buffer_size, starting_bank_id, page_size, tt_metal::BufferType::L1);
@@ -29,6 +29,20 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages, uint32_
     tt_metal::ReadFromBuffer(interleaved_buffer, readback_buffer);
 
     pass &= (host_buffer == readback_buffer);
+
+    uint32_t second_buffer_size = num_pages_two * page_size;
+
+    auto second_interleaved_buffer = tt_metal::Buffer(device, second_buffer_size, starting_bank_id, page_size, tt_metal::BufferType::L1);
+
+    std::vector<uint32_t> second_host_buffer = create_random_vector_of_bfloat16(
+        second_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+
+    tt_metal::WriteToBuffer(second_interleaved_buffer, second_host_buffer);
+
+    std::vector<uint32_t> second_readback_buffer;
+    tt_metal::ReadFromBuffer(second_interleaved_buffer, second_readback_buffer);
+
+    pass &= (second_host_buffer == second_readback_buffer);
 
     return pass;
 }
@@ -51,15 +65,13 @@ int main(int argc, char **argv) {
 
         // First run tests with basic memory allocator
         pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::BASIC);
-        pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, page_size);
-        pass &= test_interleaved_l1_buffer(device, num_bank_pages_two, page_size);
+        pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, num_bank_pages_two, page_size);
 
         // Close device and re-initialize it with L1 banking allocator
         pass &= tt_metal::CloseDevice(device);
         pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
 
-        pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, page_size);
-        pass &= test_interleaved_l1_buffer(device, num_bank_pages_two, page_size);
+        pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, num_bank_pages_two, page_size);
 
         pass &= tt_metal::CloseDevice(device);
 

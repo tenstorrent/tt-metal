@@ -505,11 +505,13 @@ bool test_interleaved_l1_datacopy() {
     std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
+    tt_metal::Buffer src;
+    tt_metal::Buffer dst;
     if constexpr (src_is_in_l1) {
         TT_ASSERT((buffer_size % num_l1_banks) == 0);
 
         uint32_t src_l1_bank_id = 0;
-        auto src = tt_metal::Buffer(device, buffer_size, src_l1_bank_id, num_bytes_per_page, tt_metal::BufferType::L1);
+        src = tt_metal::Buffer(device, buffer_size, src_l1_bank_id, num_bytes_per_page, tt_metal::BufferType::L1);
         tt_metal::WriteToBuffer(src, host_buffer);
 
         tt_metal::WriteRuntimeArgsToDevice(
@@ -522,7 +524,7 @@ bool test_interleaved_l1_datacopy() {
         TT_ASSERT((buffer_size % num_dram_banks) == 0);
 
         uint32_t dram_bank_id = 0;
-        auto src = tt_metal::Buffer(device, buffer_size, dram_bank_id, num_bytes_per_page, tt_metal::BufferType::DRAM);
+        src = tt_metal::Buffer(device, buffer_size, dram_bank_id, num_bytes_per_page, tt_metal::BufferType::DRAM);
         tt_metal::WriteToBuffer(src, host_buffer);
 
         tt_metal::WriteRuntimeArgsToDevice(
@@ -535,7 +537,7 @@ bool test_interleaved_l1_datacopy() {
     std::vector<uint32_t> readback_buffer;
     if constexpr (dst_is_in_l1) {
         uint32_t dst_l1_bank_id = 0;
-        auto dst = tt_metal::Buffer(device, buffer_size, dst_l1_bank_id, num_bytes_per_page, tt_metal::BufferType::L1);
+        dst = tt_metal::Buffer(device, buffer_size, dst_l1_bank_id, num_bytes_per_page, tt_metal::BufferType::L1);
 
          tt_metal::WriteRuntimeArgsToDevice(
             device,
@@ -552,7 +554,7 @@ bool test_interleaved_l1_datacopy() {
 
     } else {
          uint32_t dst_dram_bank_id = 0;
-         auto dst = tt_metal::Buffer(device, buffer_size, dst_dram_bank_id, num_bytes_per_page, tt_metal::BufferType::DRAM);
+         dst = tt_metal::Buffer(device, buffer_size, dst_dram_bank_id, num_bytes_per_page, tt_metal::BufferType::DRAM);
 
          tt_metal::WriteRuntimeArgsToDevice(
             device,
