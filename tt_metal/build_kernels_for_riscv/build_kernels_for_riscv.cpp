@@ -126,7 +126,7 @@ struct CompileContext {
                 "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch),
                 "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/" + get_string_lowercase(defs.arch) + "_defines",
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(defs.arch) + "/noc",
-                "tt_metal/src/firmware/riscv/targets/ncrisc",
+                "tt_metal/src/firmware/riscv/targets/brisc",
                 "tt_metal"}
             ));
             includes_abs.push_back(kernel_subdir_ + "/brisc");

@@ -24,4 +24,6 @@ inline void RISC_POST_STATUS(uint32_t status) {
 
 void risc_reset_check();
 
+extern uint8_t loading_noc;
+
 #define RISC_EPOCH_INFO_PTR EPOCH_INFO_PTR
