@@ -11,6 +11,17 @@ TT-DNN is a simplified Python interface to the compute engine of the TT-Metal.
 This will be the future plan. For now, the ``tt_lib`` Python module is a
 unified Python interface that provides both TT-DNN and the Tensor library.
 
+TT-DNN library supports 4 dimensional tensors with shape ``[W, Z, Y, X]``, in ROW_MAJOR layout, and with BFLOAT16 data type.
+
+Some OPs in this library might change layout of input tensors and pad them to better match expectations of execution kernels on TT Accelerator device.
+These OPs will unpad the result tensor befor it is returned to caller.
+
+There is a limitation that tensor in ROW_MAJOR layout on TT Accelerator device must have the size of last dimension ``X`` be divisible by 2.
+You can't create these type of tensors on TT Accelerator device or send them to TT Accelerator device with ```tt_lib.tensor.Tensor.to()``.
+However, you can supply these type of tensors to OPs from TT-DNN library as they can automatically pad the last dimension before moving the tensor
+to TT Accelerator device. To use this functionality, you must call `tt_lib.device.SetDefaultDevice(tt_device)` to set your TT Accelerator device
+as the default device that will be used to execute operations on tensors that are on host machine.
+
 tt-DNN API through ``tt_lib``
 =============================
 

@@ -116,7 +116,7 @@ void TensorModule(py::module &m_tensor) {
     auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor", R"doc(
 
 
-        Class constructor supports tensors of rank 4 where the size of both last two dimensions is a multiple of 32.
+        Class constructor supports tensors of rank 4.
         The constructor takes following arguments:
 
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
@@ -201,6 +201,8 @@ void TensorModule(py::module &m_tensor) {
 
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
 
+                Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisble by 2.
+
                 Example of creating a TT Tensor on TT accelerator device:
 
                 .. code-block:: python
@@ -240,6 +242,8 @@ void TensorModule(py::module &m_tensor) {
                 +---------------+---------------+
 
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
+
+                Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisble by 2.
 
                 Example of creating a TT Tensor on TT accelerator device with specified mem_config:
 
