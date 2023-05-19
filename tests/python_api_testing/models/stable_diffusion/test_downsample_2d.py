@@ -51,7 +51,7 @@ def test_run_downsample2d_inference():
     # setup tt models
     tt_input = torch_to_tt_tensor(input, device)
 
-    tt_down = TtDownsample2D(channels=in_channels, out_channels=out_channels, use_conv=True, state_dict=state_dict)
+    tt_down = TtDownsample2D(channels=in_channels, out_channels=out_channels, use_conv=True, state_dict=state_dict, base_address="down_blocks.0.downsamplers.0")
     tt_out = tt_down(tt_input)
     tt_output = tt_to_torch_tensor(tt_out, host)
 
