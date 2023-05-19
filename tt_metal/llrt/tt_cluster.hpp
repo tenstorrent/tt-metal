@@ -53,11 +53,11 @@ struct tt_cluster
     std::unordered_set<chip_id_t> get_all_chips();
 
     tt_soc_description& get_soc_desc(chip_id_t chip) { return sdesc_per_chip.at(chip); }
+    uint32_t get_harvested_rows(chip_id_t chip) { return harvested_rows_per_target.at(chip); }
 
     // tt_soc_description *get_soc_desc() { return sdesc.get(); }
     tt_cluster_description *get_cluster_desc() { return ndesc.get(); }
 
-    CoreCoord get_routing_coordinate(int core_r, int core_c, chip_id_t device_id) const;
     void dump_wall_clock_mailbox(std::string output_dir);
 
     //! device driver and misc apis

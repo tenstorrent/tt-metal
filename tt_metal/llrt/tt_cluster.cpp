@@ -38,14 +38,6 @@ std::unordered_set<chip_id_t> tt_cluster::get_all_chips() {
     return ndesc->get_all_chips();
 }
 
-CoreCoord tt_cluster::get_routing_coordinate(int core_r, int core_c, chip_id_t device_id) const {
-    TT_ASSERT(sdesc_per_chip.size(), "Descriptor must be loaded. Try open_device()");
-    CoreCoord coord(0,0);
-    coord.x = sdesc_per_chip.at(device_id).worker_log_to_routing_x.at(core_c);
-    coord.y = sdesc_per_chip.at(device_id).worker_log_to_routing_y.at(core_r);
-    return coord;
-}
-
 void tt_cluster::dump_wall_clock_mailbox(std::string output_dir) {
     bool is_output_dir_populated = output_dir.find("tt_build") != std::string::npos;
     if (is_output_dir_populated) {

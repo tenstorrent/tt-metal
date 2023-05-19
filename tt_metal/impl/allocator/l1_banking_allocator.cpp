@@ -31,6 +31,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const tt_Soc
     for (uint32_t y = 0; y < soc_desc.worker_grid_size.y; y++) {
         for (uint32_t x = 0; x < soc_desc.worker_grid_size.x; x++) {
             CoreCoord logical_core = CoreCoord(x, y);
+            // TODO: Fix how we setup this information for allocator.... We need to account for harvesting
             uint32_t noc_x = soc_desc.worker_log_to_routing_x.at(x);
             uint32_t noc_y = soc_desc.worker_log_to_routing_y.at(y);
             CoreCoord noc_core = CoreCoord(noc_x, noc_y);

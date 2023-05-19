@@ -37,9 +37,58 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
     }
     this->allocator_scheme_ = memory_allocator;
 }
+void Device::initialize_logical_to_routing_lookup_tables() {
+    if (not cluster_is_initialized()) {
+        tt::log_fatal("Device has not been initialized, did you forget to call InitializeDevice?");
+    }
+    auto soc_desc = this->cluster_->get_soc_desc(this->pcie_slot_);
+    auto harvested_noc_rows = this->cluster_->get_harvested_rows(this->pcie_slot_);
+    // Determine which noc-coords are harvested
+    std::vector<unsigned int> noc_row_offset_from_harvesting(soc_desc.worker_grid_size.y, 0);
+    this->num_harvested_rows_ = 0;
+    for (unsigned int r = 0; r < soc_desc.worker_grid_size.y; r++) {
+        bool row_harvested = harvested_noc_rows&0x1;
+        this->num_harvested_rows_ += row_harvested;
+        noc_row_offset_from_harvesting[r] = this->num_harvested_rows_;
+        harvested_noc_rows >> 1;
+    }
+    tt::log_assert(
+        this->num_harvested_rows_ < 2,
+        tt::LogDevice,
+        "this->pcie_slot_={} has this->num_harvested_rows_={}>2",
+        this->pcie_slot_,
+        this->num_harvested_rows_);
+    // Populate lookup table
+    this->logical_to_routing_coord_lookup_table_.clear();
+    unsigned int num_rows = soc_desc.worker_grid_size.y - this->num_harvested_rows_;
+    unsigned int num_cols = soc_desc.worker_grid_size.x;
+    for (unsigned int r = 0; r < num_rows; r++) {
+        for (unsigned int c = 0; c < num_cols; c++) {
+            CoreCoord logical_coord({
+                .x = c,
+                .y = r,
+            });
+            CoreCoord noc_routing_coord({
+                .x = static_cast<size_t>(soc_desc.worker_log_to_routing_x.at(logical_coord.x)),
+                .y = static_cast<size_t>(soc_desc.worker_log_to_routing_y.at(logical_coord.y)),
+            });
+            CoreCoord post_harvesting_noc_routing_coord({
+                .x = noc_routing_coord.x,
+                .y = noc_routing_coord.y + noc_row_offset_from_harvesting[logical_coord.y],
+            });
+
+            this->logical_to_routing_coord_lookup_table_.insert({
+                logical_coord,
+                post_harvesting_noc_routing_coord
+            });
+        }
+    }
+}
+
 
 bool Device::initialize(const MemoryAllocator &memory_allocator) {
     this->initialize_cluster();
+    this->initialize_logical_to_routing_lookup_tables();
     this->initialize_allocator(memory_allocator);
     this->closed_ = false;
     return true;
@@ -62,10 +111,10 @@ Device::~Device() {
 }
 
 tt_cluster *Device::cluster() const {
-    if (not cluster_is_initialized()) {
+    if (not this->cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return cluster_;
+    return this->cluster_;
 }
 
 int Device::num_dram_channels() const {
@@ -100,9 +149,15 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    auto worker_core_x = cluster_->get_soc_desc(pcie_slot_).worker_log_to_routing_x.at(logical_core.x);
-    auto worker_core_y = cluster_->get_soc_desc(pcie_slot_).worker_log_to_routing_y.at(logical_core.y);
-    CoreCoord worker_core = CoreCoord(worker_core_x, worker_core_y);
+    log_info(
+        "logical coord=[.y={}, .x={}]",
+        logical_core.y, logical_core.x
+    );
+    CoreCoord worker_core = this->logical_to_routing_coord_lookup_table_.at(logical_core);
+    log_info(
+        "routing coord=[.y={}, .x={}]",
+        worker_core.y, worker_core.x
+    );
     return worker_core;
 }
 

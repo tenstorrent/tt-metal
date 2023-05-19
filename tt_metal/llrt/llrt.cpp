@@ -235,7 +235,11 @@ bool test_load_write_read_trisc_binary(
     tt_cluster *cluster, std::string hex_file_path, int chip_id, const CoreCoord &core, int triscv_id) {
     assert(triscv_id >= 0 and triscv_id <= 2);
 
-    assert(is_worker_core(cluster, core, chip_id));
+    log_assert(
+        is_worker_core(cluster, core, chip_id),
+        "core=[.y={}, .x={}] is not a worker core",
+        core.y, core.x
+    );
 
     // PROF_BEGIN("trisc_get")
     std::vector<uint32_t> hex_vec = get_trisc_binary(hex_file_path, triscv_id);  // TRISC 0, 1, 2
