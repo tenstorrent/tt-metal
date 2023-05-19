@@ -25,6 +25,9 @@ from python_api_testing.models.metal_BERT_large_15.fused_ops.layernorm import (
 from python_api_testing.models.metal_BERT_large_15.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import comp_pcc, comp_allclose, profiler
+from tests.python_api_testing.models.metal_BERT_large_15.utils import (
+    run_matmul_with_dataformat,
+)
 
 
 class TtBertEncoder(torch.nn.Module):
@@ -153,7 +156,13 @@ class TtBertEncoder(torch.nn.Module):
         self, mha_res, attention_output_weight, attention_output_bias
     ):
         # profiler.start("__op11_mm_plus_bias")
-        output = ttl.tensor.matmul(mha_res, attention_output_weight)
+        output = run_matmul_with_dataformat(
+            ttl.tensor.bert_large_selfout_matmul,
+            ttl.tensor.DataType.BFLOAT16,
+            self.device,
+            mha_res,
+            attention_output_weight,
+        )
         mha_out = ttl.tensor.bcast(
             output,
             attention_output_bias,
@@ -179,6 +188,7 @@ class TtBertEncoder(torch.nn.Module):
         return ffn_out_add_and_norm
 
     def forward(self, activation, attention_mask=None):
+        assert activation.shape() == [9, 1, 384, 1024]
         # MHA - OP1 - OP10 ------------------------------->
         mha_res = self.mha(activation, attention_mask)
 
@@ -294,7 +304,7 @@ def test_bert_encoder_inference(
 if __name__ == "__main__":
     run_bert_encoder_inference(
         "phiyodr/bert-large-finetuned-squad2",
-        1,
+        9,
         384,
         True,
         0.99,

@@ -15,6 +15,9 @@ from tests.python_api_testing.models.conftest import model_location_generator_
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import comp_pcc, comp_allclose
+from tests.python_api_testing.models.metal_BERT_large_15.utils import (
+    run_matmul_with_dataformat,
+)
 
 
 def feed_forward(
@@ -29,7 +32,13 @@ def feed_forward(
     # output = [1, 9, 384, 4096]
     def op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
         # profiler.start("___op13_MM_bias_gelu")
-        output = ttl.tensor.matmul(activation, ff1_weighta)
+        output = run_matmul_with_dataformat(
+            ttl.tensor.bert_large_ff1_matmul,
+            ttl.tensor.DataType.BFLOAT16,
+            device,
+            activation,
+            ff1_weighta,
+        )
         output_plus_bias = ttl.tensor.bcast(
             output, ff1_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
         )
@@ -43,7 +52,13 @@ def feed_forward(
     # output = [1, 9, 384, 1024]
     def op14_MM_bias(activation, ff2_weighta, ff2_biasa):
         # profiler.start("___op14_MM_bias")
-        output = ttl.tensor.matmul(activation, ff2_weighta)
+        output = run_matmul_with_dataformat(
+            ttl.tensor.bert_large_ff2_matmul,
+            ttl.tensor.DataType.BFLOAT16,
+            device,
+            activation,
+            ff2_weighta,
+        )
         output_plus_bias = ttl.tensor.bcast(
             output, ff2_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
         )
@@ -250,7 +265,7 @@ def test_ffn_inference(
 if __name__ == "__main__":
     test_ffn_inference(
         "phiyodr/bert-large-finetuned-squad2",
-        1,
+        9,
         384,
         True,
         0.99,

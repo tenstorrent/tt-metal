@@ -19,6 +19,9 @@ from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from libs.tt_lib.fused_ops.softmax import softmax
 from utility_functions import enable_compile_cache, comp_pcc, comp_allclose, profiler
+from tests.python_api_testing.models.metal_BERT_large_15.utils import (
+    run_matmul_with_dataformat,
+)
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
@@ -106,7 +109,13 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def op1_qkv_fused(activation, qkv_weight, qkv_bias):
         # profiler.start("___op1_qkv_fused")
-        qkv = ttl.tensor.matmul(activation, qkv_weight)
+        qkv = run_matmul_with_dataformat(
+            ttl.tensor.bert_large_fused_qkv_matmul,
+            ttl.tensor.DataType.BFLOAT16,
+            device,
+            activation,
+            qkv_weight,
+        )
         qkv = ttl.tensor.bcast(
             qkv, qkv_bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
         )
@@ -158,7 +167,13 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def op7_bmm(Q_heads, K_T_heads):
         # profiler.start("___op7_bmm")
-        qkt = ttl.tensor.bmm(Q_heads, K_T_heads)
+        qkt = run_matmul_with_dataformat(
+            ttl.tensor.bert_large_pre_softmax_bmm,
+            ttl.tensor.DataType.BFLOAT16,
+            device,
+            Q_heads,
+            K_T_heads,
+        )
         # profiler.end("___op7_bmm")
 
         return qkt
@@ -190,7 +205,13 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def op9_bmm(attention_scores, V_heads):
         # profiler.start("___op9_bmm")
-        weighted_activation = ttl.tensor.bmm(attention_scores, V_heads)
+        weighted_activation = run_matmul_with_dataformat(
+            ttl.tensor.bert_large_post_softmax_bmm,
+            ttl.tensor.DataType.BFLOAT16,
+            device,
+            attention_scores,
+            V_heads,
+        )
         # profiler.end("___op9_bmm")
 
         return weighted_activation
@@ -380,7 +401,7 @@ def test_mha_inference(
 if __name__ == "__main__":
     test_mha_inference(
         "phiyodr/bert-large-finetuned-squad2",
-        1,
+        9,
         384,
         True,
         0.99,
