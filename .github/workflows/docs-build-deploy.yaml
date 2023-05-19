@@ -19,6 +19,7 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: true
       - name: Build tt-metal
         run: make build
       - name: Activate and build docs

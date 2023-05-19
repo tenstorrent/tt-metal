@@ -30,3 +30,4 @@ jobs:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
           files: VERSION
+          lfs: true
