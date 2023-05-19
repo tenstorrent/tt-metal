@@ -27,15 +27,5 @@ struct address_map {
   static constexpr std::int32_t BRISC_LOCAL_MEM_BASE = DATA_BUFFER_SPACE_BASE; // Only used during init.
 
   static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1 * 1024 * 1024;  // XXXX delete, used for relocating high memory on load
-
-  // Perf buffer (FIXME - update once location of the perf data buffer is finalized)
-  // XXXX pk - put this in brisc.cc as a global variable with exported symbols for other kernels
-  static constexpr std::int32_t PERF_BUF_SIZE = MEM_BRISC_FIRMWARE_SIZE - MEM_BRISC_FIRMWARE_CODE_SIZE;
-  static constexpr std::int32_t TRISC_PERF_BUF_SIZE_LEVEL_0 = 640; // smaller buffer size for limited logging
-  static constexpr std::int32_t NCRISC_PERF_BUF_SIZE_LEVEL_0 = 640; // smaller buffer size for limited logging
-  static constexpr std::int32_t TRISC_PERF_BUF_SIZE_LEVEL_1 = 4*1024; // PERF_BUF_SIZE/3
-  static constexpr std::int32_t NCRISC_PERF_BUF_SIZE_LEVEL_1 = 4*1024; // NCRISC performance buffer
-  static constexpr std::int32_t PERF_BUF_BASE_ADDR = MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_CODE_SIZE;   // 12KB
-
 };
 }  // namespace llk

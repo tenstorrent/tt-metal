@@ -7,10 +7,6 @@
 #include "ckernel_globals.h"
 #include <l1_address_map.h>
 #include <tensix.h>
-#ifdef PERF_DUMP
-#include "ckernel_perf_unpack_pack.h"
-#include "ckernel_perf_math.h"
-#endif
 
 namespace ckernel
 {
@@ -36,19 +32,6 @@ uint32_t dbg_event_end __attribute__((section(".bss"))) = 0;
 volatile uint16_t *debug_mailbox_base = nullptr;
 uint8_t mailbox_index = 0;
 uint8_t mailbox_end = 32;
-
-#ifdef PERF_DUMP
-uint32_t perf_index __attribute__((section(".bss"))) = 0;
-uint32_t perf_end __attribute__((section(".bss"))) = 0;
-volatile uint *perf_buf_base[2] = {nullptr, nullptr};
-uint8_t perf_buf_base_id __attribute__((section(".bss"))) = 0;
-bool record_perf_events __attribute__((section(".bss"))) = 0;
-uint8_t perf_events_target_idx __attribute__((section(".bss"))) = 0;
-uint16_t current_outer_loop_iter __attribute__((section(".bss"))) = 0;
-uint32_t last_clock_32h __attribute__((section(".bss"))) = 0;
-int32_t dram_dump_req_local;
-bool first_unpack_recorded __attribute__((section(".bss"))) = 0;
-#endif
 
 uint8_t thread_id;
 
@@ -153,13 +136,6 @@ int main(int argc, char *argv[])
 
     allocate_debug_mailbox_buffer();
 
-#ifdef PERF_DUMP
-    allocate_perf_buffer();
-    setup_fpu_perf_cnt();
-    record_dummy_math_event();
-    set_thread_id_parameter();
-#endif
-
     //while (ready_for_next_epoch())
     {
         run_kernel();
@@ -167,12 +143,6 @@ int main(int argc, char *argv[])
 
     // Signal completion
     tensix_sync();
-#ifdef PERF_DUMP
-    record_perf_dump_end_and_check_overflow();
-    // There has to be a tensix_sync() before this last pass.
-    last_trisc_perf_dump_to_dram();
-    tensix_sync();
-#endif
     trisc_l1_mailbox_write(KERNEL_COMPLETE);
 
 }
