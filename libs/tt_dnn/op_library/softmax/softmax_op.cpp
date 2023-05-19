@@ -18,9 +18,12 @@ namespace tt {
 
 namespace tt_metal {
 
+inline bool is_dram(const Tensor& a) { return a.buffer_type() == BufferType::DRAM; }
+inline bool is_dram(const Tensor* a) { return a ? a->buffer_type() == BufferType::DRAM : true; } // if nullptr doesn't matter
+inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 // implementation of softmax with optional scale/mask (see the header for a more detailed description)
-Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
+Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
 
     bool profile = false;
     OpEnvConfig::update_profile(&profile);
@@ -37,32 +40,20 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
 
     Program *program = new Program();
 
-    tt_xy_pair core = {0, 0};
-
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
 
     uint32_t TBYTES = 2 * 1024;
 
-    Buffer *src0_dram_buffer = a.buffer();
+    auto src0_dram_buffer = a.buffer();
 
     TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume()/TILE_HW;
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-
     // This should allocate a DRAM buffer on the device
     Device *device = a.device();
 
-    std::array<uint32_t, 4> output_shape = {shape[0], shape[1], H, W};
-    Tensor output = Tensor(output_shape, a.dtype(), Layout::TILE, device);
-
-    Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
-    int block_size = find_max_divisor(Wt, 8);
-    //if (getenv("FORCE_BLOCK_SIZE") != nullptr) block_size = std::stoi( getenv("FORCE_BLOCK_SIZE") );
-    //std::cout << "Block size=" << block_size << " Wt=" << Wt << std::endl;
+    uint32_t block_size = find_max_divisor(Wt, 8);
+    OpEnvConfig::update_block_size(&block_size);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t in0_t  = block_size*2;
@@ -72,8 +63,6 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
     uint32_t in3_t  = 2; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in4_t  = divup(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
     uint32_t im2_t  = 2; // recip result
-    // 120 is a multiple of 3,5,6; 128 is divisible by 8,4,2,1; 7 is not picked currently
-    // buffer for keeping exps in L1 to reuse
 
     // cb_exps - keeps exps in CB in L1 to avoid recomputing
     uint32_t im0_t  = block_size*divup(Wt, block_size);
@@ -99,13 +88,13 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
 
     // we are actually splitting blocks of Wt tiles, not tiles, so no checking for bank alignment is needed
     TilesSplit ts(num_cores, NCHt);
-    auto tpc = ts.get_tpc();
-    TT_ASSERT(NCHt % tpc == 0);
+    auto wtpc = ts.get_tpc();
+    TT_ASSERT(NCHt % wtpc == 0);
     TT_ASSERT(NCHt % num_cores == 0);
-    TT_ASSERT(tpc < Ht || (tpc % Ht == 0));
+    TT_ASSERT(wtpc < Ht || (wtpc % Ht == 0));
     TT_ASSERT(NCHt % num_cores == 0);
     TT_ASSERT(partHt >= Ht || Ht % partHt == 0);
-    //cout << "NUM CORES=" << num_cores << " TPC=" << tpc << " partHt=" << partHt << endl;
+    //cout << "NUM CORES=" << num_cores << " WTPC=" << wtpc << " partHt=" << partHt << endl;
 
     vector<DataMovementKernel*> readers, writers;
     readers.reserve(num_cores);
@@ -128,16 +117,18 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
         DataMovementKernel *reader_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/reader_unary_8bank_sm.cpp", core,
             DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+            //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
 
         DataMovementKernel *writer_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/writer_unary_8bank_sm.cpp", core,
             DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+            //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
 
         // for broadcasting in H direction we need to
         // NCHt, Nt, Wt
-        // if tpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
-        // if tpc >= Ht then tpc should be a multiple of Ht
-        vector<uint32_t> compute_args = { tpc, partHt, Wt };
+        // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
+        // if wtpc >= Ht then tpc should be a multiple of Ht
+        vector<uint32_t> compute_args = { wtpc, partHt, Wt };
         KernelArgs softmax_args = KernelArgs(core, compute_args);
 
         bool fp32_dest_acc_en = false;
@@ -148,7 +139,10 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
 
         softmax_kernel->add_define("BLOCK_SIZE", block_size);
         reader_kernel->add_define("BLOCK_SIZE", block_size);
+        reader_kernel->add_define("A_DRAM", is_dram(a) ? "true" : "false");
+        reader_kernel->add_define("MASK_DRAM", is_dram(mask) ? "true" : "false");
         writer_kernel->add_define("BLOCK_SIZE", block_size);
+        writer_kernel->add_define("OUTPUT_DRAM", is_dram(a) ? "true" : "false");
         if (scale != 0.0f) {
             reader_kernel->add_define("FUSED_SCALE_MASK", "1");
             softmax_kernel->add_define("FUSED_SCALE_MASK", "1");
@@ -163,15 +157,17 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
     for (uint32_t icore = 0; icore < num_cores; icore++) {
         auto core = grid.wrap_core(icore);
         uint32_t src_addr = src0_dram_buffer->address();
-        uint32_t dst_addr = dst_dram_buffer->address();
+        //uint32_t dst_addr = dst_dram_buffer->address();
         uint32_t mask_addr = mask ? mask->buffer()->address() : 0;
-        uint32_t tile_offset = tpc*Wt*icore;
-        //cout << "TPC=" << tpc << endl;
+        uint32_t tile_offset = wtpc*Wt*icore;
+        //cout << "WTPC=" << wtpc << endl;
+        //cout << "Wt=" << Wt << endl;
         //cout << "tile_offset=" << tile_offset << endl;
         union { float f; uint32_t u; } s; s.f = scale; // scale for fused scale-mask-softmax
+        // always in-place
         //                                                              0  1    2       3            4   5       6          7           8
-        WriteRuntimeArgsToDevice(device, readers[icore], core, { src_addr, 0, s.u, tpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
-        WriteRuntimeArgsToDevice(device, writers[icore], core, { dst_addr, 0,   0, tpc*Wt, tile_offset });
+        WriteRuntimeArgsToDevice(device, readers[icore], core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
+        WriteRuntimeArgsToDevice(device, writers[icore], core, { src_addr, 0,   0, wtpc*Wt, tile_offset });
     }
 
     LaunchKernels(device, program);
@@ -180,15 +176,15 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, const Tensor &a) {
 
     delete program;
 
-    return output;
+    return std::move(a);
 } // scale_mask_softmax_
 
-Tensor scale_mask_softmax(float scale, const Tensor& mask, const Tensor& a) {
-    return scale_mask_softmax_(scale, &mask, a);
+Tensor scale_mask_softmax_in_place(float scale, const Tensor& mask, Tensor& a) {
+    return std::move(scale_mask_softmax_(scale, &mask, a));
 }
 
-Tensor softmax(const Tensor &a) {
-    return scale_mask_softmax_(0.0f, nullptr, a); // 0.0f means unused scale
+Tensor softmax_in_place(Tensor &a) {
+    return std::move(scale_mask_softmax_(0.0f, nullptr, a)); // 0.0f means unused scale
 }
 
 }  // namespace ll_buda

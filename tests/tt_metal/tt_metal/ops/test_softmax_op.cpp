@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
         tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
         std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
-        Tensor c = softmax(a);
+        Tensor c = softmax_in_place(a);
         Tensor d = c.to(host);
         Tensor host_a = a.to(host); // Move tensor a to host to validate
         pass &= CloseDevice(device);

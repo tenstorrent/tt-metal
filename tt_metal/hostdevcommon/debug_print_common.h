@@ -48,6 +48,8 @@ struct DebugPrintMemLayout {
         // current writer offset in buffer
         uint32_t wpos ATTR_ALIGN4;
         uint32_t rpos ATTR_ALIGN4;
+        uint16_t core_x ATTR_ALIGN2;
+        uint16_t core_y ATTR_ALIGN2;
     } aux ATTR_ALIGN4;
     uint8_t data[PRINT_BUFFER_SIZE-sizeof(Aux)];
 

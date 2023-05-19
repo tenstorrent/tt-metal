@@ -134,7 +134,7 @@ These operations are currently not supported on TT accelerator device and will e
 Experimental Operations
 =======================
 
-Operations in this section are experimental, don't have full support, and may behave in unexpectedx ways.
+Operations in this section are experimental, don't have full support, and may behave in unexpected ways.
 
 Fused Operations from ``tt_lib`` Mini-Graph Library
 ---------------------------------------------------
@@ -183,9 +183,9 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.bert_large_post_softmax_bmm
 
-.. autofunction:: tt_lib.tensor.softmax
+.. autofunction:: tt_lib.tensor.softmax_in_place
 
-.. autofunction:: tt_lib.tensor.scale_mask_softmax
+.. autofunction:: tt_lib.tensor.scale_mask_softmax_in_place
 
 .. autofunction:: tt_lib.tensor.layernorm
 

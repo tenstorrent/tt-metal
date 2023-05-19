@@ -1229,8 +1229,10 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("compute_conv_op_block_info", &compute_conv_op_block_info);
 
     // softmax
-    m_tensor.def("softmax", &softmax, "Performs a softmax operation on the last tensor dimension.");
-    m_tensor.def("scale_mask_softmax", &scale_mask_softmax, "Performs a fused scale->attention_mask->softmax operation.");
+    m_tensor.def("softmax_in_place", &softmax_in_place,
+        "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified in place.");
+    m_tensor.def("scale_mask_softmax_in_place", &scale_mask_softmax_in_place,
+        "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place.");
 
     // layernorm
     m_tensor.def("layernorm", &layernorm, "Performs a layernorm operation on the last tensor dimension.");
@@ -1351,6 +1353,7 @@ void DeviceModule(py::module &m_device) {
     )doc");
 
     m_device.def("StartDebugPrintServer", &StartDebugPrintServer);
+    m_device.def("StartDebugPrintServerOnCores", &StartDebugPrintServerOnCores);
     m_device.def("SetProfilerDir", &SetProfilerDir);
 
     m_device.def("EnableCompileCache", &EnableCompileCache);

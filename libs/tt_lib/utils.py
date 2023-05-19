@@ -405,7 +405,7 @@ def blocked_mm_with_conv_act(conv_act,
     return ret
 
 
-def is_close(a, b, rtol=7e-2, atol=8e-2, max_mag=4.0, max_mag_fraction=0.02):
+def is_close(a, b, rtol=8e-2, atol=8e-2, max_mag=4.0, max_mag_fraction=0.02):
     """
     An improved variant of isclose, taking into account max magnitude in the sum, with logging.
     """

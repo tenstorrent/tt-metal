@@ -207,3 +207,4 @@ template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
 
 #include "debug_print_tile.h"
+#include "debug_print_core_xy.h"

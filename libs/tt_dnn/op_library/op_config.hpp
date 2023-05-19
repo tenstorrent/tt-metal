@@ -21,4 +21,11 @@ struct OpEnvConfig {
             std::cout << "=== profile flag after update from ENV[\"TT_PROFILE\"]=" << *profile << std::endl;
         }
     }
+
+    static void update_block_size(uint32_t* block_size) {
+        if (getenv("TT_BLOCK_SIZE") != nullptr) {
+            *block_size = std::stoi( getenv("TT_BLOCK_SIZE") );
+            std::cout << "=== block_size after update from ENV[\"TT_BLOCK_SIZE\"]=" << *block_size << std::endl;
+        }
+    }
 };

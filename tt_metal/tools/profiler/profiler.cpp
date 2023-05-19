@@ -158,6 +158,7 @@ void Profiler::readRiscProfilerResults(
     dropped_marker_counter = profile_buffer[kernel_profiler::DROPPED_MARKER_COUNTER];
 
     if(dropped_marker_counter > 0){
+        std::cout << "PROFILER OVERFLOW at index " << end_index << std::endl;
         log_debug(
                 tt::LogDevice,
                 "{} device markers on device {} worker core {},{} risc {} were dropped. End index {}",

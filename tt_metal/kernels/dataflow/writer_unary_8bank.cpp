@@ -10,15 +10,17 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
-    constexpr bool write_to_dram =
     #ifdef KERNEL_COMPILE_TIME_ARG_0
-    get_compile_time_arg_val(0)
+    constexpr bool write_to_dram = get_compile_time_arg_val(0);
     #else
-    true
+    constexpr bool write_to_dram = true;
     #endif
-    ;
 
+    #ifdef OUTPUT_DRAM
+    const InterleavedPow2AddrGen<OUTPUT_DRAM> s = { dst_addr, 11 };
+    #else
     const InterleavedPow2AddrGen<write_to_dram> s = { dst_addr, 11 };
+    #endif
 
     #if GENERATE_BCAST_SCALER
     constexpr uint32_t blk = BLOCK_SIZE; // needed for correctness of softmax/LN kernels

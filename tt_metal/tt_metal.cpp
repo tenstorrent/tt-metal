@@ -66,7 +66,16 @@ bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
 bool CloseDevice(Device *device) { return device->close(); }
 
 void StartDebugPrintServer(Device* device) {
-    tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}}); // TODO(AP): temp, need to rethink
+    tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
+}
+
+void StartDebugPrintServerOnCores(Device* device, const vector<vector<int>>& in_cores) {
+    vector<tt_xy_pair> cores;
+    for (int j = 0; j < in_cores.size(); j++) {
+        TT_ASSERT(in_cores[j].size() == 2);
+        cores.push_back(tt_xy_pair{size_t(in_cores[j][0]), size_t(in_cores[j][1])});
+    }
+    tt_start_debug_print_server(device->cluster(), {0}, cores);
 }
 
 DataMovementKernel *CreateDataMovementKernel(

@@ -137,7 +137,20 @@ bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator = 
  */
 bool CloseDevice(Device *device);
 
+/**
+ * Starts a debug print server on core {1,1} in physical core grid coordinates.
+*/
 void StartDebugPrintServer(Device *device);
+
+/**
+ * Starts a debug print server on specified cores (in physical core grid coordinates).
+ *
+ * |      Argument     |                                                      Description                                                      |        Data type        |    Valid range    | required |
+ * |:-----------------:|:---------------------------------------------------------------------------------------------------------------------:|:-----------------------:|:-----------------:|----------|
+ * | device            | Device pointer                                                                                                        |                         |                   | Yes      |
+ * | cores             | Array of x,y pairs with locations of the Tensix cores (physical coordinates)                                          | const tt_xy_pair &      | {0, 0} -> {9, 11} | Yes      |
+*/
+void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<int>>& cores);
 
 // ==================================================
 //                  HOST API: program & kernels

@@ -403,8 +403,10 @@ void generate_binary_for_risc(
     // Only modifying dataflow paths, we can make a separate
     // isuue for the compute paths
     if (defs.is_brisc()) {
+        //cout << "BRISC NOC_INDEX=" << uint32_t(noc_index) << endl;
         defs.kernel_defines = build_kernel_for_riscv_options->brisc_defines;
     } else if (defs.is_ncrisc()) {
+        //cout << "NCRISC NOC_INDEX=" << uint32_t(noc_index) << endl;
         defs.kernel_defines = build_kernel_for_riscv_options->ncrisc_defines;
     }
 
