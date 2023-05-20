@@ -284,7 +284,7 @@ Tensor matmul_(const Tensor& a, const Tensor& b) {
     }
 }
 
-Tensor matmul(const Tensor& a, const Tensor& b) {
+Tensor matmul_optional_bias_(const Tensor& a, const Tensor& b, Tensor* bias) {
 
     Device * device;
 
@@ -322,6 +322,13 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
         return output;
     }
 }
+
+Tensor matmul_bias(const Tensor& a, const Tensor& b, const Tensor& bias)
+{
+    return matmul_optional_bias_(a, b, &bias);
+}
+
+Tensor matmul(const Tensor& a, const Tensor& b) { return matmul_optional_bias_(a, b); }
 
 Tensor bmm_(const Tensor& a, const Tensor& b) {
     switch (bmm_op_utils::get_parallelization_strategy(a, b)){

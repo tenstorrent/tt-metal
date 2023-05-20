@@ -33,6 +33,7 @@ struct BmmOpParallelizationStrategy {
 };
 
 Tensor matmul (const Tensor &A, const Tensor &B); // broadcasts batch, expects N=1 for now
+Tensor matmul_bias (const Tensor &A, const Tensor &B, const Tensor& bias); // broadcasts batch, expects N=1 for now
 Tensor bmm     (const Tensor &A, const Tensor &B); // doesn't broadcast batch, expects batch to match in A and B
 Tensor large_bmm(const Tensor& A, const Tensor& B, bool tilize_act, bool untilize_out); // Tilizes, untilizes b
 Tensor large_bmm_single_block(const Tensor& A, const Tensor& B, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
