@@ -265,6 +265,7 @@ inline __attribute__((always_inline))
 constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
     switch (format&0x1F) {
         case ((uint8_t)DataFormat::Bfp8_b): return ((index<<10)+(index<<6));
+        case ((uint8_t)DataFormat::Float16): return (index<<11);
         //Keep default as Bfp8?
         default: return ((index<<10)+(index<<6));
     };

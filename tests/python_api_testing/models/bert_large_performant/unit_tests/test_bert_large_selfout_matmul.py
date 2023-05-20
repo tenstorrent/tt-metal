@@ -75,7 +75,7 @@ import pytest
 
 @pytest.mark.parametrize(
     "dtype",
-    ((ttl.tensor.DataType.BFLOAT8_B),),
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
 )
 @pytest.mark.parametrize(
     "in0_mem_config",

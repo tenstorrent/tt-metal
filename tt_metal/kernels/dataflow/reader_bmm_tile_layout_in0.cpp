@@ -41,7 +41,7 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
+    //constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
     constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
     constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(2);
     constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(3); // not used
@@ -59,12 +59,13 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
 
-    #define tile_size_is_pow2 tile_size_is_power_of_two == 1
-    #define in0_is_dram_bool in0_is_dram == 1
+    constexpr bool in0_is_dram_bool = in0_is_dram == 1;
+    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1 // TODO: Refactor to data_format
     #if (tile_size_is_pow2)
-    const InterleavedPow2AddrGen<in0_is_dram_bool> s0 = {
+    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
         .bank_base_address = in0_tensor_addr,
-        .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
+        .page_size = single_tile_size_bytes,
+        .data_format = DataFormat::Float16
     };
     #else
     const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
@@ -85,7 +86,10 @@ void kernel_main() {
             for(uint32_t h = 0; h < in0_block_h; h++) {
                 uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                 for(uint32_t w = 0; w < in0_block_w; w++) {
+                    //uint64_t in0_tile_noc_address = get_noc_addr(in0_tensor_tile_id, s0);
+                    //noc_async_read(in0_tile_noc_address, l1_write_addr_in0, single_tile_size_bytes);
                     noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+
                     l1_write_addr_in0 += single_tile_size_bytes;
                     in0_tensor_tile_id += in0_tensor_stride_w;
                 }

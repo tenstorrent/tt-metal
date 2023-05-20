@@ -17,6 +17,16 @@ import torch
 def run_bert_large_ff1_matmul_test(
     dtype, in0_mem_config, in1_mem_config, out_mem_config
 ):
+    if (
+        dtype == ttl.tensor.DataType.BFLOAT16
+        and out_mem_config.buffer_type == ttl.tensor.BufferType.L1
+        and (
+            in0_mem_config.buffer_type == ttl.tensor.BufferType.L1
+            or in1_mem_config.buffer_type == ttl.tensor.BufferType.L1
+        )
+    ):
+        pytest.skip("Skipping test since these tensors won't fit on device!")
+
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
@@ -75,7 +85,7 @@ import pytest
 
 @pytest.mark.parametrize(
     "dtype",
-    ((ttl.tensor.DataType.BFLOAT8_B),),
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
 )
 @pytest.mark.parametrize(
     "in0_mem_config",

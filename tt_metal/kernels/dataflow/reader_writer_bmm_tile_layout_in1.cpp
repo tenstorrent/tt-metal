@@ -61,7 +61,7 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
+    //constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
     constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
     constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(2); // not used
     constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(3);
@@ -83,17 +83,19 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in1;
 
-    #define tile_size_is_pow2 tile_size_is_power_of_two == 1
-    #define in1_is_dram_bool in1_is_dram == 1
-    #define out_is_dram_bool out_is_dram == 1
+    constexpr bool in1_is_dram_bool = in1_is_dram == 1;
+    constexpr bool out_is_dram_bool = out_is_dram == 1;
+    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1 // TODO: Refactor to data_format
     #if (tile_size_is_pow2)
-    const InterleavedPow2AddrGen<in1_is_dram> s1 = {
+    const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
-        .log_base_2_of_page_size = tile_size_pow2_exponent
+        .page_size = single_tile_size_bytes,
+        .data_format = DataFormat::Float16
     };
-    const InterleavedPow2AddrGen<out_is_dram> s = {
+    const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
-        .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
+        .page_size = single_tile_size_bytes,
+        .data_format = DataFormat::Float16
     };
     #else
     const InterleavedAddrGenFast<in1_is_dram> s1 = {
@@ -119,7 +121,10 @@ void kernel_main() {
             for(uint32_t h = 0; h < in1_block_h; h++) {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                 for(uint32_t w = 0; w < in1_block_w; w++) {
+                    //uint64_t in1_tile_noc_address = get_noc_addr(in1_tensor_tile_id, s1);
+                    //noc_async_read(in1_tile_noc_address, l1_write_addr_in1, single_tile_size_bytes);
                     noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+
                     l1_write_addr_in1 += single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
                 }

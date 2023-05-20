@@ -22,7 +22,7 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
+    //constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
     constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
     constexpr uint32_t out_is_dram                        = get_compile_time_arg_val(2);
 
@@ -76,13 +76,13 @@ void kernel_main() {
     volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     // WRITER
-    #define tile_size_is_pow2 tile_size_is_power_of_two == 1
-    #define out_is_dram_bool out_is_dram == 1
+    constexpr bool out_is_dram_bool = out_is_dram == 1;
+    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1 // TODO: Refactor to data_format
     #if (tile_size_is_pow2)
-    constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<out_is_dram_bool> s = {
+    const InterleavedAddrGenFast<out_is_dram_bool> s = {
         .bank_base_address = out_tensor_addr,
-        .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
+        .page_size = single_tile_size_bytes,
+        .data_format = DataFormat::Float16
     };
     #else
     const InterleavedAddrGenFast<out_is_dram_bool> s = {
