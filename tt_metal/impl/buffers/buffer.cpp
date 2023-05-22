@@ -7,15 +7,29 @@ namespace tt {
 
 namespace tt_metal {
 
+void validate_buffer_size_and_page_size(uint32_t size, uint32_t page_size, const BufferType &buffer_type) {
+    if (size == 0) {
+        TT_THROW("Buffer size should be larger than 0 bytes!");
+    }
+    bool valid_page_size = (size == page_size) or (page_size > 0 and size % page_size == 0);
+    if (not valid_page_size) {
+        TT_THROW("For non-interleaved buffers page size of " + std::to_string(page_size) + " bytes should be equal to buffer size of " + std::to_string(size) + ". " +
+                 "For interleaved buffers page size should be divisible by total buffer size." );
+    }
+}
+
 Buffer::Buffer(Device *device, uint32_t size, uint32_t address, uint32_t starting_bank_id, uint32_t page_size, const BufferType buffer_type)
     : device_(device), size_(size), address_(address), starting_bank_id_(starting_bank_id), page_size_(page_size), buffer_type_(buffer_type) {
     TT_ASSERT(this->device_ != nullptr and this->device_->allocator_ != nullptr);
+    validate_buffer_size_and_page_size(size, page_size, buffer_type);
     this->bank_id_to_relative_address_ = allocator::allocate_buffer_at_address(*this->device_->allocator_, starting_bank_id, size, page_size, address, buffer_type);
     TT_ASSERT(this->bank_id_to_relative_address_.find(this->starting_bank_id_) != this->bank_id_to_relative_address_.end());
 }
 
 Buffer::Buffer(Device *device, uint32_t size, uint32_t starting_bank_id, uint32_t page_size, const BufferType buffer_type)
     : device_(device), size_(size), address_(std::numeric_limits<uint32_t>::max()), starting_bank_id_(starting_bank_id), page_size_(page_size), buffer_type_(buffer_type) {
+    TT_ASSERT(this->device_ != nullptr and this->device_->allocator_ != nullptr);
+    validate_buffer_size_and_page_size(size, page_size, buffer_type);
     this->allocate();
     TT_ASSERT(this->address_ != std::numeric_limits<uint32_t>::max());
 }

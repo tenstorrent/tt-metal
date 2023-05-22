@@ -119,7 +119,7 @@ BankIdToRelativeAddress BankManager::allocate_buffer(
     }
 
     if (candidate_addr_ranges.empty()) {
-        TT_THROW("Not enough space to hold interleave " + std::to_string(total_size_bytes) + " bytes across" + std::to_string(num_banks) + " banks");
+        TT_THROW("Not enough space to interleave " + std::to_string(total_size_bytes) + " bytes across" + std::to_string(num_banks) + " banks");
     }
 
     uint32_t relative_address;
