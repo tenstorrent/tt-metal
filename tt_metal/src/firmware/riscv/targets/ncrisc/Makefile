@@ -45,10 +45,6 @@ else
 endif
 
 LINKER_SCRIPT_NAME = ncrisc.ld
-# TODO(agrebenisan): Figure out why ncrisc-debug.ld doesn't work
-# ifeq ($(DEBUG_MODE),1)
-# 	LINKER_SCRIPT_NAME = ncrisc-debug.ld
-# endif
 
 # uncomment to enable detailed logging in NCRISC post code for waveform debug
 # DEFINES = -D ENABLE_NCRISC_DEBUG_POST_CODES

@@ -15,10 +15,6 @@ CRT_START:
   la sp, __stack_top
 
   # Clear the bss segment
-  la      a0, __l1_bss_start
-  la      a1, __l1_bss_end
-  call    wzerorange
-
   la      a0, __ldm_bss_start
   la      a1, __ldm_bss_end
   call    wzerorange

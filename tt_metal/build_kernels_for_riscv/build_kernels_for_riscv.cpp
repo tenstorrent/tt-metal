@@ -8,7 +8,6 @@
 
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 #include "dev_mem_map.h"
-#include "l1_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 
 using namespace std;

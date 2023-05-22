@@ -26,9 +26,6 @@ INCLUDES += -I$(TT_METAL_HOME)/src/firmware/riscv/targets/ncrisc \
 	-I$(TT_METAL_HOME)/tt_metal
 
 LINKER_SCRIPT_NAME = brisc.ld
-ifeq ($(DEBUG_MODE),1)
-	LINKER_SCRIPT_NAME = brisc-debug.ld
-endif
 
 # -fno-tree-loop-distribute-patterns is needed to prevent memset from being instantiated which gets forced in L0, which can get called from L1 functions
 OPT_FLAGS = -flto -ffast-math -Os -g -fno-tree-loop-distribute-patterns

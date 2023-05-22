@@ -4,8 +4,8 @@
 #include <string>
 #include <fstream>
 #include "yaml-cpp/yaml.h"
-#include "l1_address_map.h"
 #include "device/tt_device.h"
+#include "dev_mem_map.h"
 
 #include "common/assert.hpp"
 

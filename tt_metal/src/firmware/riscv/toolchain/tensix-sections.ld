@@ -35,22 +35,26 @@ SECTIONS
   {
     KEEP (*(SORT_NONE(.fini)))
   } > REGION_CODE
+
+  . = ALIGN(16);
+  l1_data :
+  {
+    *(l1_data)
+  } > REGION_CODE
+  l1_data_noinit (NOLOAD) :
+  {
+    *(l1_data_no_init)
+  } > REGION_CODE
   PROVIDE (__etext = .);
   PROVIDE (_etext = .);
   PROVIDE (etext = .);
-  PROVIDE (__local_mem_rodata_start_addr = __local_mem_rodata_start_addr);
-  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_RODATA
-  .rodata1        : { *(.rodata1) } > REGION_RODATA
-  . = ALIGN(4); /* in hex8tohex32.py we pad to 4 bytes */
-  PROVIDE (__local_mem_rodata_end_addr = .);
-  .sdata2         :
+
+  .rodata         :
   {
-    *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_DATA
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_DATA
-  /* Adjust the address for the data segment.  We want to adjust up to
-     the same address within the page on the next page up.  */
-  . = DATA_SEGMENT_ALIGN (CONSTANT (MAXPAGESIZE), CONSTANT (COMMONPAGESIZE));
+    __ldm_data_start = .;
+     *(.rodata .rodata.* .gnu.linkonce.r.*)
+  } > REGION_RODATA
+  .rodata1        : { *(.rodata1) } > REGION_RODATA
   .preinit_array     :
   {
     PROVIDE_HIDDEN (__preinit_array_start = .);
@@ -102,14 +106,7 @@ SECTIONS
   } > REGION_RODATA
   .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_DATA
   .dynamic        : { *(.dynamic) } > REGION_DATA
-  . = DATA_SEGMENT_RELRO_END (0, .);
-  .data           :
-  {
-    *(.data .data.* .gnu.linkonce.d.*)
-    SORT(CONSTRUCTORS)
-  } > REGION_DATA
-  .data1          : { *(.data1) } > REGION_DATA
-  .got            : { *(.got.plt) *(.igot.plt) *(.got) *(.igot) } > REGION_DATA
+
   /* We want the small data sections together, so single-instruction offsets
      can access them all, and initialized data all before uninitialized, so
      we can shorten the on-disk segment size.  */
@@ -119,10 +116,24 @@ SECTIONS
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
     *(.sdata .sdata.* .gnu.linkonce.s.*)
   } > REGION_DATA
+  .sdata2         :
+  {
+    *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
+  } > REGION_DATA
+  . = ALIGN(4);
+  .data           :
+  {
+    *(.data .data.* .gnu.linkonce.d.*)
+    SORT(CONSTRUCTORS)
+  } > REGION_DATA
+  .data1          : { *(.data1) } > REGION_DATA
+  .got            : { *(.got.plt) *(.igot.plt) *(.got) *(.igot) } > REGION_DATA
   . = ALIGN(4); /* startup code will use word writes to zero bss */
-  _edata = .; PROVIDE (edata = .);
-  . = .;
-  __l1_bss_start = .;
+
+   __ldm_data_end = .;
+
+   __ldm_bss_start = .;
+  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_DATA
   .sbss           :
   {
     *(.dynsbss)
@@ -130,42 +141,32 @@ SECTIONS
     *(.scommon)
   } > REGION_DATA
   . = ALIGN(4);
-  __l1_bss_end = .;
 
   .bss            :
   {
-   __ldm_bss_start = .;
    *(.dynbss)
    *(.bss .bss.* .gnu.linkonce.b.*)
    *(COMMON)
 
-   /* Align here to ensure that the .bss section occupies space up to
-      _end.  Align after .bss to ensure correct alignment even if the
-      .bss section disappears because there are no input sections.
-      FIXME: Why do we need it? When there is no .bss section, we don't
-      pad the .data section.  */
+   /* Align to 4 bytes for bss copy */
    . = ALIGN(4);
    __ldm_bss_end = .;
   } > REGION_DATA
-  . = ALIGN(32 / 8);
-  . = SEGMENT_START("ldata-segment", .);
-  . = ALIGN(32 / 8);
+  local_data_noinit (NOLOAD):
+  {
+    *(local_data_noinit)
+  } > REGION_DATA
+  _edata = .; PROVIDE (edata = .);
   _end = .; PROVIDE (end = .);
-  . = DATA_SEGMENT_END (.);
 
+  /* Move to end of local memory for stack */
   .stack :
   {
-   . = ALIGN(16);
-   __stack_bottom = .;
+    . = ALIGN(16);
+    __stack_bottom = .;
    . += __firmware_stack_size;
-   __stack_top = .;
+    __stack_top = .;
   } > REGION_DATA
-
-  l1_memory :
-  {
-    *(l1_memory)
-    *(l1_memory_const) /* gcc complains about const and non-const data in the same segment. */
-  } > L1
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }

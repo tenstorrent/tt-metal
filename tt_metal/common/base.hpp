@@ -15,7 +15,6 @@
 #include "common/tt_backend_api_types.hpp" // These are the types exported to frontend team...
 #include "common/assert.hpp"
 #include "kernels/hostdevcommon/kernel_structs.h"
-#include "l1_address_map.h"
 #include "eth_l1_address_map.h"
 #include "common/constants.hpp"
 #include "common/base_types.hpp"

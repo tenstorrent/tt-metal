@@ -3,7 +3,6 @@
 #include <unistd.h>
 #include <cstdint>
 
-#include "l1_address_map.h"
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
 #include "ckernel_structs.h"
@@ -205,7 +204,6 @@ void device_setup() {
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
     volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
-
     if (*use_ncrisc) {
         l1_to_ncrisc_iram_copy();
         // Bring NCRISC out of reset, keep TRISCs under reset
@@ -269,30 +267,9 @@ inline void notify_host_kernel_finished() {
     noc_async_write_barrier();
 }
 
-void local_mem_copy() {
-    volatile uint* l1_local_mem_start_addr;
-    volatile uint* local_mem_start_addr = (volatile uint*)MEM_LOCAL_BASE;
-
-    // Removed gating conditional here since getting maybe-unitialized error under
-    // 'DEBUG_MODE=1' compilation. It should have been an assert anyway.
-    // TODO(agrebenisan and/or apokrovsky): Can we use print server for assertions?
-    l1_local_mem_start_addr = (volatile uint*)l1_mem::address_map::BRISC_LOCAL_MEM_BASE;
-
-    uint word_num = ((uint)__local_mem_rodata_end_addr - (uint)__local_mem_rodata_start_addr) >> 2;
-
-    if (word_num > 0) {
-        for (uint n = 0; n < word_num; n++) {
-            local_mem_start_addr[n] = l1_local_mem_start_addr[n];
-        }
-        local_mem_barrier = l1_local_mem_start_addr[word_num - 1];  // TODO - share
-    }
-}
-
 int main() {
-
-    // volatile uint* my_ptr = get_cq_commands_received_ptr();
-    // DPRINT << my_ptr[0] << ENDL();
-    // while(true);
+    int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
+    l1_to_local_mem_copy((uint*)__ldm_data_start, (uint*)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
 
     kernel_profiler::init_BR_profiler();
 
@@ -338,10 +315,6 @@ int main() {
 
         // Bring TRISCs out of reset
         deassert_trisc_reset();
-    }
-
-    if ((uint)MEM_LOCAL_BASE == ((uint)__local_mem_rodata_end_addr & 0xfff00000)) {
-        local_mem_copy();
     }
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
