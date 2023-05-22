@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
 
         tt_xy_pair core = {0, 0};
         uint32_t single_tile_size = 2 * 1024;

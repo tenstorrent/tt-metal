@@ -30,7 +30,7 @@ Program pre-compilation setup
 
 .. code-block:: cpp
 
-   Program *program = new Program();
+   Program program = Program();
 
 We create a ``Program`` to be run on our Grayskull accelerator. This is how
 we'll be keeping track of things in our session with the device.

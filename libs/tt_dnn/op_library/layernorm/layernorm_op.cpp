@@ -35,7 +35,7 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 
-    Program *program = new Program();
+    Program program = Program();
 
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
     uint32_t block_size = find_max_divisor(Wt, 8);
@@ -217,8 +217,6 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
 
     if (profile)
         tt_metal::DumpDeviceProfileResults(device, program);
-
-    delete program;
 
     return output;
 } // softmax

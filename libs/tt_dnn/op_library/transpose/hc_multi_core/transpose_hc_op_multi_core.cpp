@@ -27,7 +27,7 @@ Tensor transpose_hc_multi_core(const Tensor &a) {
 
     uint32_t num_tensor_tiles = N*C*H*W / TILE_HW;
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
@@ -170,8 +170,6 @@ Tensor transpose_hc_multi_core(const Tensor &a) {
     }
 
     tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     // output does not hold any data, contains pointer to buffer on device with the data
 

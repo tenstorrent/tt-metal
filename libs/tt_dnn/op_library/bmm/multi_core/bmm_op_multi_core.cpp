@@ -12,7 +12,7 @@ namespace tt_metal {
 
 Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -192,8 +192,6 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
     pass &= tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     TT_ASSERT(pass);
 

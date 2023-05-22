@@ -12,7 +12,7 @@ namespace tt_metal {
 
 Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
     tt_xy_pair core = {0, 0};
 
     const auto& ashape = a.shape(), bshape = b.shape();
@@ -168,7 +168,7 @@ Tensor bmm_single_core(const Tensor& a, const Tensor& b) {
     return matmul_single_core_(a, b, false);
 }
 
-void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program* program,
+void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program& program,
                                 tt_metal::Device* device,
                                 tt_xy_pair core,
                                 uint32_t M,
@@ -297,7 +297,7 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program* program,
     }
 }
 
-void create_CBs_for_fused_matmul_old_alloc(tt_metal::Program* program,
+void create_CBs_for_fused_matmul_old_alloc(tt_metal::Program& program,
                                 tt_metal::Device* device,
                                 tt_xy_pair core,
                                 uint32_t M,
@@ -635,7 +635,7 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_act,
     TT_ASSERT(a.device() == b.device(), "Operands to large matmul need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to large matmul need to be allocated in buffers on device!");
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
     tt_xy_pair core = {0, 0};
 
     uint32_t single_tile_size = 2 * 1024; // TODO(agrebenisan): Refactor on df

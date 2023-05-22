@@ -4,6 +4,25 @@ namespace tt {
 
 namespace tt_metal {
 
+Program::Program(Program &&other)
+    : kernels_(other.kernels_), circular_buffers_(other.circular_buffers_), logical_core_to_semaphores_(other.logical_core_to_semaphores_) {
+        other.kernels_.clear();
+        other.circular_buffers_.clear();
+        other.logical_core_to_semaphores_.clear();
+}
+
+Program &Program::operator=(Program &&other) {
+    if (this != &other) {
+        this->kernels_ = other.kernels_;
+        this->circular_buffers_ = other.circular_buffers_;
+        this->logical_core_to_semaphores_ = other.logical_core_to_semaphores_;
+        other.kernels_.clear();
+        other.circular_buffers_.clear();
+        other.logical_core_to_semaphores_.clear();
+    }
+    return *this;
+}
+
 std::vector<ComputeKernel *> Program::compute_kernels() const {
     std::vector<ComputeKernel *> compute_kernels;
     for (auto kernel : kernels_) {

@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
 
         tt_xy_pair loader_logical_core = {0, 0};
         tt_xy_pair writer_logical_core = {0, 1};

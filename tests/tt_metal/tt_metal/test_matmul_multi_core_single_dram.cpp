@@ -147,8 +147,8 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *> create_program(tt_metal::Device *device, int num_cores_r, int num_cores_c, int per_core_M, int per_core_N, int K, int in0_block_w, int out_subblock_h, int out_subblock_w) {
-    tt_metal::Program *program = new tt_metal::Program();
+std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *> create_program(tt_metal::Device *device, int num_cores_r, int num_cores_c, int per_core_M, int per_core_N, int K, int in0_block_w, int out_subblock_h, int out_subblock_w) {
+    tt_metal::Program program = tt_metal::Program();
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
@@ -286,7 +286,7 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
         math_approx_mode
     );
 
-    return {program, mm_reader_kernel, unary_writer_kernel};
+    return {std::move(program), mm_reader_kernel, unary_writer_kernel};
 }
 
 std::vector<bfloat16> get_row_slice(std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {

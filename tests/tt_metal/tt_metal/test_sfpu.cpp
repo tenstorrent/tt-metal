@@ -30,7 +30,7 @@ bool run_sfpu_test(string sfpu_name) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
 
         tt_xy_pair core = {0, 0};
 

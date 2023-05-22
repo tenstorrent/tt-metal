@@ -11,7 +11,7 @@ namespace reuse_generalized_helpers {
 using namespace tt::constants;
 using namespace tt;
 
-tt_metal::Program * create_program(
+tt_metal::Program create_program(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -25,7 +25,7 @@ tt_metal::Program * create_program(
     uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
 ) {
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
@@ -214,7 +214,7 @@ tt_metal::Program * create_program(
         }
     }
 
-    return program;
+    return std::move(program);
 }
 
 }
@@ -308,7 +308,7 @@ Tensor matmul_multi_core_reuse_generalized_(const Tensor &a, const Tensor &b, bo
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Program * program = reuse_generalized_helpers::create_program(
+    tt_metal::Program program = reuse_generalized_helpers::create_program(
         device,
         cb_data_format,
         math_fidelity,
@@ -333,8 +333,6 @@ Tensor matmul_multi_core_reuse_generalized_(const Tensor &a, const Tensor &b, bo
     ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     TT_ASSERT(pass);
 

@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
             std::cout << ", Size to transfer in bytes - " << address_map[i+2] << std::endl;
         }
 
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
 
         tt_xy_pair core = {0, 0};
 

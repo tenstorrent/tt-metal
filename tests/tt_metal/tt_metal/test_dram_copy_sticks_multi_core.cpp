@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
         auto num_cores_c = 2;
         auto num_cores_r = 2;
         tt_xy_pair start_core = {0, 0};

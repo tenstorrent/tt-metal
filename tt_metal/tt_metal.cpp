@@ -28,10 +28,10 @@ void DumpHostProfileResults(std::string name_prepend){
     tt_metal_profiler.dumpHostResults(name_prepend);
 }
 
-void DumpDeviceProfileResults(Device *device, Program *program) {
+void DumpDeviceProfileResults(Device *device, const Program &program) {
     TT_ASSERT(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
     auto worker_cores_used_in_program =\
-        device->worker_cores_from_logical_cores(program->logical_cores());
+        device->worker_cores_from_logical_cores(program.logical_cores());
 
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
@@ -79,30 +79,30 @@ void StartDebugPrintServerOnCores(Device* device, const vector<vector<int>>& in_
 }
 
 DataMovementKernel *CreateDataMovementKernel(
-    Program *program,
+    Program &program,
     const std::string &file_name,
     const tt_xy_pair &core,
     const KernelArgs &kernel_args,
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core, kernel_args, processor_type, noc);
-    program->add_kernel(kernel);
+    program.add_kernel(kernel);
     return kernel;
 }
 
 DataMovementKernel *CreateDataMovementKernel(
-    Program *program,
+    Program &program,
     const std::string &file_name,
     const tt_xy_pair &core,
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core, processor_type, noc);
-    program->add_kernel(kernel);
+    program.add_kernel(kernel);
     return kernel;
 }
 
 ComputeKernel *CreateComputeKernel(
-    Program *program,
+    Program &program,
     const std::string &file_name,
     const tt_xy_pair &core,
     const KernelArgs &kernel_args,
@@ -116,12 +116,12 @@ ComputeKernel *CreateComputeKernel(
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode);
-    program->add_kernel(kernel);
+    program.add_kernel(kernel);
     return kernel;
 }
 
 DataMovementKernel *CreateDataMovementKernel(
-    Program *program,
+    Program &program,
     const std::string &file_name,
     const CoreRange &core_range,
     const KernelArgs &kernel_args,
@@ -129,24 +129,24 @@ DataMovementKernel *CreateDataMovementKernel(
     NOC noc) {
     TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, kernel_args, processor_type, noc);
-    program->add_kernel(kernel);
+    program.add_kernel(kernel);
     return kernel;
 }
 
 DataMovementKernel *CreateDataMovementKernel(
-    Program *program,
+    Program &program,
     const std::string &file_name,
     const CoreRange &core_range,
     DataMovementProcessor processor_type,
     NOC noc) {
     TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, processor_type, noc);
-    program->add_kernel(kernel);
+    program.add_kernel(kernel);
     return kernel;
 }
 
 ComputeKernel *CreateComputeKernel(
-    Program *program,
+    Program &program,
     const std::string &file_name,
     const CoreRange &core_range,
     const KernelArgs &kernel_args,
@@ -161,7 +161,7 @@ ComputeKernel *CreateComputeKernel(
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode);
-    program->add_kernel(kernel);
+    program.add_kernel(kernel);
     return kernel;
 }
 
@@ -174,7 +174,7 @@ uint32_t TileSize(const DataFormat &data_format) {
 }
 
 CircularBuffer *CreateCircularBuffer(
-    Program *program,
+    Program &program,
     Device *device,
     uint32_t buffer_index,
     const tt_xy_pair &core,
@@ -184,12 +184,12 @@ CircularBuffer *CreateCircularBuffer(
     DataFormat data_format) {
     CircularBuffer *circular_buffer =
         new CircularBuffer(device, core, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
-    program->add_circular_buffer(circular_buffer);
+    program.add_circular_buffer(circular_buffer);
     return circular_buffer;
 }
 
 CircularBuffer *CreateCircularBuffer(
-    Program *program,
+    Program &program,
     Device *device,
     uint32_t buffer_index,
     const tt_xy_pair &core,
@@ -198,12 +198,12 @@ CircularBuffer *CreateCircularBuffer(
     DataFormat data_format) {
     CircularBuffer *circular_buffer =
         new CircularBuffer(device, core, buffer_index, num_tiles, size_in_bytes, data_format);
-    program->add_circular_buffer(circular_buffer);
+    program.add_circular_buffer(circular_buffer);
     return circular_buffer;
 }
 
 std::vector<CircularBuffer *> CreateCircularBuffers(
-    Program *program,
+    Program &program,
     Device *device,
     uint32_t buffer_index,
     const CoreRange &core_range,
@@ -220,7 +220,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
             auto core = tt_xy_pair(x, y);
             CircularBuffer *circular_buffer =
                 new CircularBuffer(device, core, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
-            program->add_circular_buffer(circular_buffer);
+            program.add_circular_buffer(circular_buffer);
             circular_buffers.push_back(circular_buffer);
         }
     }
@@ -228,7 +228,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
 }
 
 std::vector<CircularBuffer *> CreateCircularBuffers(
-    Program *program,
+    Program &program,
     Device *device,
     uint32_t buffer_index,
     const CoreRange &core_range,
@@ -247,14 +247,14 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
                 new CircularBuffer(device, logical_core, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
             // CBs constructed with address don't invoke the allocator, so we need to manually invoke it by reserving space
             circular_buffer->reserve();
-            program->add_circular_buffer(circular_buffer);
+            program.add_circular_buffer(circular_buffer);
             circular_buffers.push_back(circular_buffer);
         }
     }
     return circular_buffers;
 }
 
-std::vector<Semaphore *> CreateSemaphores(Program *program, Device *device, const CoreRange &core_range, uint32_t initial_value) {
+std::vector<Semaphore *> CreateSemaphores(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value) {
     std::vector<Semaphore *> semaphores;
     auto start_core = core_range.first;
     auto end_core = core_range.second;
@@ -264,7 +264,7 @@ std::vector<Semaphore *> CreateSemaphores(Program *program, Device *device, cons
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
             auto logical_core = tt_xy_pair(x, y);
-            auto semaphores_on_core = program->semaphores_on_core(logical_core);
+            auto semaphores_on_core = program.semaphores_on_core(logical_core);
             if (semaphores_on_core.size() == NUM_SEMAPHORES) {
                 TT_THROW("Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" + std::to_string(NUM_SEMAPHORES) + ") reached!");
             }
@@ -275,7 +275,7 @@ std::vector<Semaphore *> CreateSemaphores(Program *program, Device *device, cons
                 TT_ASSERT(addr == address);
             }
             Semaphore *semaphore = new Semaphore(device, logical_core, address, initial_value);
-            program->add_semaphore(semaphore);
+            program.add_semaphore(semaphore);
             semaphores.push_back(semaphore);
         }
     }
@@ -512,8 +512,8 @@ void CompileBlankKernel(Device *device, const std::string &out_dir_path) {
 }
 
 void SetCircularBufferDataFormat(
-    Program *program, const tt_xy_pair &logical_core, build_kernel_for_riscv_options_t &build_options, const std::string &op_path) {
-    for (auto circular_buffer : program->circular_buffers_on_core(logical_core)) {
+    const Program &program, const tt_xy_pair &logical_core, build_kernel_for_riscv_options_t &build_options, const std::string &op_path) {
+    for (auto circular_buffer : program.circular_buffers_on_core(logical_core)) {
         build_options.set_cb_dataformat_all_cores(
             static_cast<CB>(circular_buffer->buffer_index()), circular_buffer->data_format());
     }
@@ -521,8 +521,8 @@ void SetCircularBufferDataFormat(
     generate_data_format_descriptors(&build_options, op_path);
 }
 
-void ValidateL1Buffers(Device *device, Program *program, const tt_xy_pair &logical_core) {
-    auto cbs_on_core = program->circular_buffers_on_core(logical_core);
+void ValidateL1Buffers(Device *device, const Program &program, const tt_xy_pair &logical_core) {
+    auto cbs_on_core = program.circular_buffers_on_core(logical_core);
     std::unordered_set<uint32_t> buffer_addresses;
     uint32_t total_l1_buffer_size_in_bytes = 0;
     uint32_t max = device->l1_size() - UNRESERVED_BASE;
@@ -548,7 +548,7 @@ void ValidateKernelGroup(const KernelGroup &kernel_group, const tt_xy_pair &logi
 
 // Gets all kernels running on a specific core and creates blank kernels for RISCV0 and RISCV1 if the data movement
 // processors do not have a kernel
-void PopulateKernelGroupWithDataMovementKernels(Program *program, KernelGroup &kernel_group, const tt_xy_pair &logical_core) {
+void PopulateKernelGroupWithDataMovementKernels(Program &program, KernelGroup &kernel_group, const tt_xy_pair &logical_core) {
     // Toggle NOC
     std::function<NOC(DataMovementKernel *, NOC)> get_noc_id = [&](DataMovementKernel *existing_dm_kernel, NOC default_noc) {
         if (existing_dm_kernel != nullptr) {
@@ -636,7 +636,7 @@ private:
     std::unordered_set<size_t> hashes_;
 };
 
-bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
+bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
 
@@ -650,7 +650,7 @@ bool CompileProgram(Device *device, Program *program, bool profile_kernel) {
     // Kernels running on a core need to be grouped together for compilation
     // The same group of kernels shouldn't be compiled multiple times
     auto op_idx = 0;
-    for (auto &[logical_core, kernel_group] : program->core_to_kernel_group()) {
+    for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
         ValidateL1Buffers(device, program, logical_core); // PROF_BEGIN("CCGEN_PREAMBLE")
 
         ValidateKernelGroup(kernel_group, logical_core);
@@ -710,7 +710,7 @@ void ConfigureKernelGroup(const KernelGroup &kernel_group, Device *device, const
     kernel_group.riscv_0->configure(device, logical_core);
 }
 
-bool ConfigureDeviceWithProgram(Device *device, Program *program) {
+bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     bool pass = true;
 
     tt_metal_profiler.markStart("ConfigureDeviceWithProgram");
@@ -718,7 +718,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program) {
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
 
-    for (auto &[logical_core, kernel_group] : program->core_to_kernel_group()) {
+    for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
         auto worker_core = device->worker_core_from_logical_core(logical_core);
         worker_cores.push_back(worker_core);
 
@@ -736,7 +736,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program) {
         uint32_t stream_register_address = STREAM_REG_ADDR(0, 24);
         llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, {INVALID}, stream_register_address); // PROF_END("WRITE_HEX")
 
-        auto cbs_on_core = program->circular_buffers_on_core(logical_core); // PROF_BEGIN("CBS")
+        auto cbs_on_core = program.circular_buffers_on_core(logical_core); // PROF_BEGIN("CBS")
         for (auto circular_buffer : cbs_on_core) {
             llrt::set_config_for_circular_buffer(
                 circular_buffer_config_vec,
@@ -748,7 +748,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program) {
 
         llrt::write_circular_buffer_config_vector_to_core(cluster, pcie_slot, worker_core, circular_buffer_config_vec); // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
 
-        auto semaphores_on_core = program->semaphores_on_core(logical_core);
+        auto semaphores_on_core = program.semaphores_on_core(logical_core);
         for (auto semaphore : semaphores_on_core) {
             llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, {semaphore->initial_value()}, semaphore->address());
         }
@@ -803,13 +803,13 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
     return pass;
 }
 
-bool core_runs_ncrisc(Program *program, const tt_xy_pair &logical_core) {
-    auto kernel_group = program->kernels_on_core(logical_core);
+bool core_runs_ncrisc(const Program &program, const tt_xy_pair &logical_core) {
+    auto kernel_group = program.kernels_on_core(logical_core);
     return kernel_group.riscv_1 != nullptr;
 }
 
-bool core_runs_triscs(Program *program, const tt_xy_pair &logical_core) {
-    auto kernel_group = program->kernels_on_core(logical_core);
+bool core_runs_triscs(const Program &program, const tt_xy_pair &logical_core) {
+    auto kernel_group = program.kernels_on_core(logical_core);
     return kernel_group.compute != nullptr;
 }
 
@@ -825,7 +825,7 @@ llrt::TensixRiscsOptions GetRiscOptionFromCoreConfig(bool core_runs_ncrisc, bool
     return risc_option;
 }
 
-bool LaunchKernels(Device *device, Program *program, bool stagger_start) {
+bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
 
     tt_metal_profiler.markStart("LaunchKernels");
     bool pass = true;
@@ -834,7 +834,7 @@ bool LaunchKernels(Device *device, Program *program, bool stagger_start) {
     auto pcie_slot = device->pcie_slot();
 
     // Cores have to be enabled before BRISC reset is de-asserted
-    auto logical_cores_used_in_program = program->logical_cores();
+    auto logical_cores_used_in_program = program.logical_cores();
     auto worker_cores = device->worker_cores_from_logical_cores(logical_cores_used_in_program);
     llrt::internal_::enable_cores(cluster, pcie_slot, worker_cores);  // BRISC FW waits for this enable to run
 

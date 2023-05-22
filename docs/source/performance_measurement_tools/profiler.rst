@@ -41,7 +41,7 @@ In functions such as ``LaunchKernels`` the entire code within the function is wr
 
 ..  code-block:: C++
 
-    bool LaunchKernels(Device *device, Program *program) {
+    bool LaunchKernels(Device *device, Program &program) {
 
         tt_metal_profiler.markStart("LaunchKernels");
         bool pass = true;

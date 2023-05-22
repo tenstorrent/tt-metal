@@ -7,7 +7,7 @@
 using namespace tt::constants;
 using namespace tt;
 
-tt_metal::Program * create_program_mcast_in0_in1(
+tt_metal::Program create_program_mcast_in0_in1(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -22,7 +22,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
     uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
 ) {
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
@@ -326,10 +326,10 @@ tt_metal::Program * create_program_mcast_in0_in1(
         }
     }
 
-    return program;
+    return std::move(program);
 }
 
-tt_metal::Program * create_program_mcast_in0(
+tt_metal::Program create_program_mcast_in0(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -344,7 +344,7 @@ tt_metal::Program * create_program_mcast_in0(
     uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
 ) {
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
@@ -579,10 +579,10 @@ tt_metal::Program * create_program_mcast_in0(
         }
     }
 
-    return program;
+    return std::move(program);
 }
 
-tt_metal::Program * create_program_mcast_in1(
+tt_metal::Program create_program_mcast_in1(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -597,7 +597,7 @@ tt_metal::Program * create_program_mcast_in1(
     uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
 ) {
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
@@ -832,7 +832,7 @@ tt_metal::Program * create_program_mcast_in1(
         }
     }
 
-    return program;
+    return std::move(program);
 }
 
 namespace tt {
@@ -921,7 +921,7 @@ Tensor matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, bool bca
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Program * program;
+    tt_metal::Program program;
 
     if (core_range.x > 1 && core_range.y > 1) {
         program = create_program_mcast_in0_in1(
@@ -981,8 +981,6 @@ Tensor matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, bool bca
     ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     TT_ASSERT(pass);
 

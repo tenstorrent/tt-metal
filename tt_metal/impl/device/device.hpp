@@ -87,7 +87,7 @@ class Device {
     friend class Buffer;
     friend class CircularBuffer;
     friend std::vector<CircularBuffer *> CreateCircularBuffers(
-        Program *program,
+        Program &program,
         Device *device,
         uint32_t buffer_index,
         const CoreRange &core_range,

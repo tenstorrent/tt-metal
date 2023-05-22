@@ -13,11 +13,11 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
     tt_metal::Program program = tt_metal::Program();
 
     tt_metal::DataMovementKernel *brisc_kernel = tt_metal::CreateDataMovementKernel(
-        &program, "tt_metal/programming_examples/profiler/device/grayskull/test_custom_cycle_count/kernels/custom_cycle_count.cpp",
+        program, "tt_metal/programming_examples/profiler/device/grayskull/test_custom_cycle_count/kernels/custom_cycle_count.cpp",
         all_cores, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
 
     tt_metal::DataMovementKernel *ncrisc_kernel = tt_metal::CreateDataMovementKernel(
-        &program, "tt_metal/programming_examples/profiler/device/grayskull/test_custom_cycle_count/kernels/custom_cycle_count.cpp",
+        program, "tt_metal/programming_examples/profiler/device/grayskull/test_custom_cycle_count/kernels/custom_cycle_count.cpp",
         all_cores, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::RISCV_1_default);
 
     vector<uint32_t> trisc_kernel_args = {};
@@ -26,7 +26,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     tt_metal::ComputeKernel *trisc_kernel = tt_metal::CreateComputeKernel(
-        &program, "tt_metal/programming_examples/profiler/device/grayskull/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp",
+        program, "tt_metal/programming_examples/profiler/device/grayskull/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp",
         all_cores,
         trisc_args,
         MathFidelity::HiFi4,
@@ -44,11 +44,11 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
     ncrisc_kernel->add_define("LOOP_SIZE",loop_size);
     trisc_kernel->add_define("LOOP_SIZE",loop_size);
 
-    pass &= tt_metal::CompileProgram(device, &program, profile_device);
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, &program);
-    pass &= tt_metal::LaunchKernels(device, &program);
+    pass &= tt_metal::CompileProgram(device, program, profile_device);
+    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+    pass &= tt_metal::LaunchKernels(device, program);
     if (profile_device)
-        tt_metal::DumpDeviceProfileResults(device, &program);
+        tt_metal::DumpDeviceProfileResults(device, program);
     tt_metal::DumpHostProfileResults(run_name);
 
     return pass;

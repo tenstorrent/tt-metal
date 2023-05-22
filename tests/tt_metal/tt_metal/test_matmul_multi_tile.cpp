@@ -97,7 +97,7 @@ bool run_matmul(const bool with_bias) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
 
         tt_xy_pair core = {0, 0};
         uint32_t M = 4;

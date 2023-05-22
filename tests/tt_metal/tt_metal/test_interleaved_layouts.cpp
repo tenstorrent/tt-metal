@@ -77,7 +77,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
 
         tt_xy_pair core = {0, 0};
 
@@ -269,7 +269,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
 
         tt_xy_pair core = {0, 0};
 
@@ -447,7 +447,7 @@ bool test_interleaved_l1_datacopy() {
 
     pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
     tt_xy_pair core = {0, 0};
 
     auto cb_src0 = tt_metal::CreateCircularBuffer(

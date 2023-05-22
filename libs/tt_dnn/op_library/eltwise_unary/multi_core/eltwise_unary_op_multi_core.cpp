@@ -12,7 +12,7 @@ namespace tt {
 namespace tt_metal {
 
 Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
 
     // TODO: Build some sort of dispatcher based on location of op operands
@@ -168,8 +168,6 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
     }
 
     tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;

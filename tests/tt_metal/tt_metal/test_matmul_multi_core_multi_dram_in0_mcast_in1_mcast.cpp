@@ -80,7 +80,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *> create_program(
+std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *> create_program(
     tt_metal::Device *device,
     int start_core_x,
     int start_core_y,
@@ -92,7 +92,7 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
     int out_subblock_w,
     int per_core_M, int per_core_N) {
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
@@ -283,7 +283,7 @@ std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMo
         math_approx_mode
     );
 
-    return {program, mm_reader_kernel_in0_sender_in1_sender, mm_reader_kernel_in0_sender_in1_receiver, mm_reader_kernel_in0_receiver_in1_sender, mm_reader_kernel_in0_receiver_in1_receiver, unary_writer_kernel_noc0, unary_writer_kernel_noc1};
+    return {std::move(program), mm_reader_kernel_in0_sender_in1_sender, mm_reader_kernel_in0_sender_in1_receiver, mm_reader_kernel_in0_receiver_in1_sender, mm_reader_kernel_in0_receiver_in1_receiver, unary_writer_kernel_noc0, unary_writer_kernel_noc1};
 }
 
 bool write_runtime_args_to_device(

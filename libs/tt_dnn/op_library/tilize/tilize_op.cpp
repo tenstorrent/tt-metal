@@ -20,7 +20,7 @@ Tensor tilize(const Tensor &a) {
     } else {
         TT_ASSERT(a.layout() == Layout::ROW_MAJOR or a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
     }
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     tt_xy_pair core = {0, 0};
 
@@ -157,8 +157,6 @@ Tensor tilize(const Tensor &a) {
     );
     tt_metal::LaunchKernels(device, program);
 
-    delete program;
-
     return output;
 }
 
@@ -169,7 +167,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     } else {
         TT_ASSERT(a.layout() == Layout::ROW_MAJOR or a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
     }
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     tt_xy_pair core = {0, 0};
 
@@ -329,8 +327,6 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     tt_metal::WriteToDeviceL1(device, core, zero_buffer_l1_addr, zero_buffer_stick);
     tt_metal::LaunchKernels(device, program);
 
-    delete program;
-
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;
 }
@@ -352,7 +348,7 @@ Tensor tilize_conv_activation(const Tensor &a, bool conv1x1 = false) {
     num_cols = ceil((double)num_cols / (double)TILE_WIDTH) * TILE_WIDTH;
     std::vector<uint32_t> address_map = conv_transform(shape, {R,S,1,1,0,0}, {{0,1,2},{(int) num_rows, (int) num_cols}}, 2);
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
     tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
 
     tt_xy_pair core = {0, 0};
@@ -485,8 +481,6 @@ Tensor tilize_conv_activation(const Tensor &a, bool conv1x1 = false) {
         (uint32_t) (output.shape()[0] * output.shape()[1] * output.shape()[2] * output.shape()[3] / TILE_HW)}
     );
     tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;

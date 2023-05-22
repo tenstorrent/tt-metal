@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
         /*
         * Setup program to execute along with its buffers and kernels to use
         */
-        Program *program = new Program();
+        Program program = Program();
 
         constexpr tt_xy_pair core = {0, 0};
 
@@ -222,7 +222,7 @@ int main(int argc, char **argv) {
         /*
          * Move src data back into DRAM src buffer 0 to do another eltwise calculation
          */
-        Program *program_mul = new Program();
+        Program program_mul = Program();
 
         /*
          * Because we're using a new program, we must redeclare all the

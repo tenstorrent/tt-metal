@@ -22,7 +22,7 @@ Tensor transpose_wh_single_core(const Tensor &a) {
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     tt_xy_pair core = {0, 0};
 
@@ -142,8 +142,6 @@ Tensor transpose_wh_single_core(const Tensor &a) {
 
     tt_metal::LaunchKernels(device, program);
 
-    delete program;
-
     // output does not hold any data, contains pointer to buffer on device with the data
 
     return output;
@@ -166,7 +164,7 @@ Tensor transpose_hc_single_core(const Tensor &a) {
 
     uint32_t num_tensor_tiles = N*C*H*W / TILE_HW;
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     tt_xy_pair core = {0, 0};
 
@@ -281,8 +279,6 @@ Tensor transpose_hc_single_core(const Tensor &a) {
 
     tt_metal::LaunchKernels(device, program);
 
-    delete program;
-
     // output does not hold any data, contains pointer to buffer on device with the data
 
     return output;
@@ -307,7 +303,7 @@ Tensor transpose_cn_single_core(const Tensor &a) {
     uint32_t CHtWt = C * HtWt;
     uint32_t NCHtWt = num_tensor_tiles;
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     tt_xy_pair core = {0, 0};
 
@@ -419,8 +415,6 @@ Tensor transpose_cn_single_core(const Tensor &a) {
         );
 
     tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     // output does not hold any data, contains pointer to buffer on device with the data
 

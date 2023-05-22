@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
         /*
         * Setup program to execute along with its buffers and kernels to use
         */
-        Program *program = new Program();
+        Program program = Program();
 
         constexpr tt_xy_pair core = {0, 0};
 

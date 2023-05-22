@@ -34,6 +34,35 @@ CircularBuffer::CircularBuffer(
     TT_ASSERT(address % 32 == 0, "Requested address " + std::to_string(address) + " should be 32B aligned");
 }
 
+CircularBuffer::CircularBuffer(CircularBuffer &&other)
+    : device_(other.device_),
+      logical_core_(other.logical_core_),
+      buffer_index_(other.buffer_index_),
+      num_tiles_(other.num_tiles_),
+      size_(other.size_),
+      address_(other.address_),
+      data_format_(other.data_format_),
+      allocated_on_device_(other.allocated_on_device_) {
+    other.device_ = nullptr;
+    other.allocated_on_device_ = false;
+}
+
+CircularBuffer &CircularBuffer::operator=(CircularBuffer &&other) {
+    if (this != &other) {
+        this->device_ = other.device_;
+        this->logical_core_ = other.logical_core_;
+        this->buffer_index_ = other.buffer_index_;
+        this->num_tiles_ = other.num_tiles_;
+        this->size_ = other.size_;
+        this->address_ = other.address_;
+        this->data_format_ = other.data_format_;
+        this->allocated_on_device_ = other.allocated_on_device_;
+        other.device_ = nullptr;
+        other.allocated_on_device_ = false;
+    }
+    return *this;
+}
+
 tt_xy_pair CircularBuffer::noc_coordinates() const {
     return this->device_->worker_core_from_logical_core(this->logical_core_);
 }

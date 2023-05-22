@@ -15,7 +15,7 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
 
     TT_ASSERT(hFill <= H && wFill <= W);
     tt_metal::Device *device = any.device();
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
     tt_xy_pair core = {0, 0};
     TT_ASSERT(val_hi >= 0 && val_hi < 0xFFFF); // TODO(AP): support dtypes..
     TT_ASSERT(val_lo >= 0 && val_lo < 0xFFFF);
@@ -73,8 +73,6 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
     );
 
     tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;

@@ -10,7 +10,7 @@ namespace tt {
 namespace tt_metal {
 
 Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     tt_xy_pair core = {0, 0};
 
@@ -138,8 +138,6 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
     );
 
     tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;

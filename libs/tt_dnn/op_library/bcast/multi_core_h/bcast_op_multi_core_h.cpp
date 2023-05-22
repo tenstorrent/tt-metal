@@ -29,7 +29,7 @@ Tensor bcast_multi_core_h(const Tensor &a, const Tensor &b, BcastOpMath::Enum bc
     uint32_t num_tensor_tiles = NC*Ht*Wt;
     uint32_t num_btensor_tiles = NC*bH*bW / TILE_HW;
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     tt_metal::Device *device = a.device();
 
@@ -189,8 +189,6 @@ Tensor bcast_multi_core_h(const Tensor &a, const Tensor &b, BcastOpMath::Enum bc
     tt_metal::ConfigureDeviceWithProgram(device, program);
 
     tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;

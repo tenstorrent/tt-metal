@@ -11,7 +11,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-void initialize_program(tt_metal::Device *device, tt_metal::Program *program, const tt_metal::CoreRange &core_range) {
+void initialize_program(tt_metal::Device *device, tt_metal::Program &program, const tt_metal::CoreRange &core_range) {
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 2048;
 
@@ -89,7 +89,7 @@ bool check_addresses_are_same(const std::vector<tt_metal::Semaphore *> &semaphor
     return pass;
 }
 
-bool test_initialize_semaphores(tt_metal::Device *device, tt_metal::Program *program, tt_metal::CoreRange &core_range) {
+bool test_initialize_semaphores(tt_metal::Device *device, tt_metal::Program &program, tt_metal::CoreRange &core_range) {
     bool pass = true;
 
     auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
@@ -117,7 +117,7 @@ bool test_initialize_semaphores(tt_metal::Device *device, tt_metal::Program *pro
     return pass;
 }
 
-bool test_more_than_max_num_semaphores_(tt_metal::Device *device, tt_metal::Program *program, tt_metal::CoreRange &core_range) {
+bool test_more_than_max_num_semaphores_(tt_metal::Device *device, tt_metal::Program &program, tt_metal::CoreRange &core_range) {
     bool pass = true;
 
     try {
@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::InitializeDevice(device);
 
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
         tt_metal::CoreRange core_range = {{0, 0}, {1, 1}};
         initialize_program(device, program, core_range);
 
@@ -155,8 +155,6 @@ int main(int argc, char **argv) {
         //                              Teardown
         ////////////////////////////////////////////////////////////////////////////
         pass &= tt_metal::CloseDevice(device);
-
-        delete program;
 
     } catch (const std::exception &e) {
         pass = false;

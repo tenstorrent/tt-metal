@@ -79,14 +79,14 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *> create_program(
+std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *> create_program(
     tt_metal::Device *device,
     int num_cores_r,
     int num_cores_c,
     int tensor_num_tiles,
     int block_num_tiles) {
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     int num_cores = num_cores_r * num_cores_c;
 

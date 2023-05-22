@@ -21,7 +21,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
 
     TT_ASSERT(a.shape()[3] <= 16*1024 && "transpose_hc_rm kernel doesn't support W>=16k elems yet.");
     tt_metal::Device *device = a.device();
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
     tt_xy_pair core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
@@ -88,7 +88,6 @@ Tensor transpose_hc_rm(const Tensor &a) {
     );
 
     tt_metal::LaunchKernels(device, program);
-    delete program;
 
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;
@@ -98,7 +97,7 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
 
     TT_ASSERT(a.shape()[3] <= 16*1024 && "transpose_hc_rm kernel doesn't support W>=16k elems yet.");
     tt_metal::Device *device = a.device();
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
     auto num_cores_c = a.shape()[1];
     auto num_cores_r = a.shape()[2];
     tt_xy_pair start_core = {0, 0};
@@ -229,7 +228,6 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     // }
     std::cout << "Launching kernels" << std::endl;
     tt_metal::LaunchKernels(device, program);
-    delete program;
 
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;

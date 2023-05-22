@@ -18,6 +18,30 @@ class Semaphore {
         uint32_t address,
         uint32_t initial_value) : device_(device), logical_core_(logical_core), address_(address), initial_value_(initial_value) {}
 
+    Semaphore(const Semaphore &other) : device_(other.device_), logical_core_(other.logical_core_), address_(other.address_), initial_value_(other.initial_value_) {}
+
+    Semaphore& operator=(const Semaphore &other) {
+        if (this != &other) {
+            this->device_ = other.device_;
+            this->logical_core_ = other.logical_core_;
+            this->address_ = other.address_;
+            this->initial_value_ = other.initial_value_;
+        }
+        return *this;
+    }
+
+    Semaphore(Semaphore &&other) : device_(other.device_), logical_core_(other.logical_core_), address_(other.address_), initial_value_(other.initial_value_) {}
+
+    Semaphore& operator=(Semaphore &&other) {
+        if (this != &other) {
+            this->device_ = other.device_;
+            this->logical_core_ = other.logical_core_;
+            this->address_ = other.address_;
+            this->initial_value_ = other.initial_value_;
+        }
+        return *this;
+    }
+
     constexpr uint32_t size() const { return SEMAPHORE_SIZE / NUM_SEMAPHORES; }
 
     Device *device() const { return device_; }

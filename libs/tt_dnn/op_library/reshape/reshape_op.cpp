@@ -16,7 +16,7 @@ Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
 
     TT_ASSERT(a.layout() == Layout::TILE, "Only tile and row major reshape supported!");
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     tt_xy_pair core = {0, 0};
 
@@ -138,8 +138,6 @@ Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
 
     tt_metal::LaunchKernels(device, program);
 
-    delete program;
-
     // output does not hold any data, contains pointer to buffer on device with the data
     return output;
 }
@@ -154,7 +152,7 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
 
     TT_ASSERT(N != -1 and C != -1 and H != -1 and W != -1, "-1 reshape not yet supported for rebanking row major reshape");
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
     tt_xy_pair core = {0, 0};
 
     TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device");
@@ -305,7 +303,6 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
 
     tt_metal::LaunchKernels(device, program);
 
-    delete program;
     return output;
 }
 

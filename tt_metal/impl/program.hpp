@@ -20,6 +20,12 @@ class Program {
    public:
     Program() {}
 
+    Program(const Program &other) = delete;
+    Program& operator=(const Program &other) = delete;
+
+    Program(Program &&other);
+    Program& operator=(Program &&other);
+
     ~Program();
 
     std::vector<Kernel *> kernels() const { return kernels_; }
@@ -50,7 +56,7 @@ class Program {
     std::unordered_map<tt_xy_pair, std::vector<Semaphore *>> logical_core_to_semaphores_;
 
     friend DataMovementKernel *CreateDataMovementKernel(
-        Program *program,
+        Program &program,
         const std::string &file_name,
         const tt_xy_pair &core,
         const KernelArgs &kernel_args,
@@ -58,14 +64,14 @@ class Program {
         NOC noc);
 
     friend DataMovementKernel *CreateDataMovementKernel(
-        Program *program,
+        Program &program,
         const std::string &file_name,
         const tt_xy_pair &core,
         DataMovementProcessor processor_type,
         NOC noc);
 
     friend ComputeKernel *CreateComputeKernel(
-        Program *program,
+        Program &program,
         const std::string &file_name,
         const tt_xy_pair &core,
         const KernelArgs &kernel_args,
@@ -74,7 +80,7 @@ class Program {
         bool math_approx_mode);
 
     friend DataMovementKernel *CreateDataMovementKernel(
-        Program *program,
+        Program &program,
         const std::string &file_name,
         const CoreRange &core_range,
         const KernelArgs &kernel_args,
@@ -82,14 +88,14 @@ class Program {
         NOC noc);
 
     friend DataMovementKernel *CreateDataMovementKernel(
-        Program *program,
+        Program &program,
         const std::string &file_name,
         const CoreRange &core_range,
         DataMovementProcessor processor_type,
         NOC noc);
 
     friend ComputeKernel *CreateComputeKernel(
-        Program *program,
+        Program &program,
         const std::string &file_name,
         const CoreRange &core_range,
         const KernelArgs &kernel_args,
@@ -98,7 +104,7 @@ class Program {
         bool math_approx_mode);
 
     friend CircularBuffer *CreateCircularBuffer(
-        Program *program,
+        Program &program,
         Device *device,
         uint32_t buffer_id,
         const tt_xy_pair &core,
@@ -108,7 +114,7 @@ class Program {
         DataFormat data_format);
 
     friend CircularBuffer *CreateCircularBuffer(
-        Program *program,
+        Program &program,
         Device *device,
         uint32_t buffer_index,
         const tt_xy_pair &core,
@@ -117,7 +123,7 @@ class Program {
         DataFormat data_format);
 
     friend std::vector<CircularBuffer *> CreateCircularBuffers(
-        Program *program,
+        Program &program,
         Device *device,
         uint32_t buffer_index,
         const CoreRange &core_range,
@@ -127,7 +133,7 @@ class Program {
         DataFormat data_format);
 
     friend std::vector<CircularBuffer *> CreateCircularBuffers(
-        Program *program,
+        Program &program,
         Device *device,
         uint32_t buffer_index,
         const CoreRange &core_range,
@@ -135,7 +141,7 @@ class Program {
         uint32_t size_in_bytes,
         DataFormat data_format);
 
-    friend std::vector<Semaphore *> CreateSemaphores(Program *program, Device *device, const CoreRange &core_range, uint32_t initial_value);
+    friend std::vector<Semaphore *> CreateSemaphores(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value);
 
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
 

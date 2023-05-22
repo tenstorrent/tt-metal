@@ -38,7 +38,7 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 
-    Program *program = new Program();
+    Program program = Program();
 
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
 
@@ -173,8 +173,6 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
     LaunchKernels(device, program);
     if (profile)
         tt_metal::DumpDeviceProfileResults(device, program);
-
-    delete program;
 
     return std::move(a);
 } // scale_mask_softmax_

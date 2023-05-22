@@ -90,13 +90,13 @@ class Kernel {
     KernelType kernel_type_;
     std::map<tt_xy_pair, std::string> binary_path_;     //
     KernelArgs kernel_args_;
+    std::map<std::string, std::string> defines_; // preprocessor defines. this is to be able to generate generic instances.
 
     void set_binary_path(const tt_xy_pair &logical_core, const std::string &binary_path) { binary_path_.insert({logical_core, binary_path}); }
 
     virtual void configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) = 0;
 
     friend void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const tt_xy_pair &logical_core, const std::string &out_dir_path);
-    std::map<std::string, std::string> defines_; // preprocessor defines. this is to be able to generate generic instances.
 };
 
 class DataMovementKernel : public Kernel {

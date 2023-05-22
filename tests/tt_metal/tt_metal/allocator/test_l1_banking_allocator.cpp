@@ -32,7 +32,7 @@ std::vector<uint32_t> get_logical_storage_core_bank_ids(tt_metal::Device *device
     return device->bank_ids_from_logical_core(logical_core);
 }
 
-bool test_l1_buffers_allocated_top_down(tt_metal::Device *device, tt_metal::Program *program) {
+bool test_l1_buffers_allocated_top_down(tt_metal::Device *device) {
     bool pass = true;
 
     auto logical_compute_and_storage_bank_ids = get_logical_compute_and_storage_core_bank_ids(device);
@@ -70,7 +70,7 @@ bool test_l1_buffers_allocated_top_down(tt_metal::Device *device, tt_metal::Prog
     return pass;
 }
 
-bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_metal::Program *program) {
+bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_metal::Program &program) {
     bool pass = true;
 
     auto logical_compute_and_storage_bank_ids = get_logical_compute_and_storage_core_bank_ids(device);
@@ -120,7 +120,7 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
     return pass;
 }
 
-bool test_l1_buffer_do_not_grow_beyond_512KB(tt_metal::Device *device, tt_metal::Program *program) {
+bool test_l1_buffer_do_not_grow_beyond_512KB(tt_metal::Device *device) {
     bool pass = true;
 
     auto logical_compute_and_storage_bank_ids = get_logical_compute_and_storage_core_bank_ids(device);
@@ -137,7 +137,7 @@ bool test_l1_buffer_do_not_grow_beyond_512KB(tt_metal::Device *device, tt_metal:
     return pass;
 }
 
-bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, tt_metal::Program *program) {
+bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, tt_metal::Program &program) {
     bool pass = true;
 
     auto logical_compute_and_storage_bank_ids = get_logical_compute_and_storage_core_bank_ids(device);
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
-        tt_metal::Program *program = new tt_metal::Program();
+        tt_metal::Program program = tt_metal::Program();
 
         // NOTE: diagrams are NOT to scale
         // Running on compute and storage core: (0, 0) and storage core: (1, 9)
@@ -200,7 +200,7 @@ int main(int argc, char **argv) {
         // |               bank 0              |            bank 1            |
         // |        | 256 KB | 64 KB | 128 KB  |                     | 256 KB |
         // --------------------------------------------------------------------
-        pass &= test_l1_buffers_allocated_top_down(device, program);
+        pass &= test_l1_buffers_allocated_top_down(device);
 
         // Resulting L1 banks after test_circular_buffers_allocated_bottom_up:
         // compute and storage core L1
@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
 
         // tries to allocate a buffer larger than 512 KB - (256 + 64 + 128) KB in compute and storage core
         // this is expected to fail
-        pass &= test_l1_buffer_do_not_grow_beyond_512KB(device, program);
+        pass &= test_l1_buffer_do_not_grow_beyond_512KB(device);
 
         // Resulting L1 banks after test_circular_buffers_allowed_to_grow_past_512KB:
         // compute and storage core L1
@@ -236,8 +236,6 @@ int main(int argc, char **argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         pass &= tt_metal::CloseDevice(device);
-
-        delete program;
 
     } catch (const std::exception &e) {
         pass = false;

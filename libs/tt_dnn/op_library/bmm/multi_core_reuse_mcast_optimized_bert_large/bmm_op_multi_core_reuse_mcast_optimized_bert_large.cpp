@@ -11,7 +11,7 @@ namespace reuse_mcast_optimized_bert_large_helpers {
 using namespace tt::constants;
 using namespace tt;
 
-tt_metal::Program * create_program_mcast_in0_in1(
+tt_metal::Program create_program_mcast_in0_in1(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -25,7 +25,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
 ) {
 
-    tt_metal::Program *program = new tt_metal::Program();
+    tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
@@ -717,7 +717,7 @@ tt_metal::Program * create_program_mcast_in0_in1(
         }
     }
 
-    return program;
+    return std::move(program);
 }
 
 }
@@ -806,7 +806,7 @@ Tensor matmul_multi_core_reuse_mcast_optimized_bert_large_(const Tensor &a, cons
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program * program;
+    tt_metal::Program program;
 
     if (core_range.x > 1 && core_range.y > 1) {
         program = reuse_mcast_optimized_bert_large_helpers::create_program_mcast_in0_in1(
@@ -841,8 +841,6 @@ Tensor matmul_multi_core_reuse_mcast_optimized_bert_large_(const Tensor &a, cons
     ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
-
-    delete program;
 
     TT_ASSERT(pass);
 

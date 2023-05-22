@@ -27,6 +27,13 @@ class CircularBuffer {
         uint32_t address,
         DataFormat data_format);
 
+    // TODO (abhullar): Copy ctor semantics for CB should allocate same size in new space. Uplift when redesigning CB and CB config
+    CircularBuffer(const CircularBuffer &other) = delete;
+    CircularBuffer& operator=(const CircularBuffer &other) = delete;
+
+    CircularBuffer(CircularBuffer &&other);
+    CircularBuffer& operator=(CircularBuffer &&other);
+
     ~CircularBuffer();
 
     tt_xy_pair logical_core() const { return logical_core_; }
@@ -46,7 +53,7 @@ class CircularBuffer {
    private:
     void reserve();
     friend std::vector<CircularBuffer *> CreateCircularBuffers(
-        Program *program,
+        Program &program,
         Device *device,
         uint32_t buffer_index,
         const CoreRange &core_range,
