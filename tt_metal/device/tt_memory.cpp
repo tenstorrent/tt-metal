@@ -8,7 +8,6 @@
 #include "tensix.h"
 #include "tt_memory.h"
 #include "tt_hexfile.h"
-#include <l1_address_map.h>
 
 using std::numeric_limits;
 using std::runtime_error;

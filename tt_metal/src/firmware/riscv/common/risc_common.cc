@@ -42,7 +42,7 @@ void replicate_l1(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32
 }
 
 /*
-void __attribute__((section("code_l1"))) tile_header_buffer_init() {
+void tile_header_buffer_init() {
   const uint32_t TILE_HEADER_BUF_INIT_CHUNK_WORDS = 64;
   const uint32_t TILE_HEADER_BUF_INIT_CHUNK_BYTES = TILE_HEADER_BUF_INIT_CHUNK_WORDS*16;
   const uint32_t NUM_TILE_HEADER_BUF_CHUNKS = MAX_TILES_PER_PHASE / TILE_HEADER_BUF_INIT_CHUNK_WORDS;

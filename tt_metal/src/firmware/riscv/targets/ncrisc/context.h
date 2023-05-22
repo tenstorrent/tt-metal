@@ -30,8 +30,6 @@ extern void call_with_cpu_flush_args2(
 );
 
 extern void call_with_cpu_flush(void *pFunction);
-//extern void context_save(void);
-extern void __attribute__((section("code_l1"))) context_restore(void);
 
 #ifdef __cplusplus
 }

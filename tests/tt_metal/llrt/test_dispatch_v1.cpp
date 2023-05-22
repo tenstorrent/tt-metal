@@ -173,7 +173,7 @@ tuple<uint32_t, uint64_t, uint32_t> create_kernel_transfer_info(
     uint32_t write_addr;
     switch (kernel_id) {
         case 0: write_addr = MEM_BRISC_FIRMWARE_BASE; break;
-        case 1: write_addr = MEM_NCRISC_FIRMWARE_BASE; break;
+        case 1: write_addr = MEM_NCRISC_INIT_IRAM_L1_BASE; break;
         case 2: write_addr = MEM_TRISC0_BASE; break;
         case 3: write_addr = MEM_TRISC1_BASE; break;
         case 4: write_addr = MEM_TRISC2_BASE; break;

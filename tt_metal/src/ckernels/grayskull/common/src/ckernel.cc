@@ -2,7 +2,6 @@
 #include "fw_debug.h"
 #include "ckernel_main.h"
 #include "ckernel_globals.h"
-#include <l1_address_map.h>
 #include <tensix.h>
 
 #include "tools/profiler/kernel_profiler.hpp"
@@ -99,28 +98,6 @@ inline void allocate_debug_buffer() {
 
 } // namespace ckernel
 
-void local_mem_copy() {
-   volatile uint *l1_local_mem_start_addr;
-   volatile uint *local_mem_start_addr = (volatile uint*) MEM_LOCAL_BASE;
-
-   if ((uint)__firmware_start == (uint)MEM_TRISC0_BASE) {
-      l1_local_mem_start_addr = (volatile uint*)l1_mem::address_map::TRISC0_LOCAL_MEM_BASE;
-   } else if ((uint) __firmware_start == (uint)MEM_TRISC1_BASE) {
-      l1_local_mem_start_addr = (volatile uint*)l1_mem::address_map::TRISC1_LOCAL_MEM_BASE;
-   } else {
-      l1_local_mem_start_addr = (volatile uint*)l1_mem::address_map::TRISC2_LOCAL_MEM_BASE;
-   }
-   uint word_size = ((uint)__local_mem_rodata_end_addr - (uint)__local_mem_rodata_start_addr)>>2;
-
-   if (word_size>0) {
-      for (uint n=0;n<word_size;n++) {
-         local_mem_start_addr[n] = l1_local_mem_start_addr[n];
-      }
-      ckernel::mem_barrier(l1_local_mem_start_addr[word_size-1]);
-   }
-
-}
-
 using namespace ckernel;
 
 int main(int argc, char *argv[])
@@ -149,11 +126,16 @@ int main(int argc, char *argv[])
 
     trisc_l1_mailbox_write(RESET_VAL);
 
-    if ((uint)MEM_LOCAL_BASE ==
-            ((uint)__local_mem_rodata_end_addr&0xfff00000))
-    {
-       local_mem_copy();
+    uint *local_l1_start_addr;
+    if ((uint)__firmware_start == (uint)MEM_TRISC0_BASE) {
+        local_l1_start_addr = (uint *)MEM_TRISC0_INIT_LOCAL_L1_BASE;
+    } else if ((uint) __firmware_start == (uint)MEM_TRISC1_BASE) {
+        local_l1_start_addr = (uint *)MEM_TRISC1_INIT_LOCAL_L1_BASE;
+    } else {
+        local_l1_start_addr = (uint *)MEM_TRISC2_INIT_LOCAL_L1_BASE;
     }
+    int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
+    l1_to_local_mem_copy((uint*)__ldm_data_start, local_l1_start_addr, num_words);
 
     allocate_debug_mailbox_buffer();
     allocate_debug_buffer();

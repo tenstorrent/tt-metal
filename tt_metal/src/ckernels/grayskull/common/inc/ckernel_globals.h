@@ -23,4 +23,6 @@ extern CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
 
 extern uint32_t __local_mem_rodata_start_addr[];
 extern uint32_t __local_mem_rodata_end_addr[];
+extern uint32_t __ldm_data_start[];
+extern uint32_t __ldm_data_end[];
 extern uint32_t __firmware_start[];
