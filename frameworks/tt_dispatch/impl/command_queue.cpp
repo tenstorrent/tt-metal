@@ -154,7 +154,7 @@ void send_dispatch_kernel_to_device(Device* device) {
     // Ideally, this should be some separate API easily accessible in
     // TT-metal, don't like the fact that I'm writing this from scratch
     std::string root_dir = tt::utils::get_root_dir();
-    std::string arch_name = tt::utils::get_env_arch_name();
+    std::string arch_name = tt::get_string_lowercase(device->arch());
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("unary", "command_queue");
     std::string out_dir_path = root_dir + "/built_kernels/" + build_kernel_for_riscv_options.name;
 
