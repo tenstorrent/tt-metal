@@ -108,7 +108,7 @@ class TupleEncoder(json.JSONEncoder):
 
 def print_json(devicesData, setup):
     with open(f"{setup.outputFolder}/{setup.deviceAnalysisData}", "w") as devicesDataJson:
-        json.dump({"data": devicesData, "setup": setup}, devicesDataJson, indent=2, cls=TupleEncoder)
+        json.dump({"data": devicesData, "setup": setup}, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys = True)
 
 
 def print_rearranged_csv(devicesData, setup, freqText=None):
