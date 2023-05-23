@@ -50,7 +50,7 @@ void MAIN {
     constexpr auto cb_out = CB::c_out0; // output
     constexpr auto cb_gamma = CB::c_in5;
     constexpr auto cb_beta = CB::c_in6;
-    constexpr auto cb_stream = CB::c_intermed5; // stream gamma/beta
+    constexpr auto cb_fusion = CB::c_intermed5; // stream gamma/beta
     constexpr auto blk = BLOCK_SIZE; // configurable size of DST block, use 1,2 for stress testing
     constexpr auto scaler0 = 0;
     //constexpr auto cb_exps1 = CB::c_intermed4;
@@ -67,7 +67,7 @@ void MAIN {
             //UNPACK(( { DPRINT  << TSLICE(cb_scaler, 0, 32, 0, 1) << ENDL(); } ));
             //UNPACK(( { DPRINT  << "====== Wt=" << Wt << ENDL(); } ));
 
-    constexpr int cb_im_or_out = (do_gamma|do_beta) ? cb_stream : CB::c_out0;
+    constexpr int cb_im_or_out = (do_gamma|do_beta) ? cb_fusion : CB::c_out0;
     //UNPACK(( DPRINT << "TR Gamma = " << do_gamma << " beta=" << do_beta << ENDL() ));
     //UNPACK(( DPRINT << "cb out id=" << cb_im_or_out << ENDL() ));
 
@@ -316,7 +316,7 @@ void MAIN {
                         //UNPACK(( DPRINT << TSLICE(cb_recips, 0, s8) << ENDL() ));
                     // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
                     mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt+wtr, 0, wtr); // tile *= 1/(sum(exp(x)))
-                    pack_tile(wtr, cb_im_or_out); // pack either to intermediate (cb_stream or out0)
+                    pack_tile(wtr, cb_im_or_out); // pack either to intermediate (cb_fusion or out0)
                         //if (ht == 3 && wt+wtr==3) PACK(( DPRINT << "xmm/v2eps[" << ht << "," << wt+wtr << "]" << ENDL() ));
                         //if (ht == 3 && wt+wtr==3) PACK(( DPRINT << TSLICE(CB::c_out0, 0, h9w26) << ENDL() ));
                         //if (ht == 3 && wt+wtr==3) PACK(( DPRINT << TSLICE(CB::c_out0, 0, s8) << ENDL() ));
@@ -327,17 +327,17 @@ void MAIN {
 
                 if (do_gamma) {
                     ACQ();
-                    uint32_t cb_outg = do_beta ? cb_stream : CB::c_out0;
+                    uint32_t cb_outg = do_beta ? cb_fusion : CB::c_out0;
                     mul_bcast_rows_init_short();
                     cb_reserve_back(cb_outg, blk);
                     cb_wait_front(cb_gamma, wt+blk); // we don't pop, TODO: only wait on first ht
-                    cb_wait_front(cb_stream, blk);
+                    cb_wait_front(cb_fusion, blk);
                     //UNPACK(( DPRINT << "wait gamma=" << nwait_g << ENDL() ));
                     for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                        mul_tiles_bcast_rows(cb_stream, cb_gamma, wtr, wt+wtr, wtr); // tile *= 1/(sum(exp(x)))
-                        pack_tile(wtr, cb_outg); // pack either to intermediate (cb_stream or out0)
+                        mul_tiles_bcast_rows(cb_fusion, cb_gamma, wtr, wt+wtr, wtr); // tile *= 1/(sum(exp(x)))
+                        pack_tile(wtr, cb_outg); // pack either to intermediate (cb_fusion or out0)
                     }
-                    cb_pop_front(cb_stream, blk);
+                    cb_pop_front(cb_fusion, blk);
                     // we don't pop gamma
                     //UNPACK(( DPRINT << "cb_outg=" << cb_outg << ENDL() ));
                     cb_push_back(cb_outg, blk);
@@ -349,12 +349,12 @@ void MAIN {
                     add_bcast_rows_init_short();
                     cb_reserve_back(CB::c_out0, blk);
                     cb_wait_front(cb_beta, wt+blk); // TODO: optimization - only wait on first ht
-                    cb_wait_front(cb_stream, blk);
+                    cb_wait_front(cb_fusion, blk);
                     for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                        add_tiles_bcast_rows(cb_stream, cb_beta, wtr, wt+wtr, wtr); // tile *= 1/(sum(exp(x)))
-                        pack_tile(wtr, CB::c_out0); // pack either to intermediate (cb_stream or out0)
+                        add_tiles_bcast_rows(cb_fusion, cb_beta, wtr, wt+wtr, wtr); // tile *= 1/(sum(exp(x)))
+                        pack_tile(wtr, CB::c_out0); // pack either to intermediate (cb_fusion or out0)
                     }
-                    cb_pop_front(cb_stream, blk);
+                    cb_pop_front(cb_fusion, blk);
                     // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
                     cb_push_back(CB::c_out0, blk);
                     REL();
