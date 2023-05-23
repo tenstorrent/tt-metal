@@ -16,8 +16,7 @@ struct BmmOpParallelizationStrategy {
         MULTI_CORE_REUSE_MCAST_GENERALIZED = 4,
         MULTI_CORE_REUSE_PADDING = 5,
         MULTI_CORE_REUSE_MCAST_PADDING = 6,
-        SINGLE_CORE = 7,
-        SINGLE_CORE_TILIZE_UNTILIZE = 8
+        SINGLE_CORE = 7
     };
     static const vector<Enum> all() {
         return {
@@ -28,8 +27,7 @@ struct BmmOpParallelizationStrategy {
             MULTI_CORE_REUSE_MCAST_GENERALIZED,
             MULTI_CORE_REUSE_PADDING,
             MULTI_CORE_REUSE_MCAST_PADDING,
-            SINGLE_CORE,
-            SINGLE_CORE_TILIZE_UNTILIZE
+            SINGLE_CORE
         };
     }
 };
