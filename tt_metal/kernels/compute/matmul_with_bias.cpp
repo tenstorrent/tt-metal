@@ -68,7 +68,7 @@ void MAIN {
         {
             for(uint32_t c=0;c<dst_tile_cols;++c)
             {
-                add_tiles_bcast<BCAST_LLKOP, BCAST_DIM>(HlkOperand::intermed0, HlkOperand::in2, dst_tile_index, c, dst_tile_index);
+                add_tiles_bcast<BCAST_DIM>(HlkOperand::intermed0, HlkOperand::in2, dst_tile_index, c, dst_tile_index);
                 dst_tile_index++;
             }
         }
