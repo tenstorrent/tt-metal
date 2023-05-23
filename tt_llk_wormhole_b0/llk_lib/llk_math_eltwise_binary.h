@@ -9,7 +9,7 @@ using namespace ckernel;
 
 // local function declarations
 inline void eltwise_binary_configure_addrmod();
-inline void eltwise_binary_configure_mop(uint total_rows);
+inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0);
 
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void eltwise_binary_reuse_dest_as_src() {
@@ -249,7 +249,7 @@ template <
     BroadcastType bcast_type,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void eltwise_binary_configure_mop() {
+inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0) {
     constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
     const uint addr_mod = ADDR_MOD_0;
     constexpr uint innerloop = 16 >> 3;  // 8 rows per eltwise op at a time.
@@ -272,11 +272,11 @@ inline void eltwise_binary_configure_mop() {
     // Scalar and Col broadcast should not Clear B within a mop.  This is controlled outside of MOP.
     if constexpr (bcast_type == BroadcastType::COL || bcast_type == BroadcastType::SCALAR) {
         if constexpr (eltwise_binary_type == ELWADD) {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
         } else if constexpr (eltwise_binary_type == ELWSUB) {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, 0, broadcast_type, addr_mod, 0));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
         } else if constexpr (eltwise_binary_type == ELWMUL) {
@@ -295,11 +295,11 @@ inline void eltwise_binary_configure_mop() {
         }
     } else {
         if constexpr (eltwise_binary_type == ELWADD) {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
         } else if constexpr (eltwise_binary_type == ELWSUB) {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, 0, broadcast_type, addr_mod, 0));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
         } else if constexpr (eltwise_binary_type == ELWMUL) {
@@ -324,12 +324,12 @@ template <
     BroadcastType src_b_bcast_type,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary_init() {
+inline void llk_math_eltwise_binary_init(const std::uint32_t transpose=0, const std::uint32_t acc_to_dest = 0) {
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type>();
 
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
-        eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>();
+        eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(acc_to_dest);
     } else {
         FWASSERT("Unsupported op!", false);
     }
