@@ -896,27 +896,6 @@ void TensorModule(py::module &m_tensor) {
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("matmul_bias", &matmul_bias, R"doc(
-        Perform a non-batched matrix multiplication ``arg0 x arg1 + bias`` with two tensors and fused bias addition.
-
-        All 3 input tensors must have BFLOAT16 data type.
-
-        M, N, K must be multiples of 32.
-
-        Output tensor will have BFLOAT16 data type.
-
-        +----------+---------------------------+-----------+------------------------------+----------+
-        | Argument | Description               | Data type | Valid range                  | Required |
-        +==========+===========================+===========+==============================+==========+
-        | arg0     | First tensor to multiply  | Tensor    | Tensor of shape [B, 1, M, N] | Yes      |
-        +----------+---------------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to multiply | Tensor    | Tensor of shape [B, 1, N, K] | Yes      |
-        +----------+---------------------------+-----------+------------------------------+----------+
-        | arg2     | Bias tensor to add        | Tensor    | Tensor of shape [1, 1, 32, K]| Yes      |
-        +----------+---------------------------+-----------+------------------------------+----------+
-    )doc");
-
-
     m_tensor.def("bmm", &bmm, R"doc(
         Perform a batched matmul ``arg0 x arg1`` with two tensors, where batch dims match.
 

@@ -255,7 +255,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor matmul_(const Tensor& a, const Tensor& b, const Tensor* bias = nullptr) {
+Tensor matmul_(const Tensor& a, const Tensor& b) {
     switch (bmm_op_utils::get_parallelization_strategy(a, b)){
         case BmmOpParallelizationStrategy::MULTI_CORE:
             return matmul_multi_core(a, b);
@@ -284,7 +284,7 @@ Tensor matmul_(const Tensor& a, const Tensor& b, const Tensor* bias = nullptr) {
     }
 }
 
-Tensor matmul_optional_bias_(const Tensor& a, const Tensor& b, const Tensor* bias = nullptr) {
+Tensor matmul(const Tensor& a, const Tensor& b) {
 
     Device * device;
 
@@ -322,13 +322,6 @@ Tensor matmul_optional_bias_(const Tensor& a, const Tensor& b, const Tensor* bia
         return output;
     }
 }
-
-Tensor matmul_bias(const Tensor& a, const Tensor& b, const Tensor& bias)
-{
-    return matmul_optional_bias_(a, b, &bias);
-}
-
-Tensor matmul(const Tensor& a, const Tensor& b) { return matmul_optional_bias_(a, b); }
 
 Tensor bmm_(const Tensor& a, const Tensor& b) {
     switch (bmm_op_utils::get_parallelization_strategy(a, b)){
