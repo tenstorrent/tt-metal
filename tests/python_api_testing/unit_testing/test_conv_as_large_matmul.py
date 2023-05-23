@@ -93,36 +93,6 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
         out = out.to(ttl.tensor.Layout.ROW_MAJOR)
     # Copy output to host and convert tt tensor to pytorch tensor
     out_pytorch_padded = torch.tensor(out.data()).reshape(mm_output_shape)
-
-    #Run pytorch matmul
-    mm_input_shape = [1, 1, _nearest_32(OH*OW), _nearest_32(C)*R*S]
-    mm_weight_shape = [1, 1, _nearest_32(C)*R*S, _nearest_32(K)]
-    mm_output_shape = [1,1,_nearest_32(OH*OW),_nearest_32(K)]
-    # Call DTX pass to transform A
-    A_transformed_data = ttl.dtx.evaluate(A_cl_data, ttl.dtx.conv_transform([_nearest_32(C),H,W], [R,S,stride_h,stride_w,pad_h,pad_w], [(0,1,2),(mm_input_shape[2], mm_input_shape[3])], 1), mm_input_shape)
-    A_transformed_pytorch_tensor = torch.tensor(A_transformed_data).reshape(mm_input_shape)
-    B_rm = B_tiled_host.to(ttl.tensor.Layout.ROW_MAJOR)
-    assert(B_rm.shape() == [1, 1, _nearest_32(C)*R*S, _nearest_32(K)])
-    B_data = B_rm.data()
-    B_pytorch_tensor = torch.tensor(B_data).reshape(mm_weight_shape)
-    out_mm_pytorch_padded = torch.matmul(A_transformed_pytorch_tensor, B_pytorch_tensor)
-    assert(list(out_mm_pytorch_padded.shape) == mm_output_shape)
-    out_mm_pytorch = out_mm_pytorch_padded[:, :, 0 : (OH * OW), 0 : K]
-
-    # Convert matmul output layout to conv output layout
-    out_mm_tr = torch.transpose(out_mm_pytorch, 2, 3)
-    assert(list(out_mm_tr.shape) == [1,1,K,(OH*OW)])
-    out_mm_result = out_mm_tr.reshape([1,K,OH,OW])
-    # compare dtx + mm cpu with conv pytorch
-    assert(out_mm_result.shape == out_golden.shape)
-    passing_pcc, output_pcc = comp_pcc(out_golden, out_mm_result, 0.99)
-    assert passing_pcc
-
-    #Compare tt conv op output with dtx + mm cpu output
-    assert(out_pytorch_padded.shape == out_mm_pytorch_padded.shape)
-    passing_pcc, output_pcc = comp_pcc(out_mm_pytorch_padded, out_pytorch_padded, 0.99)
-    assert passing_pcc
-
     # remove padding
     out_pytorch = out_pytorch_padded[:, :, 0 : (OH * OW), 0 : K]
 

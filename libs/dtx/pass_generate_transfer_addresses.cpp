@@ -13,8 +13,8 @@ bool generate_transfer_addresses(DataTransformations * dtx){
     TransformationNode * consumer_node = dtx->transformations[1];
 
     // Loop over all groups
-    // TODO: generalize for groups > 1
-    assert(consumer_node->groups.size() == 1);
+    // TODO: generalize for producer groups > 1
+    assert(producer_node->groups.size() == 1);
     for (TensorPairGroup * consumer_group : consumer_node->groups) {
 
         // Loop over all TensorPairs
@@ -22,7 +22,9 @@ bool generate_transfer_addresses(DataTransformations * dtx){
             //if (DEBUG) consumer_tp->print_string();
 
             int rank = consumer_tp->src_tensor->str.size();
-
+            assert(rank == 3);
+            assert(consumer_group->shape[Z(rank)] == 1);
+            assert(consumer_group->shape[Y(rank)] == 1);
             Transfer * transfer = new Transfer();
             transfer->src_address = consumer_tp->src_tensor->str[X(rank)] + producer_node->groups[0]->address;
             transfer->dst_address = consumer_tp->dst_tensor->str[X(rank)] + consumer_group->address;

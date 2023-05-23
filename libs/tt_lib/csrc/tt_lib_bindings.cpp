@@ -1402,7 +1402,7 @@ void DeviceModule(py::module &m_device) {
 
 void DTXModule(py::module &m_dtx) {
     auto pyDataTransformations = py::class_<DataTransformations>(m_dtx, "DataTransformations", "Class describing the data transformations.");
-    m_dtx.def("evaluate", [](vector<float> data, vector<uint32_t> address_map, vector<int> output_shape){
+    m_dtx.def("evaluate", [](vector<float> data, vector<uint32_t> address_map, vector<vector<int>> output_shape){
         return evaluate(data, address_map, output_shape);
     }, R"doc(
         Evaluates data transformation on host cpu.

@@ -62,6 +62,9 @@ bool pad_2d_matrix(DataTransformations * dtx, vector<int> pad_to_nearest);
 
 bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<int> block_shape_yx);
 
+// expects only 1 producer group and generates groups for the outermost dimension.
+bool generate_groups_outermost_dim(DataTransformations * dtx);
+
 // Slice into tiles and store into row-major, col-major, or any other dim order - IS THIS NOW OBSOLETE?
 bool slice_into_tiles_and_store(DataTransformations * dtx, vector<int> dim_order);
 
@@ -123,7 +126,7 @@ bool convert_tensor_layout_rowmajor_2_channelslast(DataTransformations * dtx);
 //             PART 6: HIGH LEVEL PASSES
 // ========================================================
 vector<uint32_t> generate_address_map(DataTransformations * dtx);
-vector<float> evaluate(vector<float> data, vector<uint32_t> address_map, vector<int> output_shape);
+vector<vector<float>> evaluate(vector<float> data, vector<uint32_t> address_map, vector<vector<int>> output_shape);
 DataTransformations * simple_high_level_pass(vector<int> shape);
 
 std::vector<uint32_t> conv_transform(vector<int> shape, vector<int> conv_params, std::pair<vector<int>,vector<int>> block_info, uint32_t num_bytes_of_df);

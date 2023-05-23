@@ -41,8 +41,11 @@ bool collapse_transformations(DataTransformations * dtx) {
                     TensorPair * consumer_tp = consumer_node->groups[consumer_group_idx]->tensor_pairs[consumer_tp_idx];
                     if(consumer_tp->src_group != -1) {
                         for (int producer_tp_idx=0; producer_tp_idx<producer_node->groups[producer_group_idx]->tensor_pairs.size(); producer_tp_idx++) {      // node1 dst tensor
-
+                            if(consumer_tp->src_group != producer_group_idx) {
+                                continue;
+                            }
                             TensorPair * producer_tp = producer_node->groups[producer_group_idx]->tensor_pairs[producer_tp_idx];
+
                             if (DEBUG) cout << s(10) << "producer_tp_idx = " << producer_tp_idx << ",   consumer_tp_idx = " << consumer_tp_idx << endl;
                             if (DEBUG) cout << s(12) << "PRODUCER = " << producer_tp->get_string() << endl;
                             if (DEBUG) cout << s(12) << "CONSUMER = " << consumer_tp->get_string() << endl;

@@ -553,12 +553,12 @@ bool test_high_level_pass_and_evaluate() {
     vector<int> shape = {2, 2, 2};
     auto dtx = simple_high_level_pass(shape);
     vector<float> data = {1, 2, 3, 4, 5, 6, 7, 8};
-    vector<float> data_transformed = evaluate(data, generate_address_map(dtx), shape);
-    vector<float> golden_data = {1, 2, 5, 6, 3, 4, 7, 8};
+    vector<vector<float>> data_transformed = evaluate(data, generate_address_map(dtx), {shape});
+    vector<vector<float>> golden_data = {{1, 2, 5, 6, 3, 4, 7, 8}};
     return data_transformed == golden_data;
 }
 
-bool test_padding_pass_(vector<int> shape, vector<int> pad_to_nearest, vector<float> input_data, vector<float> golden_data) {
+bool test_padding_pass_(vector<int> shape, vector<int> pad_to_nearest, vector<float> input_data, vector<vector<float>> golden_data) {
     DataTransformations * dtx_left = new DataTransformations();
     TransformationNode * node1 = new TransformationNode("producer", 1);
     node1->groups[0]->shape = shape;
@@ -587,7 +587,7 @@ bool test_padding_pass_(vector<int> shape, vector<int> pad_to_nearest, vector<fl
     //combined->print();
     pass &= generate_transfer_addresses(combined);
 
-    vector<float> data_transformed = evaluate(input_data, generate_address_map(combined), padded_shape);
+    vector<vector<float>> data_transformed = evaluate(input_data, generate_address_map(combined), {padded_shape});
     return data_transformed == golden_data;
 }
 
@@ -596,10 +596,10 @@ bool test_padding_pass() {
     vector<int> shape = {1, 2, 2};
     vector<float> input_data_2_2 = {1, 2, 3, 4};
     // list of tests - pad to nearest, golden data
-    vector<tuple<vector<int>, vector<float>>> tests_2_2 = {
-        { {4,4}, {1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} },
-        { {3,4}, {1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0} },
-        { {4,3}, {1, 2, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0} },
+    vector<tuple<vector<int>, vector<vector<float>>>> tests_2_2 = {
+        { {4,4}, {{1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}} },
+        { {3,4}, {{1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0}} },
+        { {4,3}, {{1, 2, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0}} },
     };
     for (auto & t : tests_2_2) {
         auto pad_to_nearest = std::get<0>(t);
@@ -618,7 +618,7 @@ bool test_padding_pass() {
 }
 
 bool test_block_2d_matrix_pass_(vector<int> shape, vector<int> block_shape, vector<int> dim_order,
-                            vector<float> input_data, vector<float> golden_data) {
+                            vector<float> input_data, vector<vector<float>> golden_data) {
     DataTransformations * dtx_left = new DataTransformations();
     TransformationNode * node1 = new TransformationNode("producer", 1);
     node1->groups[0]->shape = shape;
@@ -639,7 +639,8 @@ bool test_block_2d_matrix_pass_(vector<int> shape, vector<int> block_shape, vect
     //cout << "\n\nDTX_COLLAPSED" << endl;
     //combined->print();
     pass &= generate_transfer_addresses(combined);
-    vector<float> data_transformed = evaluate(input_data, generate_address_map(combined), shape);
+    //combined->print();
+    vector<vector<float>> data_transformed = evaluate(input_data, generate_address_map(combined), {shape});
     return data_transformed == golden_data;
 }
 
@@ -648,14 +649,14 @@ bool test_block_2d_matrix_pass() {
     vector<int> shape = {1, 4, 4};
     vector<float> input_data_4_4 = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
     // list of tests - block shape, dim order, golden data
-    vector<tuple<vector<int>, vector<int>, vector<float>>> tests_4_4 = {
-        { {4,4}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} },
-        { {2,4}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} },
-        { {1,4}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} },
-        { {4,1}, {0,1,2}, {1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15, 4, 8, 12, 16} },
-        { {4,2}, {0,1,2}, {1, 2, 5, 6, 9, 10, 13, 14, 3, 4, 7, 8, 11, 12, 15, 16} },
-        { {2,2}, {0,1,2}, {1, 2, 5, 6, 3, 4, 7, 8, 9, 10, 13, 14, 11, 12, 15, 16} },
-        { {2,2}, {0,2,1}, {1, 2, 5, 6, 9, 10, 13, 14, 3, 4, 7, 8, 11, 12, 15, 16} },
+    vector<tuple<vector<int>, vector<int>, vector<vector<float>>>> tests_4_4 = {
+        { {4,4}, {0,1,2}, {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}} },
+        { {2,4}, {0,1,2}, {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}} },
+        { {1,4}, {0,1,2}, {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}} },
+        { {4,1}, {0,1,2}, {{1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15, 4, 8, 12, 16}} },
+        { {4,2}, {0,1,2}, {{1, 2, 5, 6, 9, 10, 13, 14, 3, 4, 7, 8, 11, 12, 15, 16}} },
+        { {2,2}, {0,1,2}, {{1, 2, 5, 6, 3, 4, 7, 8, 9, 10, 13, 14, 11, 12, 15, 16}} },
+        { {2,2}, {0,2,1}, {{1, 2, 5, 6, 9, 10, 13, 14, 3, 4, 7, 8, 11, 12, 15, 16}} },
 
     };
     for (auto & t : tests_4_4) {
@@ -675,13 +676,13 @@ bool test_block_2d_matrix_pass() {
     shape = {1, 2, 6};
     vector<float> input_data_2_6 = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
     // list of tests - block shape, dim order, golden data
-    vector<tuple<vector<int>, vector<int>, vector<float>>> tests_2_6 = {
-        { {2,6}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} },
-        { {1,6}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} },
-        { {2,2}, {0,1,2}, {1, 2, 7, 8, 3, 4, 9, 10, 5, 6, 11, 12} },
-        { {2,3}, {0,1,2}, {1, 2, 3, 7, 8, 9, 4, 5, 6, 10, 11, 12} },
-        { {1,3}, {0,1,2}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} },
-        { {1,3}, {0,2,1}, {1, 2, 3, 7, 8, 9, 4, 5, 6, 10, 11, 12} },
+    vector<tuple<vector<int>, vector<int>, vector<vector<float>>>> tests_2_6 = {
+        { {2,6}, {0,1,2}, {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}} },
+        { {1,6}, {0,1,2}, {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}} },
+        { {2,2}, {0,1,2}, {{1, 2, 7, 8, 3, 4, 9, 10, 5, 6, 11, 12}} },
+        { {2,3}, {0,1,2}, {{1, 2, 3, 7, 8, 9, 4, 5, 6, 10, 11, 12}} },
+        { {1,3}, {0,1,2}, {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}} },
+        { {1,3}, {0,2,1}, {{1, 2, 3, 7, 8, 9, 4, 5, 6, 10, 11, 12}} },
 
     };
     for (auto & t : tests_2_6) {
@@ -701,8 +702,76 @@ bool test_block_2d_matrix_pass() {
 
 }
 
+bool test_block_2d_matrix_group_pass_(vector<int> shape, vector<int> block_shape, vector<int> dim_order,
+                            vector<float> input_data, vector<vector<float>> golden_data) {
+    DataTransformations * dtx_left = new DataTransformations();
+    TransformationNode * node1 = new TransformationNode("producer", 1);
+    node1->groups[0]->shape = shape;
+    dtx_left->transformations.push_back(node1);
+    bool pass = row_major_memory_store(dtx_left);
+    //dtx_left->print();
+    DataTransformations * dtx_right = new DataTransformations();
+    TransformationNode * node0 = new TransformationNode("producer", 1);
+    node0->groups[0]->shape = shape;
+    dtx_right->transformations.push_back(node0);
+    pass &= block_2d_matrix(dtx_right, dim_order, block_shape);
+    pass &= generate_groups_outermost_dim(dtx_right);
+    //dtx_right->print();
+    pass &= row_major_memory_store(dtx_right);
+    //dtx_right->print();
+    DataTransformations * combined = reverse_and_combine_transformations(dtx_left, dtx_right);
+    //cout << "\n\nDTX_COMBINED" << endl;
+    //combined->print();
+    pass &= collapse_transformations(combined);
+    //cout << "\n\nDTX_COLLAPSED" << endl;
+    //combined->print();
+    pass &= generate_transfer_addresses(combined);
+    //combined->print();
+    vector<vector<int>> output_shape_groups;
+    uint32_t num_groups = combined->transformations.back()->groups.size();
+    assert(golden_data.size() == num_groups);
+    for(uint32_t g = 0; g < num_groups; g++) {
+        output_shape_groups.push_back(combined->transformations.back()->groups[g]->shape);
+    }
+    vector<vector<float>> data_transformed = evaluate(input_data, generate_address_map(combined), output_shape_groups);
+    assert(data_transformed.size() == golden_data.size());
+    return data_transformed == golden_data;
+}
+
+bool test_block_2d_matrix_group_pass() {
+    bool pass = true;
+    vector<int> shape = {1, 4, 4};
+    vector<float> input_data_4_4 = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    // list of tests - block shape, dim order, golden data
+    vector<tuple<vector<int>, vector<int>, vector<vector<float>>>> tests_4_4 = {
+        { {4,4}, {0,1,2}, {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}} },
+        { {2,4}, {0,1,2}, {{1, 2, 3, 4, 5, 6, 7, 8}, {9, 10, 11, 12, 13, 14, 15, 16}} },
+        { {1,4}, {0,1,2}, {{1, 2, 3, 4}, {5, 6, 7, 8}, {9, 10, 11, 12}, {13, 14, 15, 16}} },
+        { {4,1}, {0,1,2}, {{1, 5, 9, 13}, {2, 6, 10, 14}, {3, 7, 11, 15}, {4, 8, 12, 16}} },
+        { {4,2}, {0,1,2}, {{1, 2, 5, 6, 9, 10, 13, 14}, {3, 4, 7, 8, 11, 12, 15, 16}} },
+        { {2,2}, {0,1,2}, {{1, 2, 5, 6}, {3, 4, 7, 8}, {9, 10, 13, 14}, {11, 12, 15, 16}} },
+        { {2,2}, {0,2,1}, {{1, 2, 5, 6}, {9, 10, 13, 14}, {3, 4, 7, 8}, {11, 12, 15, 16}} },
+
+    };
+    for (auto & t : tests_4_4) {
+        auto block_shape = std::get<0>(t);
+        auto dim_order = std::get<1>(t);
+        auto golden_data = std::get<2>(t);
+        pass &= test_block_2d_matrix_group_pass_(shape, block_shape, dim_order, input_data_4_4, golden_data);
+        if(pass) {
+            std::cout << "Passed test with shape = ";
+        }
+        else {
+            std::cout << "Failed test with shape = ";
+        }
+        std::cout << v2s(shape) << " , block shape = " << v2s(block_shape) << " , dim order = " << v2s(dim_order) << std::endl;
+    }
+    return pass;
+
+}
+
 bool test_pad_and_block_passes_(vector<int> shape, vector<int> pad_to_nearest, vector<int> block_shape, vector<int> dim_order,
-                            vector<float> input_data, vector<float> golden_data) {
+                            vector<float> input_data, vector<vector<float>> golden_data) {
     DataTransformations * dtx_left = new DataTransformations();
     TransformationNode * node1 = new TransformationNode("producer", 1);
     node1->groups[0]->shape = shape;
@@ -729,7 +798,7 @@ bool test_pad_and_block_passes_(vector<int> shape, vector<int> pad_to_nearest, v
     combined->print();
     pass &= generate_transfer_addresses(combined);
     auto output_shape = combined->transformations.back()->groups[0]->shape;
-    vector<float> data_transformed = evaluate(input_data, generate_address_map(combined), output_shape);
+    vector<vector<float>> data_transformed = evaluate(input_data, generate_address_map(combined), {output_shape});
     return data_transformed == golden_data;
 }
 bool test_pad_and_block_passes() {
@@ -737,11 +806,11 @@ bool test_pad_and_block_passes() {
     vector<int> shape = {1, 2, 2};
     vector<float> input_data_2_2 = {1, 2, 3, 4};
     // list of tests - pad to nearest, block shape, dim order, golden data
-    vector<tuple<vector<int>, vector<int>, vector<int>, vector<float>>> tests_2_2 = {
-        // { {4,4}, {4,4}, {0,1,2}, {1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} },
-        // { {4,4}, {2,4}, {0,1,2}, {1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} },
-        // { {4,4}, {2,2}, {0,1,2}, {1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} },
-        { {4,4}, {4,1}, {0,1,2}, {1, 3, 0, 0, 2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} },
+    vector<tuple<vector<int>, vector<int>, vector<int>, vector<vector<float>>>> tests_2_2 = {
+        { {4,4}, {4,4}, {0,1,2}, {{1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}} },
+        { {4,4}, {2,4}, {0,1,2}, {{1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}} },
+        { {4,4}, {2,2}, {0,1,2}, {{1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}} },
+        { {4,4}, {4,1}, {0,1,2}, {{1, 3, 0, 0, 2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}} },
     };
     for (auto & t : tests_2_2) {
         auto pad_to_nearest = std::get<0>(t);
@@ -816,6 +885,9 @@ void run_dtx_tests() {
 
     pass &= test_block_2d_matrix_pass();
     printf("test_block_2d_matrix_pass - %d\n\n", pass);
+
+    pass &= test_block_2d_matrix_group_pass();
+    printf("test_block_2d_matrix_group_pass - %d\n\n", pass);
 
     pass &= test_padding_pass();
     printf("test_pad_2d_matrix_pass - %d\n\n", pass);
