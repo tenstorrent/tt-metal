@@ -79,8 +79,7 @@ class Device {
     friend bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator);
     void initialize_cluster();
     void initialize_allocator(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC);
-    void initialize_logical_to_routing_lookup_tables();
-    void gather_harvesting_information();
+    void initialize_harvesting_information();
     // Puts device into reset
     bool close();
     friend bool CloseDevice(Device *device);
@@ -105,6 +104,8 @@ class Device {
     MemoryAllocator allocator_scheme_;
     bool closed_;
 
+    bool harvesting_initialized_ = false;
+    CoreCoord post_harvested_worker_grid_size_ = {};
     std::unordered_map<CoreCoord, CoreCoord> logical_to_routing_coord_lookup_table_ = {};
     unsigned int num_harvested_rows_ = 0;
 };

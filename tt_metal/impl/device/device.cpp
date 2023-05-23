@@ -22,12 +22,16 @@ void Device::initialize_cluster() {
 
 void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
     TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
+    tt::log_assert(
+        this->harvesting_initialized_,
+        "Harvesting information needs to be initialized before allocator"
+    );
     auto soc_desc = this->cluster_->get_soc_desc(this->pcie_slot_);
     // Construct allocator config from soc_desc
     AllocatorConfig config({
         .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
         .dram_bank_size = soc_desc.dram_bank_size,
-        .worker_grid_size = soc_desc.worker_grid_size,
+        .worker_grid_size = this->post_harvested_worker_grid_size_,
         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
         .core_type_from_noc_coord_table = {},
         .logical_to_routing_coord_lookup_table=this->logical_to_routing_coord_lookup_table_
@@ -36,11 +40,14 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
     for (const auto& core: soc_desc.cores) {
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
     }
-    for (const auto& storage_compute_core : soc_desc.compute_and_storage_cores) {
-        config.core_type_from_noc_coord_table[storage_compute_core] = AllocCoreType::ComputeAndStore;
+    for (const auto& core : soc_desc.compute_and_storage_cores) {
+        config.core_type_from_noc_coord_table[core] = AllocCoreType::ComputeAndStore;
     }
-    for (const auto& storage_compute_core : soc_desc.storage_cores) {
-        config.core_type_from_noc_coord_table[storage_compute_core] = AllocCoreType::StorageOnly;
+    for (const auto& core : soc_desc.storage_cores) {
+        config.core_type_from_noc_coord_table[core] = AllocCoreType::StorageOnly;
+    }
+    for (const auto& core : soc_desc.dispatch_cores) {
+        config.core_type_from_noc_coord_table[core] = AllocCoreType::Dispatch;
     }
     // Configuration end
     switch (memory_allocator) {
@@ -57,7 +64,7 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
     }
     this->allocator_scheme_ = memory_allocator;
 }
-void Device::initialize_logical_to_routing_lookup_tables() {
+void Device::initialize_harvesting_information() {
     if (not cluster_is_initialized()) {
         tt::log_fatal("Device has not been initialized, did you forget to call InitializeDevice?");
     }
@@ -103,12 +110,17 @@ void Device::initialize_logical_to_routing_lookup_tables() {
             });
         }
     }
+    this->post_harvested_worker_grid_size_ = CoreCoord({
+        .x = soc_desc.worker_grid_size.x,
+        .y = soc_desc.worker_grid_size.y - this->num_harvested_rows_,
+    });
+    this->harvesting_initialized_ = true;
 }
 
 
 bool Device::initialize(const MemoryAllocator &memory_allocator) {
     this->initialize_cluster();
-    this->initialize_logical_to_routing_lookup_tables();
+    this->initialize_harvesting_information();
     this->initialize_allocator(memory_allocator);
     this->closed_ = false;
     return true;
@@ -155,7 +167,7 @@ CoreCoord Device::logical_grid_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return this->cluster_->get_soc_desc(pcie_slot_).worker_grid_size;
+    return this->post_harvested_worker_grid_size_;
 }
 
 CoreCoord Device::compute_and_storage_grid_size() const {
@@ -169,15 +181,7 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    log_info(
-        "logical coord=[.y={}, .x={}]",
-        logical_core.y, logical_core.x
-    );
     CoreCoord worker_core = this->logical_to_routing_coord_lookup_table_.at(logical_core);
-    log_info(
-        "routing coord=[.y={}, .x={}]",
-        worker_core.y, worker_core.x
-    );
     return worker_core;
 }
 
