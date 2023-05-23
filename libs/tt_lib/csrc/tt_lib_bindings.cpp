@@ -1194,6 +1194,34 @@ void TensorModule(py::module &m_tensor) {
         | untilize_out | Whether or not to untilize the output (useful if a consuming op requires row major layout) | bool      |             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
+    m_tensor.def("bmm_tilize_untilize", &bmm_tilize_untilize, R"doc(
+        Perform a batched matmul ``A x B`` with two tensors, where batch and channel dims match.
+        This op also supports tiling tensor A and untiling the output.
+
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------|
+        | Argument                      | Description                                           | Data type | Valid range | Required |
+        +===============================+=======================================================+===========+=============+==========+
+        | a                             | LHS matmul operand                                    | Tensor    |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+        | b                             | RHS matmul operand                                    | Tensor    |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+        | a_height_nblocks              | Number of blocks along A's height                     | uint32_t  |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+        | a_width_nblocks               | Number of blocks along A's width (= along B's height) | uint32_t  |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+        | b_width_nblocks               | Number of blocks along B's width                      | uint32_t  |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+        | a_block_height_ntiles         | Number of tiles along height of an A block            | uint32_t  |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+        | a_block_width_ntiles          | Number of tiles along width of an A block             | uint32_t  |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+        | b_block_width_ntiles          | Number of tiles along width of a B block              | uint32_t  |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+        | out_subblock_height_ntiles    | Height of subblocks on height for output              | uint32_t  |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+        | out_subblock_width_ntiles     | Number of subblocks on width for output               | uint32_t  |             | Yes      |
+        +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
+    )doc");
     m_tensor.def("conv", &conv, R"doc(
         Perform a batched matmul ``A x B`` with two tensors, where batch dims match.
         This op tilizes tensor A and untilizes the output

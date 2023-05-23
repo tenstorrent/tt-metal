@@ -8,8 +8,30 @@ namespace tt_metal {
 
 // TODO: Accept parallelization
 struct BmmOpParallelizationStrategy {
-    enum Enum { MULTI_CORE = 0, MULTI_CORE_REUSE = 1, MULTI_CORE_REUSE_MCAST = 2, MULTI_CORE_REUSE_GENERALIZED = 3, MULTI_CORE_REUSE_MCAST_GENERALIZED = 4, MULTI_CORE_REUSE_PADDING = 5, MULTI_CORE_REUSE_MCAST_PADDING = 6, SINGLE_CORE = 7 };
-    static const vector<Enum> all() { return { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, MULTI_CORE_REUSE_GENERALIZED, MULTI_CORE_REUSE_MCAST_GENERALIZED, MULTI_CORE_REUSE_PADDING, MULTI_CORE_REUSE_MCAST_PADDING, SINGLE_CORE }; }
+    enum Enum {
+        MULTI_CORE = 0,
+        MULTI_CORE_REUSE = 1,
+        MULTI_CORE_REUSE_MCAST = 2,
+        MULTI_CORE_REUSE_GENERALIZED = 3,
+        MULTI_CORE_REUSE_MCAST_GENERALIZED = 4,
+        MULTI_CORE_REUSE_PADDING = 5,
+        MULTI_CORE_REUSE_MCAST_PADDING = 6,
+        SINGLE_CORE = 7,
+        SINGLE_CORE_TILIZE_UNTILIZE = 8
+    };
+    static const vector<Enum> all() {
+        return {
+            MULTI_CORE,
+            MULTI_CORE_REUSE,
+            MULTI_CORE_REUSE_MCAST,
+            MULTI_CORE_REUSE_GENERALIZED,
+            MULTI_CORE_REUSE_MCAST_GENERALIZED,
+            MULTI_CORE_REUSE_PADDING,
+            MULTI_CORE_REUSE_MCAST_PADDING,
+            SINGLE_CORE,
+            SINGLE_CORE_TILIZE_UNTILIZE
+        };
+    }
 };
 
 Tensor matmul (const Tensor &A, const Tensor &B); // broadcasts batch, expects N=1 for now
@@ -18,6 +40,14 @@ Tensor large_bmm(const Tensor& A, const Tensor& B, bool tilize_act, bool untiliz
 Tensor large_bmm_single_block(const Tensor& A, const Tensor& B, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
 Tensor matmul_single_core  (const Tensor &A, const Tensor &B); // broadcasts batch, expects N=1 for now
 Tensor bmm_single_core     (const Tensor &A, const Tensor &B); // doesn't broadcast batch, expects batch to match in A and B
+Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b,
+                           uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
+                           uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
+                           uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles);
+Tensor bmm_single_core_tilize_untilize(const Tensor &A, const Tensor &B,
+                                       uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
+                                       uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
+                                       uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles);
 Tensor large_bmm_single_core(const Tensor& A, const Tensor& B, bool tilize_act, bool untilize_out); // Tilizes a, untilizes b
 Tensor large_bmm_single_core_single_block(const Tensor& A, const Tensor& B, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
 Tensor matmul_multi_core  (const Tensor &A, const Tensor &B); // broadcasts batch, expects N=1 for now
