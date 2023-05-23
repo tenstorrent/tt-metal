@@ -100,7 +100,9 @@ DTXTensor * calculate_tensor_overlap_in_nd(DTXTensor * t0, DTXTensor * t1) {
 
 }
 
-
+int nearest_to(int x, int y) {
+    return (int) (ceil((double) x / (double) y ) * y);
+}
 
 int X(int rank) {return rank-1;}
 int Y(int rank) {return rank-2;}

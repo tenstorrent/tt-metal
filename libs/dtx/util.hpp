@@ -41,7 +41,7 @@ bool compare_two_groups(TensorPairGroup * a, TensorPairGroup * b);
 bool has_overlap(DTXTensor * overlap);
 vector<int> calculate_line_segment_overlap_in_1d(int l1_str, int l1_end, int l2_str, int l2_end);
 DTXTensor * calculate_tensor_overlap_in_nd(DTXTensor * t1, DTXTensor * t2);
-
+int nearest_to(int x, int y);
 int X(int rank);
 int Y(int rank);
 int Z(int rank);

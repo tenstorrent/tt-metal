@@ -33,7 +33,13 @@ def run_conv_on_tt_device(x: torch.Tensor, conv_on_tt, conv_params, device, host
     OH = ((int) ((H - R + 2 * P_H) / U)) + 1
     OW = ((int) ((W - S + 2 * P_W) / V)) + 1
     conv_as_mm_output_shape_unpadded = [1,1,OH*OW,K]
-    x = torch2tt_tensor(x, device, ttl.tensor.Layout.CHANNELS_LAST, ttl.tensor.MemoryConfig(False, 0))
+    x_shape_channel_padded = [N,nearest_32(C),H,W]
+    x = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        ).pad(x_shape_channel_padded, (0,0,0,0), 0).to(ttl.tensor.Layout.CHANNELS_LAST).to(device, ttl.tensor.MemoryConfig(False, 0))
     print("Going to run conv on tt device")
     x = conv_on_tt(x)
     print("conv on tt device done")
@@ -53,7 +59,13 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, host, conv_bias
         OH = ((int) ((H - R + 2 * P_H) / U)) + 1
         OW = ((int) ((W - S + 2 * P_W) / V)) + 1
         conv_as_mm_output_shape_unpadded = [1,1,OH*OW,K]
-        x = torch2tt_tensor(x, device, ttl.tensor.Layout.CHANNELS_LAST, ttl.tensor.MemoryConfig(False, 0))
+        x_shape_channel_padded = [N,nearest_32(C),H,W]
+        x = ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+            ).pad(x_shape_channel_padded, (0,0,0,0), 0).to(ttl.tensor.Layout.CHANNELS_LAST).to(device, ttl.tensor.MemoryConfig(False, 0))
         print("Going to run conv on tt device")
         x = conv_on_device(x)
         print("conv on tt device done")

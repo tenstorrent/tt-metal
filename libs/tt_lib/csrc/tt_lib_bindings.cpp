@@ -1308,7 +1308,7 @@ void TensorModule(py::module &m_tensor) {
         +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
     )doc");
     m_tensor.def("conv", &conv, R"doc(
-        Perform a batched matmul ``A x B`` with two tensors, where batch dims match.
+        Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
 
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+

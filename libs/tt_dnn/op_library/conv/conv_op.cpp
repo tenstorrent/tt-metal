@@ -268,7 +268,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> compute_conv_op_blo
     return std::make_tuple(num_blocks_in0_h, num_blocks_in0_w, num_blocks_in1_w, out_subblock_h, out_subblock_w);
 }
 
-vector<uint32_t> compute_conv_as_mm_shape(vector<int> shape, vector<int> conv_params) {
+vector<uint32_t> compute_conv_as_mm_shape(vector<int> shape, vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w) {
     int conv_input_x = shape[2];
     int conv_input_y = shape[1];
     int conv_input_z = shape[0];
@@ -295,9 +295,11 @@ vector<uint32_t> compute_conv_as_mm_shape(vector<int> shape, vector<int> conv_pa
     }
     // pad height
     uint32_t num_rows = (uint32_t) conv_output_h*conv_output_w;
-    uint32_t num_rows_padded = (uint32_t) (ceil((double) num_rows / (double) TILE_HEIGHT ) * TILE_HEIGHT);
+    uint32_t in0_block_h_datums = in0_block_h * TILE_HEIGHT;
+    uint32_t num_rows_padded = (uint32_t) (ceil((double) num_rows / (double) in0_block_h_datums ) * in0_block_h_datums);
     uint32_t num_cols = conv_input_z*R*S;
-    uint32_t num_cols_padded = (uint32_t) (ceil((double) num_cols / (double) TILE_WIDTH ) * TILE_HEIGHT);
+    uint32_t in0_block_w_datums = in0_block_w * TILE_WIDTH;
+    uint32_t num_cols_padded = (uint32_t) (ceil((double) num_cols / (double) in0_block_w_datums ) * in0_block_w_datums);
     return {1,num_rows_padded, num_cols_padded};
 }
 
@@ -350,8 +352,11 @@ std::pair<vector<uint32_t>, vector<uint32_t>> populate_address_map_vectors_for_r
     return make_pair(std::move(address_map), std::move(address_map_metadata));
 }
 
-Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params, bool untilize_out=true) {
+Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params,
+                                        uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
+                                        uint32_t out_subblock_h, uint32_t out_subblock_w) {
     bool pass = true;
+    bool untilize_out=true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::CHANNELS_LAST, "Conv activation should be in channels last layout");
     TT_ASSERT(a.shape()[0] == 1, "Only batch size 1 supported.");
@@ -360,7 +365,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     //TT_ASSERT(activation_C % TILE_WIDTH == 0, "Channel depth must be divisible by tile width(32).");
     // Compute the 2d matrix shape
     vector<int> activation_shape = {(int)a.shape()[1], (int)a.shape()[2], (int)a.shape()[3]};
-    auto matrix_shape = compute_conv_as_mm_shape(activation_shape , conv_params);
+    auto matrix_shape = compute_conv_as_mm_shape(activation_shape , conv_params, in0_block_h, in0_block_w);
     assert(matrix_shape.size() == 3);
     assert(matrix_shape[0] == 1);
     uint32_t num_rows = (uint32_t) matrix_shape[1];
@@ -399,21 +404,19 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     // compute block size of input, weight and subblock size of the output
     //auto [num_blocks_in0_h, num_blocks_in0_w, num_blocks_in1_w, out_subblock_h, out_subblock_w] = compute_conv_op_block_info(Hat, Wat, Wbt);
 
-    // Hard code block size to 1 tile
-    uint32_t num_blocks_in0_h = Hat;
-    uint32_t num_blocks_in0_w = Wat;
-    uint32_t num_blocks_in1_w = Wbt;
-    uint32_t out_subblock_h = 1;
-    uint32_t out_subblock_w = 1;
+    assert(Hat % in0_block_h == 0);
+    assert(Wat % in0_block_w == 0);
+    assert(Wbt % in1_block_w == 0);
+
+    uint32_t num_blocks_in0_h = Hat / in0_block_h;
+    uint32_t num_blocks_in0_w = Wat / in0_block_w;
+    uint32_t num_blocks_in1_w = Wbt / in1_block_w;
 
     // in0 block info
-    uint32_t in0_block_w = Wat / num_blocks_in0_w; // Two blocks in the W dimension
     uint32_t in0_block_w_datums = Wa / num_blocks_in0_w;
-    uint32_t in0_block_h = Hat / num_blocks_in0_h;
     uint32_t in0_block_h_datums = Ha / num_blocks_in0_h;
 
     // in1 block info
-    uint32_t in1_block_w = Wbt / num_blocks_in1_w;
     uint32_t in1_block_w_datums = Wb / num_blocks_in1_w;
     assert(in1_block_w % out_subblock_w == 0);
     uint32_t in1_num_subblocks = in1_block_w / out_subblock_w;
@@ -500,7 +503,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
 
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core = {0, 0};
-    tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
+    //tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
 
     uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
@@ -704,7 +707,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/matmul_large_block_generalized.cpp",
+        "tt_metal/kernels/compute/bmm_tilize_untilize.cpp",
         core,
         compute_kernel_args,
         MathFidelity::HiFi4,
@@ -732,9 +735,10 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     return output;
 }
 
-Tensor conv(const Tensor& a, const Tensor &b, vector<int> conv_params, bool untilize_out) {
+Tensor conv(const Tensor& a, const Tensor &b, vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
+                                        uint32_t out_subblock_h, uint32_t out_subblock_w) {
 
-    Tensor output = conv_as_large_bmm_single_core_(a, b, conv_params, untilize_out);
+    Tensor output = conv_as_large_bmm_single_core_(a, b, conv_params, in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w);
     return output;
 }
 

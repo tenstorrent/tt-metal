@@ -302,13 +302,14 @@ class ResNet(nn.Module):
             )
         self.groups = groups
         self.base_width = width_per_group
-        self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
-        self.conv1.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}conv1.weight"])
 
         conv1_weight = state_dict[f"{self.base_address_with_dot}conv1.weight"]
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
         if not self.fold_batchnorm and is_conv_supported_on_device(self.conv1_params):
             self.conv1 = run_conv_on_device_wrapper(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, self.host)
+        else:
+            self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
+            self.conv1.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}conv1.weight"])
 
         self.bn1 = norm_layer(self.inplanes) # batch norm
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.weight"])

@@ -5,18 +5,20 @@ namespace tt {
 namespace tt_metal {
 
     template <typename T>
-    Tensor to_weight_tile_layout(Tensor conv_weight_tensor) {
+    Tensor to_weight_tile_layout(Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
         auto w_shape = conv_weight_tensor.shape();
         auto data = *reinterpret_cast<std::vector<T>*>(conv_weight_tensor.data_ptr());
         auto weight_matrix_cols = w_shape[0];
         // width padding
-        if(weight_matrix_cols%32 != 0) {
-            weight_matrix_cols = (uint32_t) std::ceil( (double) weight_matrix_cols / (double) 32 ) * 32;
+        uint32_t in1_block_w_datums = in1_block_w * 32;
+        if(weight_matrix_cols%in1_block_w_datums != 0) {
+            weight_matrix_cols = (uint32_t) std::ceil( (double) weight_matrix_cols / (double) in1_block_w_datums ) * in1_block_w_datums;
         }
         // height padding
         auto weight_matrix_rows = w_shape[1]*w_shape[2]*w_shape[3];
-        if (weight_matrix_rows % 32 != 0) {
-            weight_matrix_rows = (uint32_t) std::ceil( (double) weight_matrix_rows / (double) 32 ) * 32;
+        uint32_t in1_block_h_datums = in1_block_h * 32;
+        if (weight_matrix_rows % in1_block_h_datums != 0) {
+            weight_matrix_rows = (uint32_t) std::ceil( (double) weight_matrix_rows / (double) in1_block_h_datums ) * in1_block_h_datums;
         }
         std::array<uint32_t, 4> new_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
         std::vector<T> new_data(weight_matrix_rows*weight_matrix_cols, 0);
@@ -39,14 +41,14 @@ namespace tt_metal {
 
     // Converts convolution weights to tilized 2d matrix layout.
     // Returns a new tensor with layout=Tile
-    Tensor convert_conv_weight_tensor_to_tiled_layout(Tensor conv_weight_tensor) {
+    Tensor convert_conv_weight_tensor_to_tiled_layout(Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
         TT_ASSERT(conv_weight_tensor.layout() == Layout::ROW_MAJOR && "Convolution weights should be in row major layout for conversion to tilized layout.");
-        const static std::map<DataType, std::function<Tensor(const Tensor &)>> to_w_tile_layout_map = {
+        const static std::map<DataType, std::function<Tensor(const Tensor &, uint32_t in1_block_h, uint32_t in1_block_w)>> to_w_tile_layout_map = {
             {DataType::BFLOAT16, &to_weight_tile_layout<bfloat16>},
             {DataType::FLOAT32, &to_weight_tile_layout<float>},
             {DataType::UINT32, &to_weight_tile_layout<uint32_t>}
         };
-        return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor);
+        return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w);
     }
 
 const std::array<uint32_t, 4> infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {

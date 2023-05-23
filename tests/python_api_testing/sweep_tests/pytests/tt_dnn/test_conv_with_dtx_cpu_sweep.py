@@ -8,7 +8,7 @@ sys.path.append(f"{f}/../../../..")
 
 import numpy as np
 import tt_lib as ttl
-from tt_lib.utils import blocked_mm_with_conv_act, _nearest_32
+from tt_lib.utils import blocked_mm_with_conv_act, _nearest_32, _nearest_y
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from python_api_testing.conv.pytorch_conv_tb import (
     TestLevel,
@@ -22,7 +22,7 @@ from tests.python_api_testing.conv.conv_utils import (
 import torch
 
 
-def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
+def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_golden):
     print("Testing convolution with following parameters - ")
     conv_op_test_params.print("   ")
     ctp = conv_op_test_params.conv_params
@@ -38,37 +38,43 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     stride_w = ctp.stride_w
     pad_h = ctp.pad_h
     pad_w = ctp.pad_w
+    
+    A_pyt = pytorch_inputs_and_golden[0]
+    B_pyt = pytorch_inputs_and_golden[1]
+
+    # Parameters defining block dims
+    act_block_h = 4
+    act_block_w = 4
+    weight_block_h = act_block_w
+    weight_block_w = 4
     OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
     OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
-
-    mm_output_shape = [1,1,_nearest_32(OH*OW),_nearest_32(K)]
-    A_pyt = pytorch_inputs_and_golden[0]
+    mm_output_shape = [1,1,_nearest_y(OH*OW, 32*act_block_h),_nearest_y(K, 32*weight_block_w)]
+    
+    # Prepare activations
     A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
     A_cl_data = A_cl.data()
     # Prepare weights
-    B_pyt = pytorch_inputs_and_golden[1]
-    B_tiled_ = create_conv_weight_tensor(B_pyt, K, C, R, S)
+    B_tiled_ = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
     B_tiled_data = B_tiled_.data()
+
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
         return True
     assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
 
     # Call DTX pass to transform A
-    matrix_activation_h_tiles = (int) (_nearest_32(OH*OW) / 32)
-    matrix_weight_w_tiles = (int) (_nearest_32(K) / 32)
-    matrix_activation_w_tiles = (int) (_nearest_32(C)*R*S/32)
-    # hardcode num of blocks
-    num_blocks_act_w = matrix_activation_w_tiles
-    num_blocks_act_h = matrix_activation_h_tiles
-    num_blocks_weight_w = matrix_weight_w_tiles
-    act_block_h = 1
-    act_block_w = 1
-    weight_block_w = 1
-    act_block_width_datums = (int) (_nearest_32(C)*R*S/num_blocks_act_w)
-    act_block_height_datums = (int) (_nearest_32(OH*OW)/num_blocks_act_h)
-    weight_block_width_datums = (int) (_nearest_32(K)/num_blocks_weight_w)
+    act_block_width_datums = act_block_w * 32
+    act_block_height_datums = act_block_h * 32
+    weight_block_width_datums = weight_block_w * 32
+    matrix_activation_h_tiles = (int) (_nearest_y(OH*OW, act_block_height_datums) / 32)
+    matrix_weight_w_tiles = (int) (_nearest_y(K, weight_block_width_datums) / 32)
+    matrix_activation_w_tiles = (int) (_nearest_y(_nearest_32(C)*R*S,act_block_width_datums)/32)
+
+    num_blocks_act_w = (int) (matrix_activation_w_tiles / act_block_w)
+    num_blocks_act_h = (int) (matrix_activation_h_tiles / act_block_h)
+    num_blocks_weight_w = (int) (matrix_weight_w_tiles / weight_block_w)
     (act_address_map,weight_address_map) = ttl.dtx.conv_transform([_nearest_32(C),H,W],
-                            [_nearest_32(K), _nearest_32(C),R,S],
+                            [_nearest_y(K, weight_block_width_datums), _nearest_32(C),R,S],
                             [R,S,stride_h,stride_w,pad_h,pad_w],
                             act_block_height_datums,
                             act_block_width_datums,
@@ -97,7 +103,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     return passing_pcc
 
 
-def test_sweep_conv():
+def test_sweep_conv_with_dtx_cpu():
     test_bench = generate_conv_tb()
     pytorch_conv_golden_tb = generate_conv_tb_with_pytorch_golden(test_bench)
     passing = True
@@ -109,7 +115,7 @@ def test_sweep_conv():
         conv_op_test_params,
         pytorch_inputs_and_golden,
     ) in pytorch_conv_golden_tb.items():
-        passing_ = run_conv_as_large_matmul(
+        passing_ = run_conv_as_large_matmul_dtx_cpu(
             conv_op_test_params, pytorch_inputs_and_golden
         )
         if passing_:

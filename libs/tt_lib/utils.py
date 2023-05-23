@@ -7,6 +7,9 @@ import numpy as np
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
 
+def _nearest_y(x, y):
+    return math.ceil(x / y) * y
+
 def pad_activation(x):
     """
     This function pads an activation with 0s as a pre-preprocessing step to tilization.

@@ -8,7 +8,7 @@ sys.path.append(f"{f}/../../..")
 
 import numpy as np
 import tt_lib as ttl
-from tt_lib.utils import _nearest_32
+from tt_lib.utils import _nearest_32, _nearest_y
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from python_api_testing.conv.pytorch_conv_tb import (
     TestLevel,
@@ -44,40 +44,56 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     stride_w = ctp.stride_w
     pad_h = ctp.pad_h
     pad_w = ctp.pad_w
-    OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
-    OW = ((int)((W - S + 2 * pad_w) / stride_w)) + 1
+
 
     # torch.manual_seed(0)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
-    a_activation_shape = [1, C, H, W]
-    b_weights_shape = [K, C, R, S]
-    mm_output_shape = [1, 1, _nearest_32(OH * OW), K]
 
     A_pyt = pytorch_inputs_and_golden[0]
+    B_pyt = pytorch_inputs_and_golden[1]
+
+    # Parameters to define block dims
+    act_block_h = 4
+    act_block_w = 4
+    weight_block_h = act_block_w
+    weight_block_w = 4
+    out_subblock_h = 4
+    out_subblock_w = 2
+
+    OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
+    OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
+    mm_output_shape = [1,1,_nearest_y(OH*OW, 32*act_block_h),_nearest_y(K, 32*weight_block_w)]
+
+    # Prepare activations
     A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
     A_cl_data = A_cl_host.data()
     A = A_cl_host.to(device, ttl.tensor.MemoryConfig(False, 0))
 
     # Prepare weights
-    B_pyt = pytorch_inputs_and_golden[1]
-    B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S)
-    assert B_tiled_host.shape() == [1, 1, _nearest_32(C) * R * S, _nearest_32(K)]
+    B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
     B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(False, 1))
+
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
         print("Ran test till tensor creation only. Did not run full op compute.")
         return True
     assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
-    # Run TT metal OP
 
-    out = run_conv_on_device(A, B_tiled, [R, S, stride_h, stride_w, pad_h, pad_w], True)
-    assert out.shape() == mm_output_shape
+    # Calculate conv result with golden result. Run Pytorch conv
+    out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w))
+    untilize_out = True
+    # Run TT metal OP
+    out = ttl.tensor.conv(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w)
+    out = out.to(host)
+    assert(out.shape() == mm_output_shape)
+    if not untilize_out:
+        # untilize
+        out = out.to(ttl.tensor.Layout.ROW_MAJOR)
     # Copy output to host and convert tt tensor to pytorch tensor
-    out_pytorch = torch.tensor(out.to(host).data()).reshape(mm_output_shape)
-    ttl.device.CloseDevice(device)
+    out_pytorch_padded = torch.tensor(out.data()).reshape(mm_output_shape)
     # remove padding
-    out_pytorch = out_pytorch[:, :, 0 : (OH * OW), 0:K]
+    out_pytorch = out_pytorch_padded[:, :, 0 : (OH * OW), 0 : K]
 
     # Convert matmul output layout to conv output layout
     out_tr = torch.transpose(out_pytorch, 2, 3)
@@ -130,9 +146,8 @@ def test_sweep_conv_tt():
                 failing_tests.append(conv_op_test_params)
                 print("Failed test - ")
                 conv_op_test_params.print("   ")
-                # assert(False)
         except Exception as e:
-            print("Exception error: " + e)
+            print("Exception error: " + str(e))
             failing_tests_with_exception.append(conv_op_test_params)
             passing_ = False
         passing &= passing_

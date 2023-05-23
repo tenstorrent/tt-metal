@@ -139,7 +139,9 @@ vector<uint32_t> conv_weight_transform(vector<int> weight_shape, vector<int> con
     assert(conv_params.size() == 6);
     assert(conv_params[0] == weight_shape[2]);
     assert(conv_params[1] == weight_shape[3]);
-    vector<int> conv_as_mm_weight_shape = {1, weight_shape[1] * weight_shape[2] * weight_shape[3], weight_shape[0]};
+    vector<int> conv_as_mm_weight_shape = {1,
+                nearest_to(weight_shape[1] * weight_shape[2] * weight_shape[3], weight_block_shape_yx[0]),
+                nearest_to(weight_shape[0], weight_block_shape_yx[1])};
     // Validate that the weight is padded to tile size (32x32)
     assert(conv_as_mm_weight_shape[1] % 32 == 0);
     assert(conv_as_mm_weight_shape[2] % 32 == 0);
