@@ -40,7 +40,7 @@ public:
 
     static volatile uint64_t *wall_clock_mailbox()
     {
-        return (uint64_t *)WALL_CLOCK_MAILBOX_ADDRESS;
+        return (uint64_t *)MEM_WALL_CLOCK_MAILBOX_ADDRESS;
     }
 
     static volatile uint32_t *get_io_queue_pointer_base(uint32_t base_addr, uint32_t id)
