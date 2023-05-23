@@ -9,7 +9,7 @@
 namespace tt {
 namespace tt_metal {
 
-void create_cb_bmm_single_core_tilize_untilize(Program *program,
+void create_cb_bmm_single_core_tilize_untilize(Program &program,
                                                 Device* device,
                                                 tt_xy_pair core,
                                                 uint32_t in0_block_w,
@@ -152,7 +152,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &a,
 
     tt_xy_pair core = {0, 0};
     tt_xy_pair debug_core = {1, 1};
-    Program *program = new Program();
+    Program program = Program();
     Device *device = a.device();
 
     // for kernel debug print
@@ -322,7 +322,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &a,
         out_subblock_width_ntiles,
         out_subblock_ntiles
     };
-    ComputeKernelArgs *compute_args = InitializeCompileTimeComputeKernelArgs(core, compute_comptime_args);
+    KernelArgs compute_args = KernelArgs(core, compute_comptime_args);
     auto bmm_compute = CreateComputeKernel(
         program,
         compute_kernel,
