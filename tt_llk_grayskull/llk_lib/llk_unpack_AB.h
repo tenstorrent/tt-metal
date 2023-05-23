@@ -93,7 +93,7 @@ inline void llk_unpack_AB_hw_configure_disaggregated(
 
 template <BroadcastType BType = BroadcastType::NONE>
 // within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
-inline void llk_unpack_AB_init(const std::uint32_t within_face_16x16_transpose=0) {
+inline void llk_unpack_AB_init(const std::uint32_t transpose=0, const std::uint32_t acc_to_dest=0) {
     llk_unpack_AB_mop_config<BType>();
 }
 
