@@ -36,7 +36,7 @@ void SystemMemoryWriter::cq_write(Device* device, vector<u32>& data, u32 write_p
 }
 
 void SystemMemoryWriter::send_write_ptr(Device* device) {
-    tt_xy_pair dispatch_core = {1, 11};
+    CoreCoord dispatch_core = {1, 11};
     u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
 
     tt::llrt::write_hex_vec_to_core(

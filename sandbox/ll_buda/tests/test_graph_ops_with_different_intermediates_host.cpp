@@ -89,7 +89,7 @@ ll_buda::Device* setup_grayskull_device(){
 
 }
 
-void create_cb_in_L1(ll_buda::Program *program, ll_buda::Device* device, tt_xy_pair* core, int single_tile_size){
+void create_cb_in_L1(ll_buda::Program *program, ll_buda::Device* device, CoreCoord* core, int single_tile_size){
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;
     uint32_t num_input_tiles = 2;
@@ -147,7 +147,7 @@ std::vector<uint32_t> calculate_unary_op(string sfpu_name, std::vector<uint32_t>
         ////////////////////////////////////////////////////////////////////////////
         ll_buda::Program *program = new ll_buda::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t dram_buffer_src_addr = 0;
         int dram_src_channel_id = 0;
@@ -316,7 +316,7 @@ std::vector<uint32_t> calculate_binary_op(const int op_id, const char* op_name, 
 
         ll_buda::Program *program = new ll_buda::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         ////////////////////////////////////////////////////////////////////////////
         //                      DRAM Setup

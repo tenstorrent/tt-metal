@@ -87,7 +87,7 @@ tt_metal::Program create_program(
         for(int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
             int core_idx_x = num_blocks_read % num_cores_x;
             int core_idx_y = num_blocks_read / num_cores_x;
-            tt_xy_pair core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
+            CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
 
             uint32_t src0_cb_index = 0;
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer

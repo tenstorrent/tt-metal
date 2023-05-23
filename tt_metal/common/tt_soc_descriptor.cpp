@@ -9,29 +9,29 @@
 
 #include "common/assert.hpp"
 
-bool tt_SocDescriptor::is_worker_core(const tt_xy_pair &core) const {
+bool tt_SocDescriptor::is_worker_core(const CoreCoord &core) const {
     return (
         routing_x_to_worker_x.find(core.x) != routing_x_to_worker_x.end() &&
         routing_y_to_worker_y.find(core.y) != routing_y_to_worker_y.end());
 }
-tt_xy_pair tt_SocDescriptor::get_worker_core(const tt_xy_pair &core) const {
-    tt_xy_pair worker_xy = {
+CoreCoord tt_SocDescriptor::get_worker_core(const CoreCoord &core) const {
+    CoreCoord worker_xy = {
         static_cast<size_t>(routing_x_to_worker_x.at(core.x)), static_cast<size_t>(routing_y_to_worker_y.at(core.y))};
     return worker_xy;
 }
 
 // Compute and storage cores are worker cores that do compute and their L1 can be used for storage
-bool tt_SocDescriptor::is_compute_and_storage_core(const tt_xy_pair &core) const {
+bool tt_SocDescriptor::is_compute_and_storage_core(const CoreCoord &core) const {
     return std::find(this->compute_and_storage_cores.begin(), this->compute_and_storage_cores.end(), core) != this->compute_and_storage_cores.end();
 }
 
 // Storage cores do not do any compute, their L1 is used for storage
-bool tt_SocDescriptor::is_storage_core(const tt_xy_pair &core) const {
+bool tt_SocDescriptor::is_storage_core(const CoreCoord &core) const {
     return std::find(this->storage_cores.begin(), this->storage_cores.end(), core) != this->storage_cores.end();
 }
 
 // Dispatch cores send work to compute and storage cores
-bool tt_SocDescriptor::is_dispatch_core(const tt_xy_pair &core) const {
+bool tt_SocDescriptor::is_dispatch_core(const CoreCoord &core) const {
     return std::find(this->dispatch_cores.begin(), this->dispatch_cores.end(), core) != this->dispatch_cores.end();
 }
 
@@ -44,16 +44,16 @@ int tt_SocDescriptor::get_num_dram_channels() const {
     }
     return num_channels;
 }
-tt_xy_pair tt_SocDescriptor::get_core_for_dram_channel(int dram_chan, int subchannel) const {
+CoreCoord tt_SocDescriptor::get_core_for_dram_channel(int dram_chan, int subchannel) const {
     tt::log_assert(dram_chan < this->dram_cores.size(), "dram_chan={} must be within range of num_dram_channels={}", dram_chan, this->dram_cores.size());
     tt::log_assert(subchannel < this->dram_cores.at(dram_chan).size(), "subchannel={} must be within range of num_subchannels={}", subchannel, this->dram_cores.at(dram_chan).size());
     return this->dram_cores.at(dram_chan).at(subchannel);
 };
-tt_xy_pair tt_SocDescriptor::get_preferred_worker_core_for_dram_channel(int dram_chan) const {
+CoreCoord tt_SocDescriptor::get_preferred_worker_core_for_dram_channel(int dram_chan) const {
     tt::log_assert(dram_chan < this->preferred_worker_dram_core.size(), "dram_chan={} must be within range of preferred_worker_dram_core.size={}", dram_chan, this->preferred_worker_dram_core.size());
     return this->preferred_worker_dram_core.at(dram_chan);
 };
-tt_xy_pair tt_SocDescriptor::get_preferred_eth_core_for_dram_channel(int dram_chan) const {
+CoreCoord tt_SocDescriptor::get_preferred_eth_core_for_dram_channel(int dram_chan) const {
     tt::log_assert(dram_chan < this->preferred_eth_dram_core.size(), "dram_chan={} must be within range of preferred_eth_dram_core.size={}", dram_chan, this->preferred_eth_dram_core.size());
     return this->preferred_eth_dram_core.at(dram_chan);
 };
@@ -63,7 +63,7 @@ size_t tt_SocDescriptor::get_address_offset(int dram_chan) const {
 }
 int tt_SocDescriptor::get_num_dram_subchans() const {
     int num_chan = 0;
-    for (const std::vector<tt_xy_pair> &core : this->dram_cores) {
+    for (const std::vector<CoreCoord> &core : this->dram_cores) {
         num_chan += core.size();
     }
     return num_chan;
@@ -81,11 +81,11 @@ int tt_SocDescriptor::get_num_dram_blocks_per_channel() const {
 }
 
 
-bool tt_SocDescriptor::is_ethernet_core(const tt_xy_pair &core) const {
+bool tt_SocDescriptor::is_ethernet_core(const CoreCoord &core) const {
     return this->ethernet_core_channel_map.find(core) != ethernet_core_channel_map.end();
 }
 
-bool tt_SocDescriptor::get_channel_of_ethernet_core(const tt_xy_pair &core) const {
+bool tt_SocDescriptor::get_channel_of_ethernet_core(const CoreCoord &core) const {
     return this->ethernet_core_channel_map.at(core);
 }
 
@@ -207,7 +207,7 @@ void load_core_descriptors_from_device_descriptor(
     func_y_start++;
   }
 
-  soc_descriptor.worker_grid_size = tt_xy_pair(func_x_start, func_y_start);
+  soc_descriptor.worker_grid_size = CoreCoord(func_x_start, func_y_start);
 
   auto harvested_cores = device_descriptor_yaml["harvested_workers"].as<std::vector<std::string>>();
   for (const auto &core_string : harvested_cores) {
@@ -223,19 +223,19 @@ void load_core_descriptors_from_device_descriptor(
   // compute_and_storage_cores are a subset of worker cores
   // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
   for (const auto &core_string : compute_and_storage_cores) {
-    tt_xy_pair coord = format_node(core_string);
+    CoreCoord coord = format_node(core_string);
     compute_and_storage_coords_x.insert(coord.x);
     compute_and_storage_coords_y.insert(coord.y);
     soc_descriptor.compute_and_storage_cores.push_back(coord);
   }
 
-  soc_descriptor.compute_and_storage_grid_size = tt_xy_pair(compute_and_storage_coords_x.size(), compute_and_storage_coords_y.size());
+  soc_descriptor.compute_and_storage_grid_size = CoreCoord(compute_and_storage_coords_x.size(), compute_and_storage_coords_y.size());
 
   auto storage_cores = device_descriptor_yaml["storage_cores"].as<std::vector<std::string>>();
   // storage_cores are a subset of worker cores
   // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
   for (const auto &core_string : storage_cores) {
-    tt_xy_pair coord = format_node(core_string);
+    CoreCoord coord = format_node(core_string);
     auto &storage_core_desc = soc_descriptor.cores.at(coord);
     storage_core_desc.l1_bank_size = storage_core_l1_bank_size;
     soc_descriptor.storage_cores.push_back(coord);
@@ -245,7 +245,7 @@ void load_core_descriptors_from_device_descriptor(
   // dispatch_cores are a subset of worker cores
   // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
   for (const auto &core_string : dispatch_cores) {
-    tt_xy_pair coord = format_node(core_string);
+    CoreCoord coord = format_node(core_string);
     soc_descriptor.dispatch_cores.push_back(coord);
   }
 
@@ -272,18 +272,18 @@ void load_soc_features_from_device_descriptor(YAML::Node &device_descriptor_yaml
 // Determines which core will write perf-events on which dram-bank.
 // Creates a map of dram cores to worker cores, in the order that they will get dumped.
 void map_workers_to_dram_banks(tt_SocDescriptor *soc_descriptor) {
-  for (tt_xy_pair worker:soc_descriptor->workers) {
+  for (CoreCoord worker:soc_descriptor->workers) {
     TT_ASSERT(soc_descriptor->dram_cores.size() > 0, "No DRAM channels detected");
     // Initialize target dram core to the first dram.
-    tt_xy_pair target_dram_bank = soc_descriptor->dram_cores.at(0).at(0);
-    std::vector<std::vector<tt_xy_pair>> dram_cores_per_channel;
+    CoreCoord target_dram_bank = soc_descriptor->dram_cores.at(0).at(0);
+    std::vector<std::vector<CoreCoord>> dram_cores_per_channel;
     if (soc_descriptor->arch == tt::ARCH::WORMHOLE || soc_descriptor->arch == tt::ARCH::WORMHOLE_B0) {
-      dram_cores_per_channel = {{tt_xy_pair(0, 0)}, {tt_xy_pair(0, 5)}, {tt_xy_pair(5, 0)}, {tt_xy_pair(5, 2)}, {tt_xy_pair(5, 3)}, {tt_xy_pair(5, 5)}};
+      dram_cores_per_channel = {{CoreCoord(0, 0)}, {CoreCoord(0, 5)}, {CoreCoord(5, 0)}, {CoreCoord(5, 2)}, {CoreCoord(5, 3)}, {CoreCoord(5, 5)}};
     } else {
       dram_cores_per_channel = soc_descriptor->dram_cores;
     }
     for (const auto &dram_cores : dram_cores_per_channel) {
-      for (tt_xy_pair dram: dram_cores) {
+      for (CoreCoord dram: dram_cores) {
         int diff_x = worker.x - dram.x;
         int diff_y = worker.y - dram.y;
         // Represents a dram core that comes "before" this worker.
@@ -301,7 +301,7 @@ void map_workers_to_dram_banks(tt_SocDescriptor *soc_descriptor) {
       }
     }
     if (soc_descriptor->perf_dram_bank_to_workers.find(target_dram_bank) == soc_descriptor->perf_dram_bank_to_workers.end()) {
-      soc_descriptor->perf_dram_bank_to_workers.insert(std::pair<tt_xy_pair, std::vector<tt_xy_pair>>(target_dram_bank, {worker}));
+      soc_descriptor->perf_dram_bank_to_workers.insert(std::pair<CoreCoord, std::vector<CoreCoord>>(target_dram_bank, {worker}));
     } else {
       soc_descriptor->perf_dram_bank_to_workers[target_dram_bank].push_back(worker);
     }
@@ -326,7 +326,7 @@ std::unique_ptr<tt_SocDescriptor> load_soc_descriptor_from_yaml(std::string devi
   auto grid_size_y = device_descriptor_yaml["grid"]["y_size"].as<int>();
 
   load_core_descriptors_from_device_descriptor(device_descriptor_yaml, *soc_descriptor);
-  soc_descriptor->grid_size = tt_xy_pair(grid_size_x, grid_size_y);
+  soc_descriptor->grid_size = CoreCoord(grid_size_x, grid_size_y);
   soc_descriptor->device_descriptor_file_path = device_descriptor_file_path;
   soc_descriptor->trisc_sizes = trisc_sizes;
 

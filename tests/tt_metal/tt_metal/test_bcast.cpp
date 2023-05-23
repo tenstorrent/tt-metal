@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         vector<uint32_t> shape = {2, 4, 2*TILE_HEIGHT, 3*TILE_WIDTH};
         u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0], N = shape[0], C = shape[1];

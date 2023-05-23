@@ -121,7 +121,7 @@ ll_buda::Program *create_program(
     ll_buda::Program *program = new ll_buda::Program();
 
     for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++) {
-        tt_xy_pair core = {core_idx % 12, core_idx / 12};
+        CoreCoord core = {core_idx % 12, core_idx / 12};
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
@@ -206,7 +206,7 @@ void write_runtime_args_to_device(
 
     auto dm_kernels = program->data_movement_kernels();
     for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
-        tt_xy_pair core = {core_idx % 12, core_idx / 12};
+        CoreCoord core = {core_idx % 12, core_idx / 12};
 
         uint32_t src_dram_channel = input_locs_per_core[core_idx].first;
         uint32_t src_dram_addr = input_locs_per_core[core_idx].second;
@@ -251,7 +251,7 @@ void write_op_info_to_l1(
 ) {
 
     for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
-        tt_xy_pair core = {core_idx % 12, core_idx / 12};
+        CoreCoord core = {core_idx % 12, core_idx / 12};
         std::vector<string> sfpu_chain = sfpu_chain_per_core[core_idx];
         uint32_t chain_length = sfpu_chain.size();
         for (int idx = 0; idx < chain_length; idx++) {
@@ -343,7 +343,7 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
         vector<ll_buda::DramBuffer *> dst_dram_buffer_per_core;
         vector<ll_buda::ComputeKernelArgs *> graph_interpreter_kernel_args_per_core;
         for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
-            tt_xy_pair core = {core_idx % 12, core_idx / 12};
+            CoreCoord core = {core_idx % 12, core_idx / 12};
 
             //Output DRAM Loc is fixed per core
             uint32_t dst_dram_channel_id = core_idx % num_dram_channels;
@@ -391,7 +391,7 @@ bool run_chained_sfpu_test(uint32_t chain_length, uint32_t num_cores, uint32_t n
             vector<std::pair<uint32_t, uint32_t> > input_locs_per_core;
 
             for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
-                tt_xy_pair core = {core_idx % 12, core_idx / 12};
+                CoreCoord core = {core_idx % 12, core_idx / 12};
                 vector<string> sfpu_chain;
 
                 // Create random chain of sfpu ops
@@ -518,7 +518,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
         vector<ll_buda::DataMovementKernel *> writer_kernel_per_core;
 
         for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
-            tt_xy_pair core = {core_idx % 12, core_idx / 12};
+            CoreCoord core = {core_idx % 12, core_idx / 12};
 
             uint32_t dst_dram_channel_id = core_idx % num_dram_channels;
             auto dst_dram_buffer = ll_buda::CreateDramBuffer(device, dst_dram_channel_id, dst_dram_buffer_size, dst_dram_buffer_base_addr + dst_dram_buffer_size * (core_idx / num_dram_channels));
@@ -630,7 +630,7 @@ bool run_chained_binary_test(uint32_t chain_length, uint32_t num_cores, uint32_t
             vector<vector<string> > binary_chain_per_core;
             vector<std::vector<std::pair<uint32_t, uint32_t> > > input_locs_per_core;
             for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++){
-                tt_xy_pair core = {core_idx % 12, core_idx / 12};
+                CoreCoord core = {core_idx % 12, core_idx / 12};
                 vector<string> binary_chain;
 
                 // Create random chain of binary ops

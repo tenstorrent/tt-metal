@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include "tt_xy_pair.h"
+#include "core_coord.h"
 
 #include <unordered_map>
 #include <unordered_set>
@@ -20,7 +20,7 @@ class tt_ClusterDescriptor {
   private:
 
   std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t> > > ethernet_connections;
-  std::unordered_map<chip_id_t, tt_xy_pair> chip_locations;
+  std::unordered_map<chip_id_t, CoreCoord> chip_locations;
   std::unordered_set<chip_id_t> chips_with_mmio;
   std::unordered_set<chip_id_t> all_chips;
 
@@ -44,13 +44,13 @@ class tt_ClusterDescriptor {
   static std::unique_ptr<tt_ClusterDescriptor> create_from_yaml(const std::string &cluster_descriptor_file_path);
   static std::unique_ptr<tt_ClusterDescriptor> create_for_grayskull_cluster(
       const std::set<chip_id_t> &target_device_ids);
-  // const tt_xy_pair get_chip_xy(const chip_id_t &chip_id) const;
-  // const chip_id_t get_chip_id_at_location(const tt_xy_pair &chip_location) const;
+  // const CoreCoord get_chip_xy(const chip_id_t &chip_id) const;
+  // const chip_id_t get_chip_id_at_location(const CoreCoord &chip_location) const;
 
 
   bool chips_have_ethernet_connectivity() const;
 
-  std::unordered_map<chip_id_t, tt_xy_pair> get_chip_locations() const;
+  std::unordered_map<chip_id_t, CoreCoord> get_chip_locations() const;
   std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t> > > get_ethernet_connections() const;
   std::unordered_set<chip_id_t> get_chips_with_mmio() const;
   std::unordered_set<chip_id_t> get_all_chips() const;

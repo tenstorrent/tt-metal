@@ -13,7 +13,7 @@ namespace tt_metal {
 namespace allocator {
 
 void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const tt_SocDescriptor &soc_desc) {
-    auto in_core_category = [](const std::vector<tt_xy_pair> &core_category, const tt_xy_pair &noc_core){
+    auto in_core_category = [](const std::vector<CoreCoord> &core_category, const CoreCoord &noc_core){
         return std::find(core_category.begin(), core_category.end(), noc_core) != core_category.end();
     };
 
@@ -30,10 +30,10 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const tt_Soc
     uint32_t bank_id = 0;
     for (uint32_t y = 0; y < soc_desc.worker_grid_size.y; y++) {
         for (uint32_t x = 0; x < soc_desc.worker_grid_size.x; x++) {
-            tt_xy_pair logical_core = tt_xy_pair(x, y);
+            CoreCoord logical_core = CoreCoord(x, y);
             uint32_t noc_x = soc_desc.worker_log_to_routing_x.at(x);
             uint32_t noc_y = soc_desc.worker_log_to_routing_y.at(y);
-            tt_xy_pair noc_core = tt_xy_pair(noc_x, noc_y);
+            CoreCoord noc_core = CoreCoord(noc_x, noc_y);
             if (in_core_category(soc_desc.compute_and_storage_cores, noc_core)) {
                 uint32_t remapped_bank_id = shuffled_l1_bank_ids[bank_id];
                 allocator.logical_core_to_bank_ids.insert({logical_core, {remapped_bank_id}});

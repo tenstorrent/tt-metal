@@ -10,7 +10,7 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype) {
     }
 }
 
-u32 noc_coord_to_u32(tt_xy_pair coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
+u32 noc_coord_to_u32(CoreCoord coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
 
 
 // EnqueueReadBufferCommandSection
@@ -169,7 +169,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     // Currently hard-coded. TODO(agrebenisan): Once we add support for multiple dispatch cores, this can be refactored,
     // but don't yet have a plan for where this variable should exist.
-    tt_xy_pair dispatch_core = {1, 11};
+    CoreCoord dispatch_core = {1, 11};
     tt::llrt::test_load_write_read_risc_binary(
         device->cluster(), "built_kernels/command_queue/brisc/brisc.hex", 0, dispatch_core, 0);
 

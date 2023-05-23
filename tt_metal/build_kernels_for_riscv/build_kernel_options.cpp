@@ -1,5 +1,5 @@
 #include "common/assert.hpp"
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
 #include <iostream>
 #include <string>

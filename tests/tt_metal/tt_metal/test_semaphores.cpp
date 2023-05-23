@@ -107,7 +107,7 @@ bool test_initialize_semaphores(tt_metal::Device *device, tt_metal::Program &pro
 
     for (auto x = core_range.first.x; x <= core_range.second.x; x++) {
         for (auto y = core_range.first.y; y <= core_range.second.y; y++) {
-            auto logical_core = tt_xy_pair(x, y);
+            auto logical_core = CoreCoord(x, y);
             std::vector<uint32_t> res;
             tt_metal::ReadFromDeviceL1(device, logical_core, SEMAPHORE_BASE, SEMAPHORE_SIZE, res);
             pass &= res == golden;

@@ -48,8 +48,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair loader_logical_core = {0, 0};
-        tt_xy_pair writer_logical_core = {0, 1};
+        CoreCoord loader_logical_core = {0, 0};
+        CoreCoord writer_logical_core = {0, 1};
         auto loader_worker_core = device->worker_core_from_logical_core(loader_logical_core);
         auto writer_worker_core = device->worker_core_from_logical_core(writer_logical_core);
 

@@ -22,7 +22,7 @@ Tensor tilize(const Tensor &a) {
     }
     tt_metal::Program program = tt_metal::Program();
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
@@ -169,7 +169,7 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
     }
     tt_metal::Program program = tt_metal::Program();
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
@@ -351,7 +351,7 @@ Tensor tilize_conv_activation(const Tensor &a, bool conv1x1 = false) {
     tt_metal::Program program = tt_metal::Program();
     tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");

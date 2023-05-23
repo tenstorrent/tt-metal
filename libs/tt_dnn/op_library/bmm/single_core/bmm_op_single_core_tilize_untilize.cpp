@@ -11,7 +11,7 @@ namespace tt_metal {
 
 void create_cb_bmm_single_core_tilize_untilize(Program &program,
                                                 Device* device,
-                                                tt_xy_pair core,
+                                                CoreCoord core,
                                                 uint32_t in0_block_w,
                                                 uint32_t in0_block_h,
                                                 uint32_t in1_block_w,
@@ -150,8 +150,8 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &a,
     TT_ASSERT(src0_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor a must be divisible by tile_size_bytes");
     TT_ASSERT(src1_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor b must be divisible by tile_size_bytes");
 
-    tt_xy_pair core = {0, 0};
-    tt_xy_pair debug_core = {1, 1};
+    CoreCoord core = {0, 0};
+    CoreCoord debug_core = {1, 1};
     Program program = Program();
     Device *device = a.device();
 

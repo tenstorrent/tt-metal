@@ -25,12 +25,12 @@ std::vector<std::tuple<ethernet_channel_t, ethernet_channel_t>> tt_ClusterDescri
     return directly_connected_channels;
 }
 
-// const tt_xy_pair tt_ClusterDescriptor::get_chip_xy(const chip_id_t &chip_id) const {
+// const CoreCoord tt_ClusterDescriptor::get_chip_xy(const chip_id_t &chip_id) const {
 //     // For now we only support a 1D cluster, so the mapping is trivial (where the chip ID is the x value of the xy location)
-//     return tt_xy_pair(chip_id, 0);
+//     return CoreCoord(chip_id, 0);
 // }
 
-// const chip_id_t tt_ClusterDescriptor::get_chip_id_at_location(const tt_xy_pair &chip_location) const {
+// const chip_id_t tt_ClusterDescriptor::get_chip_id_at_location(const CoreCoord &chip_location) const {
 //     // For now we only support a 1D cluster, so the mapping is trivial (where the chip ID is the x value of the xy location)
 //     return chip_location.x;
 // }
@@ -125,7 +125,7 @@ void tt_ClusterDescriptor::load_ethernet_connections_from_connectivity_descripto
 void tt_ClusterDescriptor::load_chips_from_connectivity_descriptor(YAML::Node &yaml, tt_ClusterDescriptor &desc) {
     for (YAML::const_iterator node = yaml["chips"].begin(); node != yaml["chips"].end(); ++node) {
         chip_id_t chip_id = node->first.as<int>();
-        tt_xy_pair chip_location = format_node(node->second.as<std::string>());
+        CoreCoord chip_location = format_node(node->second.as<std::string>());
         desc.chip_locations.insert({chip_id, chip_location});
         desc.all_chips.insert(chip_id);
     }
@@ -173,8 +173,8 @@ std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<
     return eth_connections;
 }
 
-std::unordered_map<chip_id_t, tt_xy_pair> tt_ClusterDescriptor::get_chip_locations() const {
-    auto locations = std::unordered_map<chip_id_t, tt_xy_pair>();
+std::unordered_map<chip_id_t, CoreCoord> tt_ClusterDescriptor::get_chip_locations() const {
+    auto locations = std::unordered_map<chip_id_t, CoreCoord>();
     for (auto chip_id : this->enabled_active_chips) {
         locations[chip_id] = chip_locations.at(chip_id);
     }

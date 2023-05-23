@@ -102,19 +102,19 @@ void assert_reset_for_all_chips(tt_cluster *cluster) {
     }
 }
 
-// tt_xy_pair core --> NOC coordinates ("functional workers" from the SOC descriptor)
+// CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
 void write_hex_vec_to_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access) {
+    tt_cluster *cluster, int chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access) {
     // the API is named "write_dram_vec", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
     cluster->write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr, small_access);
 }
 
 std::vector<std::uint32_t> read_hex_vec_from_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, uint64_t addr, uint32_t size) {
+    tt_cluster *cluster, int chip, const CoreCoord &core, uint64_t addr, uint32_t size) {
     vector<std::uint32_t> read_hex_vec;
     cluster->read_dram_vec(read_hex_vec, tt_cxy_pair(chip, core), addr, size);
     return read_hex_vec;
@@ -122,13 +122,13 @@ std::vector<std::uint32_t> read_hex_vec_from_core(
 
 void print_worker_cores(tt_cluster *cluster, chip_id_t chip_id) {
     std::cout << std::endl << "worker cores: " << std::endl;
-    for (const tt_xy_pair &core : cluster->get_soc_desc(chip_id).workers) {
+    for (const CoreCoord &core : cluster->get_soc_desc(chip_id).workers) {
         std::cout << core.str() << " ";
     }
     std::cout << std::endl << std::endl;
 }
 
-bool is_worker_core(tt_cluster *cluster, const tt_xy_pair &core, chip_id_t chip_id) {
+bool is_worker_core(tt_cluster *cluster, const CoreCoord &core, chip_id_t chip_id) {
     return std::find(
                cluster->get_soc_desc(chip_id).workers.begin(), cluster->get_soc_desc(chip_id).workers.end(), core) !=
            cluster->get_soc_desc(chip_id).workers.end();
@@ -154,12 +154,12 @@ void set_config_for_circular_buffer(
 }
 
 void write_circular_buffer_config_vector_to_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, CircularBufferConfigVec circular_buffer_config_vec) {
+    tt_cluster *cluster, int chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec) {
     write_hex_vec_to_core(cluster, chip, core, circular_buffer_config_vec, CIRCULAR_BUFFER_CONFIG_BASE);
 }
 
 void write_graph_interpreter_op_info_to_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, op_info_t op_info, int op_idx) {
+    tt_cluster *cluster, int chip, const CoreCoord &core, op_info_t op_info, int op_idx) {
     vector<uint32_t> op_info_vec = {
         op_info.op_code,
         op_info.cb_in0_id,
@@ -176,7 +176,7 @@ void write_graph_interpreter_op_info_to_core(
 // for BRISC and NCRISC
 // TODO(AP): deduplicate with trisc variant
 bool test_load_write_read_risc_binary(
-    tt_cluster *cluster, std::string hex_file_path, int chip_id, const tt_xy_pair &core, int riscv_id) {
+    tt_cluster *cluster, std::string hex_file_path, int chip_id, const CoreCoord &core, int riscv_id) {
     // PROF_BEGIN("get_risc")
     assert(riscv_id == 0 || riscv_id == 1);
 
@@ -232,7 +232,7 @@ bool test_load_write_read_risc_binary(
 
 // for TRISCs
 bool test_load_write_read_trisc_binary(
-    tt_cluster *cluster, std::string hex_file_path, int chip_id, const tt_xy_pair &core, int triscv_id) {
+    tt_cluster *cluster, std::string hex_file_path, int chip_id, const CoreCoord &core, int triscv_id) {
     assert(triscv_id >= 0 and triscv_id <= 2);
 
     assert(is_worker_core(cluster, core, chip_id));
@@ -267,28 +267,28 @@ bool test_load_write_read_trisc_binary(
     return true;
 }
 
-void disable_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair &core) {
+void disable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
     // disable NCRISC
     uint64_t use_ncrisc_addr = RUNTIME_CONFIG_BASE;
     write_hex_vec_to_core(cluster, chip_id, core, {0}, use_ncrisc_addr);
     log_debug(tt::LogLLRuntime, "disabled ncrisc");
 }
 
-void enable_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair &core) {
+void enable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
     // enable NCRISC
     uint64_t use_ncrisc_addr = RUNTIME_CONFIG_BASE;
     write_hex_vec_to_core(cluster, chip_id, core, {1}, use_ncrisc_addr);
     log_debug(tt::LogLLRuntime, "enabled ncrisc");
 }
 
-void enable_triscs(tt_cluster *cluster, int chip_id, const tt_xy_pair &core) {
+void enable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
     // enable TRISCs
     uint64_t use_triscs_addr = RUNTIME_CONFIG_BASE + 4;  // TODO: need this as a dedicted const
     write_hex_vec_to_core(cluster, chip_id, core, {1}, use_triscs_addr);
     log_debug(tt::LogLLRuntime, "enabled triscs");
 }
 
-void disable_triscs(tt_cluster *cluster, int chip_id, const tt_xy_pair &core) {
+void disable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
     // disable TRISCs
     uint64_t use_triscs_addr = RUNTIME_CONFIG_BASE + 4;  // TODO: need this as a dedicted const
     write_hex_vec_to_core(cluster, chip_id, core, {0}, use_triscs_addr);
@@ -297,14 +297,14 @@ void disable_triscs(tt_cluster *cluster, int chip_id, const tt_xy_pair &core) {
 
 WorkerCores get_worker_cores_from_cluster(tt_cluster *cluster, int chip_id) {
     WorkerCores worker_cores;
-    for (tt_xy_pair raw_core : cluster->get_soc_desc(chip_id).workers) {
+    for (CoreCoord raw_core : cluster->get_soc_desc(chip_id).workers) {
         TT_ASSERT(cluster->get_soc_desc(chip_id).is_worker_core(raw_core));
         worker_cores.emplace_back(chip_id, raw_core);
     }
     return worker_cores;
 }
 
-tt_xy_pair get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id) {
+CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id) {
     return cluster->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(dram_channel_id);
 }
 
@@ -320,10 +320,10 @@ void log_current_ai_clk(tt_cluster *cluster) {
 namespace internal_ {
 // This loads to briscs and ncriscs - we may want to add TensixRiscsOptions here
 void load_blank_kernel_to_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<tt_xy_pair> cores) {
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores) {
     TT_ASSERT(riscs_to_load != TensixRiscsOptions::NONE, "You must specify a non-NONE RISC to load blank kernels to");
 
-    for (const tt_xy_pair &core : cores) {
+    for (const CoreCoord &core : cores) {
         bool pass = true;
 
         // PROF_BEGIN("write_brisc")
@@ -356,8 +356,8 @@ void load_blank_kernel_to_cores(
 }
 
 void load_blank_kernel_to_all_worker_cores_with_exceptions(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<tt_xy_pair> exceptions) {
-    std::vector<tt_xy_pair> cores_to_load_with_blanks;  // PROF_BEGIN("set_diff")
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> exceptions) {
+    std::vector<CoreCoord> cores_to_load_with_blanks;  // PROF_BEGIN("set_diff")
     std::set_difference(
         cluster->get_soc_desc(chip_id).workers.begin(),
         cluster->get_soc_desc(chip_id).workers.end(),
@@ -366,14 +366,14 @@ void load_blank_kernel_to_all_worker_cores_with_exceptions(
         std::inserter(cores_to_load_with_blanks, cores_to_load_with_blanks.begin()));
     // PROF_END("set_diff")
 
-    for (const tt_xy_pair &core : cores_to_load_with_blanks) {  // PROF_BEGIN("log_blank")
+    for (const CoreCoord &core : cores_to_load_with_blanks) {  // PROF_BEGIN("log_blank")
         log_debug(tt::LogLLRuntime, "loading blank to core - {}", core.str());
     }  // PROF_END("log_blank")
 
     load_blank_kernel_to_cores(cluster, chip_id, riscs_to_load, cores_to_load_with_blanks);
 }
 
-void enable_core(tt_cluster *cluster, int chip_id, const tt_xy_pair &core) {
+void enable_core(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
     std::vector<uint32_t> enable_core_enable_val = {ENABLE_CORE_ENABLE_VALUE};
     write_hex_vec_to_core(cluster, chip_id, core, enable_core_enable_val, ENABLE_CORE_MAILBOX_ADDR);
     std::vector<uint32_t> enable_core_mailbox_init_val_check;
@@ -384,13 +384,13 @@ void enable_core(tt_cluster *cluster, int chip_id, const tt_xy_pair &core) {
         "val: " + std::to_string(enable_core_mailbox_init_val_check[0]));
 }
 
-void enable_cores(tt_cluster *cluster, int chip_id, const std::vector<tt_xy_pair> &cores) {
-    for (const tt_xy_pair &core : cores) {
+void enable_cores(tt_cluster *cluster, int chip_id, const std::vector<CoreCoord> &cores) {
+    for (const CoreCoord &core : cores) {
         enable_core(cluster, chip_id, core);
     }
 }
 
-void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const tt_xy_pair &core) {
+void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
     std::vector<uint32_t> enable_core_mailbox_init_val_check = {0};
     enable_core_mailbox_init_val_check = read_hex_vec_from_core(
         cluster, chip_id, core, ENABLE_CORE_MAILBOX_ADDR, sizeof(uint32_t));  // read a single uint32_t
@@ -400,7 +400,7 @@ void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_
 }
 
 void setup_riscs_on_specified_core(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const tt_xy_pair &core) {
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core) {
     if (riscs_options == TensixRiscsOptions::NONE) {
         TT_THROW("You can't run nothing on the riscs on core " + core.str());
     }
@@ -446,14 +446,14 @@ void setup_riscs_on_specified_core(
 }
 
 void setup_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const std::vector<tt_xy_pair> &cores) {
-    for (const tt_xy_pair &core : cores) {
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const std::vector<CoreCoord> &cores) {
+    for (const CoreCoord &core : cores) {
         setup_riscs_on_specified_core(cluster, chip_id, riscs_options, core);
     }
 }
 
 bool check_if_riscs_on_specified_core_done(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const tt_xy_pair &core) {
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core) {
     bool core_is_done = true;
 
     std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t test_mailbox_address_) {
@@ -499,7 +499,7 @@ bool check_if_riscs_on_specified_core_done(
 }
 
 void cleanup_risc_on_specified_core(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const tt_xy_pair &core) {
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core) {
     bool involves_triscs = deduce_if_involves_triscs(riscs_options);
     bool involves_ncrisc = deduce_if_involves_ncrisc(riscs_options);
 
@@ -513,7 +513,7 @@ void cleanup_risc_on_specified_core(
 }
 
 void run_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<tt_xy_pair> &cores, const std::vector<uint32_t> &hugepage_done_addrs, bool stagger_start) {
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<CoreCoord> &cores, const std::vector<uint32_t> &hugepage_done_addrs, bool stagger_start) {
 
     bool write_to_huge_page = hugepage_done_addrs.size() > 0;
     if (write_to_huge_page) {
@@ -522,7 +522,7 @@ void run_riscs_on_specified_cores(
         cluster->write_sysmem_vec(reset, dispatch_done_addr, chip_id);
     }
 
-    for (const tt_xy_pair &core_ : cores) {
+    for (const CoreCoord &core_ : cores) {
         tt_cxy_pair core = tt_cxy_pair(chip_id, core_);
         if (stagger_start){
             cluster->set_remote_tensix_risc_reset(core, TENSIX_DEASSERT_SOFT_RESET);
@@ -545,7 +545,7 @@ void run_riscs_on_specified_cores(
             riscs_are_done = true;
             // Poll hugepage to see that dispatch has completed
             uint32_t idx = 0;
-            for (const tt_xy_pair &core : cores) {
+            for (const CoreCoord &core : cores) {
                 uint32_t hugepage_done_addr = hugepage_done_addrs.at(idx++);
                 cluster->read_sysmem_vec(riscs_are_done_vec, dispatch_done_addr, 4, chip_id);
                 riscs_are_done &= riscs_are_done_vec.at(0) == NOTIFY_HOST_KERNEL_COMPLETE_VALUE;
@@ -557,13 +557,13 @@ void run_riscs_on_specified_cores(
         bool riscs_are_done = false;
         while (!riscs_are_done) {
             riscs_are_done = true;
-            for (const tt_xy_pair &core : cores) {
+            for (const CoreCoord &core : cores) {
                 riscs_are_done &= check_if_riscs_on_specified_core_done(cluster, chip_id, riscs_option, core);
             }
         }
     }
 
-    for (const tt_xy_pair &core : cores) {
+    for (const CoreCoord &core : cores) {
         cleanup_risc_on_specified_core(cluster, chip_id, riscs_option, core);
     }
 

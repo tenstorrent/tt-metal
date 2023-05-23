@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
 
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t dram_buffer_size = 2 * 64;
         uint32_t input_dram_buffer_addr = 0;

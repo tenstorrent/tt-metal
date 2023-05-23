@@ -79,7 +79,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
 
@@ -199,7 +199,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
             (uint32_t) dram_dst_noc_xy.y,
             (uint32_t) num_output_tiles});
 
-        tt_xy_pair debug_core = {1,1};
+        CoreCoord debug_core = {1,1};
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -271,7 +271,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
 
@@ -392,7 +392,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
             (uint32_t) stick_size,
             (uint32_t) log2(stick_size)});
 
-        tt_xy_pair debug_core = {1,1};
+        CoreCoord debug_core = {1,1};
         read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
         read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 1);
         pass &= tt_metal::LaunchKernels(device, program);
@@ -448,7 +448,7 @@ bool test_interleaved_l1_datacopy() {
     pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
 
     tt_metal::Program program = tt_metal::Program();
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,

@@ -101,7 +101,7 @@ ll_buda::Device* setup_grayskull_device()
     return device;
 }
 
-void create_cb_in_L1(ll_buda::Program *program, ll_buda::Device* device, tt_xy_pair core, int single_tile_size)
+void create_cb_in_L1(ll_buda::Program *program, ll_buda::Device* device, CoreCoord core, int single_tile_size)
 {
     uint32_t src0_cb_index = 0;
     uint32_t src0_cb_addr = 200 * 1024;
@@ -243,9 +243,9 @@ tt_binary_program_t create_binary_op_program(
 // Each core takes part of input/output buffers
 bool execute_binary_op(
     tt_binary_program_t tt_binary_program,
-    uint32_t dram_buffer_src0_addr, tt_xy_pair dram_src0_noc_xy,
-    uint32_t dram_buffer_src1_addr, tt_xy_pair dram_src1_noc_xy,
-    uint32_t dram_buffer_dst_addr, tt_xy_pair dram_dst_noc_xy,
+    uint32_t dram_buffer_src0_addr, CoreCoord dram_src0_noc_xy,
+    uint32_t dram_buffer_src1_addr, CoreCoord dram_src1_noc_xy,
+    uint32_t dram_buffer_dst_addr, CoreCoord dram_dst_noc_xy,
     uint32_t dram_buffer_size,
     ll_buda::Device* device,
     const ll_buda::CoreRange& cores)
@@ -271,7 +271,7 @@ bool execute_binary_op(
         {
             for (size_t y = cores.first.y; y <= cores.second.y; y++)
             {
-                tt_xy_pair core {x, y};
+                CoreCoord core {x, y};
 
                 ll_buda::WriteRuntimeArgsToDevice(
                     device,

@@ -7,7 +7,7 @@ namespace tt {
 
 namespace tt_metal {
 
-KernelArgs::KernelArgs(const tt_xy_pair &logical_core, const std::vector<uint32_t> &compile_time_args) {
+KernelArgs::KernelArgs(const CoreCoord &logical_core, const std::vector<uint32_t> &compile_time_args) {
     core_to_compile_time_args_.insert({logical_core, compile_time_args});
 }
 
@@ -17,7 +17,7 @@ void KernelArgs::set_kernel_args_map(const CoreBlocks &core_blocks, const std::v
         auto args = args_spec.at(index);
 
         std::visit(overloaded_core {
-            [this, args, set_compile_time_args](tt_xy_pair single_core) {
+            [this, args, set_compile_time_args](CoreCoord single_core) {
                 if (set_compile_time_args) {
                     this->core_to_compile_time_args_.insert({single_core, args});
                 } else {
@@ -30,7 +30,7 @@ void KernelArgs::set_kernel_args_map(const CoreBlocks &core_blocks, const std::v
                 TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
                 for (auto x = start_core.x; x <= end_core.x; x++) {
                     for (auto y = start_core.y; y <= end_core.y; y++) {
-                        auto core_in_range = tt_xy_pair(x, y);
+                        auto core_in_range = CoreCoord(x, y);
                         if (set_compile_time_args) {
                             this->core_to_compile_time_args_.insert({core_in_range, args});
                         } else {
@@ -78,21 +78,21 @@ KernelArgs &KernelArgs::operator=(KernelArgs &&other) {
     return *this;
 }
 
-std::vector<uint32_t> KernelArgs::compile_time_args(const tt_xy_pair &logical_core) const {
+std::vector<uint32_t> KernelArgs::compile_time_args(const CoreCoord &logical_core) const {
     if (core_to_compile_time_args_.find(logical_core) != core_to_compile_time_args_.end()) {
         return core_to_compile_time_args_.at(logical_core);
     }
     return {};
 }
 
-std::vector<uint32_t> KernelArgs::runtime_args(const tt_xy_pair &logical_core) const {
+std::vector<uint32_t> KernelArgs::runtime_args(const CoreCoord &logical_core) const {
     if (core_to_runtime_args_.find(logical_core) != core_to_runtime_args_.end()) {
         return core_to_runtime_args_.at(logical_core);
     }
     return {};
 }
 
-void KernelArgs::set_runtime_args(const tt_xy_pair &logical_core, const std::vector<uint32_t> &runtime_args) {
+void KernelArgs::set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
     core_to_runtime_args_.insert_or_assign(logical_core, runtime_args);
 }
 

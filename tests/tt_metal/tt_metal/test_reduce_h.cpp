@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         vector<uint32_t> shape = {1, 3, 19*TILE_HEIGHT, 17*TILE_WIDTH};
         //std::cout << "++ A" << std::endl;

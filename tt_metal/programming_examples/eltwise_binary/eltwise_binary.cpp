@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
         */
         Program program = Program();
 
-        constexpr tt_xy_pair core = {0, 0};
+        constexpr CoreCoord core = {0, 0};
 
         constexpr uint32_t single_tile_size = 2 * 1024;
         constexpr uint32_t num_tiles = 2048;

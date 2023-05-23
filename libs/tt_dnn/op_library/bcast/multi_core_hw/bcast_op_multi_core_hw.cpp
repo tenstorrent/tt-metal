@@ -58,7 +58,7 @@ Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum b
 	std::vector<tt_metal::DataMovementKernel *> binary_reader_kernels;
     std::vector<tt_metal::DataMovementKernel *> unary_writer_kernels;
     for (uint32_t i = 0; i < num_cores; i++){
-		tt_xy_pair core = {i / num_cores_y, i % num_cores_y};
+		CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
 		uint32_t src0_cb_index = 0;
 		uint32_t num_input_tiles = 2;
@@ -153,7 +153,7 @@ Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum b
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
 	for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; num_tiles_read+=num_tiles_per_core[i], i++){
-		tt_xy_pair core = {i / num_cores_y, i % num_cores_y};
+		CoreCoord core = {i / num_cores_y, i % num_cores_y};
 		uint32_t num_tensor_tiles_per_core = num_tiles_per_core[i];
 
 		uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;

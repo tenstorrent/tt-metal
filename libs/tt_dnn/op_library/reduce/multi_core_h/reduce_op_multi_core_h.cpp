@@ -56,7 +56,7 @@ Tensor reduce_multi_core_h(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
     std::vector<tt_metal::DataMovementKernel *> unary_reader_kernels;
     std::vector<tt_metal::DataMovementKernel *> unary_writer_kernels;
     for (uint32_t i = 0; i < num_cores; i++){
-        tt_xy_pair core = {i / num_cores_y, i % num_cores_y};
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 2;
         auto cb_src0 = tt_metal::CreateCircularBuffer(
@@ -151,7 +151,7 @@ Tensor reduce_multi_core_h(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
 
     uint32_t out_dim_divider = Ht;
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
-        tt_xy_pair core = {i / num_cores_y, i % num_cores_y};
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tensor_tiles_per_core = Ht*num_cols_per_core[i];
         tt_metal::WriteRuntimeArgsToDevice(
             device, unary_reader_kernels[i], core,

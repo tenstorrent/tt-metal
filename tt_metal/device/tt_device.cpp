@@ -19,9 +19,9 @@
 //
 // Helper functions
 //
-std::string format_node(tt_xy_pair xy) { return std::to_string(xy.x) + "-" + std::to_string(xy.y); }
+std::string format_node(CoreCoord xy) { return std::to_string(xy.x) + "-" + std::to_string(xy.y); }
 
-tt_xy_pair format_node(std::string str) {
+CoreCoord format_node(std::string str) {
   int x_coord;
   int y_coord;
   std::regex expr("([0-9]+)[-,xX]([0-9]+)");
@@ -34,7 +34,7 @@ tt_xy_pair format_node(std::string str) {
     throw std::runtime_error("Could not parse the core id: " + str);
   }
 
-  tt_xy_pair xy(x_coord, y_coord);
+  CoreCoord xy(x_coord, y_coord);
 
   return xy;
 }

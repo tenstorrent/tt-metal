@@ -11,7 +11,7 @@
 #include "llrt.hpp"
 #include "test_libs/tiles.hpp"
 
-bool run_risc_read_speed(tt_cluster *cluster, int chip_id, const tt_xy_pair& core, std::uint32_t buffer_size, std::uint32_t num_repetitions, std::uint32_t transaction_size, const tt_xy_pair& src_xy) {
+bool run_risc_read_speed(tt_cluster *cluster, int chip_id, const CoreCoord& core, std::uint32_t buffer_size, std::uint32_t num_repetitions, std::uint32_t transaction_size, const CoreCoord& src_xy) {
     // Only need to load blanks onto BRISCs, not worry about other RISCs
     // because this test only deals with BRISC
     const tt::llrt::TensixRiscsOptions riscs_options = tt::llrt::TensixRiscsOptions::BRISC_ONLY;

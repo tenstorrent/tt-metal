@@ -74,7 +74,7 @@ std::vector<std::vector<uint32_t>> create_read_args_for_cores(
     const std::uint32_t transaction_size,
     const std::uint32_t num_transactions,
     const std::uint32_t num_repetitions,
-    const std::vector<tt_xy_pair>& cores,
+    const std::vector<CoreCoord>& cores,
     const std::uint32_t dram_channel_count_as_bits
 ) {
     std::vector<std::vector<uint32_t>> read_args_for_cores;
@@ -101,7 +101,7 @@ std::vector<std::vector<uint32_t>> create_write_args_for_cores(
     const std::uint32_t transaction_size,
     const std::uint32_t num_transactions,
     const std::uint32_t num_repetitions,
-    const std::vector<tt_xy_pair>& cores,
+    const std::vector<CoreCoord>& cores,
     const std::uint32_t dram_channel_count_as_bits
 ) {
     std::vector<std::vector<uint32_t>> write_args_for_cores;
@@ -121,7 +121,7 @@ std::vector<std::vector<uint32_t>> create_write_args_for_cores(
     return write_args_for_cores;
 }
 
-bool run_risc_rw_speed_dram_banked(tt_cluster *cluster, int chip_id, const std::vector<tt_xy_pair>& cores, std::uint32_t buffer_size, std::uint32_t num_repetitions, std::uint32_t transaction_size, std::uint32_t dram_channel_count_as_bits) {
+bool run_risc_rw_speed_dram_banked(tt_cluster *cluster, int chip_id, const std::vector<CoreCoord>& cores, std::uint32_t buffer_size, std::uint32_t num_repetitions, std::uint32_t transaction_size, std::uint32_t dram_channel_count_as_bits) {
     TT_ASSERT(buffer_size % cores.size() == 0);
     std::uint32_t buffer_size_per_core = buffer_size / cores.size();
 
@@ -141,7 +141,7 @@ bool run_risc_rw_speed_dram_banked(tt_cluster *cluster, int chip_id, const std::
     TT_ASSERT(num_transactions % cores.size() == 0);
 
     std::string cores_desc = "Cores to use: ";
-    for (const tt_xy_pair& core : cores) {
+    for (const CoreCoord& core : cores) {
         cores_desc += core.str() + " ";
     }
     log_info(tt::LogVerif, "{}", cores_desc);
@@ -150,7 +150,7 @@ bool run_risc_rw_speed_dram_banked(tt_cluster *cluster, int chip_id, const std::
     std::vector<uint32_t> dram_channel_cores;
     std::uint32_t dram_channel_count = dram_channel_count_from_count_as_bits(dram_channel_count_as_bits);
     for (int channel_id = 0; channel_id < dram_channel_count; channel_id++) {
-        tt_xy_pair dram_src_noc_xy = cluster->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(channel_id);
+        CoreCoord dram_src_noc_xy = cluster->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(channel_id);
         dram_channel_cores.push_back(static_cast<uint32_t>(dram_src_noc_xy.x));
         dram_channel_cores.push_back(static_cast<uint32_t>(dram_src_noc_xy.y));
     }
@@ -241,7 +241,7 @@ int main(int argc, char** argv)
     std::uint32_t buffer_size;
     std::uint32_t num_repetitions;
     std::uint32_t transaction_size;
-    std::vector<tt_xy_pair> cores;
+    std::vector<CoreCoord> cores;
     std::uint32_t dram_channel_count_as_bits;
 
     if (argc == 1) {

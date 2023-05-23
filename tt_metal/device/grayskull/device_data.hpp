@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include <cstdint>
 #include <vector>
 
@@ -11,16 +11,16 @@
 #define ARCH_GRAYSKULL
 #endif
 struct GRAYSKULL_DEVICE_DATA {
-    const std::vector<tt_xy_pair> DRAM_LOCATIONS = { {1, 6}, {4, 6}, {7, 6}, {10, 6}, {1, 0}, {4, 0}, {7, 0}, {10, 0} };
-    const std::vector<tt_xy_pair> ARC_LOCATIONS = { {0, 2} };
-    const std::vector<tt_xy_pair> PCI_LOCATIONS = { {0, 4} };
+    const std::vector<CoreCoord> DRAM_LOCATIONS = { {1, 6}, {4, 6}, {7, 6}, {10, 6}, {1, 0}, {4, 0}, {7, 0}, {10, 0} };
+    const std::vector<CoreCoord> ARC_LOCATIONS = { {0, 2} };
+    const std::vector<CoreCoord> PCI_LOCATIONS = { {0, 4} };
     const std::vector<uint32_t> T6_X_LOCATIONS = {12, 1, 11, 2, 10, 3, 9, 4, 8, 5, 7, 6 };
     const std::vector<uint32_t> T6_Y_LOCATIONS = {11, 1, 10, 2, 9, 3, 8, 4, 7, 5 };
     const std::vector<uint32_t> HARVESTING_NOC_LOCATIONS = {5, 7, 4, 8, 3, 9, 2, 10, 1, 11 };
 
     static constexpr uint32_t STATIC_TLB_SIZE = 1024*1024;
 
-    static constexpr tt_xy_pair BROADCAST_LOCATION = {0, 0};
+    static constexpr CoreCoord BROADCAST_LOCATION = {0, 0};
     static constexpr uint32_t BROADCAST_TLB_INDEX = 0;
 
     static constexpr uint32_t TLB_COUNT_1M = 156;

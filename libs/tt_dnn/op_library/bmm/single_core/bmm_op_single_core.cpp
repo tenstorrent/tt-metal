@@ -13,7 +13,7 @@ namespace tt_metal {
 Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
 
     tt_metal::Program program = tt_metal::Program();
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -170,7 +170,7 @@ Tensor bmm_single_core(const Tensor& a, const Tensor& b) {
 
 void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program& program,
                                 tt_metal::Device* device,
-                                tt_xy_pair core,
+                                CoreCoord core,
                                 uint32_t M,
                                 uint32_t N,
                                 uint32_t in0_block_w,
@@ -299,7 +299,7 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program& program,
 
 void create_CBs_for_fused_matmul_old_alloc(tt_metal::Program& program,
                                 tt_metal::Device* device,
-                                tt_xy_pair core,
+                                CoreCoord core,
                                 uint32_t M,
                                 uint32_t N,
                                 uint32_t in0_block_w,
@@ -636,7 +636,7 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_act,
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to large matmul need to be allocated in buffers on device!");
 
     tt_metal::Program program = tt_metal::Program();
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     uint32_t single_tile_size = 2 * 1024; // TODO(agrebenisan): Refactor on df
     tt_metal::Buffer *src0_dram_buffer = a.buffer();

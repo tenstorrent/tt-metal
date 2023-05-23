@@ -90,13 +90,13 @@ uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
     return this->device_->dram_channel_from_bank_id(bank_id);
 }
 
-tt_xy_pair Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
+CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
     TT_ASSERT(this->bank_id_to_relative_address_.find(bank_id) != this->bank_id_to_relative_address_.end());
     TT_ASSERT(this->buffer_type_ == BufferType::L1);
     return this->device_->logical_core_from_bank_id(bank_id);
 }
 
-tt_xy_pair Buffer::noc_coordinates(uint32_t bank_id) const {
+CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
     TT_ASSERT(this->bank_id_to_relative_address_.find(bank_id) != this->bank_id_to_relative_address_.end());
     switch (this->buffer_type_) {
         case BufferType::DRAM: {
@@ -115,10 +115,10 @@ tt_xy_pair Buffer::noc_coordinates(uint32_t bank_id) const {
         default:
             TT_ASSERT(false && "Unsupported buffer type!");
     }
-    return tt_xy_pair(0, 0);
+    return CoreCoord(0, 0);
 }
 
-tt_xy_pair Buffer::noc_coordinates() const {
+CoreCoord Buffer::noc_coordinates() const {
     return this->noc_coordinates(this->starting_bank_id_);
 }
 

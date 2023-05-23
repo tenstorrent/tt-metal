@@ -82,32 +82,32 @@ uint32_t Device::l1_size() const {
     return this->cluster_->get_soc_desc(pcie_slot_).worker_l1_size;
 }
 
-tt_xy_pair Device::logical_grid_size() const {
+CoreCoord Device::logical_grid_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
     return this->cluster_->get_soc_desc(pcie_slot_).worker_grid_size;
 }
 
-tt_xy_pair Device::compute_and_storage_grid_size() const {
+CoreCoord Device::compute_and_storage_grid_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
     return this->cluster_->get_soc_desc(pcie_slot_).compute_and_storage_grid_size;
 }
 
-tt_xy_pair Device::worker_core_from_logical_core(const tt_xy_pair &logical_core) const {
+CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
     auto worker_core_x = cluster_->get_soc_desc(pcie_slot_).worker_log_to_routing_x.at(logical_core.x);
     auto worker_core_y = cluster_->get_soc_desc(pcie_slot_).worker_log_to_routing_y.at(logical_core.y);
-    tt_xy_pair worker_core = tt_xy_pair(worker_core_x, worker_core_y);
+    CoreCoord worker_core = CoreCoord(worker_core_x, worker_core_y);
     return worker_core;
 }
 
-std::vector<tt_xy_pair> Device::worker_cores_from_logical_cores(const std::vector<tt_xy_pair> &logical_cores) {
-    std::vector<tt_xy_pair> worker_cores;
+std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) {
+    std::vector<CoreCoord> worker_cores;
     for (auto logical_core : logical_cores) {
         worker_cores.push_back(worker_core_from_logical_core(logical_core));
     }
@@ -130,7 +130,7 @@ uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
     return allocator::dram_channel_from_bank_id(*this->allocator_, bank_id);
 }
 
-tt_xy_pair Device::logical_core_from_bank_id(uint32_t bank_id) const {
+CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {
     this->check_allocator_is_initialized();
     return allocator::logical_core_from_bank_id(*this->allocator_, bank_id);
 }
@@ -140,7 +140,7 @@ std::vector<uint32_t> Device::bank_ids_from_dram_channel(uint32_t dram_channel) 
     return allocator::bank_ids_from_dram_channel(*this->allocator_, dram_channel);
 }
 
-std::vector<uint32_t> Device::bank_ids_from_logical_core(const tt_xy_pair &logical_core) const {
+std::vector<uint32_t> Device::bank_ids_from_logical_core(const CoreCoord &logical_core) const {
     this->check_allocator_is_initialized();
     return allocator::bank_ids_from_logical_core(*this->allocator_, logical_core);
 }

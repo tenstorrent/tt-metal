@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t num_blocks = 1;
         uint32_t num_tiles_r = 2;

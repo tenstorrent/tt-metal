@@ -160,14 +160,14 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
     TT_ASSERT(in1_CB_size <= 130*1024);
     TT_ASSERT(out_CB_size <= 540*1024);
 
-    tt_xy_pair start_core = {0, 0};
-    tt_xy_pair end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
     tt_metal::CoreRange all_cores(start_core, end_core);
 
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {
             int core_index = i * num_cores_c + j;
-            tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
+            CoreCoord core = {(std::size_t) j, (std::size_t) i};
             uint32_t l1_valid_address = 200 * 1024;
 
             uint32_t src0_cb_index = 0;
@@ -360,7 +360,7 @@ int main(int argc, char **argv) {
             for(int j = 0; j < num_cores_c; j++) {
                 std::vector<bfloat16> weights_slice = get_col_slice(identity, num_cores_c, j, K * 32, N * 32);
                 int core_index = i * num_cores_c + j;
-                tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
+                CoreCoord core = {(std::size_t) j, (std::size_t) i};
 
                 uint32_t dram_buffer_src0_addr = core_index * per_core_M * K * single_tile_size;
                 int dram_src0_channel_id = 0;

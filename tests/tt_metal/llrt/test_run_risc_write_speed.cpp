@@ -11,7 +11,7 @@
 #include "llrt.hpp"
 #include "test_libs/tiles.hpp"
 
-bool run_risc_write_speed(tt_cluster *cluster, int chip_id, const tt_xy_pair& core, std::uint32_t buffer_size, std::uint32_t num_repetitions, std::uint32_t transaction_size, const tt_xy_pair& dst_xy) {
+bool run_risc_write_speed(tt_cluster *cluster, int chip_id, const CoreCoord& core, std::uint32_t buffer_size, std::uint32_t num_repetitions, std::uint32_t transaction_size, const CoreCoord& dst_xy) {
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, tt::llrt::TensixRiscsOptions::BRISC_NCRISC, {});
 
     const int ncrisc_id = 1;

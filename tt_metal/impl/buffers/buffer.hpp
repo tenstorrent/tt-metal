@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/tt_backend_api_types.hpp"
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "common/assert.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/device/device.hpp"
@@ -47,12 +47,12 @@ class Buffer {
 
     uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
-    tt_xy_pair logical_core_from_bank_id(uint32_t bank_id) const;
+    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
-    tt_xy_pair noc_coordinates(uint32_t bank_id) const;
+    CoreCoord noc_coordinates(uint32_t bank_id) const;
 
     // returns NoC coordinates of first bank buffer is in
-    tt_xy_pair noc_coordinates() const;
+    CoreCoord noc_coordinates() const;
 
     uint32_t page_address(uint32_t bank_id, uint32_t page_index) const;
 

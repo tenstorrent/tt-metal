@@ -36,29 +36,29 @@ class Program {
 
     std::vector<DataMovementKernel *> data_movement_kernels() const;
 
-    KernelGroup kernels_on_core(const tt_xy_pair &core) const;
+    KernelGroup kernels_on_core(const CoreCoord &core) const;
 
-    std::map<tt_xy_pair, KernelGroup> core_to_kernel_group() const;
+    std::map<CoreCoord, KernelGroup> core_to_kernel_group() const;
 
-    std::vector<CircularBuffer *> circular_buffers_on_core(const tt_xy_pair &core) const;
+    std::vector<CircularBuffer *> circular_buffers_on_core(const CoreCoord &core) const;
 
-    std::vector<Semaphore *> semaphores_on_core(const tt_xy_pair &core) const;
+    std::vector<Semaphore *> semaphores_on_core(const CoreCoord &core) const;
 
-    std::vector<tt_xy_pair> logical_cores() const;
+    std::vector<CoreCoord> logical_cores() const;
 
-    std::string core_to_op(const tt_xy_pair &core) const;
+    std::string core_to_op(const CoreCoord &core) const;
 
     std::vector<std::string> cores_to_ops() const;
 
    private:
     std::vector<Kernel *> kernels_;
     std::vector<CircularBuffer *> circular_buffers_;
-    std::unordered_map<tt_xy_pair, std::vector<Semaphore *>> logical_core_to_semaphores_;
+    std::unordered_map<CoreCoord, std::vector<Semaphore *>> logical_core_to_semaphores_;
 
     friend DataMovementKernel *CreateDataMovementKernel(
         Program &program,
         const std::string &file_name,
-        const tt_xy_pair &core,
+        const CoreCoord &core,
         const KernelArgs &kernel_args,
         DataMovementProcessor processor_type,
         NOC noc);
@@ -66,14 +66,14 @@ class Program {
     friend DataMovementKernel *CreateDataMovementKernel(
         Program &program,
         const std::string &file_name,
-        const tt_xy_pair &core,
+        const CoreCoord &core,
         DataMovementProcessor processor_type,
         NOC noc);
 
     friend ComputeKernel *CreateComputeKernel(
         Program &program,
         const std::string &file_name,
-        const tt_xy_pair &core,
+        const CoreCoord &core,
         const KernelArgs &kernel_args,
         MathFidelity math_fidelity,
         bool fp32_dest_acc_en,
@@ -107,7 +107,7 @@ class Program {
         Program &program,
         Device *device,
         uint32_t buffer_id,
-        const tt_xy_pair &core,
+        const CoreCoord &core,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
         uint32_t l1_address,
@@ -117,7 +117,7 @@ class Program {
         Program &program,
         Device *device,
         uint32_t buffer_index,
-        const tt_xy_pair &core,
+        const CoreCoord &core,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
         DataFormat data_format);

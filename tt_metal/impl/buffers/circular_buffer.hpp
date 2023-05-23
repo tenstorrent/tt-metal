@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/tt_backend_api_types.hpp"
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "tt_metal/impl/device/device.hpp"
 
 namespace tt {
@@ -12,7 +12,7 @@ class CircularBuffer {
    public:
     CircularBuffer(
         Device *device,
-        const tt_xy_pair &logical_core,
+        const CoreCoord &logical_core,
         uint32_t buffer_index,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
@@ -20,7 +20,7 @@ class CircularBuffer {
 
     CircularBuffer(
         Device *device,
-        const tt_xy_pair &logical_core,
+        const CoreCoord &logical_core,
         uint32_t buffer_index,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
@@ -36,7 +36,7 @@ class CircularBuffer {
 
     ~CircularBuffer();
 
-    tt_xy_pair logical_core() const { return logical_core_; }
+    CoreCoord logical_core() const { return logical_core_; }
 
     uint32_t buffer_index() const { return buffer_index_; }
 
@@ -48,7 +48,7 @@ class CircularBuffer {
 
     DataFormat data_format() const { return data_format_; }
 
-    tt_xy_pair noc_coordinates() const;
+    CoreCoord noc_coordinates() const;
 
    private:
     void reserve();
@@ -66,7 +66,7 @@ class CircularBuffer {
     friend void DeallocateBuffer(Buffer &buffer);
 
     Device *device_;
-    tt_xy_pair logical_core_;             // Logical core
+    CoreCoord logical_core_;             // Logical core
     uint32_t buffer_index_;               // A buffer ID unique within a Tensix core (0 to 32)
     uint32_t num_tiles_;                  // Size in tiles
     uint32_t size_;

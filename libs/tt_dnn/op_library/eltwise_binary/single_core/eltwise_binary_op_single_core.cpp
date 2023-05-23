@@ -12,7 +12,7 @@ namespace tt_metal {
 Tensor eltwise_binary_single_core(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_type) {
     tt_metal::Program program = tt_metal::Program();
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to eltwise binary need to be on device!");

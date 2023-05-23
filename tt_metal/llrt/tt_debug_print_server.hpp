@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tt_cluster.hpp"
-#include "tt_xy_pair.h"
+#include "core_coord.h"
 
 enum DebugPrintHartFlags : unsigned int {
     DPRINT_HART_NC  = 1,
@@ -38,7 +38,7 @@ This call is not thread safe, and there is only one instance of print server sup
 void tt_start_debug_print_server(
     tt_cluster* cluster,
     const vector<int>& chip_ids,
-    const vector<tt_xy_pair>& cores,
+    const vector<CoreCoord>& cores,
     unsigned int thread_mask =
         DPRINT_HART_NC | DPRINT_HART_TR0 | DPRINT_HART_TR1 | DPRINT_HART_TR2 | DPRINT_HART_BR,
     const char* filename = nullptr);

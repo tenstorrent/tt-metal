@@ -70,7 +70,7 @@ inline vector<u16> gold_transpose_hc(std::vector<u16> src_vec, vector<uint32_t> 
 bool run_transpose_hc(
     tt_cluster* cluster,
     int chip_id,
-    const tt_xy_pair& core,
+    const CoreCoord& core,
     u32 num_tiles,
     const vector<u32>& shape
 ) {
@@ -88,9 +88,9 @@ bool run_transpose_hc(
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(
         cluster, chip_id, tt::llrt::TensixRiscsOptions::ALL_RISCS, {core});
 
-    tt_xy_pair dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
+    CoreCoord dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
     log_info(tt::LogVerif, "dram_src_noc_xy = {}", dram_src_noc_xy.str());
-    tt_xy_pair dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
+    CoreCoord dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
     log_info(tt::LogVerif, "dram_dst_noc_xy = {}", dram_dst_noc_xy.str());
 
     // BufferConfigVec -- common across all kernels, so written once to the core
@@ -169,7 +169,7 @@ int main(int argc, char** argv)
         tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         int chip_id = 0;
-        tt_xy_pair xy = {1,1};
+        CoreCoord xy = {1,1};
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);

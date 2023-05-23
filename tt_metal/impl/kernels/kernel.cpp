@@ -17,51 +17,51 @@ std::string Kernel::name() const {
     return kernel_name;
 }
 
-std::vector<tt_xy_pair> Kernel::logical_cores() const {
-    std::vector<tt_xy_pair> cores;
+std::vector<CoreCoord> Kernel::logical_cores() const {
+    std::vector<CoreCoord> cores;
     for (auto x = start_core_.x; x <= end_core_.x; x++) {
         for (auto y = start_core_.y; y <= end_core_.y; y++) {
-            cores.push_back(tt_xy_pair(x, y));
+            cores.push_back(CoreCoord(x, y));
         }
     }
     return cores;
 }
 
-bool Kernel::is_on_logical_core(const tt_xy_pair &logical_core) const {
+bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
     bool in_x_range = (logical_core.x >= start_core_.x) and (logical_core.x <= end_core_.x);
     bool in_y_range = (logical_core.y >= start_core_.y) and (logical_core.y <= end_core_.y);
     return in_x_range and in_y_range;
 }
 
-std::string Kernel::binary_path(const tt_xy_pair &logical_core) const {
+std::string Kernel::binary_path(const CoreCoord &logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot access binary for " + name() + " because it is not on core " + logical_core.str());
     }
     return binary_path_.at(logical_core);
 }
 
-std::vector<uint32_t> Kernel::compile_time_args(const tt_xy_pair &logical_core) const {
+std::vector<uint32_t> Kernel::compile_time_args(const CoreCoord &logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot access compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
     return kernel_args_.compile_time_args(logical_core);
 }
 
-std::vector<uint32_t> Kernel::runtime_args(const tt_xy_pair &logical_core) const {
+std::vector<uint32_t> Kernel::runtime_args(const CoreCoord &logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot access runtime args for " + name() + " because it is not on core " + logical_core.str());
     }
     return kernel_args_.runtime_args(logical_core);
 }
 
-size_t Kernel::compile_time_args_hash(const tt_xy_pair &logical_core) const {
+size_t Kernel::compile_time_args_hash(const CoreCoord &logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
     return KernelArgsHash{logical_core}(kernel_args_);
 }
 
-size_t Kernel::define_args_hash(const tt_xy_pair& logical_core) const {
+size_t Kernel::define_args_hash(const CoreCoord& logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
     }
@@ -69,7 +69,7 @@ size_t Kernel::define_args_hash(const tt_xy_pair& logical_core) const {
 }
 
 
-void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
+void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const CoreCoord &logical_core, const std::string &out_dir_path) {
     if (kernel == nullptr) {
         return;
     }
@@ -77,7 +77,7 @@ void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t &b
     kernel->set_binary_path(logical_core, out_dir_path);
 }
 
-void DataMovementKernel::configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
+void DataMovementKernel::configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const CoreCoord &logical_core, const std::string &out_dir_path) {
     if (processor_ == DataMovementProcessor::RISCV_0) {
         build_options.brisc_kernel_file_name = kernel_path_file_name_;
         build_options.brisc_defines = defines_;
@@ -88,7 +88,7 @@ void DataMovementKernel::configure_for_compilation(build_kernel_for_riscv_option
     }
 }
 
-void ComputeKernel::configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const tt_xy_pair &logical_core, const std::string &out_dir_path) {
+void ComputeKernel::configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const CoreCoord &logical_core, const std::string &out_dir_path) {
     build_options.set_hlk_file_name_all_cores(kernel_path_file_name_);
     build_options.set_hlk_math_fidelity_all_cores(math_fidelity_);
     // TODO(AP): see issue #504
@@ -97,7 +97,7 @@ void ComputeKernel::configure_for_compilation(build_kernel_for_riscv_options_t &
     build_options.hlk_defines = defines_;
 }
 
-void init_test_mailbox(Device *device, const tt_xy_pair &core, uint64_t test_mailbox_addr) {
+void init_test_mailbox(Device *device, const CoreCoord &core, uint64_t test_mailbox_addr) {
     std::vector<uint32_t> test_mailbox_init_val = {INIT_VALUE};
     tt::llrt::write_hex_vec_to_core(
         device->cluster(), device->pcie_slot(), core, test_mailbox_init_val, test_mailbox_addr);
@@ -108,7 +108,7 @@ void init_test_mailbox(Device *device, const tt_xy_pair &core, uint64_t test_mai
     TT_ASSERT(test_mailbox_init_val_check[0] == INIT_VALUE);
 }
 
-void DataMovementKernel::write_runtime_args_to_device(Device *device, const tt_xy_pair &logical_core) const {
+void DataMovementKernel::write_runtime_args_to_device(Device *device, const CoreCoord &logical_core) const {
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
@@ -145,7 +145,7 @@ void DataMovementKernel::write_runtime_args_to_device(Device *device, const tt_x
     tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, runtime_args, l1_arg_base);
 }
 
-bool DataMovementKernel::configure(Device *device, const tt_xy_pair &logical_core) const {
+bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
@@ -171,7 +171,7 @@ bool DataMovementKernel::configure(Device *device, const tt_xy_pair &logical_cor
     return pass;
 }
 
-bool ComputeKernel::configure(Device *device, const tt_xy_pair &logical_core) const {
+bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());

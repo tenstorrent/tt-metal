@@ -2,11 +2,11 @@
 #include <optional>
 #include "impl_device.hpp"
 #include "device/tt_silicon_driver_common.hpp"
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "device/tt_device.h"
 #include "device_data.hpp"
 
-std::int32_t tt_SiliconDevice::get_static_tlb_index(tt_xy_pair target) {
+std::int32_t tt_SiliconDevice::get_static_tlb_index(CoreCoord target) {
     bool is_eth_location = std::find(std::cbegin(DEVICE_DATA.ETH_LOCATIONS), std::cend(DEVICE_DATA.ETH_LOCATIONS), target) != std::cend(DEVICE_DATA.ETH_LOCATIONS);
     bool is_tensix_location = std::find(std::cbegin(DEVICE_DATA.T6_X_LOCATIONS), std::cend(DEVICE_DATA.T6_X_LOCATIONS), target.x) != std::cend(DEVICE_DATA.T6_X_LOCATIONS) &&
                               std::find(std::cbegin(DEVICE_DATA.T6_Y_LOCATIONS), std::cend(DEVICE_DATA.T6_Y_LOCATIONS), target.y) != std::cend(DEVICE_DATA.T6_Y_LOCATIONS);

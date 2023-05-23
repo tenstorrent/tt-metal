@@ -12,7 +12,7 @@ namespace tt {
 namespace tt_metal {
 void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
                                 tt_metal::Device* device,
-                                tt_xy_pair core,
+                                CoreCoord core,
                                 uint32_t act_block_size,
                                 uint32_t weight_block_size,
                                 uint32_t output_block_size,
@@ -370,7 +370,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     std::vector<uint32_t> address_map = conv_transform(shape, conv_params, block_info, num_bytes_of_df);
 
     tt_metal::Program program = tt_metal::Program();
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
     //tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
 
 

@@ -113,7 +113,7 @@ inline string get_second_token(string &input) {
     return input.substr(start, end - start + 1);
 }
 
-void print_cmd(tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core, string variable, string thread_type, string op) {
+void print_cmd(tt_cluster* cluster, uint32_t chip_id, CoreCoord core, string variable, string thread_type, string op) {
     string debug_file_path = "built_kernels/" + op + "/" + thread_type + "/" + thread_type + "_debug_dwarf_info.json";
     const string cmd = "python3 tt_metal/tools/tt_gdb/pydwarf2.py " + thread_type + " " + op;
     int ret = system(cmd.c_str());
@@ -157,7 +157,7 @@ void print_cmd(tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core, string va
     std::cout << val << std::endl;
 }
 
-void continue_cmd(tt_cluster* cluster, uint32_t chip_id, tt_xy_pair core, string thread_type) {
+void continue_cmd(tt_cluster* cluster, uint32_t chip_id, CoreCoord core, string thread_type) {
 
     const vector<uint32_t> breakpoint_flag = {0};
 
@@ -234,7 +234,7 @@ string disaggregate_python_core_map_info(const PythonCoreMapInfo& info) {
 
     ss << "--cores_with_breakpoint ";
 
-    for (tt_xy_pair core: info.breakpoint_cores) {
+    for (CoreCoord core: info.breakpoint_cores) {
         ss << std::to_string(core.y) << "-" << std::to_string(core.x) << " ";
     }
 
@@ -272,7 +272,7 @@ string disaggregate_python_core_map_info(const PythonCoreMapInfo& info) {
 
 
 void breakpoint_subroutine(
-    tt_cluster* cluster, int chip_id, const tt_xy_pair &core, string thread_type, string op) {
+    tt_cluster* cluster, int chip_id, const CoreCoord &core, string thread_type, string op) {
     auto run_cmd = [&cluster, &chip_id, &core, &thread_type, &op](string input) {
         bool exit = false;
 
@@ -321,7 +321,7 @@ void launch_core_map(PythonCoreMapInfo info) {
     TT_ASSERT(ret == 0, "tt_gdb_table.py must have 0 exit code");
 }
 
-void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> cores, vector<string> ops) {
+void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<CoreCoord> cores, vector<string> ops) {
 
     const vector<std::tuple<string, uint32_t, uint32_t>> breakpoint_addresses = {
         std::tuple("ncrisc", NCRISC_BREAKPOINT, NCRISC_BP_LNUM),
@@ -336,11 +336,11 @@ void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> cores, v
     // This program loops indefinitely, however should be launched as a detached thread so that its resources are freed after the main thread terminates
     while (true) {
 
-        vector<tt_xy_pair> breakpoint_cores;
+        vector<CoreCoord> breakpoint_cores;
         vector<map<string, int>> breakpoint_lines;
         std::ifstream core_debug_info("core_debug_info.json", std::ifstream::binary);
 
-        tt_xy_pair current_core = {0, 0};
+        CoreCoord current_core = {0, 0};
         bool reenter = false;
         string current_risc = "trisc0";
 
@@ -415,7 +415,7 @@ void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> cores, v
     }
 }
 
-void tt_gdb(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> worker_cores, vector<string> ops) {
+void tt_gdb(tt_cluster *cluster, int chip_id, const vector<CoreCoord> worker_cores, vector<string> ops) {
     // Makes this thread completely independent from the rest of execution. Once the main thread finishes, the debugger's resources are freed
 
     std::thread debug_server(tt_gdb_, cluster, chip_id, worker_cores, ops);
@@ -427,8 +427,8 @@ void tt_gdb(tt_cluster *cluster, int chip_id, const vector<tt_xy_pair> worker_co
 namespace tt {
 namespace tt_metal {
 
-void tt_gdb(Device* device, int chip_id, const vector<tt_xy_pair> logical_cores, vector<string> ops) {
-    vector<tt_xy_pair> worker_cores;
+void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> logical_cores, vector<string> ops) {
+    vector<CoreCoord> worker_cores;
 
     for (const auto& logical_core: logical_cores) {
         worker_cores.push_back(device->worker_core_from_logical_core(logical_core));

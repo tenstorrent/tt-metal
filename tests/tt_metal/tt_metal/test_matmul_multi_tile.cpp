@@ -99,7 +99,7 @@ bool run_matmul(const bool with_bias) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
         uint32_t M = 4;
         uint32_t K = 4;
         uint32_t N = K;
@@ -328,7 +328,7 @@ bool run_matmul(const bool with_bias) {
             (std::uint32_t)dram_dst_noc_xy.y,
             M * N});
 
-        tt_xy_pair debug_core = {1, 1};
+        CoreCoord debug_core = {1, 1};
         read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
 
         pass &= tt_metal::LaunchKernels(device, program);

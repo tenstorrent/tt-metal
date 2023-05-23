@@ -73,7 +73,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
 
@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
             num_tiles});
 
 
-        tt_xy_pair debug_core = {1, 1};
+        CoreCoord debug_core = {1, 1};
         read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
         pass &= tt_metal::LaunchKernels(device, program);
 

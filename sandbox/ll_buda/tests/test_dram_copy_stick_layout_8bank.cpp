@@ -32,7 +32,7 @@ bool interleaved_stick_reader_test() {
         ////////////////////////////////////////////////////////////////////////////
         ll_buda::Program *program = new ll_buda::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         int num_sticks = 4;
         int num_elements_in_stick = 256;

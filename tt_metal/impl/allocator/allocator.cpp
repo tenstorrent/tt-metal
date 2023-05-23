@@ -273,7 +273,7 @@ void init_one_bank_per_l1(Allocator &allocator, const tt_SocDescriptor &soc_desc
     uint32_t bank_id = 0;
     for (uint32_t y = 0; y < soc_desc.worker_grid_size.y; y++) {
         for (uint32_t x = 0; x < soc_desc.worker_grid_size.x; x++) {
-            tt_xy_pair logical_core = tt_xy_pair(x, y);
+            CoreCoord logical_core = CoreCoord(x, y);
             allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
             allocator.logical_core_to_bank_ids.insert({logical_core, {bank_id}});
             bank_id++;
@@ -297,7 +297,7 @@ uint32_t dram_channel_from_bank_id(const Allocator &allocator, uint32_t bank_id)
     return allocator.bank_id_to_dram_channel.at(bank_id);
 }
 
-tt_xy_pair logical_core_from_bank_id(const Allocator &allocator, uint32_t bank_id) {
+CoreCoord logical_core_from_bank_id(const Allocator &allocator, uint32_t bank_id) {
     TT_ASSERT(allocator.bank_id_to_logical_core.find(bank_id) != allocator.bank_id_to_logical_core.end());
     return allocator.bank_id_to_logical_core.at(bank_id);
 }
@@ -307,7 +307,7 @@ std::vector<uint32_t> bank_ids_from_dram_channel(const Allocator &allocator, uin
     return allocator.dram_channel_to_bank_ids.at(dram_channel);
 }
 
-std::vector<uint32_t> bank_ids_from_logical_core(const Allocator &allocator, const tt_xy_pair &logical_core) {
+std::vector<uint32_t> bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core) {
     TT_ASSERT(allocator.logical_core_to_bank_ids.find(logical_core) != allocator.logical_core_to_bank_ids.end());
     return allocator.logical_core_to_bank_ids.at(logical_core);
 }
@@ -363,7 +363,7 @@ void clear(Allocator &allocator) {
     allocator.l1_manager.clear();
 }
 
-uint32_t allocate_circular_buffer(Allocator &allocator, const tt_xy_pair &logical_core, uint32_t size_bytes) {
+uint32_t allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical_core, uint32_t size_bytes) {
     auto bank_indices = bank_ids_from_logical_core(allocator, logical_core);
     TT_ASSERT(bank_indices.size() == 1);
     auto bank_id = bank_indices.at(0);
@@ -375,7 +375,7 @@ uint32_t allocate_circular_buffer(Allocator &allocator, const tt_xy_pair &logica
     return rel_address_desc.absolute_address();
 }
 
-uint32_t allocate_circular_buffer(Allocator &allocator, const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes) {
+uint32_t allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical_core, uint32_t start_address, uint32_t size_bytes) {
     auto bank_indices = bank_ids_from_logical_core(allocator, logical_core);
     TT_ASSERT(bank_indices.size() == 1);
     auto bank_id = bank_indices.at(0);
@@ -386,14 +386,14 @@ uint32_t allocate_circular_buffer(Allocator &allocator, const tt_xy_pair &logica
     return rel_address_desc.absolute_address();
 }
 
-uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator, const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes) {
+uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator, const std::pair<CoreCoord, CoreCoord> &logical_core_range, uint32_t size_in_bytes) {
     std::vector<std::pair<uint32_t, uint32_t>> candidate_addr_ranges;
     bool get_absolute_addresses = true;
     auto start_core = logical_core_range.first;
     auto end_core = logical_core_range.second;
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto logical_core = tt_xy_pair(x, y);
+            auto logical_core = CoreCoord(x, y);
             auto bank_indices = bank_ids_from_logical_core(allocator, logical_core);
             TT_ASSERT(bank_indices.size() == 1);
             auto bank_id = bank_indices.at(0);

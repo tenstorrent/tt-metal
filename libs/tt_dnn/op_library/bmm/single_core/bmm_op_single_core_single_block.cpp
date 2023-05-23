@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device* device, tt_xy_pair core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t num_bytes_for_df) {
+void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device* device, CoreCoord core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t num_bytes_for_df) {
 
     uint32_t in0_cb                                   = 0;
     uint32_t in1_cb                                   = 1;
@@ -274,7 +274,7 @@ Tensor large_bmm_single_core_single_block_(const Tensor& a, const Tensor &b, boo
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to large matmul need to be allocated in buffers on device!");
 
     tt_metal::Program program = tt_metal::Program();
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     uint32_t single_tile_size = 2 * 1024; // TODO(agrebenisan): Refactor on df
     tt_metal::Buffer *src0_dram_buffer = a.buffer();

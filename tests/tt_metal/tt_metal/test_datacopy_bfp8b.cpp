@@ -30,7 +30,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = tt_metal::TileSize(tt::DataFormat::Bfp8_b);
         TT_ASSERT(single_tile_size == (256 * 4) + (16 *4));

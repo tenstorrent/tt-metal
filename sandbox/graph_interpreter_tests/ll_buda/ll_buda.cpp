@@ -27,7 +27,7 @@ bool InitializeDevice(Device *device) { return device->initialize(); }
 
 bool CloseDevice(Device *device) { return device->close(); }
 
-DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const tt_xy_pair &logical_core, const std::vector<uint32_t> &compile_time_args) {
+DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const CoreCoord &logical_core, const std::vector<uint32_t> &compile_time_args) {
     DataMovementKernelArgs *kernel_args = new DataMovementKernelArgs(logical_core, compile_time_args);
     return kernel_args;
 }
@@ -43,7 +43,7 @@ DataMovementKernelArgs *InitializeCompileTimeDataMovementKernelArgs(const CoreBl
     return kernel_args;
 }
 
-ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const tt_xy_pair &logical_core, void *compile_time_args, size_t compile_time_args_size) {
+ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreCoord &logical_core, void *compile_time_args, size_t compile_time_args_size) {
     ComputeKernelArgs *kernel_args = new ComputeKernelArgs(logical_core, compile_time_args, compile_time_args_size);
     return kernel_args;
 }
@@ -62,7 +62,7 @@ ComputeKernelArgs *InitializeCompileTimeComputeKernelArgs(const CoreBlocks &core
 DataMovementKernel *CreateDataMovementKernel(
     Program *program,
     const std::string &file_name,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     DataMovementKernelArgs *kernel_args,
     DataMovementProcessor processor_type,
     NOC noc) {
@@ -74,7 +74,7 @@ DataMovementKernel *CreateDataMovementKernel(
 DataMovementKernel *CreateDataMovementKernel(
     Program *program,
     const std::string &file_name,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     DataMovementProcessor processor_type,
     NOC noc) {
     auto kernel_args = new DataMovementKernelArgs();
@@ -86,7 +86,7 @@ DataMovementKernel *CreateDataMovementKernel(
 ComputeKernel *CreateComputeKernel(
     Program *program,
     const std::string &file_name,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     ComputeKernelArgs *kernel_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -158,7 +158,7 @@ DramBuffer *CreateDramBuffer(Device *device, int dram_channel, uint32_t size_in_
     return buffer;
 }
 
-L1Buffer *CreateL1Buffer(Program *program, Device *device, const tt_xy_pair &core, uint32_t size_in_bytes, uint32_t address) {
+L1Buffer *CreateL1Buffer(Program *program, Device *device, const CoreCoord &core, uint32_t size_in_bytes, uint32_t address) {
     L1Buffer *l1_buffer = new L1Buffer(device, core, size_in_bytes, address);
     program->add_l1_buffer(l1_buffer);
     return l1_buffer;
@@ -168,7 +168,7 @@ CircularBuffer *CreateCircularBuffer(
     Program *program,
     Device *device,
     uint32_t buffer_index,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     uint32_t number_of_tiles,
     uint32_t size_in_bytes,
     uint32_t l1_address,
@@ -184,7 +184,7 @@ bool GenerateBinaries(
     build_kernel_for_riscv_options_t *build_kernel_for_riscv_options,
     const std::string &op_path,
     const KernelGroup &kernel_group,
-    const tt_xy_pair &logical_core) {
+    const CoreCoord &logical_core) {
     std::string arch_name = tt::get_string_lowercase(device->device_type());
 
     if (kernel_group.compute != nullptr) {
@@ -248,7 +248,7 @@ void CompileBlankKernel(Device *device, const std::string &out_dir_path) {
 }
 
 void SetCircularBufferDataFormat(
-    Program *program, const tt_xy_pair &logical_core, build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const std::string &op_path) {
+    Program *program, const CoreCoord &logical_core, build_kernel_for_riscv_options_t *build_kernel_for_riscv_options, const std::string &op_path) {
     for (auto circular_buffer : program->circular_buffers_on_core(logical_core)) {
         build_kernel_for_riscv_options->set_cb_dataformat_all_cores(
             static_cast<CB>(circular_buffer->buffer_index()), circular_buffer->data_format());
@@ -257,7 +257,7 @@ void SetCircularBufferDataFormat(
     generate_data_format_descriptors(build_kernel_for_riscv_options, op_path);
 }
 
-void ValidateL1Buffers(Device *device, Program *program, const tt_xy_pair &logical_core) {
+void ValidateL1Buffers(Device *device, Program *program, const CoreCoord &logical_core) {
     auto l1_buffers_on_core = program->l1_buffers_on_core(logical_core);
     uint32_t total_l1_buffer_size_in_bytes = 0;
     // TODO: Pull this based on device type! - should account for reserved space as well!
@@ -270,7 +270,7 @@ void ValidateL1Buffers(Device *device, Program *program, const tt_xy_pair &logic
     }
 }
 
-void ValidateKernelGroup(const KernelGroup &kernel_group, const tt_xy_pair &logical_core) {
+void ValidateKernelGroup(const KernelGroup &kernel_group, const CoreCoord &logical_core) {
     if (kernel_group.riscv_0 != nullptr and kernel_group.riscv_1 != nullptr) {
         if (kernel_group.riscv_0->noc() == kernel_group.riscv_1->noc()) {
             TT_THROW("Data movement kernels on RISCV_0 and RISCV_1 on core " + logical_core.str() + " cannot use the same NOC, doing so results in a hang!");
@@ -280,7 +280,7 @@ void ValidateKernelGroup(const KernelGroup &kernel_group, const tt_xy_pair &logi
 
 // Gets all kernels running on a specific core and creates blank kernels for RISCV0 and RISCV1 if the data movement
 // processors do not have a kernel
-void PopulateKernelGroupWithDataMovementKernels(Program *program, KernelGroup &kernel_group, const tt_xy_pair &logical_core) {
+void PopulateKernelGroupWithDataMovementKernels(Program *program, KernelGroup &kernel_group, const CoreCoord &logical_core) {
     // Toggle NOC
     std::function<NOC(DataMovementKernel *, NOC)> get_noc_id = [&](DataMovementKernel *existing_dm_kernel, NOC default_noc) {
         if (existing_dm_kernel != nullptr) {
@@ -332,7 +332,7 @@ std::string GetOpName(const KernelGroup &kernel_group) {
     return dummy_op_name;
 }
 
-size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const tt_xy_pair &logical_core, const std::string &op_name) {
+size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const CoreCoord &logical_core, const std::string &op_name) {
     size_t kg_compile_hash = 0;
     if (kernel_group.compute != nullptr) {
         tt::utils::hash_combine(kg_compile_hash, kernel_group.compute->compile_time_args_hash(logical_core));
@@ -388,7 +388,7 @@ bool CompileProgram(Device *device, Program *program) {
     return pass;
 }
 
-void ConfigureKernelGroup(const KernelGroup &kernel_group, Device *device, const tt_xy_pair &logical_core) {
+void ConfigureKernelGroup(const KernelGroup &kernel_group, Device *device, const CoreCoord &logical_core) {
     // No need to check if kernel_group.riscv_0 and kernel_group.riscv_1 are null because compilation
     // creates blank data movement kernels for riscs0/1 if there is no kernel on them
     if (kernel_group.compute != nullptr) {
@@ -402,7 +402,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPr
     bool pass = true;
 
     ll_buda_profiler.markStart("ConfigureDeviceWithProgram");
-    std::vector<tt_xy_pair> worker_cores;
+    std::vector<CoreCoord> worker_cores;
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
 
@@ -455,7 +455,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program, bool doStartPr
     return pass;
 }
 
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const tt_xy_pair &logical_core, const std::vector<uint32_t> &runtime_args) {
+bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
     ll_buda_profiler.markStart("WriteRuntimeArgsToDevice");
     bool pass = true;
     kernel->kernel_args()->set_runtime_args(logical_core, runtime_args);
@@ -479,7 +479,7 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
         auto core = core_blocks.at(index);
         auto runtime_args = runtime_args_spec.at(index);
         std::visit(overloaded_core {
-            [device, kernel, runtime_args](tt_xy_pair single_core) {
+            [device, kernel, runtime_args](CoreCoord single_core) {
                 WriteRuntimeArgsToDevice(device, kernel, single_core, runtime_args);
             },
             [device, kernel, runtime_args](CoreRange core_range) {
@@ -487,7 +487,7 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
                 auto end_core = core_range.second;
                 for (auto x = start_core.x; x <= end_core.x; x++) {
                     for (auto y = start_core.y; y <= end_core.y; y++) {
-                        auto core_in_range = tt_xy_pair(x, y);
+                        auto core_in_range = CoreCoord(x, y);
                         WriteRuntimeArgsToDevice(device, kernel, core_in_range, runtime_args);
                     }
                 }
@@ -503,12 +503,12 @@ void stopPrintfServer()
     tt_stop_debug_print_server();
 }
 
-bool core_runs_ncrisc(Program *program, const tt_xy_pair &logical_core) {
+bool core_runs_ncrisc(Program *program, const CoreCoord &logical_core) {
     auto kernel_group = program->kernels_on_core(logical_core);
     return kernel_group.riscv_1 != nullptr;
 }
 
-bool core_runs_triscs(Program *program, const tt_xy_pair &logical_core) {
+bool core_runs_triscs(Program *program, const CoreCoord &logical_core) {
     auto kernel_group = program->kernels_on_core(logical_core);
     return kernel_group.compute != nullptr;
 }
@@ -621,7 +621,7 @@ bool ReadFromDeviceDRAMChannel(
 
 bool WriteToDeviceL1(
     Device *device,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     std::vector<uint32_t> &host_buffer,
     uint32_t buffer_address) {
     ll_buda_profiler.markStart("WriteToDeviceL1");
@@ -635,7 +635,7 @@ bool WriteToDeviceL1(
 
 bool WriteToDeviceL1(
     Device *device,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     op_info_t op_info,
     int op_idx) {
     ll_buda_profiler.markStart("WriteToDeviceL1");
@@ -648,7 +648,7 @@ bool WriteToDeviceL1(
 }
 
 bool ReadFromDeviceL1(
-    Device *device, const tt_xy_pair &core, int device_buffer_addess, std::vector<uint32_t> &host_buffer, int size) {
+    Device *device, const CoreCoord &core, int device_buffer_addess, std::vector<uint32_t> &host_buffer, int size) {
     ll_buda_profiler.markStart("ReadFromDeviceL1");
     bool pass = true;
     auto worker_core = device->worker_core_from_logical_core(core);

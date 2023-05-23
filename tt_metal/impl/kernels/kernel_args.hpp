@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "tt_metal/impl/device/device.hpp"
 
 namespace tt {
@@ -27,7 +27,7 @@ class KernelArgs {
      * @param logical_core Logical Tensix core coordinate indicating where these args can be written
      * @param compile_time_args Arguments supplied to the kernel during compilation
      */
-    KernelArgs(const tt_xy_pair &logical_core, const std::vector<uint32_t> &compile_time_args);
+    KernelArgs(const CoreCoord &logical_core, const std::vector<uint32_t> &compile_time_args);
 
     /**
      * @brief Construct a KernelArgs object to represent shared kernel args across a range of cores
@@ -51,34 +51,34 @@ class KernelArgs {
     KernelArgs(KernelArgs &&other);
     KernelArgs& operator=(KernelArgs &&other);
 
-    std::vector<uint32_t> compile_time_args(const tt_xy_pair &logical_core) const;
+    std::vector<uint32_t> compile_time_args(const CoreCoord &logical_core) const;
 
-    std::vector<uint32_t> runtime_args(const tt_xy_pair &logical_core) const;
+    std::vector<uint32_t> runtime_args(const CoreCoord &logical_core) const;
 
    private:
     void set_kernel_args_map(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &args_spec, bool set_compile_time_args);
 
-    void set_runtime_args(const tt_xy_pair &logical_core, const std::vector<uint32_t> &runtime_args);
-    friend bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const tt_xy_pair &logical_core, const std::vector<uint32_t> &runtime_args);
+    void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
+    friend bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 
-    std::unordered_map<tt_xy_pair, std::vector<uint32_t>> core_to_compile_time_args_;
-    std::unordered_map<tt_xy_pair, std::vector<uint32_t>> core_to_runtime_args_;
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_to_compile_time_args_;
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;
 };
 
 struct KernelArgsHash {
-    KernelArgsHash(const tt_xy_pair &core) : logical_core{core} { }
+    KernelArgsHash(const CoreCoord &core) : logical_core{core} { }
 
     size_t operator()(const KernelArgs& args) const;
 
-    tt_xy_pair logical_core;
+    CoreCoord logical_core;
 };
 
 struct KernelDefinesHash {
-    KernelDefinesHash(const tt_xy_pair &core) : logical_core{core} { }
+    KernelDefinesHash(const CoreCoord &core) : logical_core{core} { }
 
     size_t operator()(const std::map<std::string, std::string> &c_defines) const;
 
-    tt_xy_pair logical_core;
+    CoreCoord logical_core;
 };
 
 }  // namespace tt_metal

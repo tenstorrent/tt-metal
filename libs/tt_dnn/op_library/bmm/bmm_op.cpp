@@ -165,8 +165,8 @@ tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(uint32_t M
 }
 
 
-tt_xy_pair get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols) {
-    tt_xy_pair core_range(0, 0);
+CoreCoord get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols) {
+    CoreCoord core_range(0, 0);
     if (!(num_blocks_rows == 1 && num_blocks_cols == 1) && num_blocks_rows <= max_num_rows && num_blocks_cols <= max_num_cols) {
         core_range.x = num_blocks_cols;
         core_range.y = num_blocks_rows;
@@ -213,7 +213,7 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
 
     // If no possible params, matmul_params will be (0, 0, 0, 0)
     if (use_general_large_matmul_params and per_core_M > 0 and Kt % in0_block_w == 0 and B == 1) {
-        tt_xy_pair core_range = get_core_range((Mt / per_core_M), (Nt / per_core_N), num_cores_y, num_cores_x);
+        CoreCoord core_range = get_core_range((Mt / per_core_M), (Nt / per_core_N), num_cores_y, num_cores_x);
         // If matmul params are (16, 16, 4, 2), use the default mcast op
         if (
             per_core_M == 16 and
@@ -230,7 +230,7 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
         return BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED;
     }
     else if (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y and Kt % in0_block_w == 0) {
-        tt_xy_pair core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
+        CoreCoord core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
         // If we don't need padding, use the default multi_core reuse/reuse_mcast
         if (Mt % per_core_M == 0 and Nt % per_core_N == 0) {
             if (core_range.y > 0)
@@ -426,7 +426,7 @@ Tensor large_bmm_single_block(const Tensor& a, const Tensor& b, bool tilize_a, b
 Tensor bert_large_fused_qkv_matmul(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config) {
     TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
     TT_ASSERT((b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 3072})), "Unsupported input shape");
-    tt_xy_pair compute_and_storage_grid_size = {12, 9};
+    CoreCoord compute_and_storage_grid_size = {12, 9};
     auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
     tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
@@ -446,7 +446,7 @@ Tensor bert_large_fused_qkv_matmul(const Tensor& a, const Tensor& b, const Memor
 Tensor bert_large_ff1_matmul(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config) {
     TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
     TT_ASSERT((b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 4096})), "Unsupported input shape");
-    tt_xy_pair compute_and_storage_grid_size = {12, 9};
+    CoreCoord compute_and_storage_grid_size = {12, 9};
     auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
     tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
@@ -466,7 +466,7 @@ Tensor bert_large_ff1_matmul(const Tensor& a, const Tensor& b, const MemoryConfi
 Tensor bert_large_ff2_matmul(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config) {
     TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 384, 4096})), "Unsupported input shape");
     TT_ASSERT((b.shape() == std::array<uint32_t, 4>({1, 1, 4096, 1024})), "Unsupported input shape");
-    tt_xy_pair compute_and_storage_grid_size = {11, 9};
+    CoreCoord compute_and_storage_grid_size = {11, 9};
     auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
     tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
@@ -486,7 +486,7 @@ Tensor bert_large_ff2_matmul(const Tensor& a, const Tensor& b, const MemoryConfi
 Tensor bert_large_selfout_matmul(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config) {
     TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
     TT_ASSERT((b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 1024})), "Unsupported input shape");
-    tt_xy_pair compute_and_storage_grid_size = {11, 9};
+    CoreCoord compute_and_storage_grid_size = {11, 9};
     auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
     tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
@@ -506,7 +506,7 @@ Tensor bert_large_selfout_matmul(const Tensor& a, const Tensor& b, const MemoryC
 Tensor bert_large_pre_softmax_bmm(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config) {
     TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 16, 384, 64})), "Unsupported input shape");
     TT_ASSERT((b.shape() == std::array<uint32_t, 4>({9, 16, 64, 384})), "Unsupported input shape");
-    tt_xy_pair compute_and_storage_grid_size = {12, 9};
+    CoreCoord compute_and_storage_grid_size = {12, 9};
     auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
     tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
@@ -526,7 +526,7 @@ Tensor bert_large_pre_softmax_bmm(const Tensor& a, const Tensor& b, const Memory
 Tensor bert_large_post_softmax_bmm(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config) {
     TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 16, 384, 384})), "Unsupported input shape");
     TT_ASSERT((b.shape() == std::array<uint32_t, 4>({9, 16, 384, 64})), "Unsupported input shape");
-    tt_xy_pair compute_and_storage_grid_size = {12, 9};
+    CoreCoord compute_and_storage_grid_size = {12, 9};
     auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
     tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;

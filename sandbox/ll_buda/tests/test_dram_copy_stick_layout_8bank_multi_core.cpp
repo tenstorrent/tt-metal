@@ -34,8 +34,8 @@ bool interleaved_stick_reader_test() {
 
         auto num_cores_c = 2;
         auto num_cores_r = 2;
-        tt_xy_pair start_core = {0, 0};
-        tt_xy_pair end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
+        CoreCoord start_core = {0, 0};
+        CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
         ll_buda::CoreRange all_cores(start_core, end_core);
 
         int num_sticks = 4;
@@ -54,7 +54,7 @@ bool interleaved_stick_reader_test() {
         for(int i = 0; i < num_cores_r; i++) {
             for(int j = 0; j < num_cores_c; j++) {
                 int core_index = i * num_cores_c + j;
-                tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
+                CoreCoord core = {(std::size_t) j, (std::size_t) i};
                 auto l1_b0 = ll_buda::CreateL1Buffer(program, device, core, per_core_l1_size, l1_buffer_addr);
             }
         }
@@ -85,7 +85,7 @@ bool interleaved_stick_reader_test() {
         for(int i = 0; i < num_cores_r; i++) {
             for(int j = 0; j < num_cores_c; j++) {
                 int core_index = i * num_cores_c + j;
-                tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
+                CoreCoord core = {(std::size_t) j, (std::size_t) i};
                 ll_buda::WriteRuntimeArgsToDevice(
                     device,
                     unary_reader_kernel,

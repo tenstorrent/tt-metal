@@ -24,7 +24,7 @@ Tensor transpose_wh_single_core(const Tensor &a) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
@@ -166,7 +166,7 @@ Tensor transpose_hc_single_core(const Tensor &a) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
@@ -305,7 +305,7 @@ Tensor transpose_cn_single_core(const Tensor &a) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_cn op needs to be on device!");

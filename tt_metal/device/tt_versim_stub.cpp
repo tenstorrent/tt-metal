@@ -48,7 +48,7 @@ void tt_VersimDevice::dump_debug_mailbox(std::string output_path, int device_id)
 void tt_VersimDevice::dump_wall_clock_mailbox(std::string output_path, int device_id) {}
 
 bool versim_check_dram_core_exists(
-    const std::vector<std::vector<tt_xy_pair>> &dram_core_channels, tt_xy_pair target_core) {
+    const std::vector<std::vector<CoreCoord>> &dram_core_channels, CoreCoord target_core) {
   return false;
 }
 

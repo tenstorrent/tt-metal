@@ -16,7 +16,7 @@
 
 using tt::llrt::CircularBufferConfigVec;
 
-bool run_data_copy_multi_tile(tt_cluster* cluster, int chip_id, const tt_xy_pair& core, int num_tiles) {
+bool run_data_copy_multi_tile(tt_cluster* cluster, int chip_id, const CoreCoord& core, int num_tiles) {
 
     std::uint32_t single_tile_size = 2 * 1024;
     std::uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -30,9 +30,9 @@ bool run_data_copy_multi_tile(tt_cluster* cluster, int chip_id, const tt_xy_pair
 
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, tt::llrt::TensixRiscsOptions::ALL_RISCS, {core});
 
-    tt_xy_pair dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
+    CoreCoord dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
     log_info(tt::LogVerif, "dram_src_noc_xy = {}", dram_src_noc_xy.str());
-    tt_xy_pair dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
+    CoreCoord dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
     log_info(tt::LogVerif, "dram_dst_noc_xy = {}", dram_dst_noc_xy.str());
 
     // BufferConfigVec -- common across all kernels, so written once to the core
@@ -136,7 +136,7 @@ int main(int argc, char** argv)
         string op_path = "built_kernels/" + op;
 
         int chip_id = 0;
-        const tt_xy_pair core = {1, 1};
+        const CoreCoord core = {1, 1};
 
         pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", chip_id, core, 0); // brisc
         pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", chip_id, core, 1); // ncrisc
@@ -146,7 +146,7 @@ int main(int argc, char** argv)
         pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread2/tensix_thread2.hex", chip_id, core, 2); // trisc2
 
         if (pass) {
-            const vector<tt_xy_pair> cores = {core};
+            const vector<CoreCoord> cores = {core};
             const vector<string> ops = {op};
 
             // tt_gdb::tt_gdb(cluster, chip_id, cores, ops);

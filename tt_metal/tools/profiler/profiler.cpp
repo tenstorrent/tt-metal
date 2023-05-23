@@ -99,7 +99,7 @@ void Profiler::dumpHostResults(std::string name_prepend)
 void Profiler::dumpDeviceResults (
         tt_cluster *cluster,
         int pcie_slot,
-        const vector<tt_xy_pair> &worker_cores){
+        const vector<CoreCoord> &worker_cores){
 
     for (const auto &worker_core : worker_cores) {
         readRiscProfilerResults(
@@ -138,7 +138,7 @@ void Profiler::dumpDeviceResults (
 void Profiler::readRiscProfilerResults(
         tt_cluster *cluster,
         int pcie_slot,
-        const tt_xy_pair &worker_core,
+        const CoreCoord &worker_core,
         std::string risc_name,
         int risc_print_buffer_addr){
 

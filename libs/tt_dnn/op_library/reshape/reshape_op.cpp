@@ -18,7 +18,7 @@ Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to eltwise unary needs to be on device!");
@@ -153,7 +153,7 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
     TT_ASSERT(N != -1 and C != -1 and H != -1 and W != -1, "-1 reshape not yet supported for rebanking row major reshape");
 
     tt_metal::Program program = tt_metal::Program();
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device");
     TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");

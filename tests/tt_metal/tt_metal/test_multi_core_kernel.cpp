@@ -30,13 +30,13 @@ tt_metal::Program create_program(
     const tt_metal::KernelArgs &eltwise_unary_args) {
     tt_metal::Program program = tt_metal::Program();
 
-    tt_xy_pair start_core = all_cores.first;
-    tt_xy_pair end_core = all_cores.second;
+    CoreCoord start_core = all_cores.first;
+    CoreCoord end_core = all_cores.second;
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
     // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto core = tt_xy_pair(x, y);
+            auto core = CoreCoord(x, y);
             uint32_t src0_cb_index = 0;
             uint32_t src0_cb_addr = 200 * 1024;
             uint32_t num_input_tiles = 8;
@@ -257,8 +257,8 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(tt_metal::Device
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_xy_pair start_core = {0, 0};
-    tt_xy_pair end_core = {2, 2};
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {2, 2};
 
     tt_metal::CoreRange all_cores(start_core, end_core);
 
@@ -317,10 +317,10 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_xy_pair start_core = {0, 0};
-    tt_xy_pair end_core = {1, 1};
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {1, 1};
     tt_metal::CoreRange core_group({0, 1}, {1, 1});
-    tt_xy_pair single_core = {1, 0};
+    CoreCoord single_core = {1, 0};
     tt_metal::CoreRange all_cores(start_core, end_core);
     tt_metal::CoreBlocks core_blocks = {start_core, single_core, core_group};
 
@@ -395,10 +395,10 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_xy_pair start_core = {0, 0};
-    tt_xy_pair end_core = {1, 1};
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {1, 1};
     tt_metal::CoreRange core_group({0, 1}, {1, 1});
-    tt_xy_pair single_core = {1, 0};
+    CoreCoord single_core = {1, 0};
     tt_metal::CoreRange all_cores(start_core, end_core);
     tt_metal::CoreBlocks core_blocks = {start_core, single_core, core_group};
 

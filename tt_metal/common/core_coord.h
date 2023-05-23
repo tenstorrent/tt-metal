@@ -7,11 +7,11 @@
 // #include <command_assembler/xy_pair.h>
 
 
-struct tt_xy_pair {
+struct CoreCoord {
 
-  constexpr tt_xy_pair() : x{}, y{} {}
-  constexpr tt_xy_pair(std::size_t x, std::size_t y) : x(x), y(y) {}
-  // explicit tt_xy_pair(const CommandAssembler::xy_pair &p) : tt_xy_pair(p.x, p.y) {}
+  constexpr CoreCoord() : x{}, y{} {}
+  constexpr CoreCoord(std::size_t x, std::size_t y) : x(x), y(y) {}
+  // explicit CoreCoord(const CommandAssembler::xy_pair &p) : CoreCoord(p.x, p.y) {}
 
   std::size_t x;
   std::size_t y;
@@ -23,20 +23,20 @@ struct tt_xy_pair {
 
 };
 
-constexpr inline bool operator==(const tt_xy_pair &a, const tt_xy_pair &b) { return a.x == b.x && a.y == b.y; }
+constexpr inline bool operator==(const CoreCoord &a, const CoreCoord &b) { return a.x == b.x && a.y == b.y; }
 
-constexpr inline bool operator!=(const tt_xy_pair &a, const tt_xy_pair &b) { return !(a == b); }
+constexpr inline bool operator!=(const CoreCoord &a, const CoreCoord &b) { return !(a == b); }
 
-constexpr inline bool operator<(const tt_xy_pair &left, const tt_xy_pair &right) {
+constexpr inline bool operator<(const CoreCoord &left, const CoreCoord &right) {
   return (left.x < right.x || (left.x == right.x && left.y < right.y));
 }
 
 
-struct tt_cxy_pair : public tt_xy_pair {
+struct tt_cxy_pair : public CoreCoord {
 
-  tt_cxy_pair() : tt_xy_pair{}, chip{} {}
-  tt_cxy_pair(std::size_t ichip, tt_xy_pair xy_pair) : tt_xy_pair(xy_pair.x, xy_pair.y), chip(ichip) {}
-  tt_cxy_pair(std::size_t ichip, std::size_t x, std::size_t y) : tt_xy_pair(x,y), chip(ichip) {}
+  tt_cxy_pair() : CoreCoord{}, chip{} {}
+  tt_cxy_pair(std::size_t ichip, CoreCoord xy_pair) : CoreCoord(xy_pair.x, xy_pair.y), chip(ichip) {}
+  tt_cxy_pair(std::size_t ichip, std::size_t x, std::size_t y) : CoreCoord(x,y), chip(ichip) {}
 
   std::size_t chip;
 
@@ -53,8 +53,8 @@ constexpr inline bool operator<(const tt_cxy_pair &left, const tt_cxy_pair &righ
 
 namespace std {
 template <>
-struct hash<tt_xy_pair> {
-  std::size_t operator()(tt_xy_pair const &o) const {
+struct hash<CoreCoord> {
+  std::size_t operator()(CoreCoord const &o) const {
     std::size_t seed = 0;
     seed = std::hash<std::size_t>()(o.x) ^ std::hash<std::size_t>()(o.y) << 1;
     return seed;

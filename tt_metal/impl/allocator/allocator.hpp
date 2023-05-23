@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "common/assert.hpp"
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "tt_metal/common/tt_soc_descriptor.h"
 #include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 
@@ -126,11 +126,11 @@ uint32_t num_banks(const Allocator &allocator, const BufferType &buffer_type);
 
 uint32_t dram_channel_from_bank_id(const Allocator &allocator, uint32_t bank_id);
 
-tt_xy_pair logical_core_from_bank_id(const Allocator &allocator, uint32_t bank_id);
+CoreCoord logical_core_from_bank_id(const Allocator &allocator, uint32_t bank_id);
 
 std::vector<uint32_t> bank_ids_from_dram_channel(const Allocator &allocator, uint32_t dram_channel);
 
-std::vector<uint32_t> bank_ids_from_logical_core(const Allocator &allocator, const tt_xy_pair &logical_core);
+std::vector<uint32_t> bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core);
 
 BankIdToRelativeAddress alloc_one_bank_per_storage_unit(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up);
 
@@ -145,11 +145,11 @@ void deallocate_buffer(Allocator &allocator, uint32_t bank_id, uint32_t address,
 void clear(Allocator &allocatator);
 
 // TODO (abhullar): Circular buffer specific APIs will be removed after CB redesign.
-uint32_t allocate_circular_buffer(Allocator &allocator, const tt_xy_pair &logical_core, uint32_t size_bytes);
+uint32_t allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical_core, uint32_t size_bytes);
 
-uint32_t allocate_circular_buffer(Allocator &allocator, const tt_xy_pair &logical_core, uint32_t start_address, uint32_t size_bytes);
+uint32_t allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical_core, uint32_t start_address, uint32_t size_bytes);
 
-uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator, const std::pair<tt_xy_pair, tt_xy_pair> &logical_core_range, uint32_t size_in_bytes);
+uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator, const std::pair<CoreCoord, CoreCoord> &logical_core_range, uint32_t size_in_bytes);
 
 }  // namespace allocator
 
@@ -161,8 +161,8 @@ struct Allocator {
 
     std::unordered_map<uint32_t, uint32_t> bank_id_to_dram_channel;
     std::unordered_map<uint32_t, std::vector<uint32_t>> dram_channel_to_bank_ids;
-    std::unordered_map<uint32_t, tt_xy_pair> bank_id_to_logical_core;
-    std::unordered_map<tt_xy_pair, std::vector<uint32_t>> logical_core_to_bank_ids;
+    std::unordered_map<uint32_t, CoreCoord> bank_id_to_logical_core;
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> logical_core_to_bank_ids;
 
     // Callbacks to invoke during initialization and allocation
     allocator::AllocDescriptor descriptor;

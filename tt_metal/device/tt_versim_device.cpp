@@ -209,7 +209,7 @@ void tt_VersimDevice::dump_wall_clock_mailbox(std::string output_path, int devic
   output_file.close();
 }
 
-bool versim_check_dram_core_exists(const std::vector<std::vector<tt_xy_pair>> &dram_core_channels, tt_xy_pair target_core) {
+bool versim_check_dram_core_exists(const std::vector<std::vector<CoreCoord>> &dram_core_channels, CoreCoord target_core) {
     bool dram_core_exists = false;
     for (const auto &dram_cores_in_channel: dram_core_channels) {
       for (const auto &dram_core : dram_cores_in_channel) {

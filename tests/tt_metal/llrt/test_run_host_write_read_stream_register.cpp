@@ -25,7 +25,7 @@ int main(int argc, char** argv)
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
         tt::llrt::LoadFirmwareFlag load_firmware_flag = true;
-        tt_xy_pair core = {11, 3};
+        CoreCoord core = {11, 3};
 
         for(std::uint32_t stream_id = 0; stream_id < NUM_STREAMS; stream_id ++) {
             for(std::uint32_t register_id: REGISTERS) {

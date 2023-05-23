@@ -119,7 +119,7 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
 
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {
-            tt_xy_pair core = {(std::size_t) start_core_x + j, (std::size_t) start_core_y + i};
+            CoreCoord core = {(std::size_t) start_core_x + j, (std::size_t) start_core_y + i};
             uint32_t l1_valid_address = 200 * 1024;
 
             uint32_t src0_cb_index = 0;
@@ -284,12 +284,12 @@ bool write_runtime_args_to_device(
 
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            tt_xy_pair core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+            CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
             log_info(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
 
-            tt_xy_pair mcast_sender = {(std::size_t) start_core_x, core.y};
-            tt_xy_pair core_start = {(std::size_t) start_core_x + 1, core.y};
-            tt_xy_pair core_end = {(std::size_t) start_core_x + (num_cores_c - 1), core.y};
+            CoreCoord mcast_sender = {(std::size_t) start_core_x, core.y};
+            CoreCoord core_start = {(std::size_t) start_core_x + 1, core.y};
+            CoreCoord core_end = {(std::size_t) start_core_x + (num_cores_c - 1), core.y};
             auto mcast_sender_phyiscal = device->worker_core_from_logical_core(mcast_sender);
             auto core_start_physical = device->worker_core_from_logical_core(core_start);
             auto core_end_physical = device->worker_core_from_logical_core(core_end);
@@ -466,7 +466,7 @@ int main(int argc, char **argv) {
         for(int i = 0; i < num_cores_r; i++) {
             for(int j = 0; j < num_cores_c; j++) {
                 std::vector<uint32_t> invalid = {INVALID};
-                tt_xy_pair core = {(std::size_t) start_core_x + j, (std::size_t) start_core_y + i};
+                CoreCoord core = {(std::size_t) start_core_x + j, (std::size_t) start_core_y + i};
                 tt_metal::WriteToDeviceL1(device, core, in0_mcast_sender_semaphore_addr, invalid);
             }
         }

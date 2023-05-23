@@ -16,7 +16,7 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
     TT_ASSERT(hFill <= H && wFill <= W);
     tt_metal::Device *device = any.device();
     tt_metal::Program program = tt_metal::Program();
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
     TT_ASSERT(val_hi >= 0 && val_hi < 0xFFFF); // TODO(AP): support dtypes..
     TT_ASSERT(val_lo >= 0 && val_lo < 0xFFFF);
 

@@ -16,7 +16,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     uint32_t single_tile_size,
-    tt_xy_pair core_range,
+    CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
     uint32_t in0_block_w,
@@ -186,7 +186,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            tt_xy_pair core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+            CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
             auto l1_bank_ids = device->bank_ids_from_logical_core(core);
             TT_ASSERT(not l1_bank_ids.empty());
             auto l1_bank_id = l1_bank_ids.at(0);
@@ -258,12 +258,12 @@ tt_metal::Program create_program_mcast_in0_in1(
             tt_metal::WriteToDeviceL1(device, core, in0_mcast_sender_semaphore.address(), invalid);
             tt_metal::WriteToDeviceL1(device, core, in1_mcast_sender_semaphore.address(), invalid);
 
-            tt_xy_pair left_core    = {(std::size_t) start_core_x, (std::size_t) core.y};
-            tt_xy_pair left_core_plus_one    = {(std::size_t) start_core_x + 1, (std::size_t) core.y};
-            tt_xy_pair right_core   = {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) core.y};
-            tt_xy_pair top_core     = {(std::size_t) core.x, (std::size_t) start_core_y};
-            tt_xy_pair top_core_plus_one     = {(std::size_t) core.x, (std::size_t) start_core_y + 1};
-            tt_xy_pair bottom_core  = {(std::size_t) core.x, (std::size_t) start_core_y + num_cores_r - 1};
+            CoreCoord left_core    = {(std::size_t) start_core_x, (std::size_t) core.y};
+            CoreCoord left_core_plus_one    = {(std::size_t) start_core_x + 1, (std::size_t) core.y};
+            CoreCoord right_core   = {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) core.y};
+            CoreCoord top_core     = {(std::size_t) core.x, (std::size_t) start_core_y};
+            CoreCoord top_core_plus_one     = {(std::size_t) core.x, (std::size_t) start_core_y + 1};
+            CoreCoord bottom_core  = {(std::size_t) core.x, (std::size_t) start_core_y + num_cores_r - 1};
 
             auto left_core_physical = device->worker_core_from_logical_core(left_core);
             auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
@@ -445,7 +445,7 @@ tt_metal::Program create_program_mcast_in0(
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     uint32_t single_tile_size,
-    tt_xy_pair core_range,
+    CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
     uint32_t in0_block_w,
@@ -574,7 +574,7 @@ tt_metal::Program create_program_mcast_in0(
 
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            tt_xy_pair core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+            CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
             auto l1_bank_ids = device->bank_ids_from_logical_core(core);
             TT_ASSERT(not l1_bank_ids.empty());
             auto l1_bank_id = l1_bank_ids.at(0);
@@ -643,9 +643,9 @@ tt_metal::Program create_program_mcast_in0(
             std::vector<uint32_t> invalid = {INVALID};
             tt_metal::WriteToDeviceL1(device, core, in0_mcast_sender_semaphore.address(), invalid);
 
-            tt_xy_pair mcast_sender = {(std::size_t) start_core_x, core.y};
-            tt_xy_pair core_start = {(std::size_t) start_core_x + 1, core.y};
-            tt_xy_pair core_end = {(std::size_t) start_core_x + (num_cores_c - 1), core.y};
+            CoreCoord mcast_sender = {(std::size_t) start_core_x, core.y};
+            CoreCoord core_start = {(std::size_t) start_core_x + 1, core.y};
+            CoreCoord core_end = {(std::size_t) start_core_x + (num_cores_c - 1), core.y};
             auto mcast_sender_phyiscal = device->worker_core_from_logical_core(mcast_sender);
             auto core_start_physical = device->worker_core_from_logical_core(core_start);
             auto core_end_physical = device->worker_core_from_logical_core(core_end);
@@ -748,7 +748,7 @@ tt_metal::Program create_program_mcast_in1(
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     uint32_t single_tile_size,
-    tt_xy_pair core_range,
+    CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
     uint32_t in0_block_w,
@@ -878,7 +878,7 @@ tt_metal::Program create_program_mcast_in1(
 
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            tt_xy_pair core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+            CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
             auto l1_bank_ids = device->bank_ids_from_logical_core(core);
             TT_ASSERT(not l1_bank_ids.empty());
             auto l1_bank_id = l1_bank_ids.at(0);
@@ -947,9 +947,9 @@ tt_metal::Program create_program_mcast_in1(
             std::vector<uint32_t> invalid = {INVALID};
             tt_metal::WriteToDeviceL1(device, core, in1_mcast_sender_semaphore.address(), invalid);
 
-            tt_xy_pair mcast_sender = {core.x, (std::size_t) start_core_y};
-            tt_xy_pair core_start = {core.x, (std::size_t) start_core_y + 1};
-            tt_xy_pair core_end = {core.x, (std::size_t) start_core_y + (num_cores_r - 1)};
+            CoreCoord mcast_sender = {core.x, (std::size_t) start_core_y};
+            CoreCoord core_start = {core.x, (std::size_t) start_core_y + 1};
+            CoreCoord core_end = {core.x, (std::size_t) start_core_y + (num_cores_r - 1)};
             auto mcast_sender_physical = device->worker_core_from_logical_core(mcast_sender);
             auto core_start_physical = device->worker_core_from_logical_core(core_start);
             auto core_end_physical = device->worker_core_from_logical_core(core_end);
@@ -1053,7 +1053,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor matmul_multi_core_reuse_mcast_padding_generalized_(const Tensor &a, const Tensor &b, bool bcast_batch, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+Tensor matmul_multi_core_reuse_mcast_padding_generalized_(const Tensor &a, const Tensor &b, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -1119,7 +1119,7 @@ Tensor matmul_multi_core_reuse_mcast_padding_generalized_(const Tensor &a, const
     uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
-    tt_xy_pair core_range = bmm_op_utils::get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
+    CoreCoord core_range = bmm_op_utils::get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -1200,11 +1200,11 @@ Tensor matmul_multi_core_reuse_mcast_padding_generalized_(const Tensor &a, const
     return output;
 }
 
-Tensor matmul_multi_core_reuse_mcast_padding_generalized(const Tensor& a, const Tensor& b, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+Tensor matmul_multi_core_reuse_mcast_padding_generalized(const Tensor& a, const Tensor& b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     return matmul_multi_core_reuse_mcast_padding_generalized_(a, b, true, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
-Tensor bmm_multi_core_reuse_mcast_padding_generalized(const Tensor& a, const Tensor& b, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+Tensor bmm_multi_core_reuse_mcast_padding_generalized(const Tensor& a, const Tensor& b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     return matmul_multi_core_reuse_mcast_padding_generalized_(a, b, false, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 

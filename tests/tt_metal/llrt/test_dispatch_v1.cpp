@@ -326,7 +326,7 @@ vector<uint32_t> convert_copy_desc_to_flat_vec(const CopyDescriptor &copy_desc) 
 }
 
 void write_copy_desc_to_l1(
-    tt_cluster *cluster, int chip_id, tt_xy_pair dispatch_core, const CopyDescriptor &copy_desc) {
+    tt_cluster *cluster, int chip_id, CoreCoord dispatch_core, const CopyDescriptor &copy_desc) {
     uint32_t l1_addr = copy_desc.l1_addr;
     vector<uint32_t> flat_desc = convert_copy_desc_to_flat_vec(copy_desc);
 
@@ -335,7 +335,7 @@ void write_copy_desc_to_l1(
     tt::llrt::write_hex_vec_to_core(cluster, chip_id, dispatch_core, {l1_addr}, BRISC_L1_ARG_BASE);
 }
 
-void host_dispatch(tt_cluster *cluster, int chip_id, string op, tt_xy_pair dispatch_core, tt_xy_pair worker_core) {
+void host_dispatch(tt_cluster *cluster, int chip_id, string op, CoreCoord dispatch_core, CoreCoord worker_core) {
     // Write dispatch binary to core
     tt::llrt::test_load_write_read_risc_binary(
         cluster, "built_kernels/dispatch/brisc/brisc.hex", chip_id, dispatch_core, 0);
@@ -367,8 +367,8 @@ bool test_dispatch_v1(tt_cluster *cluster, int chip_id, string op) {
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     cluster->write_dram_vec(src_vec, tt_target_dram{chip_id, 0, 0}, ACTIVATIONS_DRAM_SRC);
-    tt_xy_pair dispatch_core = {11, 1};
-    tt_xy_pair worker_core = {1, 1};
+    CoreCoord dispatch_core = {11, 1};
+    CoreCoord worker_core = {1, 1};
     host_dispatch(cluster, chip_id, op, dispatch_core, worker_core);
 
     vector<uint32_t> dst_vec;

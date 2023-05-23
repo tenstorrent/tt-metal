@@ -38,9 +38,9 @@ std::unordered_set<chip_id_t> tt_cluster::get_all_chips() {
     return ndesc->get_all_chips();
 }
 
-tt_xy_pair tt_cluster::get_routing_coordinate(int core_r, int core_c, chip_id_t device_id) const {
+CoreCoord tt_cluster::get_routing_coordinate(int core_r, int core_c, chip_id_t device_id) const {
     TT_ASSERT(sdesc_per_chip.size(), "Descriptor must be loaded. Try open_device()");
-    tt_xy_pair coord(0,0);
+    CoreCoord coord(0,0);
     coord.x = sdesc_per_chip.at(device_id).worker_log_to_routing_x.at(core_c);
     coord.y = sdesc_per_chip.at(device_id).worker_log_to_routing_y.at(core_r);
     return coord;
@@ -124,7 +124,7 @@ void tt_cluster::verify_eth_fw() {
         std::vector<uint32_t> mem_vector;
         std::vector<uint32_t> fw_versions;
 
-        for (tt_xy_pair &eth_core : get_soc_desc(chip).ethernet_cores) {
+        for (CoreCoord &eth_core : get_soc_desc(chip).ethernet_cores) {
             read_dram_vec(mem_vector, tt_cxy_pair(chip, eth_core), eth_l1_mem::address_map::FW_VERSION_ADDR, 4);
             fw_versions.push_back(mem_vector.at(0));
         }
@@ -247,7 +247,7 @@ void tt_cluster::set_power_state(tt_DevicePowerState device_state) {
 void tt_cluster::reset_debug_print_server_buffers() {
     for (const int device_id : this->target_device_ids) {
         auto workers = get_soc_desc(device_id).workers;
-        for (const tt_xy_pair &core : workers)
+        for (const CoreCoord &core : workers)
         for (int hart_id = 0; hart_id < 5; hart_id++) { // TODO(AP): must match DPRINT_NHARTS, magic
             // compute the buffer address for the requested hart
             uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
@@ -319,7 +319,7 @@ void tt_cluster::close_device() {
 
 void tt_cluster::wait_for_completion(std::string output_dir) {
     vector<uint32_t> mem_vector;
-    std::map<int, std::unordered_set<tt_xy_pair>> device_idle_cores;
+    std::map<int, std::unordered_set<CoreCoord>> device_idle_cores;
     bool all_worker_cores_done;
 
     // initially assume no cores are idle
@@ -329,7 +329,7 @@ void tt_cluster::wait_for_completion(std::string output_dir) {
     do {
         all_worker_cores_done = true;
         for (const int device_id : target_device_ids) {
-            for (const tt_xy_pair &core : get_soc_desc(device_id).workers) {
+            for (const CoreCoord &core : get_soc_desc(device_id).workers) {
                 // check for core busy
                 bool is_core_busy = device_idle_cores.at(device_id).find(core) == device_idle_cores.at(device_id).end();
                 if (is_core_busy) {
@@ -472,7 +472,7 @@ void tt_cluster::enable_ethernet_queue(const chip_id_t &chip, int timeout) {
 void tt_cluster::broadcast_remote_tensix_risc_reset(const chip_id_t &chip, const TensixSoftResetOptions &soft_resets) {
     auto valid = soft_resets & ALL_TENSIX_SOFT_RESET;
 
-    for (const tt_xy_pair &worker_core : sdesc_per_chip.at(chip).workers) {
+    for (const CoreCoord &worker_core : sdesc_per_chip.at(chip).workers) {
         set_remote_tensix_risc_reset(tt_cxy_pair(chip, worker_core), valid);
     }
 }
@@ -631,7 +631,7 @@ void tt_cluster::write_to_non_mmio_device(vector<uint32_t> &mem_vector, tt_cxy_p
 
     const chip_id_t &mmio_capable_chip = ndesc->get_closest_mmio_capable_chip(core.chip);
     const tt_cxy_pair remote_transfer_ethernet_core = tt_cxy_pair(mmio_capable_chip, get_soc_desc(core.chip).ethernet_cores.at(0).x, get_soc_desc(core.chip).ethernet_cores.at(0).y);
-    const tt_xy_pair target_chip = ndesc->get_chip_locations().at(core.chip);
+    const CoreCoord target_chip = ndesc->get_chip_locations().at(core.chip);
     // tt::log_debug(tt::LogDevice, "Writing to non-mmio device {}: tt_cxy_pair {}, addr {}", target_chip.str(), core.str(), address);
 
     std::vector<std::uint32_t> erisc_req_q;
@@ -736,7 +736,7 @@ void tt_cluster::read_from_non_mmio_device(vector<uint32_t> &mem_vector, tt_cxy_
 
     const chip_id_t &mmio_capable_chip = ndesc->get_closest_mmio_capable_chip(core.chip);
     const tt_cxy_pair remote_transfer_ethernet_core = tt_cxy_pair(mmio_capable_chip, get_soc_desc(core.chip).ethernet_cores.at(0).x, get_soc_desc(core.chip).ethernet_cores.at(0).y);
-    const tt_xy_pair target_chip = ndesc->get_chip_locations().at(core.chip);
+    const CoreCoord target_chip = ndesc->get_chip_locations().at(core.chip);
     // tt::log_debug(tt::LogDevice, "Reading from non-mmio device {}: tt_cxy_pair {}, addr {}", target_chip.str(), core.str(), address);
 
     std::vector<std::uint32_t> erisc_req_q;
@@ -931,7 +931,7 @@ std::unique_ptr<tt_soc_description> load_soc_descriptor_from_file(const tt::ARCH
     return load_soc_descriptor_from_yaml(file_path);
 }
 
-bool check_dram_core_exists(const std::vector<std::vector<tt_xy_pair>> &all_dram_cores, tt_xy_pair target_core) {
+bool check_dram_core_exists(const std::vector<std::vector<CoreCoord>> &all_dram_cores, CoreCoord target_core) {
     bool dram_core_exists = false;
     for (const auto &dram_cores_in_channel : all_dram_cores) {
         for (auto dram_core : dram_cores_in_channel) {

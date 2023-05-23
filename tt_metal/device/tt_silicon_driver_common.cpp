@@ -1,5 +1,5 @@
 #include "device/tt_silicon_driver_common.hpp"
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "tt_device.h"
 
 bool TLB_DATA::check(const TLB_OFFSETS offset) {
@@ -30,8 +30,8 @@ std::optional<std::uint64_t> TLB_DATA::apply_offset(const TLB_OFFSETS offset) {
             static_vc << offset.static_vc;
 }
 
-std::optional<std::tuple<std::uint32_t, std::uint32_t>> tt_SiliconDevice::describe_tlb(tt_xy_pair coord) {
-    auto tlb_index = get_static_tlb_index(tt_xy_pair(coord.x, coord.y));
+std::optional<std::tuple<std::uint32_t, std::uint32_t>> tt_SiliconDevice::describe_tlb(CoreCoord coord) {
+    auto tlb_index = get_static_tlb_index(CoreCoord(coord.x, coord.y));
     if (tlb_index < 0) {
         return std::nullopt;
     }

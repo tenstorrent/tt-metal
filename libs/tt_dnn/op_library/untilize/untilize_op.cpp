@@ -30,7 +30,7 @@ Tensor untilize(const Tensor &a) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to untilize needs to be on device!");

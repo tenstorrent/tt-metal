@@ -55,7 +55,7 @@ class Profiler {
         void readRiscProfilerResults(
                 tt_cluster *cluster,
                 int pcie_slot,
-                const tt_xy_pair &worker_core,
+                const CoreCoord &worker_core,
                 std::string risc_name,
                 int risc_print_buffer_addr);
 
@@ -82,5 +82,5 @@ class Profiler {
         void dumpHostResults(std::string name_append);
 
         //Traverse all cores on the device and dump the device profile results
-        void dumpDeviceResults(tt_cluster *cluster, int pcie_slot, const vector<tt_xy_pair> &worker_cores);
+        void dumpDeviceResults(tt_cluster *cluster, int pcie_slot, const vector<CoreCoord> &worker_cores);
 };

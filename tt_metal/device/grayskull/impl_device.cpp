@@ -1,9 +1,9 @@
 #include "impl_device.hpp"
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "device/tt_device.h"
 #include "device_data.hpp"
 
-std::int32_t tt_SiliconDevice::get_static_tlb_index(tt_xy_pair target) {
+std::int32_t tt_SiliconDevice::get_static_tlb_index(CoreCoord target) {
   int flat_index = target.y * DEVICE_DATA.GRID_SIZE_X + target.x;
   if (flat_index == 0) {
       return -1;

@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
         */
         Program program = Program();
 
-        constexpr tt_xy_pair core = {0, 0};
+        constexpr CoreCoord core = {0, 0};
 
         DataMovementKernel *dram_copy_kernel = CreateDataMovementKernel(
             program,

@@ -9,7 +9,7 @@
 
 #include "common/tt_cluster_descriptor.h"
 #include "common/tt_soc_descriptor.h"
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "device/kmdif.h"
 #include "eth_l1_address_map.h"
 #include "l1_address_map.h"
@@ -52,7 +52,7 @@ struct tt_device_params {
     // {"*-2", "1-*", "*-*", "1-2"}
     // '*' indicates we must dump all the cores in that dimension.
     // This function takes the vector above and unrolles the coords with '*' in one or both dimensions.
-    std::vector<std::string> unroll_vcd_dump_cores(tt_xy_pair grid_size) const {
+    std::vector<std::string> unroll_vcd_dump_cores(CoreCoord grid_size) const {
         std::vector<std::string> unrolled_dump_core;
         for (auto &dump_core: vcd_dump_cores) {
             // If the input is a single *, then dump all cores.
@@ -214,7 +214,7 @@ class tt_device
         std::runtime_error("---- tt_device::get_clocks is not implemented\n");
         return std::map<int,int>();
     }
-    virtual void init_system(const tt_device_params &device_params, const tt_xy_pair &grid_size) {
+    virtual void init_system(const tt_device_params &device_params, const CoreCoord &grid_size) {
         bool no_checkers = true;
         std::vector<std::string> dump_cores = device_params.unroll_vcd_dump_cores(grid_size);
         start(device_params.expand_plusargs(), dump_cores, no_checkers, device_params.init_device, device_params.skip_driver_allocs);
@@ -357,9 +357,9 @@ class tt_SiliconDevice: public tt_device
 
     virtual void enable_ethernet_queue(const chip_id_t &logical_device_id, int timeout);
 
-    virtual void init_system(const tt_device_params &device_params, const tt_xy_pair &grid_size);
+    virtual void init_system(const tt_device_params &device_params, const CoreCoord &grid_size);
     virtual void shutdown_system();
-    void set_tensix_risc_reset(struct PCIdevice *device, const tt_xy_pair &core, const TensixSoftResetOptions &cores);
+    void set_tensix_risc_reset(struct PCIdevice *device, const CoreCoord &core, const TensixSoftResetOptions &cores);
     void broadcast_tensix_risc_reset(struct PCIdevice *device, const TensixSoftResetOptions &cores);
     virtual uint32_t get_harvested_noc_rows(int logical_device_id);
     virtual ~tt_SiliconDevice ();
@@ -391,9 +391,9 @@ class tt_SiliconDevice: public tt_device
 
         // Utility Functions
         std::optional<std::uint64_t> get_tlb_data(std::uint32_t tlb_index, TLB_DATA data);
-        std::int32_t get_static_tlb_index(tt_xy_pair coord);
+        std::int32_t get_static_tlb_index(CoreCoord coord);
         std::optional<std::tuple<std::uint32_t, std::uint32_t>> describe_tlb(std::int32_t tlb_index);
-        std::optional<std::tuple<std::uint32_t, std::uint32_t>> describe_tlb(tt_xy_pair coord);
+        std::optional<std::tuple<std::uint32_t, std::uint32_t>> describe_tlb(CoreCoord coord);
 
         // Setup functions
         void init_pcie_tlb(struct PCIdevice* pci_device);
@@ -472,5 +472,5 @@ struct tt_version {
 constexpr inline bool operator==(const tt_version &a, const tt_version &b) {
     return a.major == b.major && a.minor == b.minor && a.patch == b.patch;
 }
-std::string format_node(tt_xy_pair xy);
-tt_xy_pair format_node(std::string str);
+std::string format_node(CoreCoord xy);
+CoreCoord format_node(std::string str);

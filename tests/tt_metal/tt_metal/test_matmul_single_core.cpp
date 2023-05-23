@@ -155,7 +155,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
         uint32_t M = 16;
         uint32_t K = 16 * 12;
         uint32_t N = 16;

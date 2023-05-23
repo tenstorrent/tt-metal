@@ -26,7 +26,7 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 #define NOC_X(x) x
 #define NOC_Y(y) y
 
-u32 noc_coord_to_u32(tt_xy_pair coord);
+u32 noc_coord_to_u32(CoreCoord coord);
 
 class Command {
     EnqueueCommandType type_ = EnqueueCommandType::INVALID;

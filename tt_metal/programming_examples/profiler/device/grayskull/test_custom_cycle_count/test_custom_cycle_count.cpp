@@ -6,8 +6,8 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
 {
     bool pass = true;
 
-    tt_xy_pair start_core = {0, 0};
-    tt_xy_pair end_core = {11, 9};;
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {11, 9};;
     tt_metal::CoreRange all_cores(start_core, end_core);
 
     tt_metal::Program program = tt_metal::Program();

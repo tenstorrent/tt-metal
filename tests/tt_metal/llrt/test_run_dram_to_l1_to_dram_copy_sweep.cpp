@@ -41,12 +41,12 @@ int main(int argc, char** argv)
             };
         };
 
-        std::vector<tt_xy_pair> cores = {{1, 1}, {2, 4}, {7, 3}, {10, 9}};
+        std::vector<CoreCoord> cores = {{1, 1}, {2, 4}, {7, 3}, {10, 9}};
 
         for (int dram_src_channel_id = 0; dram_src_channel_id < 4; dram_src_channel_id++) {
             for (int dram_dst_channel_id = 4; dram_dst_channel_id < 8; dram_dst_channel_id++) {
-                // for (const tt_xy_pair core : tt::llrt::get_worker_cores_from_cluster(cluster, chip_id)) {
-                for (const tt_xy_pair core : cores) {
+                // for (const CoreCoord core : tt::llrt::get_worker_cores_from_cluster(cluster, chip_id)) {
+                for (const CoreCoord core : cores) {
                     log_info(tt::LogVerif, "Running dram to l1 copy for dram channel {} -> core {}", dram_src_channel_id, core.str());
 
                     unsigned total_vec_size = total_buffer_size / sizeof(std::uint32_t);

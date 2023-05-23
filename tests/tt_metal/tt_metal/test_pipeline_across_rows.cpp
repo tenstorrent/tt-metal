@@ -130,7 +130,7 @@ int main(int argc, char **argv) {
         TT_ASSERT(num_cores >= 2 && num_cores <= 12); // grayskull
         TT_ASSERT(num_tiles % block_size_tiles == 0);
 
-        std::vector<tt_xy_pair> cores;
+        std::vector<CoreCoord> cores;
         for (uint32_t i = 0; i < num_cores; i++) {
             cores.push_back({i, 0});
         }
@@ -181,9 +181,9 @@ int main(int argc, char **argv) {
         tt_metal::Buffer dst_buffer;
 
         uint32_t src_address;
-        tt_xy_pair src_noc_xy;
+        CoreCoord src_noc_xy;
         uint32_t dst_address;
-        tt_xy_pair dst_noc_xy;
+        CoreCoord dst_noc_xy;
 
         if (IO_data_in_dram) {
             uint32_t dram_buffer_addr = 0;

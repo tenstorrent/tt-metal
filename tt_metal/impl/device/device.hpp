@@ -11,8 +11,8 @@ namespace tt {
 namespace tt_metal {
 
 // Represents all cores within range specified by the two cores
-using CoreRange = std::pair<tt_xy_pair, tt_xy_pair>;
-using CoreBlocks = std::vector<std::variant<tt_xy_pair, CoreRange>>;
+using CoreRange = std::pair<CoreCoord, CoreCoord>;
+using CoreBlocks = std::vector<std::variant<CoreCoord, CoreRange>>;
 
 template<class... Ts> struct overloaded_core : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded_core(Ts...) -> overloaded_core<Ts...>;
@@ -27,7 +27,7 @@ class Program;
 class Device {
    public:
 
-    friend void tt_gdb(Device* device, int chip_id, const vector<tt_xy_pair> cores, vector<string> ops);
+    friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device(tt::ARCH arch, int pcie_slot) : arch_(arch), cluster_(nullptr), pcie_slot_(pcie_slot), closed_(false), allocator_scheme_(MemoryAllocator::BASIC) {}
 
     ~Device();
@@ -51,23 +51,23 @@ class Device {
 
     uint32_t l1_size() const;
 
-    tt_xy_pair logical_grid_size() const;
+    CoreCoord logical_grid_size() const;
 
-    tt_xy_pair compute_and_storage_grid_size() const;
+    CoreCoord compute_and_storage_grid_size() const;
 
-    tt_xy_pair worker_core_from_logical_core(const tt_xy_pair &logical_core) const;
+    CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
 
-    std::vector<tt_xy_pair> worker_cores_from_logical_cores(const std::vector<tt_xy_pair> &logical_cores);
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores);
 
     uint32_t num_banks(const BufferType &buffer_type) const;
 
     uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
-    tt_xy_pair logical_core_from_bank_id(uint32_t bank_id) const;
+    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
     std::vector<uint32_t> bank_ids_from_dram_channel(uint32_t dram_channel) const;
 
-    std::vector<uint32_t> bank_ids_from_logical_core(const tt_xy_pair &logical_core) const;
+    std::vector<uint32_t> bank_ids_from_logical_core(const CoreCoord &logical_core) const;
 
    private:
     bool cluster_is_initialized() const { return cluster_ != nullptr; }

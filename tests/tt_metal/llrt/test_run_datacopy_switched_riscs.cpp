@@ -15,7 +15,7 @@
 
 using tt::llrt::CircularBufferConfigVec;
 
-bool run_data_copy_multi_tile(tt_cluster* cluster, int chip_id, const tt_xy_pair& core, int num_tiles) {
+bool run_data_copy_multi_tile(tt_cluster* cluster, int chip_id, const CoreCoord& core, int num_tiles) {
 
     std::uint32_t single_tile_size = 2 * 1024;
     std::uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -30,9 +30,9 @@ bool run_data_copy_multi_tile(tt_cluster* cluster, int chip_id, const tt_xy_pair
 
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, tt::llrt::TensixRiscsOptions::ALL_RISCS, {core});
 
-    tt_xy_pair dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
+    CoreCoord dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
     log_info(tt::LogVerif, "dram_src_noc_xy = {}", dram_src_noc_xy.str());
-    tt_xy_pair dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
+    CoreCoord dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
     log_info(tt::LogVerif, "dram_dst_noc_xy = {}", dram_dst_noc_xy.str());
 
     // BufferConfigVec -- common across all kernels, so written once to the core

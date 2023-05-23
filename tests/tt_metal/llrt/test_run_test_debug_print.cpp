@@ -39,7 +39,7 @@ constexpr bool REMOVE_TEMP_DEBUG_PRINT_FILE = true;
 void launch_on_cores(
     tt_cluster* cluster,
     int chip_id,
-    vector<tt_xy_pair> cores,
+    vector<CoreCoord> cores,
     u32 num_tiles,
     u32 num_underscores_to_print,
     bool multicore_sync,
@@ -67,9 +67,9 @@ void launch_on_cores(
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(
         cluster, chip_id, tt::llrt::TensixRiscsOptions::ALL_RISCS, cores);
 
-    tt_xy_pair dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
+    CoreCoord dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
     log_info(tt::LogVerif, "dram_src_noc_xy = {}", dram_src_noc_xy.str());
-    tt_xy_pair dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
+    CoreCoord dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
     log_info(tt::LogVerif, "dram_dst_noc_xy = {}", dram_dst_noc_xy.str());
 
     // BufferConfigVec -- common across all kernels, so written once to the core
@@ -113,16 +113,16 @@ std::string test_tmpnam()
 bool run_test_debug_print(
     tt_cluster* cluster,
     int chip_id,
-    const tt_xy_pair& core_start,
-    const tt_xy_pair& core_end,
+    const CoreCoord& core_start,
+    const CoreCoord& core_end,
     u32 num_tiles,
     u32 num_underscores_to_print,
     const char* gold_string
 ) {
-    vector<tt_xy_pair> cores;
+    vector<CoreCoord> cores;
     for (size_t x = core_start.x; x < core_end.x; x++)
     for (size_t y = core_start.y; y < core_end.y; y++)
-        cores.push_back(tt_xy_pair{x, y});
+        cores.push_back(CoreCoord{x, y});
 
     int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
     std::string debug_outfile_str = test_tmpnam();
@@ -189,9 +189,9 @@ int main(int argc, char** argv)
         tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         int chip_id = 0;
-        tt_xy_pair xy_start = {1,1};
-        tt_xy_pair xy_end1x1 = {2,2};
-        tt_xy_pair xy_end5x5 = {6,6};
+        CoreCoord xy_start = {1,1};
+        CoreCoord xy_end1x1 = {2,2};
+        CoreCoord xy_end5x5 = {6,6};
         cluster->open_device(arch, target_type, {0}, sdesc_file);
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);

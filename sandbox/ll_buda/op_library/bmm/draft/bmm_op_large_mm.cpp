@@ -54,13 +54,13 @@ std::tuple<Program *, DataMovementKernel *, DataMovementKernel *> create_program
     TT_ASSERT(in1_CB_size <= 130*1024);
     TT_ASSERT(out_CB_size <= 540*1024);
 
-    tt_xy_pair start_core = {0, 0};
-    tt_xy_pair end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
     CoreRange all_cores(start_core, end_core);
 
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {
-            tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
+            CoreCoord core = {(std::size_t) j, (std::size_t) i};
             uint32_t l1_valid_address = 200 * 1024;
 
             uint32_t src0_cb_index = 0;
@@ -213,7 +213,7 @@ bool write_runtime_args_to_device(
 
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            tt_xy_pair core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
+            CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
 
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t) in0_dram_addr, // in0_tensor_addr
@@ -268,7 +268,7 @@ namespace ll_buda {
 
 Tensor matmul(const Tensor &a, const Tensor &b) {
 
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to eltwise binary need to be on device!");

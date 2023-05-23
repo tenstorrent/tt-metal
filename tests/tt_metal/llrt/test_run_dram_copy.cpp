@@ -23,7 +23,7 @@ void tt_rnd_set_seed(int seed) {
     rand_gen.seed(seed);
 }
 
-bool run_dram_copy(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) {
+bool run_dram_copy(tt_cluster *cluster, int chip_id, const CoreCoord& core) {
 
     uint64_t test_mailbox_addr = MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
     constexpr int INIT_VALUE = 69;
@@ -51,11 +51,11 @@ bool run_dram_copy(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) {
     std::uint32_t l1_buffer_addr = 200 * 1024;
 
     std::uint32_t dram_buffer_src_addr = 0;
-    tt_xy_pair dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
+    CoreCoord dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_src_channel_id);
     log_info(tt::LogVerif, "dram_src_noc_xy = {}", dram_src_noc_xy.str());
 
     std::uint32_t dram_buffer_dst_addr = 512 * 1024;
-    tt_xy_pair dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
+    CoreCoord dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_dst_channel_id);
     log_info(tt::LogVerif, "dram_dst_noc_xy = {}", dram_dst_noc_xy.str());
 
     std::uint32_t dram_buffer_size = 100 * 1024;

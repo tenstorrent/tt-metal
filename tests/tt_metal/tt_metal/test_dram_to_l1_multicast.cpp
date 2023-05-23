@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -47,10 +47,10 @@ int main(int argc, char **argv) {
 
         auto dram_noc_xy = dram_buffer.noc_coordinates();
 
-        tt_xy_pair core_start = {0, 0};
+        CoreCoord core_start = {0, 0};
         std::size_t num_cores_x = 12;
         std::size_t num_cores_y = 10;
-        tt_xy_pair core_end = {core_start.x + (num_cores_x - 1), core_start.y + (num_cores_y - 1)};
+        CoreCoord core_end = {core_start.x + (num_cores_x - 1), core_start.y + (num_cores_y - 1)};
         auto core_start_physical = device->worker_core_from_logical_core(core_start);
         auto core_end_physical = device->worker_core_from_logical_core(core_end);
         std::vector<uint32_t> mcast_reader_args = {
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
 
         for(int i = 0 ; i < num_cores_y; i++) {
             for(int j = 0 ; j < num_cores_x; j++) {
-                tt_xy_pair dest_core = {(std::size_t) core_start.x + j, (std::size_t) core_start.y + i};
+                CoreCoord dest_core = {(std::size_t) core_start.x + j, (std::size_t) core_start.y + i};
                 std::vector<uint32_t> dest_core_data;
                 tt_metal::ReadFromDeviceL1(device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
                 auto dest_core_data_unpacked = unpack_uint32_vec_into_bfloat16_vec(dest_core_data);

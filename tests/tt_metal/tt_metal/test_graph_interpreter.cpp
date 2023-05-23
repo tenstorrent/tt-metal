@@ -134,7 +134,7 @@ bool run_chained_sfpu_test(int chain_length) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
@@ -366,7 +366,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
@@ -655,7 +655,7 @@ bool run_forked_binary_test() {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;

@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
         ll_buda::Program *program = new ll_buda::Program();
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
         std::vector<uint32_t> first_runtime_args = {101, 202, 1};
         std::vector<uint32_t> second_runtime_args = {303, 606, 200000};
 

@@ -5,7 +5,7 @@ To enable the breakpoint server, in your test, you must include `tools/tt_gdb/tt
 For example, below is a snippet of enabling tt_gdb in `test_run_datacopy`.
 
 ```cpp
-const vector<tt_xy_pair> cores = {core};
+const vector<CoreCoord> cores = {core};
 const vector<string> ops = {op};
 
 tt_gdb(cluster, chip_id, cores, ops);

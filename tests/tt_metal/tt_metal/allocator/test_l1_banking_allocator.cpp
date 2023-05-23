@@ -11,11 +11,11 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-tt_xy_pair get_logical_coord_from_noc_coord(tt::tt_metal::Device *device, const tt_xy_pair &noc_coord) {
+CoreCoord get_logical_coord_from_noc_coord(tt::tt_metal::Device *device, const CoreCoord &noc_coord) {
     auto soc_desc = device->cluster()->get_soc_desc(device->pcie_slot());
     auto logical_coord_x = soc_desc.routing_x_to_worker_x.at(noc_coord.x);
     auto logical_coord_y = soc_desc.routing_y_to_worker_y.at(noc_coord.y);
-    return tt_xy_pair(logical_coord_x, logical_coord_y);
+    return CoreCoord(logical_coord_x, logical_coord_y);
 }
 
 std::vector<uint32_t> get_logical_compute_and_storage_core_bank_ids(tt_metal::Device *device) {

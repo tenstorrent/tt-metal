@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include "kernels/hostdevcommon/kernel_structs.h"
 #include "hlk_desc.hpp"
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/tt_xy_pair.h"
+#include "common/core_coord.h"
 #include <cstdint>
 #include <vector>
 #include <cassert>
@@ -13,12 +13,12 @@
 #define ARCH_WORMHOLE
 #endif
 struct WORMHOLE_DEVICE_DATA {
-    const std::vector<tt_xy_pair> DRAM_LOCATIONS = {
+    const std::vector<CoreCoord> DRAM_LOCATIONS = {
         {0, 0},  {5, 0}, {0, 1},{5, 1}, {5, 2}, {5, 3}, {5, 4}, {0, 5},  {5, 5}, {0, 6},  {5, 6}, {0, 7},  {5, 7}, {5, 8}, {5, 9}, {5, 10},{0, 11}, {5, 11}
     };
-    const std::vector<tt_xy_pair> ARC_LOCATIONS = { {0, 2} };
-    const std::vector<tt_xy_pair> PCI_LOCATIONS = { {0, 4} };
-    const std::vector<tt_xy_pair> ETH_LOCATIONS = {
+    const std::vector<CoreCoord> ARC_LOCATIONS = { {0, 2} };
+    const std::vector<CoreCoord> PCI_LOCATIONS = { {0, 4} };
+    const std::vector<CoreCoord> ETH_LOCATIONS = {
         {1, 0}, {2, 0}, {3, 0}, {4, 0}, {6, 0}, {7, 0}, {8, 0}, {9, 0}, {1, 6}, {2, 6}, {3, 6}, {4, 6}, {6, 6}, {7, 6}, {8, 6}, {9, 6}
     };
     const std::vector<uint32_t> T6_X_LOCATIONS = {1, 2, 3, 4, 6, 7, 8, 9};
@@ -27,7 +27,7 @@ struct WORMHOLE_DEVICE_DATA {
 
     static constexpr uint32_t STATIC_TLB_SIZE = 1024*1024;
 
-    static constexpr tt_xy_pair BROADCAST_LOCATION = {0, 0};
+    static constexpr CoreCoord BROADCAST_LOCATION = {0, 0};
     static constexpr uint32_t BROADCAST_TLB_INDEX = 0;
     static constexpr uint32_t STATIC_TLB_CFG_ADDR = 0x1fc00000;
 

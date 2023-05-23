@@ -28,7 +28,7 @@ void add_defines(tt_metal::ComputeKernel * eltwise_binary_kernel, BinaryOpType::
 }
 
 
-tt_metal::Program setup_program_one(tt_metal::Device *device, const tt_xy_pair &core, uint32_t single_tile_size) {
+tt_metal::Program setup_program_one(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t src0_cb_index = 0;
@@ -102,7 +102,7 @@ tt_metal::Program setup_program_one(tt_metal::Device *device, const tt_xy_pair &
     return std::move(program);
 }
 
-tt_metal::Program setup_program_two(tt_metal::Device *device, const tt_xy_pair &core, uint32_t single_tile_size) {
+tt_metal::Program setup_program_two(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t src0_cb_index = 0;
@@ -182,7 +182,7 @@ tt_metal::Program setup_program_two(tt_metal::Device *device, const tt_xy_pair &
 void write_program_runtime_args_to_device(
     tt_metal::Device *device,
     const tt_metal::Program &program,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     uint32_t num_tiles,
     tt_metal::Buffer &src0_dram_buffer,
     tt_metal::Buffer &src1_dram_buffer,
@@ -234,7 +234,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
 

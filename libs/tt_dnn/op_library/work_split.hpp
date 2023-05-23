@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tile_math.hpp"
-#include "tt_xy_pair.h"
+#include "core_coord.h"
 
 #include "tt_metal/host_api.hpp"
 
@@ -38,9 +38,9 @@ struct CoreGridDesc {
     uint32_t x_, y_;
     CoreGridDesc(Device* dev) { auto gs = dev->logical_grid_size(); x_ = gs.x; y_ = gs.y; TT_ASSERT(x_ > 0 && y_ > 0); }
     uint32_t total_cores() const { return x_*y_; }
-    tt_xy_pair wrap_core(int icore) const {
+    CoreCoord wrap_core(int icore) const {
         TT_ASSERT(icore < total_cores());
-        tt_xy_pair core = {(std::size_t) icore % x_, (std::size_t) icore / x_};
+        CoreCoord core = {(std::size_t) icore % x_, (std::size_t) icore / x_};
         return core;
     }
 

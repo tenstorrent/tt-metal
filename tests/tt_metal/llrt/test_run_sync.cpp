@@ -17,8 +17,8 @@ constexpr static std::uint32_t INVALID = 0x4321;
 bool run_sync(
     tt_cluster* cluster,
     int chip_id,
-    const tt_xy_pair& loader_core,
-    const tt_xy_pair& writer_core,
+    const CoreCoord& loader_core,
+    const CoreCoord& writer_core,
     std::vector<uint32_t>& src_vec,
     const std::vector<bfloat16>& golden
 ) {
@@ -47,8 +47,8 @@ bool run_sync(
     pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/ncrisc/ncrisc.hex", 0, writer_core, 1); // ncrisc
 
     // Src/Dst dram noc addresses
-    tt_xy_pair dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_channel_id);
-    tt_xy_pair dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_channel_id);
+    CoreCoord dram_src_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_channel_id);
+    CoreCoord dram_dst_noc_xy = tt::llrt::get_core_for_dram_channel(cluster, dram_channel_id);
     // ---------------------------------------------------------------------------------------
     // Producer core:
     // BRISC kernel arguments to L1 in one-shot
@@ -127,8 +127,8 @@ int main(int argc, char** argv)
         tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         const int chip_id = 0;
-        tt_xy_pair loader_core = {1, 1};
-        tt_xy_pair compute_core = {2, 1};
+        CoreCoord loader_core = {1, 1};
+        CoreCoord compute_core = {2, 1};
         cluster->open_device(arch, target_type, {chip_id}, sdesc_file);
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);

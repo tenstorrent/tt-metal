@@ -16,7 +16,7 @@ tt_metal::Program create_program(
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     uint32_t single_tile_size,
-    tt_xy_pair core_range,
+    CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
     uint32_t in0_block_w,
@@ -64,7 +64,7 @@ tt_metal::Program create_program(
         uint32_t output_idx_batch = num_blocks_written  / num_output_blocks_per_batch;
         uint32_t output_idx_x = num_blocks_written % num_block_cols_per_batch;
         uint32_t output_idx_y = num_blocks_written % num_block_rows_per_batch;
-        tt_xy_pair core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
+        CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
 
         uint32_t src0_cb_index = 0;
         uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
@@ -295,7 +295,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const MemoryConfig& mem_config, bool bcast_batch, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const MemoryConfig& mem_config, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -361,7 +361,7 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
     TT_ASSERT(Kt % in0_block_w == 0);
 
     uint32_t num_blocks_total = B * (Mt / per_core_M) * (Nt / per_core_N);
-    tt_xy_pair core_range = compute_and_storage_grid_size;
+    CoreCoord core_range = compute_and_storage_grid_size;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -407,7 +407,7 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
 }
 
 // matmul_multi_core_reuse_optimized_bert_large not used
-Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config, tt_xy_pair compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     return matmul_multi_core_reuse_optimized_bert_large_(a, b, mem_config, false, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 

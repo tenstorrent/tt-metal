@@ -32,7 +32,7 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
 
 // TODO(AP): this shouldn't be necessary as the API itself should be thread-safe but otherwise currently the test fails
 // with DMA mode (non-MMIO version of api enabled via export TT_PCI_DMA_BUF_SIZE=1048576)
-std::vector<std::uint32_t> my_read_hex_vec_from_core(tt_cluster *cluster, int chip, const tt_xy_pair& core, uint64_t addr, uint32_t size) {
+std::vector<std::uint32_t> my_read_hex_vec_from_core(tt_cluster *cluster, int chip, const CoreCoord& core, uint64_t addr, uint32_t size) {
     static std::mutex r_lock;
     r_lock.lock();
     auto result = tt::llrt::read_hex_vec_from_core(cluster, chip, core, addr, size);
@@ -41,7 +41,7 @@ std::vector<std::uint32_t> my_read_hex_vec_from_core(tt_cluster *cluster, int ch
 }
 
 // TODO(AP): this shouldn't be necessary as the API itself should be thread-safe
-void my_write_hex_vec_to_core(tt_cluster *cluster, int chip, const tt_xy_pair& core, std::vector<uint32_t> hex_vec, uint64_t addr) {
+void my_write_hex_vec_to_core(tt_cluster *cluster, int chip, const CoreCoord& core, std::vector<uint32_t> hex_vec, uint64_t addr) {
     static std::mutex w_lock;
     w_lock.lock();
     tt::llrt::write_hex_vec_to_core(cluster, chip, core, hex_vec, addr);
@@ -50,7 +50,7 @@ void my_write_hex_vec_to_core(tt_cluster *cluster, int chip, const tt_xy_pair& c
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
 // Used for debug print server startup sequence.
-void write_init_magic(tt_cluster* cluster, int chip_id, const tt_xy_pair& core, int hart_id, bool starting = true) {
+void write_init_magic(tt_cluster* cluster, int chip_id, const CoreCoord& core, int hart_id, bool starting = true) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
 
@@ -68,7 +68,7 @@ struct DebugPrintServerContext {
     static bool ProfilerIsRunning;
 
     DebugPrintServerContext(
-        tt_cluster* cluster, vector<int> chip_ids, const vector<tt_xy_pair>& cores, uint32_t hart_mask, const char* filename
+        tt_cluster* cluster, vector<int> chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask, const char* filename
     ) {
         TT_ASSERT(inst == nullptr);
         inst = this;
@@ -138,11 +138,11 @@ private:
     // configuration of cores/harts to listen for
     tt_cluster* cluster_;
     vector<int> chip_ids_;
-    vector<tt_xy_pair> cores_;
+    vector<CoreCoord> cores_;
     uint32_t hart_mask_;
 
-    void thread_poll(int chip_id, tt_xy_pair core, int hart_index);
-    void peek_flush_one_hart_nonblocking(int chip_id, const tt_xy_pair& core, int hart_index);
+    void thread_poll(int chip_id, CoreCoord core, int hart_index);
+    void peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_index);
 
     void lock_stream() {
         if (outfile_ != &cout)
@@ -201,7 +201,7 @@ done:
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool check_init_magic_cleared(tt_cluster* cluster, int chip_id, const tt_xy_pair& core, int hart_id) {
+bool check_init_magic_cleared(tt_cluster* cluster, int chip_id, const CoreCoord& core, int hart_id) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
 
@@ -212,7 +212,7 @@ bool check_init_magic_cleared(tt_cluster* cluster, int chip_id, const tt_xy_pair
 
 // rename the current thread so it's easier to distinguish in the debugger
 // TODO(AP): this renaming didn't show up in VSCODE thread list
-void rename_my_thread(int chip_id, const tt_xy_pair& core, int hart_id)
+void rename_my_thread(int chip_id, const CoreCoord& core, int hart_id)
 {
     std::string rn("DPRINT_C,X,Y,T{");
     rn += std::to_string(chip_id);
@@ -227,7 +227,7 @@ void rename_my_thread(int chip_id, const tt_xy_pair& core, int hart_id)
 }
 
 // peeks a specified hart for any debug prints present in the buffer and flushes it, printing the contents out to host-side stream
-void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const tt_xy_pair& core, int hart_id) {
+void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_id) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
 
@@ -412,7 +412,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
 
 // TODO(AP): investigate if we can reduce the number of threads using coroutines
 void DebugPrintServerContext::thread_poll(
-    int chip_id, tt_xy_pair core, int hart_index) {
+    int chip_id, CoreCoord core, int hart_index) {
 
     rename_my_thread(chip_id, core, hart_index);
 
@@ -461,7 +461,7 @@ bool tt_is_print_server_running()
 
 // The print server is not valid without alive tt_cluster and tt_device
 void tt_start_debug_print_server(
-    tt_cluster* cluster, const vector<int>& chip_ids, const vector<tt_xy_pair>& cores, uint32_t hart_mask, const char* filename)
+    tt_cluster* cluster, const vector<int>& chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask, const char* filename)
 {
     TT_ASSERT(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
     TT_ASSERT(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");

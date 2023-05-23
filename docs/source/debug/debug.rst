@@ -19,7 +19,7 @@ For example, below is a snippet of enabling tt_gdb in `test_run_datacopy`.
 
 .. code-block:: cpp
 
-    const vector<tt_xy_pair> cores = {core};
+    const vector<CoreCoord> cores = {core};
     const vector<string> ops = {op};
 
     tt_gdb(cluster, chip_id, cores, ops);
@@ -144,7 +144,7 @@ To use debug printing capability, it is first required to start the debug print 
 
     auto device = tt_metal::CreateDevice(tt_metal::DeviceType::Grayskull, pci_express_slot);
     ...
-    vector<tt_xy_pair> cores = {{1,1}};
+    vector<CoreCoord> cores = {{1,1}};
     int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
     tt_start_debug_print_server(device->cluster(), {chip_id}, cores, hart_mask);
     ...

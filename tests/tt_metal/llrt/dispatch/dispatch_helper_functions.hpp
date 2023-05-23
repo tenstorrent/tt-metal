@@ -66,4 +66,4 @@ CopyDescriptor construct_copy_descriptor_from_dram_config(
 
 vector<uint32_t> convert_copy_desc_to_flat_vec(const CopyDescriptor &copy_desc);
 
-void write_copy_desc_to_l1(tt_cluster *cluster, int chip_id, tt_xy_pair dispatch_core, const CopyDescriptor &copy_desc);
+void write_copy_desc_to_l1(tt_cluster *cluster, int chip_id, CoreCoord dispatch_core, const CopyDescriptor &copy_desc);

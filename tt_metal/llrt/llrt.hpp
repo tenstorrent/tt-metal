@@ -36,9 +36,9 @@ namespace llrt {
 
 using RamSrcAddr = unsigned int;
 using RamDstAddr = unsigned int;
-using SrcL1Core = tt_xy_pair;
+using SrcL1Core = CoreCoord;
 using SrcL1Cores = std::vector<SrcL1Core>;
-using DstL1Core = tt_xy_pair;
+using DstL1Core = CoreCoord;
 using DstL1Cores = std::vector<DstL1Core>;
 using SrcChannelId = int;
 using DstChannelId = int;
@@ -58,9 +58,9 @@ using NUM_TRANSACTIONS = std::uint32_t;
 using NUM_REPETITIONS = std::uint32_t;
 
 using DramCopySpec =
-    std::tuple<tt_xy_pair, SrcChannelId, DstChannelId, DramBufferSize, DramSrcAddr, DramDstAddr, LoadFirmwareFlag>;
+    std::tuple<CoreCoord, SrcChannelId, DstChannelId, DramBufferSize, DramSrcAddr, DramDstAddr, LoadFirmwareFlag>;
 using RamCopySpec = std::tuple<
-    tt_xy_pair,
+    CoreCoord,
     SrcL1Cores,
     DstL1Cores,
     DramBufferSize,
@@ -71,10 +71,10 @@ using RamCopySpec = std::tuple<
     CountOffset,
     CountOffset,
     LoadFirmwareFlag>;
-using DramToL1CopySpec = std::tuple<tt_xy_pair, SrcChannelId, DramBufferSize, DramSrcAddr, L1Addr, LoadFirmwareFlag>;
+using DramToL1CopySpec = std::tuple<CoreCoord, SrcChannelId, DramBufferSize, DramSrcAddr, L1Addr, LoadFirmwareFlag>;
 using CopyPatternSpec = std::
-    tuple<tt_xy_pair, DestAddr, tt_xy_pair, SrcAddr, NCHW, RSUV, BYTES_PER_DATUM, NUM_REPETITIONS, LoadFirmwareFlag>;
-using L1ToDramCopySpec = std::tuple<tt_xy_pair, DstChannelId, DramBufferSize, DramDstAddr, L1Addr, LoadFirmwareFlag>;
+    tuple<CoreCoord, DestAddr, CoreCoord, SrcAddr, NCHW, RSUV, BYTES_PER_DATUM, NUM_REPETITIONS, LoadFirmwareFlag>;
+using L1ToDramCopySpec = std::tuple<CoreCoord, DstChannelId, DramBufferSize, DramDstAddr, L1Addr, LoadFirmwareFlag>;
 
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
@@ -100,18 +100,18 @@ void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stag
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 void assert_reset_for_all_chips(tt_cluster *cluster);
 
-// tt_xy_pair core --> NOC coordinates ("functional workers" from the SOC descriptor)
+// CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 void write_hex_vec_to_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access = false);
+    tt_cluster *cluster, int chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access = false);
 
 std::vector<std::uint32_t> read_hex_vec_from_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, uint64_t addr, uint32_t size);
+    tt_cluster *cluster, int chip, const CoreCoord &core, uint64_t addr, uint32_t size);
 
 void print_worker_cores(tt_cluster *cluster, chip_id_t chip_id = 0);
 
-bool is_worker_core(tt_cluster *cluster, const tt_xy_pair &core, chip_id_t chip_id = 0);
+bool is_worker_core(tt_cluster *cluster, const CoreCoord &core, chip_id_t chip_id = 0);
 
 CircularBufferConfigVec create_circular_buffer_config_vector();
 
@@ -123,31 +123,31 @@ void set_config_for_circular_buffer(
     uint32_t size_in_tiles);
 
 void write_circular_buffer_config_vector_to_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, CircularBufferConfigVec circular_buffer_config_vec);
+    tt_cluster *cluster, int chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec);
 
 void write_graph_interpreter_op_info_to_core(
-    tt_cluster *cluster, int chip, const tt_xy_pair &core, op_info_t op_info, int op_idx);
+    tt_cluster *cluster, int chip, const CoreCoord &core, op_info_t op_info, int op_idx);
 
 // for BRISC and NCRISC
 bool test_load_write_read_risc_binary(
-    tt_cluster *cluster, std::string hex_file_path, int chip_id, const tt_xy_pair &core, int riscv_id);
+    tt_cluster *cluster, std::string hex_file_path, int chip_id, const CoreCoord &core, int riscv_id);
 
 // for TRISCs
 bool test_load_write_read_trisc_binary(
-    tt_cluster *cluster, std::string hex_file_path, int chip_id, const tt_xy_pair &core, int triscv_id);
+    tt_cluster *cluster, std::string hex_file_path, int chip_id, const CoreCoord &core, int triscv_id);
 
-void disable_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair &core);
+void disable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
-void enable_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair &core);
+void enable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
-void enable_triscs(tt_cluster *cluster, int chip_id, const tt_xy_pair &core);
+void enable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
-void disable_triscs(tt_cluster *cluster, int chip_id, const tt_xy_pair &core);
+void disable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
 WorkerCores get_worker_cores_from_cluster(tt_cluster *cluster, int chip_id);
 
 // subchannel hard-coded to 0 for now
-tt_xy_pair get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id = 0);
+CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id = 0);
 
 enum class TensixRiscsOptions : std::uint32_t {
     NONE = 0,
@@ -177,39 +177,39 @@ void log_current_ai_clk(tt_cluster *cluster);
 namespace internal_ {
 // This loads to briscs and ncriscs - we may want to add TensixRiscsOptions here
 void load_blank_kernel_to_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<tt_xy_pair> cores);
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores);
 
 void load_blank_kernel_to_all_worker_cores_with_exceptions(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<tt_xy_pair> exceptions);
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> exceptions);
 
-void enable_core(tt_cluster *cluster, int chip_id, const tt_xy_pair &core);
+void enable_core(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
-void enable_cores(tt_cluster *cluster, int chip_id, const std::vector<tt_xy_pair> &cores);
+void enable_cores(tt_cluster *cluster, int chip_id, const std::vector<CoreCoord> &cores);
 
-void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const tt_xy_pair &core);
+void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
 // In old dispatch, there is no concept of the dispatch core. When brisc (RUNTIME_CONFIG_BASE + 8) = true,
 // we assume we don't need to send dispatch info to a remote core, and behaviour matches the old dispatch
 void setup_riscs_on_specified_core(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const tt_xy_pair &core);
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core);
 
 void setup_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const std::vector<tt_xy_pair> &core);
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const std::vector<CoreCoord> &core);
 
 bool check_if_riscs_on_specified_core_done(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const tt_xy_pair &core);
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core);
 
 void cleanup_risc_on_specified_core(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const tt_xy_pair &core);
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core);
 
 void run_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<tt_xy_pair> &cores, const std::vector<uint32_t> &hugepage_done_addrs = vector<uint32_t>(), bool stagger_start = false);
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<CoreCoord> &cores, const std::vector<uint32_t> &hugepage_done_addrs = vector<uint32_t>(), bool stagger_start = false);
 
 void dispatch(
     tt_cluster *cluster,
     int chip_id,
     const TensixRiscsOptions riscs_option,
-    const std::vector<tt_xy_pair> &dispatch_cores,
+    const std::vector<CoreCoord> &dispatch_cores,
     uint32_t dispatch_done_addr);
 
 }  // namespace internal_

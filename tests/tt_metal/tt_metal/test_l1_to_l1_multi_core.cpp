@@ -30,7 +30,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        //tt_xy_pair core = {0, 0};
+        //CoreCoord core = {0, 0};
 
         uint32_t num_tiles = 10;
         uint32_t tile_size_bytes = 1024 * 2;
@@ -42,8 +42,8 @@ int main(int argc, char **argv) {
         uint32_t l1_buffer_addr = 400 * 1024;
         for(uint32_t i = 0; i < 10; i++) {
             for(uint32_t j = 0; j < i; j++) {
-                tt_xy_pair core = {(size_t) j, (size_t) i};
-                tt_xy_pair dst_soc_core = {(size_t) i+1, (size_t) j+1};
+                CoreCoord core = {(size_t) j, (size_t) i};
+                CoreCoord dst_soc_core = {(size_t) i+1, (size_t) j+1};
                 if(j > 5) {
                     dst_soc_core.y += 1;
                 }
@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> result_vec;
         for(uint32_t i = 0; i < 10; i++) {
             for(uint32_t j = i+1; j < 10; j++) {
-                tt_xy_pair core = {(size_t) j, (size_t) i};
+                CoreCoord core = {(size_t) j, (size_t) i};
                 tt_metal::ReadFromDeviceL1(device, core, l1_buffer_addr, total_tiles_size_bytes, result_vec);
                 std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(
                     dram_buffer_size, j * 10 + i);

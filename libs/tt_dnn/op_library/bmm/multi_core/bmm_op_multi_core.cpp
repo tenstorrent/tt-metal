@@ -85,7 +85,7 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
 
-        tt_xy_pair core = {i / num_cores_y, i % num_cores_y};
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 2;
         auto cb_src0 = tt_metal::CreateCircularBuffer(

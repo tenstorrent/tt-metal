@@ -39,8 +39,8 @@ int main(int argc, char **argv) {
         ll_buda::Program *program = new ll_buda::Program();
         auto num_cores_c = 4;
         auto num_cores_r = 1;
-        tt_xy_pair start_core = {0, 0};
-        tt_xy_pair end_core = {(std::size_t)start_core.x + num_cores_c - 1, (std::size_t)start_core.y + num_cores_r - 1};;
+        CoreCoord start_core = {0, 0};
+        CoreCoord end_core = {(std::size_t)start_core.x + num_cores_c - 1, (std::size_t)start_core.y + num_cores_r - 1};;
         ll_buda::CoreRange all_cores(start_core, end_core);
 
         int num_sticks = 4;
@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
         uint32_t per_core_l1_size = src_dram_buffer->size() / (num_cores_r * num_cores_c);
         for(int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
-                tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
+                CoreCoord core = {(std::size_t) j, (std::size_t) i};
                 auto l1_b0 = ll_buda::CreateL1Buffer(program, device, core, per_core_l1_size, l1_buffer_addr);
             }
         }
@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
         uint32_t core_index = 0;
         for(int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
-                tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
+                CoreCoord core = {(std::size_t) j, (std::size_t) i};
                 ll_buda::WriteRuntimeArgsToDevice(
                     device,
                     unary_reader_kernel,

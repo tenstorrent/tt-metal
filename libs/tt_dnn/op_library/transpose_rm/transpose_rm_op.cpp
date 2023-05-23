@@ -22,7 +22,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
     TT_ASSERT(a.shape()[3] <= 16*1024 && "transpose_hc_rm kernel doesn't support W>=16k elems yet.");
     tt_metal::Device *device = a.device();
     tt_metal::Program program = tt_metal::Program();
-    tt_xy_pair core = {0, 0};
+    CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to eltwise unary needs to be on device!");
@@ -100,8 +100,8 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     tt_metal::Program program = tt_metal::Program();
     auto num_cores_c = a.shape()[1];
     auto num_cores_r = a.shape()[2];
-    tt_xy_pair start_core = {0, 0};
-    tt_xy_pair end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
     tt_metal::CoreRange all_cores(start_core, end_core);
 
     // TODO: Build some sort of dispatcher based on location of op operands
@@ -127,7 +127,7 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     uint32_t per_core_l1_size = src0_dram_buffer->size() / (num_cores_r * num_cores_c);
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {
-            tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
+            CoreCoord core = {(std::size_t) j, (std::size_t) i};
             auto l1_bank_ids = device->bank_ids_from_logical_core(core);
             TT_ASSERT(not l1_bank_ids.empty());
             auto l1_bank_id = l1_bank_ids.at(0);
@@ -176,7 +176,7 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {
             int core_index = i * num_cores_c + j;
-            tt_xy_pair core = {(std::size_t) j, (std::size_t) i};
+            CoreCoord core = {(std::size_t) j, (std::size_t) i};
             tt_metal::WriteRuntimeArgsToDevice(
                 device,
                 binary_reader_kernels[i],
@@ -203,7 +203,7 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     // uint32_t core_index = 0;
     // for(int i = 0; i < ashape[2]; i++) {
     //     for(int j = 0; j < ashape[1]; j++) {
-    //         tt_xy_pair core = {(std::size_t) core_index, (std::size_t) 0};
+    //         CoreCoord core = {(std::size_t) core_index, (std::size_t) 0};
     //         tt_metal::WriteRuntimeArgsToDevice(
     //             device,
     //             binary_reader_kernel,

@@ -57,7 +57,7 @@ struct tt_cluster
     // tt_soc_description *get_soc_desc() { return sdesc.get(); }
     tt_cluster_description *get_cluster_desc() { return ndesc.get(); }
 
-    tt_xy_pair get_routing_coordinate(int core_r, int core_c, chip_id_t device_id) const;
+    CoreCoord get_routing_coordinate(int core_r, int core_c, chip_id_t device_id) const;
     void dump_wall_clock_mailbox(std::string output_dir);
 
     //! device driver and misc apis
@@ -118,4 +118,4 @@ struct tt_cluster
 
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram);
 std::unique_ptr<tt_soc_description> load_soc_descriptor_from_file(const tt::ARCH &arch, std::string file_path);
-bool check_dram_core_exists(const std::vector<std::vector<tt_xy_pair>> &all_dram_cores, tt_xy_pair target_core);
+bool check_dram_core_exists(const std::vector<std::vector<CoreCoord>> &all_dram_cores, CoreCoord target_core);

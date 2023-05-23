@@ -128,11 +128,11 @@ void write_tilized_data_to_dram_with_offset(tt_cluster *cluster, int chip_id, st
 }
 
 template <typename T>
-void write_tilized_data_to_l1_of_cores_with_offset(tt_cluster *cluster, int chip_id, const std::vector<tt_xy_pair>& cores, std::vector<std::vector<uint32_t>>& tile_datas, int core_count_offset = 0, unsigned address_offset = 0) {
+void write_tilized_data_to_l1_of_cores_with_offset(tt_cluster *cluster, int chip_id, const std::vector<CoreCoord>& cores, std::vector<std::vector<uint32_t>>& tile_datas, int core_count_offset = 0, unsigned address_offset = 0) {
     const int num_of_cores = cores.size();
     for (int tile_idx = 0; tile_idx < tile_datas.size(); tile_idx++) {
         int core_index = get_src_core_index_from_tile_index(tile_idx, num_of_cores, core_count_offset);
-        const tt_xy_pair &core = cores[core_index];
+        const CoreCoord &core = cores[core_index];
 
         int start_address = get_address_no_offset_on_l1_for_tile<T>(tile_idx, num_of_cores) + address_offset;
         write_single_tile_to_l1<T>(cluster, tt_cxy_pair(chip_id, core), start_address, tile_datas[tile_idx]);
@@ -168,13 +168,13 @@ std::vector<std::vector<uint32_t>> read_tilized_data_from_dram_with_offset(tt_cl
 }
 
 template <typename D>
-std::vector<std::vector<uint32_t>> read_tilized_data_from_l1_of_cores_with_offset(tt_cluster *cluster, int chip_id, const std::vector<tt_xy_pair> &cores, int num_tiles, int core_count_offset = 0, unsigned address_offset = 0) {
+std::vector<std::vector<uint32_t>> read_tilized_data_from_l1_of_cores_with_offset(tt_cluster *cluster, int chip_id, const std::vector<CoreCoord> &cores, int num_tiles, int core_count_offset = 0, unsigned address_offset = 0) {
     std::vector<std::vector<uint32_t>> tile_datas(num_tiles);
 
     const int num_of_cores = cores.size();
     for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         int core_index = get_src_core_index_from_tile_index(tile_idx, num_of_cores, core_count_offset);
-        const tt_xy_pair &core = cores[core_index];
+        const CoreCoord &core = cores[core_index];
 
 
         int start_address = get_address_no_offset_on_l1_for_tile<D>(tile_idx, num_of_cores) + address_offset;

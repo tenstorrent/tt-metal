@@ -55,7 +55,7 @@ void populate_kernel_group(KernelGroup &kernel_group, Kernel *kernel) {
     }
 }
 
-KernelGroup Program::kernels_on_core(const tt_xy_pair &core) const {
+KernelGroup Program::kernels_on_core(const CoreCoord &core) const {
     KernelGroup kernel_group;
     for (auto kernel : kernels_) {
         auto cores = kernel->logical_cores();
@@ -66,8 +66,8 @@ KernelGroup Program::kernels_on_core(const tt_xy_pair &core) const {
     return kernel_group;
 }
 
-std::map<tt_xy_pair, KernelGroup> Program::core_to_kernel_group() const {
-    std::map<tt_xy_pair, KernelGroup> core_to_kernel_group;
+std::map<CoreCoord, KernelGroup> Program::core_to_kernel_group() const {
+    std::map<CoreCoord, KernelGroup> core_to_kernel_group;
 
     for (auto kernel : kernels_) {
         for (auto core : kernel->logical_cores()) {
@@ -79,7 +79,7 @@ std::map<tt_xy_pair, KernelGroup> Program::core_to_kernel_group() const {
     return core_to_kernel_group;
 }
 
-std::string Program::core_to_op(const tt_xy_pair &core) const {
+std::string Program::core_to_op(const CoreCoord &core) const {
     for (auto kernel : kernels_) {
         auto cores = kernel->logical_cores();
         if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
@@ -117,7 +117,7 @@ std::vector<std::string> Program::cores_to_ops() const {
     return ops;
 }
 
-std::vector<CircularBuffer *> Program::circular_buffers_on_core(const tt_xy_pair &core) const {
+std::vector<CircularBuffer *> Program::circular_buffers_on_core(const CoreCoord &core) const {
     std::vector<CircularBuffer *> cbs_on_core;
     for (auto circular_buffer : circular_buffers_) {
         if (circular_buffer->logical_core() == core) {
@@ -127,16 +127,16 @@ std::vector<CircularBuffer *> Program::circular_buffers_on_core(const tt_xy_pair
     return cbs_on_core;
 }
 
-std::vector<Semaphore *> Program::semaphores_on_core(const tt_xy_pair &core) const {
+std::vector<Semaphore *> Program::semaphores_on_core(const CoreCoord &core) const {
     if (this->logical_core_to_semaphores_.find(core) == this->logical_core_to_semaphores_.end()) {
         return {};
     }
     return this->logical_core_to_semaphores_.at(core);
 }
 
-std::vector<tt_xy_pair> Program::logical_cores() const {
-    std::vector<tt_xy_pair> cores_in_program;
-    std::set<tt_xy_pair> unique_cores;
+std::vector<CoreCoord> Program::logical_cores() const {
+    std::vector<CoreCoord> cores_in_program;
+    std::set<CoreCoord> unique_cores;
     for (auto kernel : kernels_) {
         for (auto core : kernel->logical_cores()) {
             if (unique_cores.find(core) != unique_cores.end()) {

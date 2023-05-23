@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         vector<uint32_t> shape = {1, 3, 3*32*1, 4*32*1};
         u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];

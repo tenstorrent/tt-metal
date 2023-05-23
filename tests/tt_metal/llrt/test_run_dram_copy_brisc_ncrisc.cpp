@@ -26,18 +26,18 @@ void tt_rnd_set_seed(int seed) {
 struct dram_copy_kernel_args {
     int dram_src_channel_id;
     std::uint32_t dram_src_buffer_addr;
-    tt_xy_pair dram_src_noc_xy;
+    CoreCoord dram_src_noc_xy;
 
     int dram_dst_channel_id;
     std::uint32_t dram_dst_buffer_addr = 512 * 1024;
-    tt_xy_pair dram_dst_noc_xy;
+    CoreCoord dram_dst_noc_xy;
 
     std::uint32_t dram_buffer_size;
     std::uint32_t l1_buffer_addr;
     std::uint32_t arg_base_addr;
 };
 
-void write_dram_copy_kernel_args(tt_cluster* cluster, int chip_id, tt_xy_pair core, const dram_copy_kernel_args& kernel_args) {
+void write_dram_copy_kernel_args(tt_cluster* cluster, int chip_id, CoreCoord core, const dram_copy_kernel_args& kernel_args) {
     // blast dram copy kernel arguments to L1 in one-shot
     tt::llrt::write_hex_vec_to_core(cluster, chip_id, core,
         {kernel_args.l1_buffer_addr,
@@ -55,7 +55,7 @@ void write_dram_copy_kernel_args(tt_cluster* cluster, int chip_id, tt_xy_pair co
         kernel_args.arg_base_addr);
 }
 
-bool run_dram_copy_brisc_ncrisc(tt_cluster *cluster, int chip_id, const tt_xy_pair& core) {
+bool run_dram_copy_brisc_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord& core) {
     const tt::llrt::TensixRiscsOptions riscs_options = tt::llrt::TensixRiscsOptions::BRISC_NCRISC;
 
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, tt::llrt::TensixRiscsOptions::BRISC_NCRISC, {core});

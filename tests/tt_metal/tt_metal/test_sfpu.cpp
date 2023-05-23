@@ -32,7 +32,7 @@ bool run_sfpu_test(string sfpu_name) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 2048;

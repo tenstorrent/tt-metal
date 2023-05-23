@@ -45,7 +45,7 @@ We will be using the accelerator core with coordinates ``{0, 0}``.
 
 .. code-block:: cpp
 
-  constexpr tt_xy_pair core = {0, 0};
+  constexpr CoreCoord core = {0, 0};
 
   DataMovementKernel *dram_copy_kernel = CreateDataMovementKernel(
       program,

@@ -148,7 +148,7 @@ void StartDebugPrintServer(Device *device);
  * |      Argument     |                                                      Description                                                      |        Data type        |    Valid range    | required |
  * |:-----------------:|:---------------------------------------------------------------------------------------------------------------------:|:-----------------------:|:-----------------:|----------|
  * | device            | Device pointer                                                                                                        |                         |                   | Yes      |
- * | cores             | Array of x,y pairs with locations of the Tensix cores (physical coordinates)                                          | const tt_xy_pair &      | {0, 0} -> {9, 11} | Yes      |
+ * | cores             | Array of x,y pairs with locations of the Tensix cores (physical coordinates)                                          | const CoreCoord &      | {0, 0} -> {9, 11} | Yes      |
 */
 void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<int>>& cores);
 
@@ -163,10 +163,10 @@ void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<
 //  *
 //  * |      Argument     |                                                      Description                                                      |        Data type        |    Valid range    | required |
 //  * |:-----------------:|:---------------------------------------------------------------------------------------------------------------------:|:-----------------------:|:-----------------:|----------|
-//  * | logical_core      | The location of the Tensix core with a kernel that receives these arguments (Logical co-ordinates)                    | const tt_xy_pair &      | {0, 0} –> {9, 11} | Yes      |
+//  * | logical_core      | The location of the Tensix core with a kernel that receives these arguments (Logical co-ordinates)                    | const CoreCoord &      | {0, 0} –> {9, 11} | Yes      |
 //  * | compile_time_args | Collection of compile time args for the kernel. Required kernel arguments are located in the *.cpp file of the kernel | std::vector<uint32_t> & | Default empty     | Yes      |
 //  */
-// KernelArgs InitializeCompileTimeKernelArgs(const tt_xy_pair &logical_core, const std::vector<uint32_t> &compile_time_args);
+// KernelArgs InitializeCompileTimeKernelArgs(const CoreCoord &logical_core, const std::vector<uint32_t> &compile_time_args);
 
 // /**
 //  * Creates kernel arguments for a range of cores with the same compile time arguments
@@ -175,7 +175,7 @@ void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<
 //  *
 //  * | Argument          | Description                                                                                                           | Data type                                             | Valid range                                            | required |
 //  * |-------------------|-----------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------|--------------------------------------------------------|----------|
-//  * | core_range        | The range of the Tensix co-ordinates with a kernel that receives these arguments (Logical co-ordinates)               | const CoreRange & (std::pair<tt_xy_pair, tt_xy_pair>) | Any range encompassing cores within {0 , 0} –> {9, 11} | Yes      |
+//  * | core_range        | The range of the Tensix co-ordinates with a kernel that receives these arguments (Logical co-ordinates)               | const CoreRange & (std::pair<CoreCoord, CoreCoord>) | Any range encompassing cores within {0 , 0} –> {9, 11} | Yes      |
 //  * | compile_time_args | Collection of compile time args for the kernel. Required kernel arguments are located in the *.cpp file of the kernel | std::vector<uint32_t> &                               | Default empty                                          | Yes      |
 //  */
 // KernelArgs InitializeCompileTimeKernelArgs(const CoreRange &core_range, const std::vector<uint32_t> &compile_time_args);
@@ -187,7 +187,7 @@ void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<
 //  *
 //  * |      Argument     |                                                                 Description                                                                |                               Data type                               |                                                      Valid range                                                      | required |
 //  * |:-----------------:|:------------------------------------------------------------------------------------------------------------------------------------------:|:---------------------------------------------------------------------:|:---------------------------------------------------------------------------------------------------------------------:|----------|
-//  * | core_blocks       | A collection containing a single Tensix co-ordinate or a range of Tensix co-ordinates that receives these arguments (Logical co-ordinates) | const CoreBlocks & (std::vector<std::variant<tt_xy_pair, CoreRange>>) | A single core or range encompassing cores within {0 , 0} –> {9, 11}                                                   | Yes      |
+//  * | core_blocks       | A collection containing a single Tensix co-ordinate or a range of Tensix co-ordinates that receives these arguments (Logical co-ordinates) | const CoreBlocks & (std::vector<std::variant<CoreCoord, CoreRange>>) | A single core or range encompassing cores within {0 , 0} –> {9, 11}                                                   | Yes      |
 //  * | compile_time_args | A collection of compile time args. Required kernel arguments are located in the *.cpp file of the kernel                                   | std::vector<std::vector<uint32_t>> &                                  | Same size as core_blocks. Args are assigned to core or range of cores from core_blocks in order of compile_time_args. | Yes      |
 //  */
 // KernelArgs InitializeCompileTimeKernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args);
@@ -201,7 +201,7 @@ void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<
  * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
  * | program        | The program to which this kernel will be added to                                                            | Program &                |                                                                | Yes      |
  * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
- * | core           | The location of the Tensix core on which the kernel will execute (Logical co-ordinates)                      | const tt_xy_pair &       | {0, 0} –> {9, 11}                                              | Yes      |
+ * | core           | The location of the Tensix core on which the kernel will execute (Logical co-ordinates)                      | const CoreCoord &       | {0, 0} –> {9, 11}                                              | Yes      |
  * | kernel_args    | Compile and runtime kernel arguments passed at compile time and runtime respectively                         | const KernelArgs &       |                                                                | Yes      |
  * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
  * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
@@ -210,7 +210,7 @@ void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<
 DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     const KernelArgs &kernel_args,
     DataMovementProcessor processor_type,
     NOC noc);
@@ -224,14 +224,14 @@ DataMovementKernel *CreateDataMovementKernel(
  * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
  * | program        | The program to which this kernel will be added to                                                            | Program &                |                                                                | Yes      |
  * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
- * | core           | The location of the Tensix core on which the kernel will execute (Logical co-ordinates)                      | const tt_xy_pair &       | {0, 0} –> {9, 11}                                              | Yes      |
+ * | core           | The location of the Tensix core on which the kernel will execute (Logical co-ordinates)                      | const CoreCoord &       | {0, 0} –> {9, 11}                                              | Yes      |
  * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
  * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
  */
 DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     DataMovementProcessor processor_type,
     NOC noc);
 
@@ -286,7 +286,7 @@ DataMovementKernel *CreateDataMovementKernel(
  * |:----------------:|:---------------------------------------------------------------------------------------:|:-------------------:|:---------------------:|----------|
  * | program          | The program to which this kernel will be added to                                       | Program &           |                       | Yes      |
  * | file_name        | Name of file containing the kernel                                                      | const std::string   |                       | Yes      |
- * | core             | The location of the Tensix core on which the kernel will execute (Logical co-ordinates) | const tt_xy_pair &  | {0, 0} –> {9, 11}     | Yes      |
+ * | core             | The location of the Tensix core on which the kernel will execute (Logical co-ordinates) | const CoreCoord &  | {0, 0} –> {9, 11}     | Yes      |
  * | kernel_args      | Kernel arguments, passed at compile time                                                | const KernelArgs &  |                       | Yes      |
  * | math_fidelity    | The percision of the matrix compute engine                                              | enum                | MathFidelity::HiFi4   | Yes      |
  * | fp32_dest_acc_en | Specifies the type of accumulation performed in the matrix compute engine.              | bool                | false (for Grayskull) | Yes      |
@@ -295,7 +295,7 @@ DataMovementKernel *CreateDataMovementKernel(
 ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     const KernelArgs &kernel_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -364,7 +364,7 @@ uint32_t TileSize(const DataFormat &data_format);
  * | program       | The program to which buffer will be added to.                                  | Program &          |                                         | True     |
  * | device        | The device where the L1 buffer resides.                                        | Device *           |                                         | True     |
  * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 DOX-TODO: specify more detail here. | True     |
- * | core          | The location of the Tensix core on which the CB will reside (logical co-ordinates) | const tt_xy_pair & | DOX-TODO: { , } –> { , }                    | True     |
+ * | core          | The location of the Tensix core on which the CB will reside (logical co-ordinates) | const CoreCoord & | DOX-TODO: { , } –> { , }                    | True     |
  * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | DOX-TODO: range?                            | True     |
  * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (DOX-TODO: in Bytes)              | True     |
  * | l1_address    | Address at which the CB buffer will reside                                     | uint32_t           | 200 kB to 1MB (DOX-TODO: in bytes)          | True     |
@@ -374,7 +374,7 @@ CircularBuffer *CreateCircularBuffer(
     Program &program,
     Device *device,
     uint32_t buffer_index,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     uint32_t l1_address,
@@ -391,7 +391,7 @@ CircularBuffer *CreateCircularBuffer(
  * | program       | The program to which buffer will be added to.                                  | Program &          |                                         | True     |
  * | device        | The device where the L1 buffer resides.                                        | Device *           |                                         | True     |
  * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 DOX-TODO: specify more detail here. | True     |
- * | core          | The location of the Tensix core on which the CB will reside (logical co-ordinates) | const tt_xy_pair & | DOX-TODO: { , } –> { , }                    | True     |
+ * | core          | The location of the Tensix core on which the CB will reside (logical co-ordinates) | const CoreCoord & | DOX-TODO: { , } –> { , }                    | True     |
  * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | DOX-TODO: range?                            | True     |
  * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (DOX-TODO: in Bytes)              | True     |
  * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
@@ -400,7 +400,7 @@ CircularBuffer *CreateCircularBuffer(
     Program &program,
     Device *device,
     uint32_t buffer_index,
-    const tt_xy_pair &core,
+    const CoreCoord &core,
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format);
@@ -416,7 +416,7 @@ CircularBuffer *CreateCircularBuffer(
  * | program       | The program to which buffer will be added to.                                  | Program *          |                                         | True     |
  * | device        | The device where the L1 buffer resides.                                        | Device *           |                                         | True     |
  * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 DOX-TODO: specify more detail here. | True     |
- * | core_range    | Range of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRange & (std::pair<tt_xy_pair, tt_xy_pair>) | DOX-TODO: { , } –> { , }                    | True     |
+ * | core_range    | Range of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRange & (std::pair<CoreCoord, CoreCoord>) | DOX-TODO: { , } –> { , }                    | True     |
  * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | DOX-TODO: range?                            | True     |
  * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (DOX-TODO: in Bytes)              | True     |
  * | l1_address    | Address at which the CB buffer will reside                                     | uint32_t           | 200 kB to 1MB (DOX-TODO: in bytes)          | True     |
@@ -443,7 +443,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
  * | program       | The program to which buffer will be added to.                                  | Program *          |                                         | True     |
  * | device        | The device where the L1 buffer resides.                                        | Device *           |                                         | True     |
  * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 DOX-TODO: specify more detail here. | True     |
- * | core_range    | Range of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRange & (std::pair<tt_xy_pair, tt_xy_pair>) | DOX-TODO: { , } –> { , }                    | True     |
+ * | core_range    | Range of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRange & (std::pair<CoreCoord, CoreCoord>) | DOX-TODO: { , } –> { , }                    | True     |
  * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | DOX-TODO: range?                            | True     |
  * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (DOX-TODO: in Bytes)              | True     |
  * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
@@ -466,7 +466,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
  * |---------------|------------------------------------------------------|-------------------------------------------------------|----------------------------------------------------------|----------|
  * | program       | The program to which semaphore will be added to      | Program &                                             |                                                          | Yes      |
  * | device        | The device where the semaphore resides               | Device *                                              |                                                          | Yes      |
- * | core_range    | Range of the Tensix co-ordinates using the semaphore | const CoreRange & (std::pair<tt_xy_pair, tt_xy_pair>) | Pair of logical coords where first coord <= second coord | Yes      |
+ * | core_range    | Range of the Tensix co-ordinates using the semaphore | const CoreRange & (std::pair<CoreCoord, CoreCoord>) | Pair of logical coords where first coord <= second coord | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                              |                                                          | Yes      |
  */
 std::vector<Semaphore *> CreateSemaphores(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value);
@@ -543,11 +543,11 @@ bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t addres
  * | Argument      | Description                                     | Data type             | Valid range                                         | required |
  * |---------------|-------------------------------------------------|-----------------------|-----------------------------------------------------|----------|
  * | device        | The device whose DRAM to write data into        | Device *              |                                                     | Yes      |
- * | logical_core  | Logical coordinate of core whose L1 to write to | tt_xy_pair            | On Grayskull, any valid logical worker coordinate   | Yes      |
+ * | logical_core  | Logical coordinate of core whose L1 to write to | CoreCoord            | On Grayskull, any valid logical worker coordinate   | Yes      |
  * | address       | Starting address in L1 to write into            | uint32_t              | Any non-reserved address in L1 that fits for buffer | Yes      |
  * | host_buffer   | Buffer on host whose data to copy from          | std::vector<uint32_t> | Buffer must fit into L1                             | Yes      |
  */
-bool WriteToDeviceL1(Device *device, const tt_xy_pair &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer);
+bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer);
 
 /**
  * Copy data from an L1 buffer into a host buffer. Must be a buffer, and not a CB.
@@ -557,12 +557,12 @@ bool WriteToDeviceL1(Device *device, const tt_xy_pair &logical_core, uint32_t ad
  * | Argument             | Description                                 | Data type             | Valid range                                       | required |
  * |----------------------|---------------------------------------------|-----------------------|---------------------------------------------------|----------|
  * | device               | The device whose DRAM to read data from     | Device *              |                                                   | Yes      |
- * | logical_core         | Logical coordinate of core whose L1 to read | tt_xy_pair            | On Grayskull, any valid logical worker coordinate | Yes      |
+ * | logical_core         | Logical coordinate of core whose L1 to read | CoreCoord            | On Grayskull, any valid logical worker coordinate | Yes      |
  * | address              | Starting address in L1 to read from         | uint32_t              |                                                   | Yes      |
  * | size                 | Size of L1 buffer in bytes                  | uint32_t              |                                                   | Yes      |
  * | host_buffer          | Buffer on host to copy data into            | std::vector<uint32_t> | Buffer must fit L1 buffer                         | Yes      |
  */
-bool ReadFromDeviceL1(Device *device, const tt_xy_pair &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer);
+bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer);
 
 // ==================================================
 //           COMPILE & EXECUTE KENRNELS
@@ -582,7 +582,7 @@ bool CompileProgram(
 bool ConfigureDeviceWithProgram(Device *device, const Program &program);
 
 // Loads all kernel args into L1s of assigned Tensix cores
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const tt_xy_pair &logical_core, const std::vector<uint32_t> &runtime_args);
+bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 
 bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args);
 
@@ -592,7 +592,7 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 // All kernels on a given Tensix core must be launched.
 bool LaunchKernels(Device *device, const Program &program, bool stagger_start = false);
 
-bool WriteToDeviceL1(Device *device, const tt_xy_pair &core, op_info_t op_info, int op_idx);
+bool WriteToDeviceL1(Device *device, const CoreCoord &core, op_info_t op_info, int op_idx);
 
 }  // namespace tt_metal
 

@@ -9,7 +9,7 @@ namespace tt_metal {
 
 CircularBuffer::CircularBuffer(
     Device *device,
-    const tt_xy_pair &logical_core,
+    const CoreCoord &logical_core,
     uint32_t buffer_index,
     uint32_t num_tiles,
     uint32_t size_in_bytes,
@@ -20,7 +20,7 @@ CircularBuffer::CircularBuffer(
 
 CircularBuffer::CircularBuffer(
     Device *device,
-    const tt_xy_pair &logical_core,
+    const CoreCoord &logical_core,
     uint32_t buffer_index,
     uint32_t num_tiles,
     uint32_t size_in_bytes,
@@ -63,7 +63,7 @@ CircularBuffer &CircularBuffer::operator=(CircularBuffer &&other) {
     return *this;
 }
 
-tt_xy_pair CircularBuffer::noc_coordinates() const {
+CoreCoord CircularBuffer::noc_coordinates() const {
     return this->device_->worker_core_from_logical_core(this->logical_core_);
 }
 

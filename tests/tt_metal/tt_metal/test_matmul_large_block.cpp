@@ -89,7 +89,7 @@ void print_faces(std::vector<bfloat16> data, string name) {
     std::cout<<std::endl;
 }
 
-void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* device, tt_xy_pair core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h) {
+void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* device, CoreCoord core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h) {
 
     uint32_t num_bytes_for_df = 2;
 
@@ -342,7 +342,7 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::Program();
 
-        tt_xy_pair core = {0, 0};
+        CoreCoord core = {0, 0};
         uint32_t M = 8;
         uint32_t K = 4;
         uint32_t N = K;
@@ -525,7 +525,7 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
             core,
             writer_rt_args);
 
-        tt_xy_pair debug_core = {1, 1};
+        CoreCoord debug_core = {1, 1};
 
         read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
         pass &= tt_metal::LaunchKernels(device, program);
