@@ -3,9 +3,6 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
-#define BCAST_DIM BroadcastType::COL
-
 #include "llk_3c.h"
 
 #include "debug_print.h"
@@ -188,7 +185,7 @@ void MAIN {
                         //UNPACK(( DPRINT << "RecipsInBcast:" << ENDL() ));
                         //UNPACK(( DPRINT << TSLICE(cb_recips, 0, s8) << ENDL() ));
                     // wt+wt8 since we pop Wt after the entire loop
-                    mul_tiles_bcast(tt::Dim::R, cb_exps, cb_recips, wt+wt8, 0, wt8); // tile *= 1/(sum(exp(x)))
+                    mul_tiles_bcast<BroadcastType::COL>(cb_exps, cb_recips, wt+wt8, 0, wt8); // tile *= 1/(sum(exp(x)))
                     pack_tile(wt8, CB::c_out0);
                         //if (ht == 1) PACK(( DPRINT << "exp*RecipSumExps[" << ht << "," << wt+wt8 << "]" << ENDL() ));
                         //if (ht == 1) PACK(( DPRINT << TSLICE(CB::c_out0, 0, s8) << ENDL() ));
