@@ -1,11 +1,12 @@
 #include <iostream>
 
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+#include "tests/tt_metal/test_utils/env_vars.hpp"
 
 int main(int argc, char* argv[]) {
 
     std::string root_dir = tt::utils::get_root_dir();
-    std::string arch_name = tt::utils::get_env_arch_name();
+    std::string arch_name = tt::test_utils::get_env_arch_name();
 
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("unary","datacopy_op");

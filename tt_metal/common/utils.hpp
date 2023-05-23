@@ -16,7 +16,6 @@ namespace utils
     bool run_command(const string &cmd, const string &log_file, const bool verbose);
     void create_file(string file_path_str);
     std::string get_root_dir();
-    std::string get_env_arch_name();
 
     // Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
     template <typename SizeT>
