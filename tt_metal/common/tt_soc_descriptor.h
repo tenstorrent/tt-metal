@@ -41,6 +41,7 @@ struct CoreDescriptor {
   CoreType type;
 
   std::size_t l1_size = 0;
+  std::size_t l1_bank_size = 0;
   std::size_t dram_size_per_core = 0;
 };
 
@@ -80,12 +81,16 @@ struct tt_SocDescriptor {
   int dst_size_alignment;
   int packer_version;
   int worker_l1_size;
+  int storage_core_l1_bank_size;
   int eth_l1_size;
   uint32_t dram_bank_size;
   std::unordered_map<tt_xy_pair, std::vector<tt_xy_pair>> perf_dram_bank_to_workers;
 
   bool is_worker_core(const tt_xy_pair &core) const;
   tt_xy_pair get_worker_core(const tt_xy_pair& core) const;
+  bool is_compute_and_storage_core(const tt_xy_pair &core) const;
+  bool is_storage_core(const tt_xy_pair &core) const;
+  bool is_dispatch_core(const tt_xy_pair &core) const;
 
   int get_num_dram_channels() const;
   tt_xy_pair get_core_for_dram_channel(int dram_chan, int subchannel) const;

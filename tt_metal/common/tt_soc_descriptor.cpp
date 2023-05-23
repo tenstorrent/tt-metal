@@ -20,6 +20,21 @@ tt_xy_pair tt_SocDescriptor::get_worker_core(const tt_xy_pair &core) const {
     return worker_xy;
 }
 
+// Compute and storage cores are worker cores that do compute and their L1 can be used for storage
+bool tt_SocDescriptor::is_compute_and_storage_core(const tt_xy_pair &core) const {
+    return std::find(this->compute_and_storage_cores.begin(), this->compute_and_storage_cores.end(), core) != this->compute_and_storage_cores.end();
+}
+
+// Storage cores do not do any compute, their L1 is used for storage
+bool tt_SocDescriptor::is_storage_core(const tt_xy_pair &core) const {
+    return std::find(this->storage_cores.begin(), this->storage_cores.end(), core) != this->storage_cores.end();
+}
+
+// Dispatch cores send work to compute and storage cores
+bool tt_SocDescriptor::is_dispatch_core(const tt_xy_pair &core) const {
+    return std::find(this->dispatch_cores.begin(), this->dispatch_cores.end(), core) != this->dispatch_cores.end();
+}
+
 int tt_SocDescriptor::get_num_dram_channels() const {
     int num_channels = 0;
     for (const auto& dram_core : dram_cores) {
@@ -99,6 +114,7 @@ inline std::string& trim(std::string& s, const char* t = ws)
 void load_core_descriptors_from_device_descriptor(
     YAML::Node device_descriptor_yaml, tt_SocDescriptor &soc_descriptor) {
   auto worker_l1_size = device_descriptor_yaml["worker_l1_size"].as<int>();
+  auto storage_core_l1_bank_size = device_descriptor_yaml["storage_core_l1_bank_size"].as<int>();
   auto eth_l1_size = device_descriptor_yaml["eth_l1_size"].as<int>();
 
   auto arc_cores = device_descriptor_yaml["arc"].as<std::vector<std::string>>();
@@ -152,6 +168,7 @@ void load_core_descriptors_from_device_descriptor(
     core_descriptor.coord = format_node(core_string);
     core_descriptor.type = CoreType::ETH;
     core_descriptor.l1_size = eth_l1_size;
+    core_descriptor.l1_bank_size = eth_l1_size;
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
     soc_descriptor.ethernet_cores.push_back(core_descriptor.coord);
 
@@ -168,6 +185,7 @@ void load_core_descriptors_from_device_descriptor(
     core_descriptor.coord = format_node(core_string);
     core_descriptor.type = CoreType::WORKER;
     core_descriptor.l1_size = worker_l1_size;
+    core_descriptor.l1_bank_size = worker_l1_size;
     core_descriptor.dram_size_per_core = DEFAULT_DRAM_SIZE_PER_CORE;
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
     soc_descriptor.workers.push_back(core_descriptor.coord);
@@ -218,6 +236,8 @@ void load_core_descriptors_from_device_descriptor(
   // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
   for (const auto &core_string : storage_cores) {
     tt_xy_pair coord = format_node(core_string);
+    auto &storage_core_desc = soc_descriptor.cores.at(coord);
+    storage_core_desc.l1_bank_size = storage_core_l1_bank_size;
     soc_descriptor.storage_cores.push_back(coord);
   }
 
@@ -244,6 +264,7 @@ void load_soc_features_from_device_descriptor(YAML::Node &device_descriptor_yaml
   soc_descriptor->unpacker_version = device_descriptor_yaml["features"]["unpacker"]["version"].as<int>();
   soc_descriptor->dst_size_alignment = device_descriptor_yaml["features"]["math"]["dst_size_alignment"].as<int>();
   soc_descriptor->worker_l1_size = device_descriptor_yaml["worker_l1_size"].as<int>();
+  soc_descriptor->storage_core_l1_bank_size = device_descriptor_yaml["storage_core_l1_bank_size"].as<int>();
   soc_descriptor->eth_l1_size = device_descriptor_yaml["eth_l1_size"].as<int>();
   soc_descriptor->dram_bank_size = device_descriptor_yaml["dram_bank_size"].as<uint32_t>();
 }

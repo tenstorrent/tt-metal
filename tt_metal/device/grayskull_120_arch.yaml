@@ -74,6 +74,9 @@ router_only:
 worker_l1_size:
   1048576
 
+storage_core_l1_bank_size:
+  524288
+
 dram_bank_size:
   1073741824
 
