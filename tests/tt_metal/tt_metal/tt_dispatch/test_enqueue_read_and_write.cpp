@@ -11,7 +11,7 @@ void zero_out_sysmem(Device *device) {
     // Prior to running anything, need to clear out system memory
     // to prevent anything being stale. Potentially make it a static
     // method on command queue
-    vector<uint> zeros(1024 * 1024 * 1024 / sizeof(uint), 0);
+    vector<u32> zeros(1024 * 1024 * 1024 / sizeof(u32), 0);
     device->cluster()->write_sysmem_vec(zeros, 0, 0);
 }
 
@@ -27,8 +27,8 @@ bool test_enqueue_write_buffer(BufferType buftype) {
         int num_tiles = 500;
         Buffer bufa(device, 2048 * num_tiles, 0, 2048, buftype);
 
-        vector<uint> src;
-        for (uint i = 0; i < 512 * num_tiles; i++) {
+        vector<u32> src;
+        for (u32 i = 0; i < 512 * num_tiles; i++) {
             src.push_back(i);
         }
 
@@ -37,7 +37,7 @@ bool test_enqueue_write_buffer(BufferType buftype) {
         zero_out_sysmem(device);
 
         // tt_start_debug_print_server(device->cluster(), {0}, {{1, 11}});
-        vector<uint> res;
+        vector<u32> res;
         {
             CommandQueue cq(device);
             EnqueueWriteBuffer(cq, bufa, src, false);
@@ -69,12 +69,12 @@ bool test_enqueue_read_buffer(BufferType buftype) {
         // method on command queue
         zero_out_sysmem(device);
 
-        vector<uint> src;
-        for (uint i = 0; i < 512 * num_tiles; i++) {
+        vector<u32> src;
+        for (u32 i = 0; i < 512 * num_tiles; i++) {
             src.push_back(i);
         }
 
-        vector<uint> res;
+        vector<u32> res;
         WriteToBuffer(bufa, src);
 
         {
@@ -103,7 +103,7 @@ bool test_enqueue_blocking_read_stress(BufferType buftype) {
         u32 k = 0;
         CommandQueue cq(device);
         for (int i = 0; i < num_tiles_total; i++) {
-            vector<uint> src;
+            vector<u32> src;
             for (u32 j = 0; j < 512; j++) {
                 src.push_back(k);
                 k++;
@@ -142,7 +142,7 @@ bool test_enqueue_write_stress(BufferType buftype) {
                 buffers.push_back(Buffer(device, 2048 * num_pages, 0, 2048, buftype));
             }
             for (int i = 0; i < num_tiles_total / num_pages; i++) {
-                vector<uint> src;
+                vector<u32> src;
                 for (u32 j = 0; j < 512 * num_pages; j++) {
                     src.push_back(k);
                     k++;
@@ -182,7 +182,7 @@ bool test_enqueue_write_and_read_pair_stress(BufferType buftype) {
         u32 k = 0;
         CommandQueue cq(device);
         for (int i = 0; i < num_tiles_total; i++) {
-            vector<uint> src;
+            vector<u32> src;
             for (u32 j = 0; j < 512; j++) {
                 src.push_back(k);
                 k++;
@@ -233,7 +233,7 @@ bool test_chained_enqueue_writes_then_reads_stress() {
                 num_tiles_in_buffer = std::min(int(num_tiles_left), 256);
             }
 
-            vector<uint> src;
+            vector<u32> src;
             for (u32 j = 0; j < 512 * num_tiles_in_buffer; j++) {
                 src.push_back(j);
             }

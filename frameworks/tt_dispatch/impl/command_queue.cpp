@@ -53,7 +53,7 @@ void EnqueueReadBufferCommand::process() {
     u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::size_in_bytes();
     this->read_buffer_addr = system_memory_temporary_storage_address;
     const auto command_desc = this->device_command(system_memory_temporary_storage_address).get_desc();
-    vector<uint32_t> command_vector(command_desc.begin(), command_desc.end());
+    vector<u32> command_vector(command_desc.begin(), command_desc.end());
     u32 cmd_size = DeviceCommand::size_in_bytes() + this->buffer.size();
 
     // Change noc write name
@@ -112,7 +112,7 @@ void EnqueueWriteBufferCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
     u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::size_in_bytes();
     const auto command_desc = this->device_command(system_memory_temporary_storage_address).get_desc();
-    vector<uint32_t> command_vector(command_desc.begin(), command_desc.end());
+    vector<u32> command_vector(command_desc.begin(), command_desc.end());
     u32 cmd_size = DeviceCommand::size_in_bytes() + this->buffer.size();
 
     // Change noc write name
@@ -137,7 +137,7 @@ const DeviceCommand FinishCommand::device_command(u32) {
 void FinishCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
     const auto command_desc = this->device_command(0).get_desc();
-    vector<uint32_t> command_vector(command_desc.begin(), command_desc.end());
+    vector<u32> command_vector(command_desc.begin(), command_desc.end());
 
     u32 cmd_size = DeviceCommand::size_in_bytes();
 

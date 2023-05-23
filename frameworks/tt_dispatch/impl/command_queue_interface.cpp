@@ -1,9 +1,9 @@
 #include "command_queue_interface.hpp"
 
 u32 get_cq_rd_ptr(Device* device) {
-    uint chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
-    vector<uint> recv;
-    uint rd_ptr_addr = 0;
+    u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
+    vector<u32> recv;
+    u32 rd_ptr_addr = 0;
     device->cluster()->read_sysmem_vec(recv, rd_ptr_addr, 4, chip_id);
     return recv.at(0);
 }
@@ -31,19 +31,19 @@ void SystemMemoryWriter::cq_reserve_back(Device* device, u32 cmd_size_B) {
 }
 
 // Ideally, data should be an array or pointer, but vector for time-being
-void SystemMemoryWriter::cq_write(Device* device, vector<uint>& data, uint write_ptr) {
+void SystemMemoryWriter::cq_write(Device* device, vector<u32>& data, u32 write_ptr) {
     device->cluster()->write_sysmem_vec(data, write_ptr, 0);
 }
 
 void SystemMemoryWriter::send_write_ptr(Device* device) {
     tt_xy_pair dispatch_core = {1, 11};
-    uint chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
+    u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
 
     tt::llrt::write_hex_vec_to_core(
         device->cluster(), chip_id, dispatch_core, {this->cq_write_interface.fifo_wr_ptr}, CQ_WRITE_PTR, false);
 }
 
-void SystemMemoryWriter::cq_push_back(Device* device, uint push_size_B) {
+void SystemMemoryWriter::cq_push_back(Device* device, u32 push_size_B) {
     // All data needs to be 32B aligned
     u32 push_size_16B = ((push_size_B + 31) / 32) * 2; // Terse way to find next multiple of 32 in 16B words
 
