@@ -12,36 +12,51 @@ namespace tt_metal {
 
 namespace allocator {
 
-void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const tt_SocDescriptor &soc_desc) {
-    auto in_core_category = [](const std::vector<CoreCoord> &core_category, const CoreCoord &noc_core){
-        return std::find(core_category.begin(), core_category.end(), noc_core) != core_category.end();
+void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const AllocatorConfig &alloc_config) {
+    auto num_in_category = [](const std::unordered_map<CoreCoord, AllocCoreType> &core_allocation_types, const AllocCoreType &alloc_type){
+        int num_cores = 0;
+        for (const auto& core_allocation_type: core_allocation_types) {
+            if (core_allocation_type.second == alloc_type) {
+                num_cores++;
+            }
+        }
+        return num_cores;
     };
 
     std::unordered_map<uint32_t, BankDescriptor> bank_id_to_descriptor;
 
-    uint32_t compute_core_bank_size = soc_desc.worker_l1_size - UNRESERVED_BASE;
+    uint32_t compute_core_bank_size = alloc_config.worker_l1_size - UNRESERVED_BASE;
 
     static constexpr uint32_t storage_core_bank_size = 512 * 1024;
     static constexpr uint32_t num_banks_per_storage_core = 2;
-    int expected_num_l1_banks = soc_desc.compute_and_storage_cores.size() + (num_banks_per_storage_core * soc_desc.storage_cores.size());
+    int expected_num_l1_banks = 
+        num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::ComputeAndStore) + 
+        (num_banks_per_storage_core * num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::StorageOnly));
     uint8_t shuffled_l1_bank_ids[expected_num_l1_banks];
     init_shuffled_l1_bank_id_mapping(shuffled_l1_bank_ids);
 
     uint32_t bank_id = 0;
-    for (uint32_t y = 0; y < soc_desc.worker_grid_size.y; y++) {
-        for (uint32_t x = 0; x < soc_desc.worker_grid_size.x; x++) {
+    for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {
+        for (uint32_t x = 0; x < alloc_config.worker_grid_size.x; x++) {
             CoreCoord logical_core = CoreCoord(x, y);
-            // TODO: Fix how we setup this information for allocator.... We need to account for harvesting
-            uint32_t noc_x = soc_desc.worker_log_to_routing_x.at(x);
-            uint32_t noc_y = soc_desc.worker_log_to_routing_y.at(y);
-            CoreCoord noc_core = CoreCoord(noc_x, noc_y);
-            if (in_core_category(soc_desc.compute_and_storage_cores, noc_core)) {
+            log_assert (
+                alloc_config.logical_to_routing_coord_lookup_table.find(logical_core) != alloc_config.logical_to_routing_coord_lookup_table.end(),
+                "Cannot find log_coord=[.y={}, .x={}] in logical_to_routing_coord_lookup_table... invalid AllocatorConfig setup",
+                logical_core.y, logical_core.x
+            );
+            CoreCoord noc_core = alloc_config.logical_to_routing_coord_lookup_table.at(logical_core);
+            log_assert (
+                alloc_config.core_type_from_noc_coord_table.find(noc_core) != alloc_config.core_type_from_noc_coord_table.end(),
+                "Cannot find noc-coord=[.y={}, .x={}] in core_type_from_noc_coord_table... invalid AllocatorConfig setup",
+                noc_core.y, noc_core.x
+            );
+            if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::ComputeAndStore) {
                 uint32_t remapped_bank_id = shuffled_l1_bank_ids[bank_id];
                 allocator.logical_core_to_bank_ids.insert({logical_core, {remapped_bank_id}});
                 allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
                 bank_id_to_descriptor.insert({remapped_bank_id, {.offset_bytes = UNRESERVED_BASE, .size_bytes = compute_core_bank_size}});
                 bank_id++;
-            } else if (in_core_category(soc_desc.storage_cores, noc_core)) {
+            } else if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::StorageOnly) {
                 std::vector<uint32_t> bank_ids;
                 for (int storage_bank_index = 0; storage_bank_index < num_banks_per_storage_core; storage_bank_index++) {
                     uint32_t remapped_bank_id = shuffled_l1_bank_ids[bank_id];
@@ -53,10 +68,18 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const tt_Soc
                     bank_id++;
                 }
                 allocator.logical_core_to_bank_ids.insert({logical_core, bank_ids});
+            } else {
+                tt::log_fatal ("Unsupported CoreType");
             }
         }
     }
-    TT_ASSERT(bank_id_to_descriptor.size() == expected_num_l1_banks);
+
+    log_assert(
+        bank_id_to_descriptor.size() == expected_num_l1_banks,
+        "init_compute_and_storage_l1_bank_manager() -- banks setup={} must be equal to the number of bankes expected={}",
+        bank_id_to_descriptor.size(),
+        expected_num_l1_banks
+    );
     allocator.l1_manager = BankManager(bank_id_to_descriptor);
 }
 
@@ -157,9 +180,9 @@ BankIdToRelativeAddress alloc_at_addr_in_compute_and_storage(BankManager &bank_m
 
 }   // namespace allocator
 
-L1BankingAllocator::L1BankingAllocator(const tt_SocDescriptor &soc_desc)
+L1BankingAllocator::L1BankingAllocator(const AllocatorConfig &alloc_config)
     : Allocator(
-        soc_desc,
+        alloc_config,
         {
             .dram = {
                 .init=allocator::init_one_bank_per_channel,

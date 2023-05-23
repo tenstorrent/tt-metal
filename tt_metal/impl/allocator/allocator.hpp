@@ -4,9 +4,9 @@
 #include <functional>
 #include <vector>
 
+#include "allocator_types.hpp"
 #include "common/assert.hpp"
 #include "common/core_coord.h"
-#include "tt_metal/common/tt_soc_descriptor.h"
 #include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 
 namespace tt {
@@ -106,7 +106,7 @@ void populate_candidate_address_ranges(
 );
 
 struct InitAndAllocFuncs {
-    std::function<void(Allocator &, const tt_SocDescriptor &)> init;
+    std::function<void(Allocator &, const AllocatorConfig &)> init;
     std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, bool)> alloc;
     std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, uint32_t)> alloc_at_addr;
 };
@@ -118,9 +118,9 @@ struct AllocDescriptor {
     InitAndAllocFuncs l1;
 };
 
-void init_one_bank_per_channel(Allocator &allocator, const tt_SocDescriptor &soc_desc);
+void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config);
 
-void init_one_bank_per_l1(Allocator &allocator, const tt_SocDescriptor &soc_desc);
+void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config);
 
 uint32_t num_banks(const Allocator &allocator, const BufferType &buffer_type);
 
@@ -154,7 +154,7 @@ uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator
 }  // namespace allocator
 
 struct Allocator {
-    Allocator(const tt_SocDescriptor &soc_desc, const allocator::AllocDescriptor &alloc_descriptor);
+    Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor);
 
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;

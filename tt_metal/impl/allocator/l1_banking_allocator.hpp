@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/common/tt_soc_descriptor.h"
 #include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 
 namespace tt {
@@ -17,7 +16,7 @@ namespace tt_metal {
 
 namespace allocator {
 
-void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const tt_SocDescriptor &soc_desc);
+void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const AllocatorConfig &alloc_config);
 
 BankIdToRelativeAddress alloc_in_compute_and_storage_l1(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up);
 
@@ -33,7 +32,7 @@ BankIdToRelativeAddress alloc_at_addr_in_compute_and_storage(BankManager &bank_m
 // This gives a total of (108 + 1 bank) + (10 * 2 banks) = 128 banks of 512 KB for L1 buffers
 // DRAM allocation is the same as BasicAllocator
 struct L1BankingAllocator : Allocator {
-    L1BankingAllocator(const tt_SocDescriptor &soc_desc);
+    L1BankingAllocator(const AllocatorConfig &alloc_config);
 };
 
 }  // namespace tt_metal

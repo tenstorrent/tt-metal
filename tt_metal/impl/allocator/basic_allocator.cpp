@@ -5,9 +5,9 @@ namespace tt {
 namespace tt_metal {
 
 // Basic allocator has 1 bank per DRAM channel and 1 bank per L1 of Tensix core
-BasicAllocator::BasicAllocator(const tt_SocDescriptor &soc_desc)
+BasicAllocator::BasicAllocator(const AllocatorConfig &alloc_config)
     : Allocator(
-        soc_desc,
+        alloc_config,
         {
             .dram = {
                 .init=allocator::init_one_bank_per_channel,

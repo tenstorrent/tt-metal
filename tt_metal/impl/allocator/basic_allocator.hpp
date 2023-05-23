@@ -12,7 +12,7 @@ namespace tt {
 namespace tt_metal {
 
 struct BasicAllocator : Allocator {
-    BasicAllocator(const tt_SocDescriptor &soc_desc);
+    BasicAllocator(const AllocatorConfig &alloc_config);
 };
 
 }  // namespace tt_metal

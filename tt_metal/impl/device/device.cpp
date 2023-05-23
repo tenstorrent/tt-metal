@@ -23,13 +23,33 @@ void Device::initialize_cluster() {
 void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
     TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
     auto soc_desc = this->cluster_->get_soc_desc(this->pcie_slot_);
+    // Construct allocator config from soc_desc
+    AllocatorConfig config({
+        .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
+        .dram_bank_size = soc_desc.dram_bank_size,
+        .worker_grid_size = soc_desc.worker_grid_size,
+        .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
+        .core_type_from_noc_coord_table = {},
+        .logical_to_routing_coord_lookup_table=this->logical_to_routing_coord_lookup_table_
+    });
+    // Initialize core-type table
+    for (const auto& core: soc_desc.cores) {
+        config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
+    }
+    for (const auto& storage_compute_core : soc_desc.compute_and_storage_cores) {
+        config.core_type_from_noc_coord_table[storage_compute_core] = AllocCoreType::ComputeAndStore;
+    }
+    for (const auto& storage_compute_core : soc_desc.storage_cores) {
+        config.core_type_from_noc_coord_table[storage_compute_core] = AllocCoreType::StorageOnly;
+    }
+    // Configuration end
     switch (memory_allocator) {
         case MemoryAllocator::BASIC: {
-            this->allocator_ = std::make_unique<BasicAllocator>(soc_desc);
+            this->allocator_ = std::make_unique<BasicAllocator>(config);
         }
         break;
         case MemoryAllocator::L1_BANKING: {
-            this->allocator_ = std::make_unique<L1BankingAllocator>(soc_desc);
+            this->allocator_ = std::make_unique<L1BankingAllocator>(config);
         }
         break;
         default:

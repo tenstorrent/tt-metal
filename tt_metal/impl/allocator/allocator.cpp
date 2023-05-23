@@ -254,25 +254,25 @@ void populate_candidate_address_ranges(
     candidate_addr_ranges = intersecting_addr_ranges;
 }
 
-void init_one_bank_per_channel(Allocator &allocator, const tt_SocDescriptor &soc_desc) {
+void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config) {
     uint32_t bank_offset = 0;
-    allocator.dram_manager = BankManager(soc_desc.get_num_dram_channels(), bank_offset, soc_desc.dram_bank_size);
-    for (uint32_t bank_id = 0; bank_id < soc_desc.get_num_dram_channels(); bank_id++) {
+    allocator.dram_manager = BankManager(alloc_config.num_dram_channels, bank_offset, alloc_config.dram_bank_size);
+    for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
     }
 }
 
-void init_one_bank_per_l1(Allocator &allocator, const tt_SocDescriptor &soc_desc) {
-    uint32_t num_l1_banks = soc_desc.worker_grid_size.y * soc_desc.worker_grid_size.x;
+void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config) {
+    uint32_t num_l1_banks = alloc_config.worker_grid_size.y * alloc_config.worker_grid_size.x;
     // Space up to UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
     uint32_t offset_bytes = UNRESERVED_BASE;
-    uint32_t l1_bank_size = soc_desc.worker_l1_size - UNRESERVED_BASE;
+    uint32_t l1_bank_size = alloc_config.worker_l1_size - UNRESERVED_BASE;
     allocator.l1_manager = BankManager(num_l1_banks, offset_bytes, l1_bank_size);
 
     uint32_t bank_id = 0;
-    for (uint32_t y = 0; y < soc_desc.worker_grid_size.y; y++) {
-        for (uint32_t x = 0; x < soc_desc.worker_grid_size.x; x++) {
+    for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {
+        for (uint32_t x = 0; x < alloc_config.worker_grid_size.x; x++) {
             CoreCoord logical_core = CoreCoord(x, y);
             allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
             allocator.logical_core_to_bank_ids.insert({logical_core, {bank_id}});
@@ -412,10 +412,10 @@ uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator
 
 }  // namespace allocator
 
-Allocator::Allocator(const tt_SocDescriptor &soc_desc, const allocator::AllocDescriptor &alloc_descriptor) : descriptor(alloc_descriptor) {
+Allocator::Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor) : descriptor(alloc_descriptor) {
     // TODO: add validation for allocator_descriptor?
-    this->descriptor.dram.init(*this, soc_desc);
-    this->descriptor.l1.init(*this, soc_desc);
+    this->descriptor.dram.init(*this, alloc_config);
+    this->descriptor.l1.init(*this, alloc_config);
     // assert that bank managers have been initialized?
     TT_ASSERT(not bank_id_to_dram_channel.empty() and not dram_channel_to_bank_ids.empty());
     TT_ASSERT(not bank_id_to_logical_core.empty() and not bank_id_to_logical_core.empty());

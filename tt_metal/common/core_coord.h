@@ -13,8 +13,8 @@ struct CoreCoord {
   constexpr CoreCoord(std::size_t x, std::size_t y) : x(x), y(y) {}
   // explicit CoreCoord(const CommandAssembler::xy_pair &p) : CoreCoord(p.x, p.y) {}
 
-  std::size_t x;
-  std::size_t y;
+  std::size_t x = 0;
+  std::size_t y = 0;
 
   std::string str() const { return "(x=" + std::to_string(x) + ",y=" + std::to_string(y) + ")"; }
 
@@ -38,7 +38,7 @@ struct tt_cxy_pair : public CoreCoord {
   tt_cxy_pair(std::size_t ichip, CoreCoord xy_pair) : CoreCoord(xy_pair.x, xy_pair.y), chip(ichip) {}
   tt_cxy_pair(std::size_t ichip, std::size_t x, std::size_t y) : CoreCoord(x,y), chip(ichip) {}
 
-  std::size_t chip;
+  std::size_t chip = 0;
 
   std::string str() const { return "(chip=" + std::to_string(chip) + ",x=" + std::to_string(x) + ",y=" + std::to_string(y) + ")"; }
 };
