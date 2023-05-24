@@ -37,10 +37,10 @@ bool run_eltwise_sync(
 
     // Producer core
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, tt::llrt::TensixRiscsOptions::ALL_RISCS, {compute_core});
-    string loader_op_path = "built_kernels/dram_loader_sync";
+    string loader_op_path = "dram_loader_sync";
     bool pass = tt::llrt::test_load_write_read_risc_binary(cluster, loader_op_path + "/brisc/brisc.hex", 0, loader_core, 0); // brisc
     // Consumer core
-    string compute_op_path = "built_kernels/eltwise_sync";
+    string compute_op_path = "eltwise_sync";
     pass = tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/brisc/brisc.hex", 0, compute_core, 0); // brisc
     pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/ncrisc/ncrisc.hex", 0, compute_core, 1); // ncrisc
 

@@ -2,6 +2,8 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 
+#include "build_kernels_for_riscv/build_kernel_options.hpp"
+
 #include <unordered_set>
 #include <mutex>
 
@@ -50,12 +52,13 @@ struct HexNameToMemVectorCache {
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
 ll_api::memory get_risc_binary(string path) {
+
+    string path_to_bin = get_kernel_compile_outpath() + path;
     if (HexNameToMemVectorCache::inst().exists(path)) {
         // std::cout << "-- HEX2MEM CACHE HIT FOR " << path << std::endl;
         return HexNameToMemVectorCache::inst().get(path);
     }
 
-    string path_to_bin = path;
     fs::path bin_file(path_to_bin);
     if (!fs::exists(bin_file)) {
         string tt_metal_home = string(getenv("TT_METAL_HOME"));
@@ -193,12 +196,12 @@ ll_api::memory read_mem_from_core(
 }
 
 bool test_load_write_read_risc_binary(
-    tt_cluster *cluster, std::string hex_file_path, int chip_id, const CoreCoord &core, int riscv_id) {
+    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id) {
 
     assert(is_worker_core(cluster, core, chip_id));
 
-    log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
-    ll_api::memory mem = get_risc_binary(hex_file_path);
+    log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_name);
+    ll_api::memory mem = get_risc_binary(hex_file_name);
 
     if (riscv_id == 0) {
         // Options for handling brisc fw not starting at mem[0]:
@@ -254,10 +257,10 @@ bool test_load_write_read_risc_binary(
 
 // for TRISCs
 bool test_load_write_read_trisc_binary(
-    tt_cluster *cluster, std::string hex_file_path, int chip_id, const CoreCoord &core, int triscv_id) {
+    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int triscv_id) {
 
     assert(triscv_id >= 0 and triscv_id <= 2);
-    return test_load_write_read_risc_binary(cluster, hex_file_path, chip_id, core, triscv_id + 2);
+    return test_load_write_read_risc_binary(cluster, hex_file_name, chip_id, core, triscv_id + 2);
 }
 
 void disable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
@@ -320,21 +323,21 @@ void load_blank_kernel_to_cores(
         bool pass = true;
 
         // PROF_BEGIN("write_brisc")
-        pass = test_load_write_read_risc_binary(cluster, "built_kernels/blank_op/brisc/brisc.hex", chip_id, core, 0);
+        pass = test_load_write_read_risc_binary(cluster, "blank_op/brisc/brisc.hex", chip_id, core, 0);
         if (!pass) {
             throw std::runtime_error("Initial testing read/write of brisc to core failed");
         }  // PROF_END("write_brisc")
 
         if (deduce_if_involves_ncrisc(riscs_to_load)) {  // PROF_BEGIN("ncrisc")
             pass =
-                test_load_write_read_risc_binary(cluster, "built_kernels/blank_op/ncrisc/ncrisc.hex", chip_id, core, 1);
+                test_load_write_read_risc_binary(cluster, "blank_op/ncrisc/ncrisc.hex", chip_id, core, 1);
             if (!pass) {
                 throw std::runtime_error("Initial testing read/write of ncrisc to core failed");
             }
         }  // PROF_END("ncrisc")
 
         if (deduce_if_involves_triscs(riscs_to_load)) {  // PROF_BEGIN("trisc")
-            string op_path = "built_kernels/blank_op";
+            string op_path = "blank_op";
             pass &= test_load_write_read_trisc_binary(
                 cluster, op_path + "/tensix_thread0/tensix_thread0.hex", chip_id, core, 0);
             pass &= test_load_write_read_trisc_binary(

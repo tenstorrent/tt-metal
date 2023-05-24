@@ -8,6 +8,7 @@
 
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/device/device.hpp"
+#include "build_kernels_for_riscv/build_kernel_options.hpp"
 
 #include "tt_gdb.hpp"
 
@@ -114,7 +115,7 @@ inline string get_second_token(string &input) {
 }
 
 void print_cmd(tt_cluster* cluster, uint32_t chip_id, CoreCoord core, string variable, string thread_type, string op) {
-    string debug_file_path = "built_kernels/" + op + "/" + thread_type + "/" + thread_type + "_debug_dwarf_info.json";
+    string debug_file_path = tt::get_kernel_compile_outpath() + op + "/" + thread_type + "/" + thread_type + "_debug_dwarf_info.json";
     const string cmd = "python3 tt_metal/tools/tt_gdb/pydwarf2.py " + thread_type + " " + op;
     int ret = system(cmd.c_str());
 

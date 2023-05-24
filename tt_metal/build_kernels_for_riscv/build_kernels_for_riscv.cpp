@@ -13,6 +13,7 @@
 using namespace std;
 using namespace tt;
 
+
 std::string RISCID_to_string(RISCID id) {
     switch (id) {
         case NC: return "NC";
@@ -68,22 +69,24 @@ struct CompileState {
     string gpp_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++ " };
     string gcc_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-gcc " }; // TODO(AP): this wasn't really necessary for assembler
     string objcopy_       { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objcopy " };
-    string kernel_subdir_; // full path to kernel subdir
+    string kernel_subdir_;
     string thread_bin_subdir;
     string log_file;
 
-    CompileState(RISCID risc_id, const string& kernel_subdir) {
-        home_ = std::getenv("TT_METAL_HOME");
-        TT_ASSERT(home_.size() > 0);
+    CompileState(RISCID risc_id,
+                 const string& in_kernel_subdir,
+                 tt::build_kernel_for_riscv_options_t* build_opts) {
+
+        home_ = tt::utils::get_root_dir();
         if (home_.back() != '/')
             home_.push_back('/');
-        kernel_subdir_ = kernel_subdir; // example: "eltwise_binary_writer_unary_8bank_reader_dual_8bank/7036516950107541145"
+        kernel_subdir_ = build_opts->outpath + in_kernel_subdir;
         gpp_ = home_ + gpp_;
         gcc_ = home_ + gcc_;
         objcopy_ = home_ + objcopy_;
 
         // this is in the top-level outdir because "/ncrisc" is deleted by make clean, but we log the output of make clean as well
-        log_file = fs::absolute(kernel_subdir).string() + "/risc_build_" + RISCID_to_string(risc_id) + ".log";
+        log_file = fs::absolute(kernel_subdir_).string() + "/risc_build_" + RISCID_to_string(risc_id) + ".log";
         utils::create_file(log_file);
 
         switch (risc_id) {
@@ -279,10 +282,6 @@ struct CompileState {
 
     string get_compile_cmd(const string& hwthread_name, const string& obj_name, const string& cpp_name) const
     {
-        //"-c -o /home/andrei/git/gp.ai/built_kernels/"
-        //ctx.kernel_name_has_str_ = eltwise_binary_writer_unary_8bank_reader_dual_8bank/7036516950107541145/
-        //"tensix_thread1/ckernel.o"
-        //src/ckernel.cc
         string gpp_str;
         bool is_asm = (cpp_name.find(".S") != std::string::npos);
         if (is_asm) // TODO(AP): wasn't necessary to split for assembler
@@ -387,12 +386,9 @@ static CompileState pre_compile_for_risc(
 
     log_trace(tt::LogBuildKernels, "Compiling RISCID={}", risc_id);
 
-    CompileState ctx(risc_id, out_dir_path);
-    string kernel_dir = out_dir_path;
-    kernel_dir += "/";
-    kernel_dir += ctx.thread_bin_subdir;
+    CompileState ctx(risc_id, out_dir_path, build_kernel_for_riscv_options);
+    string kernel_dir = ctx.kernel_subdir_ + "/" + ctx.thread_bin_subdir;
     fs::create_directories(kernel_dir);
-
     ctx.hwthread = risc_id;
     ctx.arch = get_arch_from_string(arch_name);
 
@@ -426,9 +422,9 @@ static CompileState pre_compile_for_risc(
     }
 
     // copy unpack/pack data formats to the kernel dir
-    if (fs::exists(out_dir_path + "/chlkc_unpack_data_format.h")) {
-        fs::copy(out_dir_path + "/chlkc_unpack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
-        fs::copy(out_dir_path + "/chlkc_pack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
+    if (fs::exists(ctx.kernel_subdir_ + "/chlkc_unpack_data_format.h")) {
+        fs::copy(ctx.kernel_subdir_ + "/chlkc_unpack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
+        fs::copy(ctx.kernel_subdir_ + "/chlkc_pack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
     }
 
     return ctx;
@@ -571,7 +567,8 @@ void gen_trisc_cpp(const string& src_name, const string& dst_name, vector<string
 
 std::string gen_trisc_cpps(
     string input_hlk_file_path,
-    string out_dir_path,
+    tt::build_kernel_for_riscv_options_t* build_opts,
+    string out_kernel_path,
     string device_name,
     const std::map<std::string, std::string>& defines,
     bool dump_perf_events,
@@ -582,18 +579,12 @@ std::string gen_trisc_cpps(
 )
 {
     string hlkc_path;
-    string tt_metal_home;
-    if (!getenv("TT_METAL_HOME")) {
-        fs::path cwd = fs::current_path();
-        tt_metal_home = cwd.string();
-    } else {
-        tt_metal_home = string(getenv("TT_METAL_HOME"));
-    }
 
+    string out_dir_path = build_opts->outpath + out_kernel_path + "/";
     string out_file_name_base = "chlkc";
-    string unpack_base        = out_dir_path + "/" + out_file_name_base + "_unpack";
-    string math_base          = out_dir_path + "/" + out_file_name_base   + "_math";
-    string pack_base          = out_dir_path + "/" + out_file_name_base  + "_pack";
+    string unpack_base        = out_dir_path + out_file_name_base + "_unpack";
+    string math_base          = out_dir_path + out_file_name_base + "_math";
+    string pack_base          = out_dir_path + out_file_name_base + "_pack";
     string unpack_cpp         = unpack_base + ".cpp";
     string unpack_llk_args_h  = unpack_base + "_llk_args.h";
     string math_cpp           = math_base + ".cpp";
@@ -653,6 +644,7 @@ void generate_src_for_triscs(
 
     gen_trisc_cpps(
         hlk_file_name,
+        topts,
         out_dir_path,
         arch_name,
         hlk_defines,
@@ -834,8 +826,8 @@ void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataF
 void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path) {
     string out_file_name_base = "chlkc_";
     string out_file_name_suffix = "_data_format.h";
-    string unpack_data_format_descs = out_dir_path + "/" + out_file_name_base + "unpack" + out_file_name_suffix;
-    string pack_data_format_descs = out_dir_path + "/" + out_file_name_base + "pack" + out_file_name_suffix;
+    string unpack_data_format_descs = build_kernel_for_riscv_options->outpath + out_dir_path + "/" + out_file_name_base + "unpack" + out_file_name_suffix;
+    string pack_data_format_descs = build_kernel_for_riscv_options->outpath + out_dir_path + "/" + out_file_name_base + "pack" + out_file_name_suffix;
 
     // assuming all cores within a op have the same desc
     tt_hlk_desc& desc = build_kernel_for_riscv_options->hlk_desc;
@@ -885,8 +877,7 @@ void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_ke
 }
 
 void generate_math_fidelity_descriptor(build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path) {
-    string math_fidelity_descriptor = out_dir_path + "/" + "chlkc_math_fidelity.h";
-
+    string math_fidelity_descriptor = build_kernel_for_riscv_options->outpath + out_dir_path + "/" + "chlkc_math_fidelity.h";
     // assuming all cores within a op have the same desc
     tt_hlk_desc& desc = build_kernel_for_riscv_options->hlk_desc;
 
@@ -898,7 +889,7 @@ void generate_math_fidelity_descriptor(build_kernel_for_riscv_options_t* build_k
 }
 
 void generate_math_approx_mode_descriptor(build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path) {
-    string approx_descriptor = out_dir_path + "/" + "chlkc_math_approx_mode.h";
+    string approx_descriptor = build_kernel_for_riscv_options->outpath + out_dir_path + "/" + "chlkc_math_approx_mode.h";
 
     // assuming all cores within a op have the same desc
     tt_hlk_desc& desc = build_kernel_for_riscv_options->hlk_desc;
@@ -972,7 +963,8 @@ void generate_binaries_for_triscs(
 void generate_descriptors(
     tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir)
 {
-    fs::create_directories(op_dir);
+    string full_path = opts->outpath + op_dir;
+    fs::create_directories(full_path);
     try {
         std::thread td( [=]() { generate_data_format_descriptors(opts, op_dir); } );
         std::thread tm( [=]() { generate_math_fidelity_descriptor(opts, op_dir); } );

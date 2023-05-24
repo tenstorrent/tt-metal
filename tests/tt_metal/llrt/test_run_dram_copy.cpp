@@ -135,7 +135,7 @@ int main(int argc, char** argv)
         // tt::llrt::print_worker_cores(cluster);
 
         // the first worker core starts at (1,1)
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/dram_copy/brisc/brisc.hex", 0, {9,8}, 0);
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "dram_copy/brisc/brisc.hex", 0, {9,8}, 0);
         if (pass) {
             pass = run_dram_copy(cluster, 0, {9,8});
         }

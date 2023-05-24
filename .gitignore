@@ -39,6 +39,7 @@ ops.csv
 debuda_test
 compiled_ops
 built_kernels
+built
 null.d
 
 docs/build

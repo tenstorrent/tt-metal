@@ -70,7 +70,7 @@ int main(int argc, char** argv)
         // tt::llrt::print_worker_cores(cluster);
 
         // the first worker core starts at (1,1)
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/test_op/brisc/brisc.hex", 0, {1,1}, 0);
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "test_op/brisc/brisc.hex", 0, {1,1}, 0);
         if (pass) {
             pass = run_brisc(cluster, 0, {1,1});
         }

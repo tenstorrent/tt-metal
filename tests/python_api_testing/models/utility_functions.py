@@ -108,7 +108,7 @@ def ttP(x, count=4, offset=0, stride=1):
 
 def enable_compile_cache():
     """
-    Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
+    Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built/kernels/.../hash directory with kernel binaries is present.
     """
     ttl.device.EnableCompileCache()
 

@@ -78,7 +78,7 @@ vector<uint32_t> allocate(
 }
 
 DramConfig construct_dram_config(string op) {
-    string op_path = "built_kernels/" + op;
+    string op_path = op;
     std::array<string, 5> datacopy_hex_files = {
         op_path + "/brisc/brisc.hex",
         op_path + "/tensix_thread0/tensix_thread0.hex",
@@ -338,7 +338,7 @@ void write_copy_desc_to_l1(
 void host_dispatch(tt_cluster *cluster, int chip_id, string op, CoreCoord dispatch_core, CoreCoord worker_core) {
     // Write dispatch binary to core
     tt::llrt::test_load_write_read_risc_binary(
-        cluster, "built_kernels/dispatch/brisc/brisc.hex", chip_id, dispatch_core, 0);
+        cluster, "dispatch/brisc/brisc.hex", chip_id, dispatch_core, 0);
 
     DramConfig dram_config = construct_dram_config(op);
     std::cout << dram_config << std::endl;

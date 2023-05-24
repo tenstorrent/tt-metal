@@ -133,7 +133,7 @@ int main(int argc, char** argv)
 
         // tt::llrt::print_worker_cores(cluster);
 
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/dram_copy/brisc/brisc.hex", 0, {2,1}, 0);
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "dram_copy/brisc/brisc.hex", 0, {2,1}, 0);
         if (!pass) {
             throw std::runtime_error("Initial testing read/write of brisc to core failed");
         }

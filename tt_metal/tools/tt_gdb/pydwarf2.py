@@ -242,7 +242,7 @@ if __name__ == "__main__":
     assert len(sys.argv) == 3, "Must supply exactly two arguments, a thread type and an op consecutively"
     thread_type = sys.argv[1]
     op = sys.argv[2]
-    op_dir = f"{os.environ['TT_METAL_HOME']}/built_kernels/{op}"
+    op_dir = f"{os.environ['TT_METAL_HOME']}/built/kernels/{op}"
     assert os.path.isdir(op_dir), f"'{op_dir}' does not exist"
     assert os.path.isdir(f"{op_dir}/{thread_type}"), f"{op_dir}/{thread_type} does not exist"
 

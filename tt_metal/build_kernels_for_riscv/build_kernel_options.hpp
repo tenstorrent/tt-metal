@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/core_coord.h"
+#include "common/utils.hpp"
 #include "kernels/hostdevcommon/kernel_structs.h"
 #include "hlk_desc.hpp"
 
@@ -13,6 +14,7 @@ class build_kernel_for_riscv_options_t
 
     // general config
     std::string name;
+    const std::string& outpath;
 
     // HLK config
     tt::tt_hlk_desc hlk_desc;
@@ -42,5 +44,15 @@ class build_kernel_for_riscv_options_t
     void set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format);
 };
 
+// TODO: llrt needs these but doesn't link against build_kernels_for_riscv.cpp
+inline const std::string& get_firmware_compile_outpath() {
+    static const std::string outpath = tt::utils::get_root_dir() + "/built/firmware/";
+    return outpath;
+}
+
+inline const std::string& get_kernel_compile_outpath() {
+    static const std::string outpath = tt::utils::get_root_dir() + "/built/kernels/";
+    return outpath;
+}
 
 } // end namespace tt

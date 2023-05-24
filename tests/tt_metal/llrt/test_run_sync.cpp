@@ -39,10 +39,10 @@ bool run_sync(
     TT_ASSERT(num_output_tiles % transient_buffer_size_tiles == 0);
     // Producer core
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, tt::llrt::TensixRiscsOptions::BRISC_NCRISC, {});
-    string loader_op_path = "built_kernels/dram_loader_sync";
+    string loader_op_path = "dram_loader_sync";
     bool pass = tt::llrt::test_load_write_read_risc_binary(cluster, loader_op_path + "/brisc/brisc.hex", 0, loader_core, 0); // brisc
     // Consumer core
-    string compute_op_path = "built_kernels/remote_read_remote_write_sync";
+    string compute_op_path = "remote_read_remote_write_sync";
     pass = tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/brisc/brisc.hex", 0, writer_core, 0); // brisc
     pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/ncrisc/ncrisc.hex", 0, writer_core, 1); // ncrisc
 

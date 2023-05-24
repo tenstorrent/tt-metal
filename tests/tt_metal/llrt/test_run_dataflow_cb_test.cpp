@@ -120,10 +120,9 @@ int main(int argc, char** argv)
         // tt::llrt::print_worker_cores(cluster);
 
         string op = "dataflow_cb_test";
-        string op_path = "built_kernels/" + op;
 
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", 0, {1,1}, 0); // brisc
-        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", 0, {1,1}, 1); // ncrisc
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op + "/brisc/brisc.hex", 0, {1,1}, 0); // brisc
+        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op + "/ncrisc/ncrisc.hex", 0, {1,1}, 1); // ncrisc
 
         if (pass) {
             pass &= run_dataflow_cb_test(cluster, 0, {1, 1}, 2048, op);

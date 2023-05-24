@@ -162,7 +162,7 @@ bool run_risc_rw_speed_dram_banked(tt_cluster *cluster, int chip_id, const std::
 
     const int brisc_id = 0;
     for (std::uint32_t core_index = 0; core_index < cores.size(); core_index++) {
-        if (!tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/risc_rw_speed_banked_dram/brisc/brisc.hex", chip_id, cores[core_index], brisc_id)) {
+        if (!tt::llrt::test_load_write_read_risc_binary(cluster, "risc_rw_speed_banked_dram/brisc/brisc.hex", chip_id, cores[core_index], brisc_id)) {
             return false;
         }
     }
@@ -197,7 +197,7 @@ bool run_risc_rw_speed_dram_banked(tt_cluster *cluster, int chip_id, const std::
 
     const int ncrisc_id = 1;
     for (std::uint32_t core_index = 0; core_index < cores.size(); core_index++) {
-        if (!tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/risc_rw_speed_banked_dram/ncrisc/ncrisc.hex", chip_id, cores[core_index], ncrisc_id)) {
+        if (!tt::llrt::test_load_write_read_risc_binary(cluster, "risc_rw_speed_banked_dram/ncrisc/ncrisc.hex", chip_id, cores[core_index], ncrisc_id)) {
             return false;
         }
     }

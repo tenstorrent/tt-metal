@@ -160,9 +160,9 @@ int main(int argc, char** argv)
 
         // the first worker core starts at (1,1)
         // load BRISC FW (this also load NCRISC from L1 to IRAM and also deasserts reset for NCRISC)
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/dram_copy_brisc_ncrisc/brisc/brisc.hex", 0, {3,10}, 0);
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "dram_copy_brisc_ncrisc/brisc/brisc.hex", 0, {3,10}, 0);
         // load NCRISC FW
-        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/dram_copy_brisc_ncrisc/ncrisc/ncrisc.hex", 0, {3,10}, 1);
+        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, "dram_copy_brisc_ncrisc/ncrisc/ncrisc.hex", 0, {3,10}, 1);
 
         if (pass) {
             pass = run_dram_copy_brisc_ncrisc(cluster, 0, {3,10});
