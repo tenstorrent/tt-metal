@@ -29,8 +29,8 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
 
     static constexpr uint32_t storage_core_bank_size = 512 * 1024;
     static constexpr uint32_t num_banks_per_storage_core = 2;
-    int expected_num_l1_banks = 
-        num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::ComputeAndStore) + 
+    int expected_num_l1_banks =
+        num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::ComputeAndStore) +
         (num_banks_per_storage_core * num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::StorageOnly));
     uint8_t shuffled_l1_bank_ids[expected_num_l1_banks];
     init_shuffled_l1_bank_id_mapping(shuffled_l1_bank_ids);
@@ -68,8 +68,6 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
                     bank_id++;
                 }
                 allocator.logical_core_to_bank_ids.insert({logical_core, bank_ids});
-            } else {
-                tt::log_fatal ("Unsupported CoreType");
             }
         }
     }
