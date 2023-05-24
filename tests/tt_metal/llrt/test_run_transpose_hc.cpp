@@ -174,7 +174,7 @@ int main(int argc, char** argv)
         cluster->start_device(default_params); // use default params
         tt::llrt::utils::log_current_ai_clk(cluster);
 
-        string op_path = "built_kernels/transpose_hc_op";
+        string op_path = "transpose_hc_op";
 
         pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", chip_id, xy, 0); // brisc
         pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", chip_id, xy, 1); // ncrisc

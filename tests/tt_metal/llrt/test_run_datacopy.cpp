@@ -133,17 +133,16 @@ int main(int argc, char** argv)
         // tt::llrt::print_worker_cores(cluster);
 
         string op = "datacopy_op";
-        string op_path = "built_kernels/" + op;
 
         int chip_id = 0;
         const CoreCoord core = {1, 1};
 
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", chip_id, core, 0); // brisc
-        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", chip_id, core, 1); // ncrisc
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op + "/brisc/brisc.hex", chip_id, core, 0); // brisc
+        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op + "/ncrisc/ncrisc.hex", chip_id, core, 1); // ncrisc
 
-        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread0/tensix_thread0.hex", chip_id, core, 0); // trisc0
-        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread1/tensix_thread1.hex", chip_id, core, 1); // trisc1
-        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread2/tensix_thread2.hex", chip_id, core, 2); // trisc2
+        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op + "/tensix_thread0/tensix_thread0.hex", chip_id, core, 0); // trisc0
+        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op + "/tensix_thread1/tensix_thread1.hex", chip_id, core, 1); // trisc1
+        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op + "/tensix_thread2/tensix_thread2.hex", chip_id, core, 2); // trisc2
 
         if (pass) {
             const vector<CoreCoord> cores = {core};

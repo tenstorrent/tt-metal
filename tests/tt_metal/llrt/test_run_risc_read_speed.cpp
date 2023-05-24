@@ -18,7 +18,7 @@ bool run_risc_read_speed(tt_cluster *cluster, int chip_id, const CoreCoord& core
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, riscs_options, {core});
 
     const int brisc_id = 0;
-    if (!tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/risc_read_speed/brisc/brisc.hex", chip_id, core, brisc_id)) {
+    if (!tt::llrt::test_load_write_read_risc_binary(cluster, "risc_read_speed/brisc/brisc.hex", chip_id, core, brisc_id)) {
         return false;
     }
 

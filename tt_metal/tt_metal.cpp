@@ -587,10 +587,11 @@ bool BlankKernelBinariesExist(const std::string &blank_op_path) {
     return binaries_exist;
 }
 
-void CompileBlankKernel(Device *device, const std::string &out_dir_path) {
+void CompileBlankKernel(Device *device) {
     build_kernel_for_riscv_options_t blank_build_options("blank_op", "blank_op");
     // Crude way to check if blank_op needs to be compiled or not
-    if (BlankKernelBinariesExist(out_dir_path + blank_build_options.name)) {
+    // TODO: move all this tracking and path generation into the build_kernels file
+    if (BlankKernelBinariesExist(blank_build_options.outpath + blank_build_options.name)) {
         return;
     }
     struct hlk_args_t {
@@ -606,8 +607,8 @@ void CompileBlankKernel(Device *device, const std::string &out_dir_path) {
     std::string arch_name = tt::get_string_lowercase(device->arch());
 
     generate_binaries_params_t default_params;
-    GenerateBankToNocCoordHeaders(device, &blank_build_options, out_dir_path + blank_build_options.name);
-    generate_binaries_all_riscs(&blank_build_options, out_dir_path + blank_build_options.name, arch_name, default_params);
+    GenerateBankToNocCoordHeaders(device, &blank_build_options, blank_build_options.name);
+    generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params);
 }
 
 void SetCircularBufferDataFormat(
@@ -786,8 +787,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     TT_ASSERT(!(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
-    std::string out_dir_path = tt::utils::get_root_dir() + "/built_kernels/";
-    CompileBlankKernel(device, out_dir_path); // PROF_BEGIN("CCBLANK") PROF_END("CCBLANK")
+    CompileBlankKernel(device); // PROF_BEGIN("CCBLANK") PROF_END("CCBLANK")
 
     // Compute kernels generate dependencies for data movement kernels
     // Kernels running on a core need to be grouped together for compilation
@@ -805,7 +805,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         build_kernel_for_riscv_options_t build_options("dummy_type", dummy_op_name + std::to_string(op_idx++));
 
         auto kernel_group_hash = KernelGroupCompileHash(kernel_group, logical_core, dummy_op_name, device->pcie_slot());
-        std::string op_path = out_dir_path + dummy_op_name + "/" + std::to_string(kernel_group_hash);
+        std::string op_path = dummy_op_name + "/" + std::to_string(kernel_group_hash);
 
         SetCircularBufferDataFormat(program, logical_core, build_options, op_path);
 

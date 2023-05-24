@@ -8,8 +8,7 @@ namespace tt
 {
 
     build_kernel_for_riscv_options_t::build_kernel_for_riscv_options_t(std::string type, std::string name)
-      : name(name), fp32_dest_acc_en(false) {}
-
+      : name(name), outpath(get_kernel_compile_outpath()), fp32_dest_acc_en(false) {}
 
     void build_kernel_for_riscv_options_t::set_hlk_file_name_all_cores(std::string file_name)
     {

@@ -27,7 +27,7 @@ BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES = (
 
 def run_compile_tests(num_processes, timeout, tt_arch):
 
-    run_process_and_get_result("rm -rf built_kernels")
+    run_process_and_get_result("rm -rf built")
     run_single_build_kernels_for_riscv_test = partial(run_single_test, "build_kernels_for_riscv", timeout=timeout, tt_arch=tt_arch)
 
     if num_processes > 1:

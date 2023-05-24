@@ -5,14 +5,12 @@
 
 int main(int argc, char* argv[]) {
 
-    std::string root_dir = tt::utils::get_root_dir();
     std::string arch_name = tt::test_utils::get_env_arch_name();
 
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("unary","datacopy_op");
-    std::string out_dir_path = root_dir + "/built_kernels/" + build_kernel_for_riscv_options.name;
 
-    log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
+    log_info(tt::LogBuildKernels, "Compiling OP: {}", build_kernel_for_riscv_options.name);
 
     std::vector<uint32_t> compute_kernel_args = {
         2048
@@ -35,11 +33,11 @@ int main(int argc, char* argv[]) {
     // generate binaries
     __internal::generate_default_bank_to_noc_coord_descriptor (
         &build_kernel_for_riscv_options,
-        out_dir_path,
+        build_kernel_for_riscv_options.name,
         tt::get_arch_from_string(arch_name)
     );
     generate_binaries_params_t params = {.compute_kernel_compile_time_args = compute_kernel_args};
-    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, arch_name, params);
+    generate_binaries_all_riscs(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, arch_name, params);
 
     return 0;
 }

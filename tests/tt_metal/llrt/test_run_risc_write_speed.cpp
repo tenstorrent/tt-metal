@@ -15,7 +15,7 @@ bool run_risc_write_speed(tt_cluster *cluster, int chip_id, const CoreCoord& cor
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, tt::llrt::TensixRiscsOptions::BRISC_NCRISC, {});
 
     const int ncrisc_id = 1;
-    if (!tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/risc_write_speed/ncrisc/ncrisc.hex", chip_id, core, ncrisc_id)) {
+    if (!tt::llrt::test_load_write_read_risc_binary(cluster, "risc_write_speed/ncrisc/ncrisc.hex", chip_id, core, ncrisc_id)) {
         return false;
     }
 

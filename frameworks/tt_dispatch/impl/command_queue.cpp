@@ -153,10 +153,8 @@ EnqueueCommandType FinishCommand::type() { return this->type_; }
 void send_dispatch_kernel_to_device(Device* device) {
     // Ideally, this should be some separate API easily accessible in
     // TT-metal, don't like the fact that I'm writing this from scratch
-    std::string root_dir = tt::utils::get_root_dir();
     std::string arch_name = tt::get_string_lowercase(device->arch());
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("unary", "command_queue");
-    std::string out_dir_path = root_dir + "/built_kernels/" + build_kernel_for_riscv_options.name;
 
     build_kernel_for_riscv_options.fp32_dest_acc_en = false;
 
@@ -165,13 +163,13 @@ void send_dispatch_kernel_to_device(Device* device) {
     std::map<string, string> brisc_defines = {{"IS_DISPATCH_KERNEL", ""}, {"DEVICE_DISPATCH_MODE", ""}};
     build_kernel_for_riscv_options.brisc_defines = brisc_defines;
     bool profile = false;
-    generate_binary_for_risc(RISCID::BR, &build_kernel_for_riscv_options, out_dir_path, arch_name, 0, {}, profile);
+    generate_binary_for_risc(RISCID::BR, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, arch_name, 0, {}, profile);
 
     // Currently hard-coded. TODO(agrebenisan): Once we add support for multiple dispatch cores, this can be refactored,
     // but don't yet have a plan for where this variable should exist.
     CoreCoord dispatch_core = {1, 11};
     tt::llrt::test_load_write_read_risc_binary(
-        device->cluster(), "built_kernels/command_queue/brisc/brisc.hex", 0, dispatch_core, 0);
+        device->cluster(), "command_queue/brisc/brisc.hex", 0, dispatch_core, 0);
 
     // Deassert reset of dispatch core BRISC. TODO(agrebenisan): Refactor once Paul's changes in
     tt::llrt::internal_::setup_riscs_on_specified_core(

@@ -97,14 +97,14 @@ int main(int argc, char** argv)
 
         // tt::llrt::print_worker_cores(cluster);
 
-        string op_path = "built_kernels/datacopy_op_switched_riscs";
+        string op = "datacopy_op_switched_riscs";
 
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", 0, {1,1}, 0); // brisc
-        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", 0, {1,1}, 1); // ncrisc
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op + "/brisc/brisc.hex", 0, {1,1}, 0); // brisc
+        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op + "/ncrisc/ncrisc.hex", 0, {1,1}, 1); // ncrisc
 
-        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread0/tensix_thread0.hex", 0, {1,1}, 0); // trisc0
-        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread1/tensix_thread1.hex", 0, {1,1}, 1); // trisc1
-        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread2/tensix_thread2.hex", 0, {1,1}, 2); // trisc2
+        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op + "/tensix_thread0/tensix_thread0.hex", 0, {1,1}, 0); // trisc0
+        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op + "/tensix_thread1/tensix_thread1.hex", 0, {1,1}, 1); // trisc1
+        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op + "/tensix_thread2/tensix_thread2.hex", 0, {1,1}, 2); // trisc2
 
         if (pass) {
             pass &= run_data_copy_multi_tile(cluster, 0, {1, 1}, 2048); // must match the value in test_compile_datacopy!

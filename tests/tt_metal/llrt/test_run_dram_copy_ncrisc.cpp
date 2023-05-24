@@ -153,9 +153,9 @@ int main(int argc, char** argv)
 
         // the first worker core starts at (1,1)
         // need to load BRISC FW + blank brisc kernel because BRISC FW loads NCRISC from L1 to NCRISC IRAM and also deasserts reset for NCRISC
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/dram_copy_ncrisc/brisc/brisc.hex", 0, {5,10}, 0);
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, "dram_copy_ncrisc/brisc/brisc.hex", 0, {5,10}, 0);
         // load NCRISC FW
-        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, "built_kernels/dram_copy_ncrisc/ncrisc/ncrisc.hex", 0, {5,10}, 1);
+        pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, "dram_copy_ncrisc/ncrisc/ncrisc.hex", 0, {5,10}, 1);
 
         if (pass) {
             pass = run_dram_copy_ncrisc(cluster, 0, {5,10});

@@ -12,7 +12,7 @@
 
 using tt::llrt::CircularBufferConfigVec;
 
-constexpr static std::uint32_t INVALID = 0x4321;
+constexpr static std::uint32_t INVALID_VALUE = 0x4321;
 
 bool run_eltwise_sync(
     tt_cluster* cluster,
@@ -37,10 +37,10 @@ bool run_eltwise_sync(
 
     // Producer core
     tt::llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(cluster, chip_id, tt::llrt::TensixRiscsOptions::ALL_RISCS, {compute_core});
-    string loader_op_path = "built_kernels/dram_loader_sync";
+    string loader_op_path = "dram_loader_sync";
     bool pass = tt::llrt::test_load_write_read_risc_binary(cluster, loader_op_path + "/brisc/brisc.hex", 0, loader_core, 0); // brisc
     // Consumer core
-    string compute_op_path = "built_kernels/eltwise_sync";
+    string compute_op_path = "eltwise_sync";
     pass = tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/brisc/brisc.hex", 0, compute_core, 0); // brisc
     pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, compute_op_path + "/ncrisc/ncrisc.hex", 0, compute_core, 1); // ncrisc
 
@@ -96,9 +96,9 @@ bool run_eltwise_sync(
         BRISC_L1_ARG_BASE);
     // ---------------------------------------------------------------------------------------
 
-    // Initialize producer/consumer registers to "INVALID"
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, loader_core, {INVALID}, stream_register_address);
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, compute_core, {INVALID}, stream_register_address);
+    // Initialize producer/consumer registers to "INVALID_VALUE"
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, loader_core, {INVALID_VALUE}, stream_register_address);
+    tt::llrt::write_hex_vec_to_core(cluster, chip_id, compute_core, {INVALID_VALUE}, stream_register_address);
 
     // Write tiles sequentially to DRAM
     cluster->write_dram_vec(src_vec, tt_target_dram{chip_id, dram_channel_id, 0}, dram_buffer_src_addr); // write to address

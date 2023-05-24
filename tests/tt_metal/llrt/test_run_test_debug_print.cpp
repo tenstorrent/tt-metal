@@ -48,7 +48,7 @@ void launch_on_cores(
 
     bool pass = true;
     { // load the op to cores
-        string op_path = "built_kernels/test_debug_print_op";
+        string op_path = "test_debug_print_op";
         for (auto xy: cores) {
             pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", chip_id, xy, 0); // brisc
             pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", chip_id, xy, 1); // ncrisc

@@ -104,11 +104,11 @@ int main(int argc, char** argv)
         // tt::llrt::print_worker_cores(cluster);
 
         // the first worker core starts at (1,1)
-        string op_path = "built_kernels/blank_op";
-        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", 0, {1,1}, 0);
-        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread0/tensix_thread0.hex", 0, {1,1}, 0);
-        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread1/tensix_thread1.hex", 0, {1,1}, 1);
-        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op_path + "/tensix_thread2/tensix_thread2.hex", 0, {1,1}, 2);
+        string op = "blank_op";
+        pass = tt::llrt::test_load_write_read_risc_binary(cluster, op + "/brisc/brisc.hex", 0, {1,1}, 0);
+        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op + "/tensix_thread0/tensix_thread0.hex", 0, {1,1}, 0);
+        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op + "/tensix_thread1/tensix_thread1.hex", 0, {1,1}, 1);
+        pass = pass & tt::llrt::test_load_write_read_trisc_binary(cluster, op + "/tensix_thread2/tensix_thread2.hex", 0, {1,1}, 2);
 
         if (pass) {
             pass = run_brisc_and_triscs(cluster, 0, {1,1});

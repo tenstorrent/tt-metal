@@ -121,7 +121,7 @@ int main(int argc, char** argv)
 
         // tt::llrt::print_worker_cores(cluster);
 
-        string op_path = "built_kernels/matmul_small_block";
+        string op_path = "matmul_small_block";
 
         pass = tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/brisc/brisc.hex", 0, {1,1}, 0); // brisc
         pass = pass & tt::llrt::test_load_write_read_risc_binary(cluster, op_path + "/ncrisc/ncrisc.hex", 0, {1,1}, 1); // ncrisc
