@@ -159,6 +159,14 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.untilize
 
+.. autofunction:: tt_lib.tensor.tilize_with_val_padding
+
+.. autofunction:: tt_lib.tensor.untilize_with_unpadding
+
+.. autofunction:: tt_lib.tensor.pad
+
+.. autofunction:: tt_lib.tensor.unpad
+
 .. autofunction:: tt_lib.tensor.fill_rm
 
 .. autofunction:: tt_lib.tensor.fill_ones_rm

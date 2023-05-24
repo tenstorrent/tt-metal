@@ -25,7 +25,9 @@ params += [
 
 
 @pytest.mark.parametrize("input_shapes, permute_args, pcie_slot", params)
-def test_permute_test(input_shapes, permute_args, pcie_slot, function_level_defaults):
+def test_run_permute_test(
+    input_shapes, permute_args, pcie_slot, function_level_defaults
+):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16

@@ -3,6 +3,7 @@ import random
 from itertools import permutations, product
 from functools import lru_cache
 import tt_lib as ttl
+from tt_lib.utils import _nearest_32 as nearest_32, tilize
 
 # torch.testing.get_all_dtypes()
 supported_dtypes = {
@@ -25,8 +26,12 @@ on_device_options = [
 
 
 # Wrapper around gen functions to include casting
-def gen_func_with_cast(gen_func, dtype):
-    return lambda size: gen_func(size).to(dtype)
+def gen_func_with_cast(gen_func, dtype, tilize_input=False):
+    return (
+        lambda size: tilize(gen_func(size).to(dtype))
+        if tilize_input
+        else gen_func(size).to(dtype)
+    )
 
 
 def gen_zeros(size):
@@ -176,7 +181,7 @@ def gen_default_args(input_shapes):
     return [{}]
 
 
-def gen_pad_args(input_shapes):
+def gen_tensor_pad_args(input_shapes):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     test_args = {}
@@ -203,7 +208,7 @@ def gen_pad_args(input_shapes):
     return [test_args]
 
 
-def gen_unpad_args(input_shapes):
+def gen_tensor_unpad_args(input_shapes):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     test_args = {}
@@ -290,12 +295,17 @@ def sanitize_args(input_shapes, dtype_device_layout):
     return dtype_device_layout
 
 
-def gen_dtype_layout_device(input_shapes, supported_dtypes = supported_tt_dtypes, supported_layouts = supported_tt_layouts, on_device = on_device_options):
-    for dtype, layout, on_device in product(
+def gen_dtype_layout_device(
+    input_shapes,
+    supported_dtypes=supported_tt_dtypes,
+    supported_layouts=supported_tt_layouts,
+    on_device=on_device_options,
+):
+    for dtype, layout, on_dev in product(
         supported_dtypes, supported_layouts, on_device
     ):
         out = sanitize_args(
-            input_shapes, {"dtype": dtype, "layout": layout, "on_device": on_device}
+            input_shapes, {"dtype": dtype, "layout": layout, "on_device": on_dev}
         )
         if out is not None:
             yield out
@@ -341,7 +351,173 @@ def gen_reshape_args(input_shapes):
     )
     step = 1
     for reshape_dims in _gen_reshape_args_from_volume(vol, step):
-        for input_info in gen_dtype_layout_device((input_shapes[0], reshape_dims["reshape_dims"]), supported_layouts=[ttl.tensor.Layout.TILE]):
+        for input_info in gen_dtype_layout_device(
+            (input_shapes[0], reshape_dims["reshape_dims"]),
+            supported_layouts=[ttl.tensor.Layout.TILE],
+        ):
             if input_info is not None:
                 input_info.update(reshape_dims)
                 yield input_info
+
+
+def gen_tilize_with_val_padding_args(input_shapes):
+    assert len(input_shapes) == 1
+    assert len(input_shapes[0]) == 4
+    for input_info in gen_dtype_layout_device(
+        input_shapes, supported_layouts=[ttl.tensor.Layout.ROW_MAJOR], on_device=[True]
+    ):
+        if input_info is not None:
+            pad_sizes = (10, 10, 64, 64)
+            output_tensor_shape = [
+                random.randrange(
+                    input_shapes[0][i],
+                    input_shapes[0][i] + pad_sizes[i],
+                    1,
+                )
+                for i in range(4)
+            ]
+            output_tensor_shape[-2] = nearest_32(output_tensor_shape[-2])
+            output_tensor_shape[-1] = nearest_32(output_tensor_shape[-1])
+            input_tensor_start = [0, 0, 0, 0]
+            pad_value = random.uniform(-100, 100)
+            # Cast to bfloat16 then back to float for exact match
+            pad_value = (
+                torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
+            )
+
+            input_info.update(
+                {
+                    "output_tensor_shape": output_tensor_shape,
+                    "input_tensor_start": input_tensor_start,
+                    "pad_value": pad_value,
+                }
+            )
+            yield input_info
+
+
+def gen_untilize_with_unpadding_args(input_shapes):
+    assert len(input_shapes) == 1
+    assert len(input_shapes[0]) == 4
+    assert input_shapes[0][-2] % 32 == 0
+    assert input_shapes[0][-1] % 32 == 0
+    for input_info in gen_dtype_layout_device(
+        input_shapes, supported_layouts=[ttl.tensor.Layout.TILE], on_device=[True]
+    ):
+        if input_info is not None:
+            output_tensor_start = [0, 0, 0, 0]
+            output_tensor_end = [
+                random.randrange(output_tensor_start[i], input_shapes[0][i], 1)
+                for i in range(4)
+            ]
+            if output_tensor_end[-1] % 2 == 0:
+                output_tensor_end[-1] += 1
+            input_info.update(
+                {
+                    "output_tensor_start": output_tensor_start,
+                    "output_tensor_end": output_tensor_end,
+                }
+            )
+            yield input_info
+
+
+def gen_pad_args(input_shapes):
+    assert len(input_shapes) == 1
+    assert len(input_shapes[0]) == 4
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        supported_layouts=[ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.TILE],
+        on_device=[True],
+    ):
+        if input_info is not None:
+            if input_info["layout"] == ttl.tensor.Layout.ROW_MAJOR:
+                pad_sizes = (10, 10, 64, 64)
+                output_tensor_shape = [
+                    random.randint(
+                        input_shapes[0][i], input_shapes[0][i] + pad_sizes[i]
+                    )
+                    for i in range(4)
+                ]
+                if output_tensor_shape[-1] % 2 != 0:
+                    output_tensor_shape[-1] += 1
+                input_tensor_start = [0, 0, 0, 0]
+                pad_value = random.uniform(-100, 100)
+                # Cast to bfloat16 then back to float for exact match
+                pad_value = (
+                    torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
+                )
+
+                input_info.update(
+                    {
+                        "output_tensor_shape": output_tensor_shape,
+                        "input_tensor_start": input_tensor_start,
+                        "pad_value": pad_value,
+                    }
+                )
+            elif input_info["layout"] == ttl.tensor.Layout.TILE:
+                pad_sizes = (10, 10, 64, 64)
+                output_tensor_shape = [
+                    random.randrange(
+                        input_shapes[0][i],
+                        input_shapes[0][i] + pad_sizes[i],
+                        1,
+                    )
+                    for i in range(4)
+                ]
+                output_tensor_shape[-2] = nearest_32(output_tensor_shape[-2])
+                output_tensor_shape[-1] = nearest_32(output_tensor_shape[-1])
+                input_tensor_start = [0, 0, 0, 0]
+                pad_value = random.uniform(-100, 100)
+                # Cast to bfloat16 then back to float for exact match
+                pad_value = (
+                    torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
+                )
+
+                input_info.update(
+                    {
+                        "output_tensor_shape": output_tensor_shape,
+                        "input_tensor_start": input_tensor_start,
+                        "pad_value": pad_value,
+                    }
+                )
+            yield input_info
+
+
+def gen_unpad_args(input_shapes):
+    assert len(input_shapes) == 1
+    assert len(input_shapes[0]) == 4
+
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        supported_layouts=[ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.TILE],
+        on_device=[True],
+    ):
+        if input_info is not None:
+            if input_info["layout"] == ttl.tensor.Layout.ROW_MAJOR:
+                output_tensor_start = [0, 0, 0, 0]
+                output_tensor_end = [
+                    random.randrange(output_tensor_start[i], input_shapes[0][i], 1)
+                    for i in range(4)
+                ]
+                if output_tensor_end[-1] % 2 == 0:
+                    output_tensor_end[-1] += 1
+                input_info.update(
+                    {
+                        "output_tensor_start": output_tensor_start,
+                        "output_tensor_end": output_tensor_end,
+                    }
+                )
+            elif input_info["layout"] == ttl.tensor.Layout.TILE:
+                output_tensor_start = [0, 0, 0, 0]
+                output_tensor_end = [
+                    random.randrange(output_tensor_start[i], input_shapes[0][i], 1)
+                    for i in range(4)
+                ]
+                output_tensor_end[-2] = nearest_32(output_tensor_end[-2]) - 1
+                output_tensor_end[-1] = nearest_32(output_tensor_end[-1]) - 1
+                input_info.update(
+                    {
+                        "output_tensor_start": output_tensor_start,
+                        "output_tensor_end": output_tensor_end,
+                    }
+                )
+            yield input_info

@@ -56,7 +56,9 @@ def get_atol_rtol_pcc(golden, calculated):
         cal_pcc = np.min(
             np.ma.corrcoef(
                 np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-                np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
+                np.ma.masked_invalid(
+                    torch.squeeze(calculated).detach().numpy()
+                ).flatten(),
             )
         )
 

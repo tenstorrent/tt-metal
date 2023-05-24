@@ -147,12 +147,13 @@ op_map = {
         "tt_lib_op": tt_lib_ops.reshape,
         "pytorch_op": pytorch_ops.reshape,
     },
-    ################################################
-    #################### Tensor ####################
-    ################################################
-    "datacopy": {
-        "tt_lib_op": tt_lib_ops.datacopy,
-        "pytorch_op": pytorch_ops.datacopy,
+    "tilize_with_val_padding": {
+        "tt_lib_op": tt_lib_ops.tilize_with_val_padding,
+        "pytorch_op": pytorch_ops.tilize_with_val_padding,
+    },
+    "untilize_with_unpadding": {
+        "tt_lib_op": tt_lib_ops.untilize_with_unpadding,
+        "pytorch_op": pytorch_ops.untilize_with_unpadding,
     },
     "pad": {
         "tt_lib_op": tt_lib_ops.pad,
@@ -160,6 +161,21 @@ op_map = {
     },
     "unpad": {
         "tt_lib_op": tt_lib_ops.unpad,
+        "pytorch_op": pytorch_ops.unpad,
+    },
+    ################################################
+    #################### Tensor ####################
+    ################################################
+    "datacopy": {
+        "tt_lib_op": tt_lib_ops.datacopy,
+        "pytorch_op": pytorch_ops.datacopy,
+    },
+    "tensor_pad": {
+        "tt_lib_op": tt_lib_ops.tensor_pad,
+        "pytorch_op": pytorch_ops.pad,
+    },
+    "tensor_unpad": {
+        "tt_lib_op": tt_lib_ops.tensor_unpad,
         "pytorch_op": pytorch_ops.unpad,
     },
     "pad_to_tile": {

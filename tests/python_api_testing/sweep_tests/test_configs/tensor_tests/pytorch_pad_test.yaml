@@ -1,6 +1,6 @@
 ---
 test-list:
-  pad:
+  tensor_pad:
     shape:
       start-shape: [1, 1, 1, 1]
       end-shape: [10, 10, 100, 100]
@@ -13,7 +13,7 @@ test-list:
       args:
         low: -100
         high: 100
-    args-gen: gen_pad_args
+    args-gen: gen_tensor_pad_args
     comparison:
       function: comp_equal
-    output-file: pad_sweep.csv
+    output-file: tensor_pad_sweep.csv

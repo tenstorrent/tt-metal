@@ -973,10 +973,9 @@ def permute(x, *args, host, device, dtype, layout, on_device, permute_dims, **kw
 
     return output
 
+
 @setup_host_and_device
-def reshape(
-    x,  *args, host, device, dtype, layout, on_device, reshape_dims, **kwargs
-):
+def reshape(x, *args, host, device, dtype, layout, on_device, reshape_dims, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -989,6 +988,147 @@ def reshape(
         t0 = t0.to(device)
 
     t1 = ttl.tensor.reshape(t0, *reshape_dims)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def tilize_with_val_padding(
+    x,
+    *args,
+    host,
+    device,
+    dtype,
+    layout,
+    on_device,
+    output_tensor_shape,
+    input_tensor_start,
+    pad_value,
+    **kwargs
+):
+    assert dtype == ttl.tensor.DataType.BFLOAT16
+    assert layout == ttl.tensor.Layout.ROW_MAJOR
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.tilize_with_val_padding(
+        t0, output_tensor_shape, input_tensor_start, pad_value
+    )
+
+    output = torch.Tensor(t1.to(host).data()).reshape(t1.shape())
+
+    return output
+
+
+@setup_host_and_device
+def untilize_with_unpadding(
+    x,
+    *args,
+    host,
+    device,
+    dtype,
+    layout,
+    on_device,
+    output_tensor_start,
+    output_tensor_end,
+    **kwargs
+):
+    assert dtype == ttl.tensor.DataType.BFLOAT16
+    assert layout == ttl.tensor.Layout.TILE
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.TILE,
+    )
+
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.untilize_with_unpadding(t0, output_tensor_start, output_tensor_end)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def pad(
+    x,
+    *args,
+    host,
+    device,
+    dtype,
+    layout,
+    on_device,
+    output_tensor_shape,
+    input_tensor_start,
+    pad_value,
+    **kwargs
+):
+    assert dtype == ttl.tensor.DataType.BFLOAT16
+    assert layout in [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.TILE]
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.pad(t0, output_tensor_shape, input_tensor_start, pad_value)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def unpad(
+    x,
+    *args,
+    host,
+    device,
+    dtype,
+    layout,
+    on_device,
+    output_tensor_start,
+    output_tensor_end,
+    **kwargs
+):
+    assert dtype == ttl.tensor.DataType.BFLOAT16
+    assert layout in [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.TILE]
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.unpad(t0, output_tensor_start, output_tensor_end)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
@@ -1029,7 +1169,7 @@ def datacopy(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def pad(x, pcie_slot, *args, **kwargs):
+def tensor_pad(x, pcie_slot, *args, **kwargs):
     assert "output_tensor_shape" in kwargs
     assert "input_tensor_start" in kwargs
     assert "pad_value" in kwargs
@@ -1052,7 +1192,7 @@ def pad(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def unpad(x, pcie_slot, *args, **kwargs):
+def tensor_unpad(x, pcie_slot, *args, **kwargs):
     assert "output_tensor_start" in kwargs
     assert "output_tensor_end" in kwargs
 

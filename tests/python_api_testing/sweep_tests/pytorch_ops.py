@@ -1,5 +1,6 @@
 import torch
-from tt_lib.utils import _nearest_32 as nearest_32
+from tt_lib.utils import _nearest_32 as nearest_32, tilize, untilize
+
 
 ################################################
 #################### TT-DNN ####################
@@ -84,6 +85,33 @@ def reshape(x, *args, **kwargs):
     return torch.reshape(x, reshape_dims)
 
 
+def tilize_with_val_padding(
+    x, output_tensor_shape, input_tensor_start, pad_value, *args, **kwargs
+):
+    pad = torch.nn.functional.pad(
+        x,
+        tuple(
+            j
+            for i in reversed(range(len(x.shape)))
+            for j in (input_tensor_start[i], output_tensor_shape[i] - x.shape[i])
+        ),
+        value=pad_value,
+    )
+    tilized = tilize(pad)
+    return tilized
+
+
+def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **kwargs):
+    untilized = untilize(x)
+    unpad = untilized[
+        output_tensor_start[0] : output_tensor_end[0] + 1,
+        output_tensor_start[1] : output_tensor_end[1] + 1,
+        output_tensor_start[2] : output_tensor_end[2] + 1,
+        output_tensor_start[3] : output_tensor_end[3] + 1,
+    ]
+    return unpad
+
+
 ################################################
 #################### Tensor ####################
 ################################################
@@ -128,10 +156,14 @@ def unpad(x, *args, **kwargs):
 
     return out
 
-def pad_to_tile(x, pad_value, *args, **kwargs):
 
+def pad_to_tile(x, pad_value, *args, **kwargs):
     input_tensor_shape = x.shape
-    output_tensor_shape = [*input_tensor_shape[:-2], nearest_32(input_tensor_shape[-2]), nearest_32(input_tensor_shape[-1])]
+    output_tensor_shape = [
+        *input_tensor_shape[:-2],
+        nearest_32(input_tensor_shape[-2]),
+        nearest_32(input_tensor_shape[-1]),
+    ]
     out = torch.full(output_tensor_shape, pad_value, dtype=torch.bfloat16)
     out[
         0 : input_tensor_shape[0],
@@ -144,12 +176,11 @@ def pad_to_tile(x, pad_value, *args, **kwargs):
 
 
 def unpad_from_tile(x, output_tensor_shape, *args, **kwargs):
-
     out = x[
         0 : output_tensor_shape[0],
         0 : output_tensor_shape[1],
         0 : output_tensor_shape[2],
-        0 : output_tensor_shape[3]
+        0 : output_tensor_shape[3],
     ]
 
     return out

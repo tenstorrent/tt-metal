@@ -11,7 +11,7 @@ from python_api_testing.sweep_tests import generation_funcs
 
 
 TEST_FIELDNAMES = {
-    "pad": [
+    "tensor_pad": [
         "test_name",
         "input_shapes",
         "output_tensor_shape",
@@ -23,7 +23,7 @@ TEST_FIELDNAMES = {
         "test_output",
         "pass/fail",
     ],
-    "unpad": [
+    "tensor_unpad": [
         "test_name",
         "input_shapes",
         "output_tensor_start",
@@ -76,6 +76,64 @@ TEST_FIELDNAMES = {
         "layout",
         "dtype",
         "on_device",
+        "status",
+        "test_output",
+        "pass/fail",
+    ],
+    "tilize_with_val_padding": [
+        "test_name",
+        "input_shapes",
+        "layout",
+        "dtype",
+        "on_device",
+        "output_tensor_shape",
+        "input_tensor_start",
+        "pad_value",
+        "data_seed",
+        "env_vars",
+        "status",
+        "test_output",
+        "pass/fail",
+    ],
+    "untilize_with_unpadding": [
+        "test_name",
+        "input_shapes",
+        "layout",
+        "dtype",
+        "on_device",
+        "output_tensor_start",
+        "output_tensor_end",
+        "data_seed",
+        "env_vars",
+        "status",
+        "test_output",
+        "pass/fail",
+    ],
+    "pad": [
+        "test_name",
+        "input_shapes",
+        "layout",
+        "dtype",
+        "on_device",
+        "output_tensor_shape",
+        "input_tensor_start",
+        "pad_value",
+        "data_seed",
+        "env_vars",
+        "status",
+        "test_output",
+        "pass/fail",
+    ],
+    "unpad": [
+        "test_name",
+        "input_shapes",
+        "layout",
+        "dtype",
+        "on_device",
+        "output_tensor_start",
+        "output_tensor_end",
+        "data_seed",
+        "env_vars",
         "status",
         "test_output",
         "pass/fail",
@@ -186,6 +244,7 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                     **datagen_dict["args"],
                 ),
                 generation_funcs.supported_dtypes[datagen_dict.get("dtype", "float32")],
+                datagen_dict.get("tilize", False),
             )
         ] * num_shapes
     elif isinstance(datagen_dict, list):
@@ -196,6 +255,7 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                     **_datagen_dict["args"],
                 ),
                 generation_funcs.supported_dtypes[datagen_dict.get("dtype", "float32")],
+                datagen_dict.get("tilize", False),
             )
             for _datagen_dict in datagen_dict
         ]

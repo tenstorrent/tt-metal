@@ -27,10 +27,10 @@ def test_run_unpad_test(input_shapes, pcie_slot):
     ]
     comparison_func = partial(comparison_funcs.comp_equal)
     run_single_pytorch_test(
-        "unpad",
+        "tensor_unpad",
         input_shapes,
         datagen_func,
         comparison_func,
         pcie_slot,
-        generation_funcs.gen_unpad_args(input_shapes)[0],
+        generation_funcs.gen_tensor_unpad_args(input_shapes)[0],
     )

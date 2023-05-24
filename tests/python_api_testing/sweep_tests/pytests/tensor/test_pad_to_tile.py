@@ -32,5 +32,5 @@ def test_run_pad_to_tile_test(input_shapes, pcie_slot, function_level_defaults):
         datagen_func,
         comparison_func,
         pcie_slot,
-        generation_funcs.gen_pad_to_tile_args(input_shapes)[0]
+        generation_funcs.gen_pad_to_tile_args(input_shapes)[0],
     )
