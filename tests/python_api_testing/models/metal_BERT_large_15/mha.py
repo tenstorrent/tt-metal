@@ -66,6 +66,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     qkv_bias = torch2tt_tensor(qkv_bias, device)
 
     # Used to scale down the input to the softmax
+    freciprocal_of_sqrt_hidden_dim = 1 / math.sqrt(hidden_dim // num_heads)
     reciprocal_of_sqrt_hidden_dim_tensor = ttl.tensor.Tensor(
         [1 / math.sqrt(hidden_dim // num_heads)] + [0 for _ in range(32 * 32 - 1)],
         [1, 1, 32, 32],
@@ -179,6 +180,27 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         return qkt
 
     def op8_scale_mask_softmax(qkt, attention_mask):
+        # Attention scores computation
+        # profiler.start("___op8_scale_mask_softmax")
+
+        N, C, H, W = qkt.shape()
+
+        #ref = op8_scale_mask_softmax_ref(qkt, attention_mask)
+
+        new_shape = [N, 1, C*H, W]
+        ttl.tensor.reshape(qkt, *new_shape)
+
+        if (attention_mask is not None):
+            attention_scores = ttl.tensor.scale_mask_softmax_in_place(freciprocal_of_sqrt_hidden_dim, attention_mask, qkt)
+        else:
+            attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
+            attention_scores = ttl.tensor.softmax_in_place(attention_score_input)
+        ttl.tensor.reshape(attention_scores, N, C, H, W) # Reshape back to original shape
+        # profiler.end("___op8_scale_mask_softmax")
+
+        return attention_scores
+
+    def op8_scale_mask_softmax_ref(qkt, attention_mask):
         # Attention scores computation
         # profiler.start("___op8_scale_mask_softmax")
 

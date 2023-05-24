@@ -12,6 +12,8 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
+from tests.python_api_testing.models.conftest import model_location_generator_
+
 from libs import tt_lib as ttl
 from python_api_testing.models.metal_BERT_large_15.fused_ops.add_and_norm import (
     AddAndNorm,
@@ -54,6 +56,8 @@ class TtAddAndNormModel(torch.nn.Module):
                 .to(ttl.tensor.Layout.TILE)
                 .to(device)
             )
+            self.gamma_ = gamma
+            self.beta_ = beta
         elif lnorm_type == "ffn":
             gamma = pad_weight(
                 state_dict["bert.encoder.layer.0.output.LayerNorm.weight"]
@@ -79,6 +83,8 @@ class TtAddAndNormModel(torch.nn.Module):
                 .to(ttl.tensor.Layout.TILE)
                 .to(device)
             )
+            self.gamma_ = gamma
+            self.beta_ = beta
         else:
             assert False, "Invalid lnorm_type"
 
@@ -91,9 +97,13 @@ class TtAddAndNormModel(torch.nn.Module):
             config.hidden_size,
             device,
         )
+        self.eps = config.layer_norm_eps
 
     def forward(self, a, b):
-        return self.add_and_norm(a, b)
+        out_dram = True
+        fused_result = ttl.tensor.add_layernorm_gamma_beta(a, b, self.eps, self.gamma_, self.beta_, out_dram)
+        return fused_result
+        #return self.add_and_norm(a, b)
 
 
 class PytorchAddAndNormModel(torch.nn.Module):
@@ -214,5 +224,5 @@ def test_add_and_norm_inference(
 
 if __name__ == "__main__":
     run_add_and_norm_inference(
-        "mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99
+        "mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99, model_location_generator_
     )
