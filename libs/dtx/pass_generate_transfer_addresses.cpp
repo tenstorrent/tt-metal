@@ -22,9 +22,7 @@ bool generate_transfer_addresses(DataTransformations * dtx){
             //if (DEBUG) consumer_tp->print_string();
 
             int rank = consumer_tp->src_tensor->str.size();
-            assert(rank == 3);
-            assert(consumer_group->shape[Z(rank)] == 1);
-            assert(consumer_group->shape[Y(rank)] == 1);
+            assert(vector_product(consumer_group->shape) == consumer_group->shape[X(rank)]);
             Transfer * transfer = new Transfer();
             transfer->src_address = consumer_tp->src_tensor->str[X(rank)] + producer_node->groups[0]->address;
             transfer->dst_address = consumer_tp->dst_tensor->str[X(rank)] + consumer_group->address;
