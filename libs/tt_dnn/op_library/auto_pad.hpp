@@ -2,6 +2,10 @@
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 #include "constants.hpp"
+#include "tt_dnn/op_library/tilize/tilize_op.hpp"
+#include "tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "tt_dnn/op_library/pad/pad_op.hpp"
+#include "tt_dnn/op_library/unpad/unpad_op.hpp"
 
 using namespace tt::constants;
 
@@ -36,8 +40,19 @@ class AutoPad {
         }
 
         static Tensor format_input_tensor(const Tensor &a, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value=0) {
-
             if (a.layout() != Layout::TILE || a.shape() != padded_shape) {
+                // ON DEVICE PADDING/CONVERSIONS
+                if (!a.on_host()) {
+                    if (a.layout() == Layout::ROW_MAJOR && a.shape()[3] % 2 == 0) {
+                        auto out = tilize_with_val_padding(a, padded_shape, {0, 0, 0, 0}, pad_value);
+                        return out;
+                    } else if (a.layout() == Layout::TILE) {
+                        auto out = pad(a, padded_shape, {0, 0, 0, 0}, pad_value);
+                        return out;
+                    }
+                }
+
+                // ON HOST PADDING/CONVERSIONS
                 auto host = GetHost();
                 auto input = a.to(host);
                 if (a.shape()!= padded_shape) {
@@ -52,7 +67,6 @@ class AutoPad {
                 input = input.to(device);
 
                 delete host;
-
                 return input;
 
             } else if (a.on_host()) {
@@ -63,20 +77,44 @@ class AutoPad {
         }
 
         static void format_output_tensor(const Tensor &a, Tensor &output, const std::array<uint32_t, 4>& shape, Device * device) {
-
             // Hack env variable to leave outputs on device if no unpadding needed
             if (std::getenv("TT_LEAVE_TILE_OUTPUT_ON_DEVICE") != nullptr) {
                 if (output.shape() == shape && output.layout() == Layout::TILE) {
                     return;
                 }
             }
+
+            // ON DEVICE UNPADDING/CONVERSIONS
+            if (!a.on_host()) {
+                if (output.shape() != shape) {
+                    if (a.layout() == Layout::TILE && output.layout() == Layout::TILE && shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0) {
+                        output = unpad(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                        return;
+                    } else if (shape[3] % 2 == 0 && ((a.layout() == Layout::ROW_MAJOR && output.layout() == Layout::TILE) || (a.layout() == Layout::TILE && output.layout() == Layout::TILE))) {
+                        output = untilize_with_unpadding(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                        return;
+                    }
+                }
+                if (a.layout() != output.layout()) {
+                    if (a.layout() == Layout::TILE) {
+                        output = tilize(output);
+                        return;
+                    } else if (a.layout() == Layout::ROW_MAJOR && output.layout() == Layout::TILE) {
+                        output = untilize(output);
+                        return;
+                    }
+                }
+            }
+
+            // ON HOST UNPADDING/CONVERSIONS
             auto host = GetHost();
-            // Unpad output if necessary, result is always on host
+            // Unpad output if necessary
             if (output.shape() != shape) {
+
                 output = output.to(host);
 
                 // Requires RM for unpad
-                if (output.layout() != Layout::ROW_MAJOR){
+                if (output.layout() != Layout::ROW_MAJOR) {
                     output = output.to(Layout::ROW_MAJOR);
                 }
                 output = output.unpad({0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
