@@ -463,18 +463,22 @@ bool GenerateBinaries(
             profile_kernel); };
 
     generate_descriptors(build_options, op_path);
-    std::thread br_thread(brisc_lambda);
-    std::thread nc_thread(ncrisc_lambda);
-    if (kernel_group.compute != nullptr) {
-        auto triscs_lambda = [=]() {
-            generate_binaries_for_triscs(
-                build_options, op_path, arch_name, kernel_group.compute->compile_time_args(logical_core), profile_kernel);
-        };
-        std::thread tr_thread(triscs_lambda);
-        tr_thread.join();
+    try {
+        std::thread br_thread(brisc_lambda);
+        std::thread nc_thread(ncrisc_lambda);
+        if (kernel_group.compute != nullptr) {
+            auto triscs_lambda = [=]() {
+                generate_binaries_for_triscs(
+                    build_options, op_path, arch_name, kernel_group.compute->compile_time_args(logical_core), profile_kernel);
+            };
+            std::thread tr_thread(triscs_lambda);
+            tr_thread.join();
+        }
+        nc_thread.join();
+        br_thread.join();
+    } catch (std::runtime_error &ex) {
+        std::cerr << "EXCEPTION FROM THREADING IN GenerateBinaries: " << ex.what() << std::endl;
     }
-    nc_thread.join();
-    br_thread.join();
     return true;
 }
 
@@ -517,8 +521,6 @@ void SetCircularBufferDataFormat(
         build_options.set_cb_dataformat_all_cores(
             static_cast<CB>(circular_buffer->buffer_index()), circular_buffer->data_format());
     }
-    std::filesystem::create_directories(op_path);
-    generate_data_format_descriptors(&build_options, op_path);
 }
 
 void ValidateL1Buffers(Device *device, const Program &program, const CoreCoord &logical_core) {
@@ -600,6 +602,10 @@ std::string GetOpName(const KernelGroup &kernel_group) {
     return dummy_op_name;
 }
 
+#ifdef GENERATE_HASH_LOG
+#include <fstream>
+#endif
+
 size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const CoreCoord &logical_core, const std::string &op_name, const int &pcie_slot) {
     size_t kg_compile_hash = 0;
     if (kernel_group.compute != nullptr) {
@@ -613,6 +619,23 @@ size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const CoreCoord &
     tt::utils::hash_combine(kg_compile_hash, std::hash<std::string>{}(op_name));
     // Add the device id into the compile hash to prevent clashes from simultaneous builds during multi-process runs
     tt::utils::hash_combine(kg_compile_hash, std::hash<int>{}(pcie_slot));
+    #ifdef GENERATE_HASH_LOG
+    static std::ofstream f("/tmp/hashlog.txt");
+    static std::mutex mutex_;
+    {
+        unique_lock<mutex> lock;
+        f << op_name << " :: "
+          << ( kernel_group.compute ? kernel_group.compute->compile_time_args_hash(logical_core) : 0 ) << " :: "
+          << ( kernel_group.compute ? kernel_group.compute->define_args_hash(logical_core) : 0 ) << " :: "
+          << kernel_group.riscv_0->compile_time_args_hash(logical_core) << " :: "
+          << kernel_group.riscv_1->compile_time_args_hash(logical_core) << " :: "
+          << kernel_group.riscv_0->noc() << " :: "
+          << kernel_group.riscv_1->noc() << " :: "
+          << std::hash<std::string>{}(op_name) << " :: "
+          << kg_compile_hash
+          << std::endl << std::flush;
+    }
+    #endif
     return kg_compile_hash;
 }
 
@@ -681,6 +704,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         // if path exists we assume that the complied kernel is there and is valid and up to date
         // This is obviously an incorrect assumption (because there's no checking performed)
         // but allows to improve iteration speed.
+        //cout << "Enable cache = " << enable_compile_cache << std::endl;
         if (enable_compile_cache)
             path_exists = std::filesystem::exists(op_path); // PROF_END("CCGEN_PREAMBLE")
         if (!path_exists) {

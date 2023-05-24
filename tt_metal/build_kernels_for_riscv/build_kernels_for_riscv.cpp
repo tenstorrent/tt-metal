@@ -934,13 +934,16 @@ void generate_descriptors(
     tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir)
 {
     fs::create_directories(op_dir);
-
-    std::thread td( [=]() { generate_data_format_descriptors(opts, op_dir); } );
-    std::thread tm( [=]() { generate_math_fidelity_descriptor(opts, op_dir); } );
-    std::thread ta( [=]() { generate_math_approx_mode_descriptor(opts, op_dir); } );
-    td.join();
-    tm.join();
-    ta.join();
+    try {
+        std::thread td( [=]() { generate_data_format_descriptors(opts, op_dir); } );
+        std::thread tm( [=]() { generate_math_fidelity_descriptor(opts, op_dir); } );
+        std::thread ta( [=]() { generate_math_approx_mode_descriptor(opts, op_dir); } );
+        td.join();
+        tm.join();
+        ta.join();
+    } catch (std::runtime_error &ex) {
+        std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
+    }
 }
 
 //! wormhole/wormhole_b0 are aliased for firmwares...
