@@ -1,4 +1,7 @@
-# Note taken from software repo - may need updates.
+# soc-descriptor yaml
+# Anything using [#-#] is noc coordinates
+# Anything using [[#, #]] is logical coordinates (Can be relative)
+# relative index: 0 means first row, -1 means last row of functional grid...
 grid:
   x_size: 10
   y_size: 12

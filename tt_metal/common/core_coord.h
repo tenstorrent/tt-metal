@@ -18,9 +18,6 @@ struct CoreCoord {
 
   std::string str() const { return "(x=" + std::to_string(x) + ",y=" + std::to_string(y) + ")"; }
 
-  // TODO: Remove CA Translation
-  // operator CommandAssembler::xy_pair() const { return CommandAssembler::xy_pair(x, y); }
-
 };
 
 constexpr inline bool operator==(const CoreCoord &a, const CoreCoord &b) { return a.x == b.x && a.y == b.y; }
@@ -31,6 +28,24 @@ constexpr inline bool operator<(const CoreCoord &left, const CoreCoord &right) {
   return (left.x < right.x || (left.x == right.x && left.y < right.y));
 }
 
+struct RelativeCoreCoord {
+  long x = 0;
+  long y = 0;
+
+  std::string str() const { return "(x=" + std::to_string(x) + ",y=" + std::to_string(y) + ")"; }
+
+};
+
+constexpr inline bool operator==(const RelativeCoreCoord &a, const RelativeCoreCoord &b) { return a.x == b.x && a.y == b.y; }
+
+constexpr inline bool operator!=(const RelativeCoreCoord &a, const RelativeCoreCoord &b) { return !(a == b); }
+
+inline CoreCoord get_core_coord_from_relative(const RelativeCoreCoord& in, const CoreCoord& grid_size) {
+  CoreCoord coord;
+  coord.x = in.x + ((in.x < 0)? grid_size.x : 0);
+  coord.y = in.y + ((in.y < 0)? grid_size.y : 0);
+  return coord;
+}
 
 struct tt_cxy_pair : public CoreCoord {
 
@@ -55,6 +70,14 @@ namespace std {
 template <>
 struct hash<CoreCoord> {
   std::size_t operator()(CoreCoord const &o) const {
+    std::size_t seed = 0;
+    seed = std::hash<std::size_t>()(o.x) ^ std::hash<std::size_t>()(o.y) << 1;
+    return seed;
+  }
+};
+template <>
+struct hash<RelativeCoreCoord> {
+  std::size_t operator()(RelativeCoreCoord const &o) const {
     std::size_t seed = 0;
     seed = std::hash<std::size_t>()(o.x) ^ std::hash<std::size_t>()(o.y) << 1;
     return seed;

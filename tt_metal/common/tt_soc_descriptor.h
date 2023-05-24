@@ -59,8 +59,8 @@ struct tt_SocDescriptor {
   std::vector<CoreCoord> workers;
   std::vector<CoreCoord> harvested_workers;
   std::vector<CoreCoord> compute_and_storage_cores;  // saved as CoreType::WORKER
-  std::vector<CoreCoord> storage_cores;  // saved as CoreType::WORKER
-  std::vector<CoreCoord> dispatch_cores; // saved as CoreType::WORKER
+  std::vector<RelativeCoreCoord> storage_cores;  // saved as CoreType::WORKER
+  std::vector<RelativeCoreCoord> dispatch_cores; // saved as CoreType::WORKER
   std::vector<CoreCoord> pcie_cores;
   std::unordered_map<int, int> worker_log_to_routing_x;
   std::unordered_map<int, int> worker_log_to_routing_y;
@@ -88,9 +88,6 @@ struct tt_SocDescriptor {
 
   bool is_worker_core(const CoreCoord &core) const;
   CoreCoord get_worker_core(const CoreCoord& core) const;
-  bool is_compute_and_storage_core(const CoreCoord &core) const;
-  bool is_storage_core(const CoreCoord &core) const;
-  bool is_dispatch_core(const CoreCoord &core) const;
 
   int get_num_dram_channels() const;
   CoreCoord get_core_for_dram_channel(int dram_chan, int subchannel) const;

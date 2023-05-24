@@ -20,20 +20,6 @@ CoreCoord tt_SocDescriptor::get_worker_core(const CoreCoord &core) const {
     return worker_xy;
 }
 
-// Compute and storage cores are worker cores that do compute and their L1 can be used for storage
-bool tt_SocDescriptor::is_compute_and_storage_core(const CoreCoord &core) const {
-    return std::find(this->compute_and_storage_cores.begin(), this->compute_and_storage_cores.end(), core) != this->compute_and_storage_cores.end();
-}
-
-// Storage cores do not do any compute, their L1 is used for storage
-bool tt_SocDescriptor::is_storage_core(const CoreCoord &core) const {
-    return std::find(this->storage_cores.begin(), this->storage_cores.end(), core) != this->storage_cores.end();
-}
-
-// Dispatch cores send work to compute and storage cores
-bool tt_SocDescriptor::is_dispatch_core(const CoreCoord &core) const {
-    return std::find(this->dispatch_cores.begin(), this->dispatch_cores.end(), core) != this->dispatch_cores.end();
-}
 
 int tt_SocDescriptor::get_num_dram_channels() const {
     int num_channels = 0;
@@ -117,18 +103,25 @@ void load_core_descriptors_from_device_descriptor(
   auto storage_core_l1_bank_size = device_descriptor_yaml["storage_core_l1_bank_size"].as<int>();
   auto eth_l1_size = device_descriptor_yaml["eth_l1_size"].as<int>();
 
-  auto arc_cores = device_descriptor_yaml["arc"].as<std::vector<std::string>>();
-  for (const auto &core_string : arc_cores) {
+  for (const auto &core_node : device_descriptor_yaml["arc"]) {
     CoreDescriptor core_descriptor;
-    core_descriptor.coord = format_node(core_string);
+    if (core_node.IsScalar()) {
+      core_descriptor.coord = format_node(core_node.as<std::string>());
+    } else {
+      tt::log_fatal ("Only NOC coords supported for arc cores");
+    }
     core_descriptor.type = CoreType::ARC;
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
     soc_descriptor.arc_cores.push_back(core_descriptor.coord);
   }
-  auto pcie_cores = device_descriptor_yaml["pcie"].as<std::vector<std::string>>();
-  for (const auto &core_string : pcie_cores) {
+
+  for (const auto &core_node :  device_descriptor_yaml["pcie"]) {
     CoreDescriptor core_descriptor;
-    core_descriptor.coord = format_node(core_string);
+    if (core_node.IsScalar()) {
+      core_descriptor.coord = format_node(core_node.as<std::string>());
+    } else {
+      tt::log_fatal ("Only NOC coords supported for pcie cores");
+    }
     core_descriptor.type = CoreType::PCIE;
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
     soc_descriptor.pcie_cores.push_back(core_descriptor.coord);
@@ -138,11 +131,14 @@ void load_core_descriptors_from_device_descriptor(
   for (const auto &channel_it : device_descriptor_yaml["dram"]) {
     soc_descriptor.dram_cores.push_back({});
     auto &soc_dram_cores = soc_descriptor.dram_cores.at(soc_descriptor.dram_cores.size() - 1);
-    const auto &dram_cores = channel_it.as<std::vector<std::string>>();
-    for (int i = 0; i < dram_cores.size(); i++) {
-      const auto &dram_core = dram_cores.at(i);
+    for (int i = 0; i < channel_it.size(); i++) {
+      const auto &dram_core = channel_it[i];
       CoreDescriptor core_descriptor;
-      core_descriptor.coord = format_node(dram_core);
+      if (dram_core.IsScalar()) {
+        core_descriptor.coord = format_node(dram_core.as<std::string>());
+      } else {
+        tt::log_fatal ("Only NOC coords supported for dram cores");
+      }
       core_descriptor.type = CoreType::DRAM;
       soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
       soc_dram_cores.push_back(core_descriptor.coord);
@@ -152,20 +148,32 @@ void load_core_descriptors_from_device_descriptor(
   }
 
   soc_descriptor.preferred_eth_dram_core.clear();
-  for (const auto& channel_it: device_descriptor_yaml["dram_preferred_eth_endpoint"]) {
-    soc_descriptor.preferred_eth_dram_core.push_back(format_node(channel_it.as<std::string>()));
+  for (const auto& core_node: device_descriptor_yaml["dram_preferred_eth_endpoint"]) {
+    if (core_node.IsScalar()) {
+      soc_descriptor.preferred_eth_dram_core.push_back(format_node(core_node.as<std::string>()));
+    } else {
+      tt::log_fatal ("Only NOC coords supported for dram_preferred_eth_endpoint cores");
+    }
   }
   soc_descriptor.preferred_worker_dram_core.clear();
-  for (const auto& channel_it: device_descriptor_yaml["dram_preferred_worker_endpoint"]) {
-    soc_descriptor.preferred_worker_dram_core.push_back(format_node(channel_it.as<std::string>()));
+  for (const auto& core_node: device_descriptor_yaml["dram_preferred_worker_endpoint"]) {
+    if (core_node.IsScalar()) {
+      soc_descriptor.preferred_worker_dram_core.push_back(format_node(core_node.as<std::string>()));
+    } else {
+      tt::log_fatal ("Only NOC coords supported for dram_preferred_worker_endpoint");
+    }
   }
   soc_descriptor.dram_address_offsets = device_descriptor_yaml["dram_address_offsets"].as<std::vector<size_t>>();
 
   auto eth_cores = device_descriptor_yaml["eth"].as<std::vector<std::string>>();
   int current_ethernet_channel = 0;
-  for (const auto &core_string : eth_cores) {
+  for (const auto &core_node : device_descriptor_yaml["eth"]) {
     CoreDescriptor core_descriptor;
-    core_descriptor.coord = format_node(core_string);
+    if (core_node.IsScalar()) {
+      core_descriptor.coord = format_node(core_node.as<std::string>());
+    } else {
+      tt::log_fatal ("Only NOC coords supported for eth cores");
+    }
     core_descriptor.type = CoreType::ETH;
     core_descriptor.l1_size = eth_l1_size;
     core_descriptor.l1_bank_size = eth_l1_size;
@@ -175,14 +183,18 @@ void load_core_descriptors_from_device_descriptor(
     soc_descriptor.ethernet_core_channel_map[core_descriptor.coord] = current_ethernet_channel;
     current_ethernet_channel++;
   }
-  std::vector<std::string> worker_cores = device_descriptor_yaml["functional_workers"].as<std::vector<std::string>>();
+
   std::set<int> worker_routing_coords_x;
   std::set<int> worker_routing_coords_y;
   std::unordered_map<int,int> routing_coord_worker_x;
   std::unordered_map<int,int> routing_coord_worker_y;
-  for (const auto &core_string : worker_cores) {
+  for (const auto &core_node : device_descriptor_yaml["functional_workers"]) {
     CoreDescriptor core_descriptor;
-    core_descriptor.coord = format_node(core_string);
+    if (core_node.IsScalar()) {
+      core_descriptor.coord = format_node(core_node.as<std::string>());
+    } else {
+      tt::log_fatal ("Only NOC coords supported for functional_workers cores");
+    }
     core_descriptor.type = CoreType::WORKER;
     core_descriptor.l1_size = worker_l1_size;
     core_descriptor.l1_bank_size = worker_l1_size;
@@ -209,21 +221,28 @@ void load_core_descriptors_from_device_descriptor(
 
   soc_descriptor.worker_grid_size = CoreCoord(func_x_start, func_y_start);
 
-  auto harvested_cores = device_descriptor_yaml["harvested_workers"].as<std::vector<std::string>>();
-  for (const auto &core_string : harvested_cores) {
+  for (const auto &core_node : device_descriptor_yaml["harvested_workers"]) {
     CoreDescriptor core_descriptor;
-    core_descriptor.coord = format_node(core_string);
+    if (core_node.IsScalar()) {
+      core_descriptor.coord = format_node(core_node.as<std::string>());
+    } else {
+      tt::log_fatal ("Only NOC coords supported for harvested_workers cores");
+    }
     core_descriptor.type = CoreType::HARVESTED;
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
   }
 
   std::set<int> compute_and_storage_coords_x;
   std::set<int> compute_and_storage_coords_y;
-  auto compute_and_storage_cores = device_descriptor_yaml["compute_and_storage_cores"].as<std::vector<std::string>>();
   // compute_and_storage_cores are a subset of worker cores
   // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-  for (const auto &core_string : compute_and_storage_cores) {
-    CoreCoord coord = format_node(core_string);
+  for (const auto &core_node : device_descriptor_yaml["compute_and_storage_cores"]) {
+    CoreCoord coord = {};
+    if (core_node.IsScalar()) {
+      coord = format_node(core_node.as<std::string>());
+    } else {
+      tt::log_fatal ("Only noc coords supported for compute_and_storage_cores cores");
+    }
     compute_and_storage_coords_x.insert(coord.x);
     compute_and_storage_coords_y.insert(coord.y);
     soc_descriptor.compute_and_storage_cores.push_back(coord);
@@ -231,28 +250,45 @@ void load_core_descriptors_from_device_descriptor(
 
   soc_descriptor.compute_and_storage_grid_size = CoreCoord(compute_and_storage_coords_x.size(), compute_and_storage_coords_y.size());
 
-  auto storage_cores = device_descriptor_yaml["storage_cores"].as<std::vector<std::string>>();
   // storage_cores are a subset of worker cores
   // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-  for (const auto &core_string : storage_cores) {
-    CoreCoord coord = format_node(core_string);
-    auto &storage_core_desc = soc_descriptor.cores.at(coord);
-    storage_core_desc.l1_bank_size = storage_core_l1_bank_size;
+  for (const auto &core_node : device_descriptor_yaml["storage_cores"]) {
+    RelativeCoreCoord coord = {};
+    if (core_node.IsSequence()) {
+      // Logical coord
+      coord = RelativeCoreCoord({
+        .x = core_node[0].as<int>(),
+        .y = core_node[1].as<int>(),
+      });
+    } else {
+      tt::log_fatal ("Only logical relative coords supported for storage_cores cores");
+    }
     soc_descriptor.storage_cores.push_back(coord);
   }
 
-  auto dispatch_cores = device_descriptor_yaml["dispatch_cores"].as<std::vector<std::string>>();
   // dispatch_cores are a subset of worker cores
   // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-  for (const auto &core_string : dispatch_cores) {
-    CoreCoord coord = format_node(core_string);
+  for (const auto &core_node : device_descriptor_yaml["dispatch_cores"]) {
+    RelativeCoreCoord coord = {};
+    if (core_node.IsSequence()) {
+      // Logical coord
+      coord = RelativeCoreCoord({
+        .x = core_node[0].as<int>(),
+        .y = core_node[1].as<int>(),
+      });
+    } else {
+      tt::log_fatal ("Only logical relative coords supported for dispatch_cores cores");
+    }
     soc_descriptor.dispatch_cores.push_back(coord);
   }
 
-  auto router_only_cores = device_descriptor_yaml["router_only"].as<std::vector<std::string>>();
-  for (const auto &core_string : router_only_cores) {
+  for (const auto &core_node :  device_descriptor_yaml["router_only"]) {
     CoreDescriptor core_descriptor;
-    core_descriptor.coord = format_node(core_string);
+    if (core_node.IsScalar()) {
+      core_descriptor.coord = format_node(core_node.as<std::string>());
+    } else {
+      tt::log_fatal ("Only NOC/logical coords supported for router_only cores");
+    }
     core_descriptor.type = CoreType::ROUTER_ONLY;
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
   }

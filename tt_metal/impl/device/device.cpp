@@ -44,10 +44,14 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
         config.core_type_from_noc_coord_table[core] = AllocCoreType::ComputeAndStore;
     }
     for (const auto& core : soc_desc.storage_cores) {
-        config.core_type_from_noc_coord_table[core] = AllocCoreType::StorageOnly;
+        const auto logical_coord = get_core_coord_from_relative(core, this->post_harvested_worker_grid_size_);
+        const auto noc_coord = this->logical_to_routing_coord_lookup_table_[logical_coord];
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
     for (const auto& core : soc_desc.dispatch_cores) {
-        config.core_type_from_noc_coord_table[core] = AllocCoreType::Dispatch;
+        const auto logical_coord = get_core_coord_from_relative(core, this->post_harvested_worker_grid_size_);
+        const auto noc_coord = this->logical_to_routing_coord_lookup_table_[logical_coord];
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
     // Configuration end
     switch (memory_allocator) {
