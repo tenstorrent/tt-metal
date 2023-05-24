@@ -12,6 +12,11 @@ if [ "$TT_METAL_ENV" != "dev" ]; then
   exit 1
 fi
 
+if [[ -z "$ARCH_NAME" ]]; then
+  echo "Must provide ARCH_NAME in environment" 1>&2
+  exit 1
+fi
+
 cd $TT_METAL_HOME
 
 ./build_tt_metal.sh

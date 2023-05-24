@@ -7,11 +7,14 @@ on:
 
 jobs:
   build-and-unit-tests:
+    strategy:
+      matrix:
+        arch: [grayskull]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
     environment: dev
-    runs-on:
-      group: gs-pool
+    runs-on: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v3
         with:

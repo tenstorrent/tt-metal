@@ -25,7 +25,7 @@ BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES = (
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_dispatch_datacopy_mvp", "test_build_kernel_dispatch_datacopy_mvp")
 )
 
-def run_compile_tests(num_processes, timeout):
+def run_compile_tests(num_processes, timeout, tt_arch):
 
     run_process_and_get_result("rm -rf built_kernels")
     run_single_build_kernels_for_riscv_test = partial(run_single_test, "build_kernels_for_riscv", timeout=timeout)
@@ -52,9 +52,9 @@ def run_compile_tests(num_processes, timeout):
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.BUILD_KERNELS_FOR_RISCV)
 
-    timeout, num_processes = get_build_kernels_for_riscv_arguments_from_cmdline_args(cmdline_args)
+    timeout, tt_arch, num_processes = get_build_kernels_for_riscv_arguments_from_cmdline_args(cmdline_args)
 
-    test_report = run_compile_tests(num_processes, timeout)
+    test_report = run_compile_tests(num_processes, timeout, tt_arch)
 
     report_tests(test_report)
 

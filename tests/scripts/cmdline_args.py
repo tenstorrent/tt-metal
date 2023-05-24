@@ -35,6 +35,7 @@ def add_test_type_specific_args_(argparser, test_suite_type=TestSuiteType.UNKNOW
 
 def add_common_args_(argparser):
     argparser.add_argument("--timeout", default=600, type=int, help="Timeout in seconds for each test")
+    argparser.add_argument("--tt-arch", default="grayskull", type=str, help="Name of silicon arch as a lowercase str, ex. grayskull, wormhole_b0")
 
     return argparser
 
@@ -60,7 +61,7 @@ def get_cmdline_args(test_suite_type=TestSuiteType.UNKNOWN):
 def get_full_arg_list_with_specific_args_(get_specific_args, cmdline_args):
     parsed_args = get_args_from_cmdline_args_(cmdline_args)
 
-    return (parsed_args.timeout,) + get_specific_args(parsed_args)
+    return (parsed_args.timeout, parsed_args.tt_arch) + get_specific_args(parsed_args)
 
 
 def get_empty_args_from_parsed_args_(parsed_args):

@@ -12,14 +12,23 @@ if [ "$TT_METAL_ENV" != "dev" ]; then
   exit 1
 fi
 
+if [[ -z "$ARCH_NAME" ]]; then
+  echo "Must provide ARCH_NAME in environment" 1>&2
+  exit 1
+fi
+
 cd $TT_METAL_HOME
 
 export PYTHONPATH=$TT_METAL_HOME
 
-env ARCH_NAME=grayskull python tests/scripts/run_build_kernels_for_riscv.py -j 16
-env python tests/scripts/run_llrt.py --short-driver-tests
+env python tests/scripts/run_build_kernels_for_riscv.py -j 16 --tt-arch $ARCH_NAME
+env python tests/scripts/run_llrt.py --short-driver-tests --tt-arch $ARCH_NAME
 
-./tests/scripts/run_python_api_unit_tests.sh
+if [ "$ARCH_NAME" == "grayskull" ]; then
+  ./tests/scripts/run_python_api_unit_tests.sh
+else
+  echo "Skipping non-Grayskull Python small integration tests..."
+fi
 
 echo "Checking docs build..."
 

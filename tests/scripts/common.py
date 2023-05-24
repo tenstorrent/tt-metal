@@ -8,6 +8,8 @@ from functools import partial
 from collections import namedtuple
 from operator import ne
 
+from loguru import logger
+
 
 class TestSuiteType(Enum):
     BUILD_KERNELS_FOR_RISCV = auto()
@@ -18,6 +20,11 @@ class TestSuiteType(Enum):
 
 
 TestEntry = namedtuple("TestEntry", ["test_name", "executable_name", "extra_params"], defaults=[""])
+
+
+def generate_test_entry_id(test_entry):
+    if isinstance(test_entry, TestEntry):
+        return f"{test_entry.test_name}-{test_entry.extra_params}"
 
 
 def namespace_to_test_suite_type(namespace: str) -> TestSuiteType:
@@ -55,9 +62,10 @@ def get_git_home_dir_str():
     return git_home_dir_str
 
 
-def get_env_dict_for_fw_tests():
+def get_env_dict_for_fw_tests(tt_arch):
     return {
         "TT_METAL_HOME": get_git_home_dir_str(),
+        "ARCH_NAME": tt_arch,
     }
 
 
@@ -65,7 +73,7 @@ def default_build_full_path_to_test(namespace, executable_name, extra_params):
     return pathlib.Path(f"{get_git_home_dir_str()}/build/test/{namespace}/{executable_name}")
 
 
-def build_executable_command_for_test(namespace: str, test_entry: TestEntry, timeout, build_full_path_to_test):
+def build_executable_command_for_test(namespace: str, test_entry: TestEntry, timeout, tt_arch, build_full_path_to_test):
     assert namespace in ("build_kernels_for_riscv", "llrt", "tt_metal", "programming_example")
 
     test_name = test_entry.test_name
@@ -77,7 +85,14 @@ def build_executable_command_for_test(namespace: str, test_entry: TestEntry, tim
     assert full_path_to_test.exists(), f"Path to {test_name} does not exist - did you build it? Should be {full_path_to_test}"
     assert not full_path_to_test.is_dir()
 
-    return f"timeout {timeout} {full_path_to_test} {extra_params}"
+    if namespace in ("build_kernels_for_riscv"):
+        logger.warning(f"tt-arch should be injected as a cmdline param for build_kernels_for_riscv eventually")
+        return f"timeout {timeout} {full_path_to_test} {extra_params}"
+    elif namespace in ("llrt",):
+        return f"timeout {timeout} {full_path_to_test} --arch {tt_arch} {extra_params}"
+    else:
+        logger.warning(f"tt-arch not implemented for {namespace}-type tests")
+        return f"timeout {timeout} {full_path_to_test} {extra_params}"
 
 
 class SpecificReturnCodes(Enum):
@@ -136,10 +151,10 @@ def report_tests(test_report):
         print(f"  {test_entry.test_name}-[{extra_params_str}]: {result_str}")
 
 
-def run_single_test(namespace: str, test_entry: TestEntry, timeout, capture_output=False, build_full_path_to_test=default_build_full_path_to_test):
-    command = build_executable_command_for_test(namespace, test_entry, timeout=timeout, build_full_path_to_test=build_full_path_to_test)
+def run_single_test(namespace: str, test_entry: TestEntry, timeout, tt_arch="grayskull", capture_output=False, build_full_path_to_test=default_build_full_path_to_test):
+    command = build_executable_command_for_test(namespace, test_entry, timeout=timeout, tt_arch=tt_arch, build_full_path_to_test=build_full_path_to_test)
 
-    env_for_fw_test = get_env_dict_for_fw_tests()
+    env_for_fw_test = get_env_dict_for_fw_tests(tt_arch)
 
     completed_process = run_process_and_get_result(command, capture_output=capture_output, extra_env=env_for_fw_test)
 

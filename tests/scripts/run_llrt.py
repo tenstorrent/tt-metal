@@ -66,7 +66,7 @@ def get_llrt_test_entries(short_driver_tests):
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.LLRT)
 
-    timeout, short_driver_tests, = get_llrt_arguments_from_cmdline_args(cmdline_args)
+    timeout, tt_arch, short_driver_tests, = get_llrt_arguments_from_cmdline_args(cmdline_args)
 
     llrt_test_entries = get_llrt_test_entries(short_driver_tests=short_driver_tests)
 
