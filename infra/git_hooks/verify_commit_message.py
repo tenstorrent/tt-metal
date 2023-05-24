@@ -8,6 +8,11 @@ FORMAT_MSG = "#<GH ISSUE NUMBER>: <non-empty message>"
 MATCHING_REGEX = "^(#\d+\:\ .)"
 
 
+def print_commit_msg(commit_msg_whole):
+    print("\t --- Printing commit message ---")
+    print(commit_msg_whole)
+
+
 if __name__ == "__main__":
     argv = sys.argv
     argc = len(sys.argv)
@@ -22,9 +27,11 @@ if __name__ == "__main__":
     search_result = re.search(MATCHING_REGEX, commit_msg_whole)
 
     if not search_result:
+        print_commit_msg(commit_msg_whole)
         raise Exception(f"Commit message does match format {FORMAT_MSG}")
 
     result_groups = search_result.groups(default=tuple())
 
     if not result_groups:
+        print_commit_msg(commit_msg_whole)
         raise Exception("Regex matching error during commit message sanitization")
