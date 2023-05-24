@@ -295,7 +295,8 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
         // lreg0_lo=0.1928f;//322B
         // lreg4_lo=-0.0150f;//A3AE
         sfpu_load_imm32(0,0x37E7322B);
-        sfpu_load_imm32(4,0xB122A3AE);
+        //sfpu_load_imm32(4,0xB122A3AE);
+        sfpu_load_imm32(4,0xB12286D8);
 
 
         sfpu_load_imm32(1,0x38E138F3);
