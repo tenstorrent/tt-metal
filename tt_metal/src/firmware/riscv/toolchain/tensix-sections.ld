@@ -162,11 +162,10 @@ SECTIONS
   /* Move to end of local memory for stack */
   .stack :
   {
-    . = ALIGN(16);
     __stack_bottom = .;
    . += __firmware_stack_size;
     __stack_top = .;
-  } > REGION_DATA
+  } > REGION_STACK
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }
