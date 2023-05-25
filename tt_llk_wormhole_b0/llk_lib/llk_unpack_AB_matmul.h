@@ -92,6 +92,8 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
     configure_unpack_AB(get_operand_id(unpack_AB_params->unpB_operand), get_operand_id(unpack_AB_params->unpA_operand), 
                         srca_height, srcb_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en, srnd_fpu_en);
 
+    // Override the default tile size to be 32x32
+    TTI_SETADCXX(0b11, TILE_WIDTH*TILE_HEIGHT-1, 0x0);
 }
 
 template<bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
