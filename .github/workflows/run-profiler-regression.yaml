@@ -1,0 +1,30 @@
+name: Run profiler regression
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run_profiler_regression:
+    strategy:
+      matrix:
+        arch: [grayskull]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+    environment: dev
+    runs-on: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: true
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: make build
+      - name: Run profiler regression tests
+        run: |
+          source build/python_env/bin/activate
+          ./tests/scripts/run_profiler_regressions.sh
