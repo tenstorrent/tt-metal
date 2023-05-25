@@ -7,6 +7,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/dtx/tensor \
 		 tests/tt_metal/dtx/overlap \
 		 tests/tt_metal/dtx/collapse_transformations \
+		 tests/tt_metal/test_compile_args \
 		 tests/tt_metal/ops/test_eltwise_binary_op \
 		 tests/tt_metal/ops/test_eltwise_unary_op \
 		 tests/tt_metal/ops/test_softmax_op \
