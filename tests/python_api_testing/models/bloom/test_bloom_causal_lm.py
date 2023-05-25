@@ -9,12 +9,26 @@ sys.path.append(f"{f}/../../../..")
 import torch
 from libs import tt_lib as ttm
 
-from transformers import BloomForCausalLM
+from transformers import BloomForCausalLM, BloomTokenizerFast
 from utility_functions import print_diff_argmax
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
 import python_api_testing.models.bloom.bloom_causal_lm as bloom_causal_lm
+
+
+def pad_input_32(tensor, value):
+    len = tensor.shape[1]
+
+    if len % 32 == 0:
+        return tensor
+
+    padded_len = ((len // 32) + 1) * 32
+
+    pad_tensor = (value * torch.ones(tensor.shape[0], padded_len-len)).to(torch.long)
+    tensor = torch.cat([tensor, pad_tensor], dim=1)
+
+    return tensor
 
 
 def run_bloom_causal_lm_test(device):
@@ -28,8 +42,10 @@ def run_bloom_causal_lm_test(device):
     pt_bloom_causal_lm = hugging_bloom_reference_model
 
     # Prepare input
-    torch.manual_seed(0)
-    input_ids = torch.randint(0, 100, (1, 64))
+    tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
+    input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
+    tokenized = tokenizer(input_sentance, return_tensors="pt")
+    input_ids = pad_input_32(tokenized.input_ids, config.pad_token_id)
 
     pt_out = pt_bloom_causal_lm.forward(input_ids)
     print("PT finished")

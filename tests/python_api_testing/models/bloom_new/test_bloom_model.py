@@ -15,22 +15,8 @@ from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_
 
 from loguru import logger
 
-import python_api_testing.models.bloom.bloom_utils as bloom_utils
-import python_api_testing.models.bloom.bloom_model as bloom_model
-
-
-def pad_input_32(tensor, value):
-    len = tensor.shape[1]
-
-    if len % 32 == 0:
-        return tensor
-
-    padded_len = ((len // 32) + 1) * 32
-
-    pad_tensor = (value * torch.ones(tensor.shape[0], padded_len-len)).to(torch.long)
-    tensor = torch.cat([tensor, pad_tensor], dim=1)
-
-    return tensor
+import python_api_testing.models.bloom_new.bloom_utils as bloom_utils
+import python_api_testing.models.bloom_new.bloom_model as bloom_model
 
 
 def run_bloom_model_test(device):
@@ -38,8 +24,11 @@ def run_bloom_model_test(device):
     hugging_bloom_reference_model.eval()
 
     config = hugging_bloom_reference_model.config
+    #use_cache
     state_dict = hugging_bloom_reference_model.state_dict()
     base_address = "transformer"
+    # hidden_size = config.hidden_size # 1024
+    # n_head = config.n_head
 
     tt_bloom_model = bloom_model.TtBloomModel(config, state_dict, base_address, device)
     pt_bloom_model = hugging_bloom_reference_model.transformer
@@ -48,7 +37,7 @@ def run_bloom_model_test(device):
     tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
     input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
     tokenized = tokenizer(input_sentance, return_tensors="pt")
-    input_ids = pad_input_32(tokenized.input_ids, config.pad_token_id)
+    input_ids = tokenized.input_ids
 
     pt_out = pt_bloom_model.forward(input_ids)[0]
     print("PT finished")
