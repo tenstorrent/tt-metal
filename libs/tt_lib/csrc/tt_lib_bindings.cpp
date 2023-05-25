@@ -19,6 +19,7 @@
 #include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_dnn/op_library/auto_pad.hpp"
+#include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tensor/tensor_utils.hpp"
 
 #include "tt_lib_bindings.hpp"
@@ -1295,6 +1296,14 @@ void TensorModule(py::module &m_tensor) {
         | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
+
+    // Custom BERT TMs
+    m_tensor.def("bert_large_split_fused_qkv", &bert_large_split_fused_qkv,
+        py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shape [9, 1, 384, 1024].
+    )doc");
+
+    // Custom BERT matmuls/bmms
     m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul,
         py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_fused_qkv non-batched matmul ``A x B`` with two tensors.
