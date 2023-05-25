@@ -9,43 +9,7 @@ from loguru import logger
 from tests.scripts.common import run_single_test, run_process_and_get_result, report_tests, TestEntry, error_out_if_test_report_has_failures, TestSuiteType
 from tests.scripts.cmdline_args import get_cmdline_args, get_llrt_arguments_from_cmdline_args
 
-
-SILICON_DRIVER_TEST_ENTRIES = (
-    TestEntry("llrt/tests/test_silicon_driver", "test_silicon_driver"),
-    TestEntry("llrt/tests/test_silicon_driver_dram_sweep", "test_silicon_driver_dram_sweep"),
-    TestEntry("llrt/tests/test_silicon_driver_l1_sweep", "test_silicon_driver_l1_sweep"),
-)
-
-SHORT_SILICON_DRIVER_TEST_ENTRIES = (
-    TestEntry("llrt/tests/test_silicon_driver", "test_silicon_driver"),
-    TestEntry("llrt/tests/test_silicon_driver_dram_sweep", "test_silicon_driver_dram_sweep", "--short"),
-    TestEntry("llrt/tests/test_silicon_driver_l1_sweep", "test_silicon_driver_l1_sweep", "--short"),
-)
-
-LLRT_TEST_ENTRIES = (
-    TestEntry("llrt/tests/test_run_blank_brisc_triscs", "test_run_blank_brisc_triscs"),
-    TestEntry("llrt/tests/test_run_risc_read_speed", "test_run_risc_read_speed"),
-    TestEntry("llrt/tests/test_run_risc_write_speed", "test_run_risc_write_speed"),
-    TestEntry("llrt/tests/test_run_eltwise_sync", "test_run_eltwise_sync"),
-    TestEntry("llrt/tests/test_run_sync", "test_run_sync"),
-    TestEntry("llrt/tests/test_run_sync_db", "test_run_sync_db"),
-    TestEntry("llrt/tests/test_run_dataflow_cb_test", "test_run_dataflow_cb_test"),
-
-    TestEntry("llrt/tests/test_run_test_debug_print", "test_run_test_debug_print"),
-    TestEntry("llrt/tests/test_run_datacopy_switched_riscs", "test_run_datacopy_switched_riscs"),
-    # TestEntry("llrt/tests/test_dispatch_v1", "test_dispatch_v1"),
-)
-
-
-WORMHOLE_B0_LLRT_TEST_ENTRIES = (
-    TestEntry("llrt/tests/test_run_blank_brisc_triscs", "test_run_blank_brisc_triscs"),
-    TestEntry("llrt/tests/test_run_risc_read_speed", "test_run_risc_read_speed"),
-    TestEntry("llrt/tests/test_run_risc_write_speed", "test_run_risc_write_speed"),
-    TestEntry("llrt/tests/test_run_sync", "test_run_sync"),
-    TestEntry("llrt/tests/test_run_sync_db", "test_run_sync_db"),
-    TestEntry("llrt/tests/test_run_dataflow_cb_test", "test_run_dataflow_cb_test"),
-
-)
+from tests.tt_metal.llrt.test_run_llrt import LLRT_TEST_ENTRIES, SHORT_SILICON_DRIVER_TEST_ENTRIES, SILICON_DRIVER_TEST_ENTRIES, SKIP_LLRT_ENTRIES, SKIP_LLRT_WORMHOLE_ENTRIES
 
 
 def run_single_llrt_test(test_entry, timeout, tt_arch):
@@ -71,10 +35,10 @@ def run_llrt_tests(llrt_test_entries, timeout, tt_arch):
 
 
 def get_llrt_test_entries(short_driver_tests, tt_arch):
-    for wh_b0_test in WORMHOLE_B0_LLRT_TEST_ENTRIES:
-        assert wh_b0_test in LLRT_TEST_ENTRIES, "wormhole_b0 tests are not a subset of all available LLRT tests"
+    llrt_test_entries = LLRT_TEST_ENTRIES - SKIP_LLRT_ENTRIES
 
-    llrt_test_entries = WORMHOLE_B0_LLRT_TEST_ENTRIES if tt_arch == "wormhole_b0" else LLRT_TEST_ENTRIES
+    if tt_arch == "wormhole_b0":
+        llrt_test_entries -= SKIP_LLRT_WORMHOLE_ENTRIES
 
     return list(
         chain.from_iterable([llrt_test_entries, SHORT_SILICON_DRIVER_TEST_ENTRIES if short_driver_tests else SILICON_DRIVER_TEST_ENTRIES])
