@@ -9,7 +9,7 @@ jobs:
   build-and-unit-tests:
     strategy:
       matrix:
-        arch: [grayskull]
+        arch: [grayskull, wormhole_b0]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
