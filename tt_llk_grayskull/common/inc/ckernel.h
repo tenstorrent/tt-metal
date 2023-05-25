@@ -1,6 +1,5 @@
 
 #pragma once
-
 #include "risc_attribs.h"
 
 // Compiler hint that a branch is unlikely to be taken
@@ -50,6 +49,7 @@
 
 #include "ckernel_include.h"
 #include "fw_debug.h"
+#include "tt_log.h"
 #include "tensix.h"
 #include <l1_address_map.h>
 // #include <cstring>
@@ -389,7 +389,7 @@ inline void record_kernel_runtime(uint64_t kernel_runtime) {
     debug_mailbox_base[mailbox_end - 1] = (kernel_runtime >> 48);
 }
 
-void debug_dump(uint8_t *data, uint32_t byte_size);
+void debug_dump(const uint8_t *data, uint32_t byte_size);
 void debug_dump_seek(uint8_t offset);
 
 #if DELAY_EN > 0
