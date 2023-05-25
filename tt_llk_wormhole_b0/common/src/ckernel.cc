@@ -123,7 +123,7 @@ inline void allocate_debug_buffer() {
    debug_buffer_start = debug_buffer;
 }
 
-__attribute__((noinline)) void debug_dump(uint8_t *data, uint32_t byte_size) {
+__attribute__((noinline)) void debug_dump(const uint8_t *data, uint32_t byte_size) {
   for (uint32_t i = 0; i < byte_size; i++) {
     if ((((uint32_t) debug_buffer)&(l1_mem::address_map::DEBUG_BUFFER_SIZE-1)) == 
          l1_mem::address_map::DEBUG_BUFFER_SIZE-1) {

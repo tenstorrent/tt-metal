@@ -50,6 +50,7 @@
 
 #include "ckernel_include.h"
 #include "fw_debug.h"
+#include "tt_log.h"
 #include "tensix.h"
 #include <l1_address_map.h>
 // #include <cstring>
