@@ -12,9 +12,8 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compute_kernel_args) {
+void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compute_kernel_args) {
     // every kernel, semaphore and CB should be mapped to each core in the core ranges of core_range_set
-    bool pass = true;
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
@@ -36,12 +35,9 @@ bool check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
             }
         }
     }
-
-    return pass;
 }
 
-bool check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
-    bool pass = true;
+void check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
@@ -49,11 +45,9 @@ bool check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeS
                 std::vector<uint32_t> res;
                 tt_metal::ReadFromDeviceL1(device, logical_core, SEMAPHORE_BASE, SEMAPHORE_SIZE, res);
                 TT_ASSERT(res == golden_sem_values);
-                pass &= res == golden_sem_values;
             }
         }
     }
-    return pass;
 }
 
 bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_metal::Program &program, const CoreRangeSet &core_range_set) {
@@ -153,13 +147,13 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         pass &= semaphore->address() == SEMAPHORE_BASE + (size_per_semaphore * i);
     }
 
-    pass &= check_program_is_mapped_to_correct_cores(program, core_range_set, compute_kernel_args);
+    check_program_is_mapped_to_correct_cores(program, core_range_set, compute_kernel_args);
 
     pass &= tt_metal::CompileProgram(device, program);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-    pass &= check_semaphores_are_initialized(device, core_range_set, golden_sem_values);
+    check_semaphores_are_initialized(device, core_range_set, golden_sem_values);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -220,18 +214,18 @@ bool test_overlapping_core_range_set() {
 
     try {
         CoreRangeSet invalid_ranges = CoreRangeSet({core_range_one, core_range_two, overlapping_range});
-    } catch (const std::exception &e) {
-        pass = true;
-    }
+        pass &= false;
+        TT_ASSERT(false);
+    } catch (const std::exception &e) {}
 
     CoreRange single_core = {.start={1, 1}, .end={1, 1}};
     CoreRangeSet second_valid_ranges = CoreRangeSet({single_core, core_range_two});
 
     try {
         CoreRangeSet second_invalid_ranges = CoreRangeSet({single_core, core_range_two, core_range_one});
-    } catch (const std::exception &e) {
-        pass = true;
-    }
+        pass &= false;
+        TT_ASSERT(false);
+    } catch (const std::exception &e) {}
 
     return pass;
 }
