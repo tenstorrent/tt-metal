@@ -21,6 +21,54 @@ from utility_functions import comp_pcc, comp_allclose_and_pcc
 from downblock_2d import TtDownBlock2D
 
 
+def test_run_downblock_real_input_inference(model_location_generator):
+    # Initialize the device
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
+    host = ttl.device.GetHost()
+
+    # setup pytorch model
+    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
+    unet = pipe.unet
+    unet.eval()
+    state_dict = unet.state_dict()
+    unet_downblock = pipe.unet.down_blocks[3]
+
+    # synthesize the input
+    base_address = 'down_blocks.3'
+
+    dir_path = model_location_generator("tt_dnn-models/StableDiffusion/tensor_files")
+    attr_path = f"{dir_path}/DownBlock2D_inp__attr.pt"
+    emb_path = f"{dir_path}/DownBlock2D_inp__emb.pt"
+    sample_path = f"{dir_path}/DownBlock2D_inp__sample.pt"
+
+    map_location = torch.device('cpu')
+    sample = torch.load(sample_path, map_location=map_location)
+    emb = torch.load(emb_path, map_location=map_location)
+
+    kwargs = torch.load(attr_path)
+
+    #execute torch
+    torch_output, torch_output_states = unet_downblock(sample, emb)
+
+    # setup tt models
+    tt_sample = torch_to_tt_tensor_rm(sample, device)
+    tt_emb = torch_to_tt_tensor_rm(emb, device)
+
+    tt_downblock = TtDownBlock2D(**kwargs,
+                                state_dict=state_dict,
+                                base_address = base_address)
+
+    tt_out, tt_output_states = tt_downblock(tt_sample, tt_emb)
+    tt_output = tt_to_torch_tensor(tt_out, host)
+
+    passing = comp_pcc(torch_output, tt_output)
+    logger.info(comp_allclose_and_pcc(tt_output, torch_output))
+    ttl.device.CloseDevice(device)
+    assert passing[0], passing[1:]
+    logger.info(f"PASSED {passing[1]}")
+
 
 def test_run_downblock_inference():
     # Initialize the device

@@ -22,6 +22,77 @@ from unet_2d_blocks import TtUNetMidBlock2DCrossAttn
 from loguru import logger
 
 
+def test_run_unet_mid_block_real_input_inference(model_location_generator):
+    # Initialize the device
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
+    host = ttl.device.GetHost()
+
+    # setup pytorch model
+    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
+    unet = pipe.unet
+    unet.eval()
+    state_dict = unet.state_dict()
+    mid_block = pipe.unet.mid_block
+
+    # synthesize the input
+    base_address = 'down_blocks.3'
+
+    dir_path = model_location_generator("tt_dnn-models/StableDiffusion/tensor_files")
+    attention_mask_path = f"{dir_path}/UNetMidBlock2DCrossAttn_inp__attention_mask.pt"
+    emb_path = f"{dir_path}/UNetMidBlock2DCrossAttn_inp__emb.pt"
+    sample_path = f"{dir_path}/UNetMidBlock2DCrossAttn_inp__sample.pt"
+    attr_path = f"{dir_path}/UNetMidBlock2DCrossAttn_inp__attr.pt"
+    encoder_hidden_states_path = f"{dir_path}/UNetMidBlock2DCrossAttn_inp__encoder_hidden_states.pt"
+    cross_attention_kwargs_path = f"{dir_path}/UNetMidBlock2DCrossAttn_inp__cross_attention_kwargs.pt"
+
+    map_location = torch.device('cpu')
+    sample = torch.load(sample_path, map_location=map_location)
+    emb = torch.load(emb_path, map_location=map_location)
+    attention_mask = torch.load(attention_mask_path, map_location=map_location)
+    encoder_hidden_states = torch.load(encoder_hidden_states_path, map_location=map_location)
+    cross_attention_kwargs = torch.load(cross_attention_kwargs_path, map_location=map_location)
+
+    kwargs = torch.load(attr_path)
+
+    torch_output = mid_block(
+                        sample,
+                        emb, #.squeeze(0).squeeze(0),
+                        encoder_hidden_states=encoder_hidden_states, #.squeeze(0),
+                        attention_mask=attention_mask,
+                        cross_attention_kwargs=cross_attention_kwargs
+                        )
+
+
+    tt_mid_block = TtUNetMidBlock2DCrossAttn(
+                    **kwargs,
+                    state_dict=state_dict,
+                    base_address="mid_block"
+    )
+
+    tt_sample = torch_to_tt_tensor_rm(sample, device, put_on_device=False)
+    tt_emb = torch_to_tt_tensor_rm(emb, device, put_on_device=False)
+    tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
+
+    tt_output = tt_mid_block(
+        tt_sample,
+        tt_emb,
+        encoder_hidden_states=tt_encoder_hidden_states,
+        attention_mask=attention_mask,
+        cross_attention_kwargs=cross_attention_kwargs
+        )
+
+    tt_output = tt_to_torch_tensor(tt_output, host)
+
+    passing = comp_pcc(torch_output, tt_output)
+    logger.info(comp_allclose_and_pcc(tt_output, torch_output))
+    ttl.device.CloseDevice(device)
+    assert passing[0], passing[1:]
+    logger.info(f"PASSED {passing[1]}")
+
+
+
 def test_run_unet_mid_block_inference():
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)

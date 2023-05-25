@@ -24,7 +24,7 @@ from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
 from utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
-from utility_functions import enable_binary_cache, enable_compile_cache
+from utility_functions import enable_compile_cache
 from libs import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 
@@ -100,8 +100,7 @@ def demo():
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
-    enable_binary_cache()
-    enable_compile_cache()
+    # enable_compile_cache()
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")

@@ -21,6 +21,61 @@ from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tenso
 from upblock_2d import TtUpBlock2D
 
 
+def test_run_upblock_real_input_inference(model_location_generator):
+    # Initialize the device
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
+    host = ttl.device.GetHost()
+
+    # setup pytorch model
+    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
+    unet = pipe.unet
+    unet.eval()
+    state_dict = unet.state_dict()
+    unet_upblock = pipe.unet.up_blocks[0]
+
+       # synthesize the input
+    base_address = 'up_blocks.0'
+
+    dir_path = model_location_generator("tt_dnn-models/StableDiffusion/tensor_files")
+
+    attr_path = f"{dir_path}/UpBlock2D_inp__attr.pt"
+    emb_path = f"{dir_path}/UpBlock2D_inp__emb.pt"
+    sample_path = f"{dir_path}/UpBlock2D_inp__sample.pt"
+    res_sample_path = f"{dir_path}/UpBlock2D_inp__res_samples.pt"
+    upsample_path = f"{dir_path}/UpBlock2D_inp__upsample_size.pt"
+
+    map_location = torch.device('cpu')
+
+    sample = torch.load(sample_path, map_location=map_location)
+    emb = torch.load(emb_path, map_location=map_location)
+    res_samples = torch.load(res_sample_path, map_location=map_location)
+    upsample_size = torch.load(upsample_path, map_location=map_location)
+
+    kwargs = torch.load(attr_path)
+
+    torch_output = unet_upblock(sample, res_samples, emb, upsample_size)
+
+    tt_sample = torch_to_tt_tensor_rm(sample, device)
+    tt_emb = torch_to_tt_tensor_rm(emb, device)
+    _ttt = torch_to_tt_tensor_rm
+    tt_res_samples = [_ttt(res_samples[i], device) for i in range(len(res_samples))]
+
+    tt_upblock = TtUpBlock2D(**kwargs,
+                            state_dict=state_dict,
+                            base_address = base_address
+                            )
+    tt_out = tt_upblock(tt_sample, tt_res_samples, tt_emb, None)
+    tt_output = tt_to_torch_tensor(tt_out, host)
+
+    passing = comp_pcc(torch_output, tt_output)
+    logger.info(comp_allclose_and_pcc(tt_output, torch_output))
+    ttl.device.CloseDevice(device)
+    assert passing[0], passing[1:]
+    logger.info(f"PASSED {passing[1]}")
+
+
 def test_run_upblock_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)

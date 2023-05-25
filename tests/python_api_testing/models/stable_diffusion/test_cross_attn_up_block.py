@@ -14,12 +14,87 @@ import torch.nn as nn
 import torch
 from diffusers import StableDiffusionPipeline
 from loguru import logger
+import pytest
 
 from libs import tt_lib as ttl
 from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tensor_rm
 from unet_2d_blocks import TtCrossAttnUpBlock2D
 
+
+@pytest.mark.parametrize("index", [1, 2, 3])
+def test_run_cross_attn_up_block_real_input_inference(index, model_location_generator):
+    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
+    unet = pipe.unet
+    unet.eval()
+    state_dict = unet.state_dict()
+
+    dir_path = model_location_generator("tt_dnn-models/StableDiffusion/tensor_files")
+    attr_path = f"{dir_path}/CrossAttnUpBlock2D_inp__attr__block_{index}.pt"
+    attention_mask_path = f"{dir_path}/CrossAttnUpBlock2D_inp__attention_mask__block_{index}.pt"
+    cross_attn_kwargs_path = f"{dir_path}/CrossAttnUpBlock2D_inp__cross_attention_kwargs__block_{index}.pt"
+    emb_path = f"{dir_path}/CrossAttnUpBlock2D_inp__emb__block_{index}.pt"
+    encoder_hidden_states_path = f"{dir_path}/CrossAttnUpBlock2D_inp__encoder_hidden_states__block_{index}.pt"
+    sample_path = f"{dir_path}/CrossAttnUpBlock2D_inp__sample__block_{index}.pt"
+    res_samples_path = f"{dir_path}/CrossAttnUpBlock2D_inp__res_samples__block_{index}.pt"
+    upsample_size_path = f"{dir_path}/CrossAttnUpBlock2D_inp__upsample_size__block_{index}.pt"
+
+
+    map_location = torch.device('cpu')
+    sample = torch.load(sample_path, map_location=map_location)
+    emb = torch.load(emb_path, map_location=map_location)
+    encoder_hidden_states = torch.load(encoder_hidden_states_path, map_location=map_location)
+    attention_mask = torch.load(attention_mask_path, map_location=map_location)
+    cross_attention_kwargs = torch.load(cross_attn_kwargs_path, map_location=map_location)
+    res_samples = torch.load(res_samples_path, map_location=map_location)
+    upsample_size = torch.load(upsample_size_path, map_location=map_location)
+
+    kwargs = torch.load(attr_path)
+    base_address = f"up_blocks.{index}"
+    up_block = pipe.unet.up_blocks[index]
+
+    torch_output = up_block(
+                        hidden_states=sample,
+                        temb=emb,
+                        res_hidden_states_tuple= res_samples,
+                        encoder_hidden_states=encoder_hidden_states,
+                        attention_mask=attention_mask,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        upsample_size=upsample_size,
+                        )
+
+    # Initialize the device
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
+    host = ttl.device.GetHost()
+
+    tt_cross_attn_up_block = TtCrossAttnUpBlock2D(**kwargs,
+                                            state_dict=state_dict,
+                                            base_address=base_address)
+
+    tt_sample = torch_to_tt_tensor_rm(sample, device, put_on_device=False)
+    tt_emb = torch_to_tt_tensor_rm(emb, device, put_on_device=False)
+    tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
+
+    tt_output = tt_cross_attn_up_block(
+        hidden_states=tt_sample,
+        temb=tt_emb,
+        res_hidden_states_tuple= res_samples,
+        encoder_hidden_states=tt_encoder_hidden_states,
+        attention_mask=attention_mask,
+        cross_attention_kwargs=cross_attention_kwargs
+        )
+
+    tt_output = tt_to_torch_tensor(tt_output, host)
+
+    passing = comp_pcc(torch_output, tt_output)
+    logger.info(comp_allclose_and_pcc(tt_output, torch_output))
+    ttl.device.CloseDevice(device)
+    assert passing[0], passing[1:]
+    logger.info(f"PASSED {passing[1]}")
+
+# test_run_cross_attn_up_block_inference_new(1)
 
 def test_run_cross_attn_up_block_inference():
     # setup pytorch model
