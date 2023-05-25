@@ -105,33 +105,33 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
     TT_ASSERT(in1_CB_size <= 130*1024);
     TT_ASSERT(out_CB_size <= 540*1024);
 
-    tt_metal::CoreRange all_cores(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange all_cores{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange left_column(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange left_column{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange all_except_left_column(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange all_except_left_column{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange in0_sender_in1_sender(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y});
+    CoreRange in0_sender_in1_sender{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y}};
 
-    tt_metal::CoreRange in0_sender_in1_receiver(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange in0_sender_in1_receiver{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange in0_receiver_in1_sender(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y});
+    CoreRange in0_receiver_in1_sender{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
 
-    tt_metal::CoreRange in0_receiver_in1_receiver(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange in0_receiver_in1_receiver{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {

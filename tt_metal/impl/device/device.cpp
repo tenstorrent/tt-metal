@@ -114,10 +114,10 @@ void Device::initialize_harvesting_information() {
             });
         }
     }
-    this->post_harvested_worker_grid_size_ = CoreCoord({
+    this->post_harvested_worker_grid_size_ = CoreCoord{
         .x = soc_desc.worker_grid_size.x,
         .y = soc_desc.worker_grid_size.y - this->num_harvested_rows_,
-    });
+    };
     this->harvesting_initialized_ = true;
 }
 

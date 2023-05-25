@@ -149,7 +149,7 @@ uint32_t allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical
 
 uint32_t allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical_core, uint32_t start_address, uint32_t size_bytes);
 
-uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator, const std::pair<CoreCoord, CoreCoord> &logical_core_range, uint32_t size_in_bytes);
+uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator, const CoreRange &logical_core_range, uint32_t size_in_bytes);
 
 }  // namespace allocator
 

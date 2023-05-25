@@ -102,7 +102,7 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     auto num_cores_r = a.shape()[2];
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
-    tt_metal::CoreRange all_cores(start_core, end_core);
+    CoreRange all_cores{.start=start_core, .end=end_core};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to eltwise unary needs to be on device!");
@@ -137,7 +137,7 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     std::cout << "Creating kernels " << std::endl;
     std::vector<tt_metal::DataMovementKernel*> binary_reader_kernels;
     for(uint32_t i = 0; i < num_cores_r; i++) {
-        tt_metal::CoreRange core_range({0,i}, {(std::size_t)num_cores_c - 1,i});
+        CoreRange core_range{.start={0,i}, .end={(std::size_t)num_cores_c - 1,i}};
         if(i%2 == 0) {
             binary_reader_kernels.push_back(tt_metal::CreateDataMovementKernel(
                 program, "tt_metal/kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",
@@ -151,7 +151,7 @@ Tensor transpose_hc_rm_multi_core(const Tensor &a) {
     }
 
     // for(uint32_t j = 0; j < num_cores_c; j++) {
-    //     tt_metal::CoreRange core_range({j,0}, {j, (std::size_t)num_cores_r - 1});
+    //     CoreRange core_range{.start={j,0}, .end={j, (std::size_t)num_cores_r - 1}};
     //     if(j%2 == 0) {
     //         binary_reader_kernels.push_back(tt_metal::CreateDataMovementKernel(
     //             program, "tt_metal/kernels/dataflow/transpose_hc_rm_8bank_partitioned.cpp",

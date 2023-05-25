@@ -4,6 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
+#include "common/core_coord.h"
 // #include "tt_gdb/tt_gdb.hpp"
 
 
@@ -26,17 +27,17 @@ tt_metal::Device *initialize_device() {
 tt_metal::Program create_program(
     tt_metal::Device *device,
     uint32_t single_tile_size,
-    const tt_metal::CoreRange &all_cores,
+    const CoreRange &all_cores,
     const tt_metal::KernelArgs &eltwise_unary_args) {
     tt_metal::Program program = tt_metal::Program();
 
-    CoreCoord start_core = all_cores.first;
-    CoreCoord end_core = all_cores.second;
+    CoreCoord start_core = all_cores.start;
+    CoreCoord end_core = all_cores.end;
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
     // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto core = CoreCoord(x, y);
+            auto core = CoreCoord{x, y};
             uint32_t src0_cb_index = 0;
             uint32_t src0_cb_addr = 200 * 1024;
             uint32_t num_input_tiles = 8;
@@ -116,7 +117,7 @@ void compile_and_configure_program(
 }
 
 void write_same_runtime_args_to_device(
-    tt_metal::Device *device, const tt_metal::Program &program, const tt_metal::CoreRange &core_range, int32_t num_tiles, tt_metal::Buffer &src_dram_buffer, tt_metal::Buffer &dst_dram_buffer) {
+    tt_metal::Device *device, const tt_metal::Program &program, const CoreRange &core_range, int32_t num_tiles, tt_metal::Buffer &src_dram_buffer, tt_metal::Buffer &dst_dram_buffer) {
     auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
     auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
@@ -144,8 +145,8 @@ void write_same_runtime_args_to_device(
 void write_unique_writer_runtime_args_to_device(
     tt_metal::Device *device,
     const tt_metal::Program &program,
-    const tt_metal::CoreRange &core_range,
-    const tt_metal::CoreBlocks &core_blocks,
+    const CoreRange &core_range,
+    const CoreRangeSet &core_blocks,
     int32_t num_tiles,
     tt_metal::Buffer &src_dram_buffer,
     tt_metal::Buffer &dst_dram_buffer_1,
@@ -193,7 +194,7 @@ void write_unique_writer_runtime_args_to_device(
 void write_unique_reader_writer_runtime_args_to_device(
     tt_metal::Device *device,
     const tt_metal::Program &program,
-    const tt_metal::CoreBlocks &core_blocks,
+    const CoreRangeSet &core_blocks,
     int32_t num_tiles_1,
     int32_t num_tiles_2,
     int32_t num_tiles_3,
@@ -260,7 +261,7 @@ bool test_multi_core_kernel_same_runtime_same_compile_time_args(tt_metal::Device
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {2, 2};
 
-    tt_metal::CoreRange all_cores(start_core, end_core);
+    CoreRange all_cores{.start=start_core, .end=end_core};
 
     uint32_t single_tile_size = 2 * 1024;
     int32_t num_tiles = 2048;
@@ -319,10 +320,11 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     ////////////////////////////////////////////////////////////////////////////
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {1, 1};
-    tt_metal::CoreRange core_group({0, 1}, {1, 1});
-    CoreCoord single_core = {1, 0};
-    tt_metal::CoreRange all_cores(start_core, end_core);
-    tt_metal::CoreBlocks core_blocks = {start_core, single_core, core_group};
+    CoreRange start_core_range = {.start=start_core, .end=start_core};
+    CoreRange core_group{.start={0, 1}, .end={1, 1}};
+    CoreRange single_core = {.start={1, 0}, .end={1, 0}};
+    CoreRange all_cores{.start=start_core, .end=end_core};
+    CoreRangeSet core_blocks = {start_core_range, single_core, core_group};
 
     uint32_t single_tile_size = 2 * 1024;
     int32_t num_tiles = 2048;
@@ -397,10 +399,11 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     ////////////////////////////////////////////////////////////////////////////
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {1, 1};
-    tt_metal::CoreRange core_group({0, 1}, {1, 1});
-    CoreCoord single_core = {1, 0};
-    tt_metal::CoreRange all_cores(start_core, end_core);
-    tt_metal::CoreBlocks core_blocks = {start_core, single_core, core_group};
+    CoreRange start_core_range{.start=start_core, .end=start_core};
+    CoreRange core_group{.start={0, 1}, .end={1, 1}};
+    CoreRange single_core = {.start={1, 0}, .end={1, 0}};
+    CoreRange all_cores{.start=start_core, .end=end_core};
+    CoreRangeSet core_blocks = {start_core_range, single_core, core_group};
 
     uint32_t single_tile_size = 2 * 1024;
     int32_t num_tiles_1 = 2048;

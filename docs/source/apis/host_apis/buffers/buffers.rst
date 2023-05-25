@@ -3,5 +3,5 @@ Buffers
 
 .. toctree::
   CreateCircularBuffer
-  CreateSemaphores
+  CreateSemaphore
   DeallocateBuffer

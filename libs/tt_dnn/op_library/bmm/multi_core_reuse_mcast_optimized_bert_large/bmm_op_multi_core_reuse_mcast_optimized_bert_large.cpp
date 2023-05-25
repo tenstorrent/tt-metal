@@ -43,50 +43,50 @@ tt_metal::Program create_program_mcast_in0_in1(
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
-    tt_metal::CoreRange all_cores(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange all_cores{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange left_column(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange left_column{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange top_row(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y});
+    CoreRange top_row{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
 
-    tt_metal::CoreRange all_except_left_column(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange all_except_left_column{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange all_except_top_row(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange all_except_top_row{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange in0_sender_in1_receiver(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange in0_sender_in1_receiver{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange in0_receiver_in1_sender(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y});
+    CoreRange in0_receiver_in1_sender{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
 
-    tt_metal::CoreRange in0_receiver_in1_receiver(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange in0_receiver_in1_receiver{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    /* TODO: CreateDataMovementKernel doesn't support CoreBlocks??
-    tt_metal::CoreBlocks in0_receiver_in1_receiver_ckb_white;
-    tt_metal::CoreBlocks in0_receiver_in1_receiver_ckb_black;
+    /* TODO: CreateDataMovementKernel doesn't support CoreRangeSet??
+    CoreRangeSet in0_receiver_in1_receiver_ckb_white;
+    CoreRangeSet in0_receiver_in1_receiver_ckb_black;
     bool white = true;
     for (int y = start_core_y + 1; y < start_core_y + num_cores_r; y++) {
         for (int x = start_core_x + 1; x < start_core_x + num_cores_c; x++) {
             if (white) {
-                in0_receiver_in1_receiver_ckb_white.push_back(CoreCoord((std::size_t) x, (std::size_t) y));
+                in0_receiver_in1_receiver_ckb_white.push_back(CoreCoord{(std::size_t) x, (std::size_t) y)};
                 white = false;
             }
             else {
-                in0_receiver_in1_receiver_ckb_black.push_back(CoreCoord((std::size_t) x, (std::size_t) y));
+                in0_receiver_in1_receiver_ckb_black.push_back(CoreCoord{(std::size_t) x, (std::size_t) y)};
                 white = true;
             }
         }
@@ -112,16 +112,10 @@ tt_metal::Program create_program_mcast_in0_in1(
     }
     */
     // Mcast args
-    auto in0_mcast_sender_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, INVALID);
-    auto in1_mcast_sender_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore_vec = tt_metal::CreateSemaphores(program, device, all_cores, INVALID);
-
-    // Address should be same across all cores
-    auto in0_mcast_sender_semaphore = in0_mcast_sender_semaphore_vec[0];
-    auto in0_mcast_receiver_semaphore = in0_mcast_receiver_semaphore_vec[0];
-    auto in1_mcast_sender_semaphore = in1_mcast_sender_semaphore_vec[0];
-    auto in1_mcast_receiver_semaphore = in1_mcast_receiver_semaphore_vec[0];
+    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
 
     CoreCoord top_left_core = {(std::size_t) start_core_x, (std::size_t) start_core_y};
     CoreCoord top_left_core_plus_one = {(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1};
@@ -290,7 +284,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_0_default);
 
-    /* TODO: CreateDataMovementKernel doesn't support CoreBlocks??
+    /* TODO: CreateDataMovementKernel doesn't support CoreRangeSet??
     auto mm_kernel_in0_receiver_ckb_white = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",

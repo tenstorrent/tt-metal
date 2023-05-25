@@ -12,7 +12,7 @@ class CircularBuffer {
    public:
     CircularBuffer(
         Device *device,
-        const CoreCoord &logical_core,
+        const CoreRangeSet &core_ranges,
         uint32_t buffer_index,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
@@ -20,7 +20,7 @@ class CircularBuffer {
 
     CircularBuffer(
         Device *device,
-        const CoreCoord &logical_core,
+        const CoreRangeSet &core_ranges,
         uint32_t buffer_index,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
@@ -36,7 +36,7 @@ class CircularBuffer {
 
     ~CircularBuffer();
 
-    CoreCoord logical_core() const { return logical_core_; }
+    CoreRangeSet core_ranges() const { return core_ranges_; }
 
     uint32_t buffer_index() const { return buffer_index_; }
 
@@ -48,25 +48,16 @@ class CircularBuffer {
 
     DataFormat data_format() const { return data_format_; }
 
-    CoreCoord noc_coordinates() const;
+    bool is_on_logical_core(const CoreCoord &logical_core) const;
 
    private:
     void reserve();
-    friend std::vector<CircularBuffer *> CreateCircularBuffers(
-        Program &program,
-        Device *device,
-        uint32_t buffer_index,
-        const CoreRange &core_range,
-        uint32_t num_tiles,
-        uint32_t size_in_bytes,
-        DataFormat data_format
-    );
 
     void deallocate();
     friend void DeallocateBuffer(Buffer &buffer);
 
     Device *device_;
-    CoreCoord logical_core_;             // Logical core
+    CoreRangeSet core_ranges_;
     uint32_t buffer_index_;               // A buffer ID unique within a Tensix core (0 to 32)
     uint32_t num_tiles_;                  // Size in tiles
     uint32_t size_;

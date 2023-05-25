@@ -40,10 +40,10 @@ class KernelArgs {
     /**
      * @brief Construct a KernelArgs object to represent kernel args across multiple groups of cores that can have the same or different args
      *
-     * @param core_blocks Vector holding CoreRanges and single logical Tensix core coordinates indicating where these args can be written
-     * @param compile_time_args Arguments supplied to kernels in the core range during compilation. Order of compile time args indicates which core block the args apply to
+     * @param core_ranges Set holding logical Tensix CoreRanges (inclusive) indicating where these args can be written
+     * @param compile_time_args Arguments supplied to kernels in the core range during compilation. Order of compile time args indicates which CoreRange the args apply to
      */
-    KernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args);
+    KernelArgs(const CoreRangeSet &core_ranges, const std::vector<std::vector<uint32_t>> &compile_time_args);
 
     KernelArgs(const KernelArgs &other);
     KernelArgs& operator=(const KernelArgs &other);
@@ -56,7 +56,7 @@ class KernelArgs {
     std::vector<uint32_t> runtime_args(const CoreCoord &logical_core) const;
 
    private:
-    void set_kernel_args_map(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &args_spec, bool set_compile_time_args);
+    void set_kernel_args_map(const CoreRangeSet &core_blocks, const std::vector<std::vector<uint32_t>> &args_spec, bool set_compile_time_args);
 
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
     friend bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);

@@ -3,6 +3,7 @@
 
 #include <string>
 #include <regex>
+#include <set>
 // #include <boost/functional/hash.hpp>
 // #include <command_assembler/xy_pair.h>
 
@@ -64,6 +65,34 @@ constexpr inline bool operator!=(const tt_cxy_pair &a, const tt_cxy_pair &b) { r
 
 constexpr inline bool operator<(const tt_cxy_pair &left, const tt_cxy_pair &right) {
   return (left.chip < right.chip || (left.chip == right.chip && left.x < right.x) || (left.chip == right.chip && left.x == right.x && left.y < right.y));
+}
+
+struct CoreRange {
+  CoreCoord start;
+  CoreCoord end;
+
+  std::string str() const { return "[" + start.str() + " - " + end.str() + "]"; }
+};
+
+constexpr inline bool operator==(const CoreRange &a, const CoreRange &b) { return a.start == b.start && a.end == b.end; }
+
+constexpr inline bool operator!=(const CoreRange &a, const CoreRange &b) { return !(a == b); }
+
+constexpr inline bool operator<(const CoreRange &left, const CoreRange &right) {
+  return (left.start < right.start || (left.start == right.start && left.end < right.end));
+}
+
+using CoreRangeSet = std::set<CoreRange>;
+
+inline bool core_coord_in_core_range_set(const CoreRangeSet &core_ranges, const CoreCoord &core_coord) {
+  for (auto core_range : core_ranges) {
+    bool in_x_range = (core_coord.x >= core_range.start.x) and (core_coord.x <= core_range.end.x);
+    bool in_y_range = (core_coord.y >= core_range.start.y) and (core_coord.y <= core_range.end.y);
+    if (in_x_range and in_y_range) {
+      return true;
+    }
+  }
+  return false;
 }
 
 namespace std {

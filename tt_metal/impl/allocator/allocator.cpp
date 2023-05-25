@@ -273,7 +273,7 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     uint32_t bank_id = 0;
     for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {
         for (uint32_t x = 0; x < alloc_config.worker_grid_size.x; x++) {
-            CoreCoord logical_core = CoreCoord(x, y);
+            CoreCoord logical_core = CoreCoord{x, y};
             allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
             allocator.logical_core_to_bank_ids.insert({logical_core, {bank_id}});
             bank_id++;
@@ -386,11 +386,11 @@ uint32_t allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical
     return rel_address_desc.absolute_address();
 }
 
-uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator, const std::pair<CoreCoord, CoreCoord> &logical_core_range, uint32_t size_in_bytes) {
+uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator, const CoreRange &logical_core_range, uint32_t size_in_bytes) {
     std::vector<std::pair<uint32_t, uint32_t>> candidate_addr_ranges;
     bool get_absolute_addresses = true;
-    auto start_core = logical_core_range.first;
-    auto end_core = logical_core_range.second;
+    auto start_core = logical_core_range.start;
+    auto end_core = logical_core_range.end;
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
             auto logical_core = CoreCoord(x, y);

@@ -10,13 +10,6 @@ namespace tt {
 
 namespace tt_metal {
 
-// Represents all cores within range specified by the two cores
-using CoreRange = std::pair<CoreCoord, CoreCoord>;
-using CoreBlocks = std::vector<std::variant<CoreCoord, CoreRange>>;
-
-template<class... Ts> struct overloaded_core : Ts... { using Ts::operator()...; };
-template<class... Ts> overloaded_core(Ts...) -> overloaded_core<Ts...>;
-
 // Fwd declares
 enum class BufferType;
 class CircularBuffer;
@@ -86,15 +79,6 @@ class Device {
 
     friend class Buffer;
     friend class CircularBuffer;
-    friend std::vector<CircularBuffer *> CreateCircularBuffers(
-        Program &program,
-        Device *device,
-        uint32_t buffer_index,
-        const CoreRange &core_range,
-        uint32_t num_tiles,
-        uint32_t size_in_bytes,
-        DataFormat data_format
-    );
 
     static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
     tt::ARCH arch_;

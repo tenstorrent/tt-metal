@@ -156,42 +156,6 @@ void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<
 //                  HOST API: program & kernels
 // ==================================================
 
-// /**
-//  * Creates compile time kernel arguments
-//  *
-//  * Return value: KernelArgs
-//  *
-//  * |      Argument     |                                                      Description                                                      |        Data type        |    Valid range    | required |
-//  * |:-----------------:|:---------------------------------------------------------------------------------------------------------------------:|:-----------------------:|:-----------------:|----------|
-//  * | logical_core      | The location of the Tensix core with a kernel that receives these arguments (Logical co-ordinates)                    | const CoreCoord &      | {0, 0} –> {9, 11} | Yes      |
-//  * | compile_time_args | Collection of compile time args for the kernel. Required kernel arguments are located in the *.cpp file of the kernel | std::vector<uint32_t> & | Default empty     | Yes      |
-//  */
-// KernelArgs InitializeCompileTimeKernelArgs(const CoreCoord &logical_core, const std::vector<uint32_t> &compile_time_args);
-
-// /**
-//  * Creates kernel arguments for a range of cores with the same compile time arguments
-//  *
-//  * Return value: KernelArgs
-//  *
-//  * | Argument          | Description                                                                                                           | Data type                                             | Valid range                                            | required |
-//  * |-------------------|-----------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------|--------------------------------------------------------|----------|
-//  * | core_range        | The range of the Tensix co-ordinates with a kernel that receives these arguments (Logical co-ordinates)               | const CoreRange & (std::pair<CoreCoord, CoreCoord>) | Any range encompassing cores within {0 , 0} –> {9, 11} | Yes      |
-//  * | compile_time_args | Collection of compile time args for the kernel. Required kernel arguments are located in the *.cpp file of the kernel | std::vector<uint32_t> &                               | Default empty                                          | Yes      |
-//  */
-// KernelArgs InitializeCompileTimeKernelArgs(const CoreRange &core_range, const std::vector<uint32_t> &compile_time_args);
-
-// /**
-//  * Creates kernel arguments specified by a combination of single core co-ordinates or a range of core co-ordinates
-//  *
-//  * Return value: KernelArgs
-//  *
-//  * |      Argument     |                                                                 Description                                                                |                               Data type                               |                                                      Valid range                                                      | required |
-//  * |:-----------------:|:------------------------------------------------------------------------------------------------------------------------------------------:|:---------------------------------------------------------------------:|:---------------------------------------------------------------------------------------------------------------------:|----------|
-//  * | core_blocks       | A collection containing a single Tensix co-ordinate or a range of Tensix co-ordinates that receives these arguments (Logical co-ordinates) | const CoreBlocks & (std::vector<std::variant<CoreCoord, CoreRange>>) | A single core or range encompassing cores within {0 , 0} –> {9, 11}                                                   | Yes      |
-//  * | compile_time_args | A collection of compile time args. Required kernel arguments are located in the *.cpp file of the kernel                                   | std::vector<std::vector<uint32_t>> &                                  | Same size as core_blocks. Args are assigned to core or range of cores from core_blocks in order of compile_time_args. | Yes      |
-//  */
-// KernelArgs InitializeCompileTimeKernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args);
-
 /**
  * Creates a single core data movement kernel and adds it to the program.
  *
@@ -224,7 +188,7 @@ DataMovementKernel *CreateDataMovementKernel(
  * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
  * | program        | The program to which this kernel will be added to                                                            | Program &                |                                                                | Yes      |
  * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
- * | core           | The location of the Tensix core on which the kernel will execute (Logical co-ordinates)                      | const CoreCoord &       | {0, 0} –> {9, 11}                                              | Yes      |
+ * | core           | A range of the Tensix cores (inclusive) on which the kernel will execute (Logical co-ordinates)              | const CoreCoord &       | {0, 0} –> {9, 11}                                              | Yes      |
  * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
  * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
  */
@@ -278,6 +242,48 @@ DataMovementKernel *CreateDataMovementKernel(
     NOC noc);
 
 /**
+ * Creates a multi-core data movement kernel and adds it to the program.
+ *
+ * Return value: DataMovementKernel *
+ *
+ * | Argument       | Description                                                                                                  | Data type                | Valid range                                                    | required |
+ * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
+ * | program        | The program to which this kernel will be added to                                                            | Program &                |                                                                | Yes      |
+ * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
+ * | core_ranges    | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
+ * | kernel_args    | Compile and runtime kernel arguments passed at compile time and runtime respectively                         | const KernelArgs &       |                                                                | Yes      |
+ * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
+ * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
+ */
+DataMovementKernel *CreateDataMovementKernel(
+    Program &program,
+    const std::string &file_name,
+    const CoreRangeSet &core_ranges,
+    const KernelArgs &kernel_args,
+    DataMovementProcessor processor_type,
+    NOC noc);
+
+/**
+ * Creates a multi-core data movement kernel with no default arguments and adds it to the program.
+ *
+ * Return value: DataMovementKernel *
+ *
+ * | Argument       | Description                                                                                                  | Data type                | Valid range                                                    | required |
+ * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
+ * | program        | The program to which this kernel will be added to                                                            | Program *                |                                                                | Yes      |
+ * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
+ * | core_ranges    | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
+ * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
+ * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
+ */
+DataMovementKernel *CreateDataMovementKernel(
+    Program &program,
+    const std::string &file_name,
+    const CoreRangeSet &core_ranges,
+    DataMovementProcessor processor_type,
+    NOC noc);
+
+/**
  * Creates a single core compute kernel object, and adds it to the program.
  *
  * Return value: ComputeKernel *
@@ -320,6 +326,30 @@ ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     const CoreRange &core_range,
+    const KernelArgs &kernel_args,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    bool math_approx_mode);
+
+/**
+ * Creates a multi-core compute kernel object, and adds it to the program.
+ *
+ * Return value: ComputeKernel *
+ *
+ * | Argument         | Description                                                                                                  | Data type           | Valid range                                            | required |
+ * |------------------|--------------------------------------------------------------------------------------------------------------|---------------------|--------------------------------------------------------|----------|
+ * | program          | The program to which this kernel will be added to                                                            | Program &           |                                                        | Yes      |
+ * | file_name        | Name of file containing the kernel                                                                           | const std::string   |                                                        | Yes      |
+ * | core_ranges      | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
+ * | kernel_args      | Kernel arguments, passed at compile time                                                                     | const KernelArgs &  |                                                        | Yes      |
+ * | math_fidelity    | The percision of the matrix compute engine                                                                   | enum                | MathFidelity::HiFi4                                    | Yes      |
+ * | fp32_dest_acc_en | Specifies the type of accumulation performed in the matrix compute engine.                                   | bool                | false (for Grayskull)                                  | Yes      |
+ * | math_approx_mode | Used by the vector compute engine. (will be depricated)                                                      | bool                | true, false                                            | Yes      |
+ */
+ComputeKernel *CreateComputeKernel(
+    Program &program,
+    const std::string &file_name,
+    const CoreRangeSet &core_ranges,
     const KernelArgs &kernel_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -409,7 +439,7 @@ CircularBuffer *CreateCircularBuffer(
  * Creates Circular Buffers (CBs) in L1 memory of all cores within core range (inclusive) at specified address and adds it to the program. L1 allocator does not track CBs with manually specified addresses.
  * Warning: Do not mix use of this API with CB creation APIs that are tracked by allocator since there is no gurantee that buffer space will not be overwritten.
  *
- * Return value: std::vector<CircularBuffer *>
+ * Return value: CircularBuffer *
  *
  * | Argument      | Description                                                                    | Type               | Valid Range                             | Required |
  * |---------------|--------------------------------------------------------------------------------|--------------------|-----------------------------------------|----------|
@@ -422,7 +452,7 @@ CircularBuffer *CreateCircularBuffer(
  * | l1_address    | Address at which the CB buffer will reside                                     | uint32_t           | 200 kB to 1MB (DOX-TODO: in bytes)          | True     |
  * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
  */
-std::vector<CircularBuffer *> CreateCircularBuffers(
+CircularBuffer *CreateCircularBuffers(
     Program &program,
     Device *device,
     uint32_t buffer_index,
@@ -448,7 +478,7 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
  * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (DOX-TODO: in Bytes)              | True     |
  * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
  */
-std::vector<CircularBuffer *> CreateCircularBuffers(
+CircularBuffer *CreateCircularBuffers(
     Program &program,
     Device *device,
     uint32_t buffer_index,
@@ -458,18 +488,84 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
     DataFormat data_format);
 
 /**
+ * Creates Circular Buffers (CBs) in L1 memory of all cores within set of core ranges (inclusive) at specified address and adds it to the program. L1 allocator does not track CBs with manually specified addresses.
+ * Warning: Do not mix use of this API with CB creation APIs that are tracked by allocator since there is no gurantee that buffer space will not be overwritten.
+ *
+ * Return value: CircularBuffer *
+ *
+ * | Argument      | Description                                                                    | Type               | Valid Range                             | Required |
+ * |---------------|--------------------------------------------------------------------------------|--------------------|-----------------------------------------|----------|
+ * | program       | The program to which buffer will be added to.                                  | Program *          |                                         | True     |
+ * | device        | The device where the L1 buffer resides.                                        | Device *           |                                         | True     |
+ * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 DOX-TODO: specify more detail here. | True     |
+ * | core_ranges   | Ranges of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRangeSet & (std::set<CoreRange>) | DOX-TODO: { , } –> { , }                    | True     |
+ * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | DOX-TODO: range?                            | True     |
+ * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (DOX-TODO: in Bytes)              | True     |
+ * | l1_address    | Address at which the CB buffer will reside                                     | uint32_t           | 200 kB to 1MB (DOX-TODO: in bytes)          | True     |
+ * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
+ */
+CircularBuffer *CreateCircularBuffers(
+    Program &program,
+    Device *device,
+    uint32_t buffer_index,
+    const CoreRangeSet &core_ranges,
+    uint32_t num_tiles,
+    uint32_t size_in_bytes,
+    uint32_t l1_address,
+    DataFormat data_format);
+
+/**
+ * Creates Circular Buffer (CB) per core within set of core ranges (inclusive). CBs will be allocated to the same address on their respective cores, an error is returned is this is not possible.
+ * Warning: Do not mix use of this API with CB creation APIs that are not tracked by allocator since there is no gurantee that buffer space will not be overwritten.
+ *
+ * Return value: CircularBuffer *
+ *
+ * | Argument      | Description                                                                    | Type               | Valid Range                             | Required |
+ * |---------------|--------------------------------------------------------------------------------|--------------------|-----------------------------------------|----------|
+ * | program       | The program to which buffer will be added to.                                  | Program *          |                                         | True     |
+ * | device        | The device where the L1 buffer resides.                                        | Device *           |                                         | True     |
+ * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 DOX-TODO: specify more detail here. | True     |
+ * | core_ranges   | Ranges of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRange & (std::set<CoreRange>) | DOX-TODO: { , } –> { , }                    | True     |
+ * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | DOX-TODO: range?                            | True     |
+ * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (DOX-TODO: in Bytes)              | True     |
+ * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
+ */
+CircularBuffer *CreateCircularBuffers(
+    Program &program,
+    Device *device,
+    uint32_t buffer_index,
+    const CoreRangeSet &core_ranges,
+    uint32_t num_tiles,
+    uint32_t size_in_bytes,
+    DataFormat data_format);
+
+/**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to four 32B semaphores.
  *
- * Return value: std::vector<Semaphore *>
+ * Return value: Semaphore *
  *
  * | Argument      | Description                                          | Type                                                  | Valid Range                                              | Required |
  * |---------------|------------------------------------------------------|-------------------------------------------------------|----------------------------------------------------------|----------|
  * | program       | The program to which semaphore will be added to      | Program &                                             |                                                          | Yes      |
  * | device        | The device where the semaphore resides               | Device *                                              |                                                          | Yes      |
- * | core_range    | Range of the Tensix co-ordinates using the semaphore | const CoreRange & (std::pair<CoreCoord, CoreCoord>) | Pair of logical coords where first coord <= second coord | Yes      |
+ * | core_range    | Range of the Tensix co-ordinates using the semaphore | const CoreRange & (std::pair<CoreCoord, CoreCoord>)   | Pair of logical coords where first coord <= second coord | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                              |                                                          | Yes      |
  */
-std::vector<Semaphore *> CreateSemaphores(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value);
+Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value);
+
+/**
+ * Initializes semaphore on all cores within core range (inclusive). Each core can have up to four 32B semaphores.
+ *
+ * Return value: Semaphore *
+ *
+ * | Argument       | Description                                                 | Type                   | Valid Range                                               | Required |
+ * |----------------|-------------------------------------------------------------|------------------------|-----------------------------------------------------------|----------|
+ * | program        | The program to which semaphore will be added to             | Program &              |                                                           | Yes      |
+ * | device         | The device where the semaphore resides                      | Device *               |                                                           | Yes      |
+ * | core_ranges    | Set of Range of the Tensix co-ordinates using the semaphore | const CoreRangeSet &   | Pairs of logical coords where first coord <= second coord | Yes      |
+ * | initial_value  | Initial value of the semaphore                              | uint32_t               |                                                           | Yes      |
+ */
+Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_ranges, uint32_t initial_value);
 
 /**
 * Copies data from a host buffer into the specified buffer
@@ -586,7 +682,7 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 
 bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args);
 
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &runtime_args_spec);
+bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRangeSet &core_ranges, const std::vector<std::vector<uint32_t>> &runtime_args_spec);
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.

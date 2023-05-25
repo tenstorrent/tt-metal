@@ -14,33 +14,17 @@ class Semaphore {
    public:
     Semaphore(
         Device *device,
-        const CoreCoord &logical_core,
+        const CoreRangeSet &core_ranges,
         uint32_t address,
-        uint32_t initial_value) : device_(device), logical_core_(logical_core), address_(address), initial_value_(initial_value) {}
+        uint32_t initial_value) : device_(device), core_ranges_(core_ranges), address_(address), initial_value_(initial_value) {}
 
-    Semaphore(const Semaphore &other) : device_(other.device_), logical_core_(other.logical_core_), address_(other.address_), initial_value_(other.initial_value_) {}
+    Semaphore(const Semaphore &other);
 
-    Semaphore& operator=(const Semaphore &other) {
-        if (this != &other) {
-            this->device_ = other.device_;
-            this->logical_core_ = other.logical_core_;
-            this->address_ = other.address_;
-            this->initial_value_ = other.initial_value_;
-        }
-        return *this;
-    }
+    Semaphore& operator=(const Semaphore &other);
 
-    Semaphore(Semaphore &&other) : device_(other.device_), logical_core_(other.logical_core_), address_(other.address_), initial_value_(other.initial_value_) {}
+    Semaphore(Semaphore &&other);
 
-    Semaphore& operator=(Semaphore &&other) {
-        if (this != &other) {
-            this->device_ = other.device_;
-            this->logical_core_ = other.logical_core_;
-            this->address_ = other.address_;
-            this->initial_value_ = other.initial_value_;
-        }
-        return *this;
-    }
+    Semaphore& operator=(Semaphore &&other);
 
     constexpr uint32_t size() const { return SEMAPHORE_SIZE / NUM_SEMAPHORES; }
 
@@ -48,21 +32,18 @@ class Semaphore {
 
     uint32_t address() const { return address_; }
 
-    CoreCoord logical_core() const { return logical_core_; }
+    CoreRangeSet core_ranges() const { return core_ranges_; }
 
     uint32_t initial_value() const { return initial_value_; }
 
-    CoreCoord noc_coordinates() const { return this->device_->worker_core_from_logical_core(this->logical_core_); }
+    bool initialized_on_logical_core(const CoreCoord &logical_core) const;
 
    private:
     Device *device_;
-    CoreCoord logical_core_;             // Logical core
+    CoreRangeSet core_ranges_;             // Ranges of cores where this semaphore is initialized
     uint32_t address_;
     uint32_t initial_value_;              // Initial value of semaphore
 };
-
-
-
 
 }  // namespace tt_metal
 

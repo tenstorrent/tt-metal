@@ -101,6 +101,54 @@ DataMovementKernel *CreateDataMovementKernel(
     return kernel;
 }
 
+DataMovementKernel *CreateDataMovementKernel(
+    Program &program,
+    const std::string &file_name,
+    const CoreRange &core_range,
+    const KernelArgs &kernel_args,
+    DataMovementProcessor processor_type,
+    NOC noc) {
+    TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
+    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, kernel_args, processor_type, noc);
+    program.add_kernel(kernel);
+    return kernel;
+}
+
+DataMovementKernel *CreateDataMovementKernel(
+    Program &program,
+    const std::string &file_name,
+    const CoreRange &core_range,
+    DataMovementProcessor processor_type,
+    NOC noc) {
+    TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
+    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, processor_type, noc);
+    program.add_kernel(kernel);
+    return kernel;
+}
+
+DataMovementKernel *CreateDataMovementKernel(
+    Program &program,
+    const std::string &file_name,
+    const CoreRangeSet &core_range_set,
+    const KernelArgs &kernel_args,
+    DataMovementProcessor processor_type,
+    NOC noc) {
+    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, kernel_args, processor_type, noc);
+    program.add_kernel(kernel);
+    return kernel;
+}
+
+DataMovementKernel *CreateDataMovementKernel(
+    Program &program,
+    const std::string &file_name,
+    const CoreRangeSet &core_range_set,
+    DataMovementProcessor processor_type,
+    NOC noc) {
+    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, processor_type, noc);
+    program.add_kernel(kernel);
+    return kernel;
+}
+
 ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
@@ -120,31 +168,6 @@ ComputeKernel *CreateComputeKernel(
     return kernel;
 }
 
-DataMovementKernel *CreateDataMovementKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreRange &core_range,
-    const KernelArgs &kernel_args,
-    DataMovementProcessor processor_type,
-    NOC noc) {
-    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, kernel_args, processor_type, noc);
-    program.add_kernel(kernel);
-    return kernel;
-}
-
-DataMovementKernel *CreateDataMovementKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreRange &core_range,
-    DataMovementProcessor processor_type,
-    NOC noc) {
-    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, processor_type, noc);
-    program.add_kernel(kernel);
-    return kernel;
-}
-
 ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
@@ -153,10 +176,29 @@ ComputeKernel *CreateComputeKernel(
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
-    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
+    TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
     ComputeKernel *kernel = new ComputeKernel(
         file_name,
         core_range,
+        kernel_args,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
+    program.add_kernel(kernel);
+    return kernel;
+}
+
+ComputeKernel *CreateComputeKernel(
+    Program &program,
+    const std::string &file_name,
+    const CoreRangeSet &core_ranges,
+    const KernelArgs &kernel_args,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    bool math_approx_mode) {
+    ComputeKernel *kernel = new ComputeKernel(
+        file_name,
+        core_ranges,
         kernel_args,
         math_fidelity,
         fp32_dest_acc_en,
@@ -182,10 +224,8 @@ CircularBuffer *CreateCircularBuffer(
     uint32_t size_in_bytes,
     uint32_t l1_address,
     DataFormat data_format) {
-    CircularBuffer *circular_buffer =
-        new CircularBuffer(device, core, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
-    program.add_circular_buffer(circular_buffer);
-    return circular_buffer;
+    CoreRange single_core_range = {.start = core, .end = core};
+    return CreateCircularBuffers(program, device, buffer_index, {single_core_range}, num_tiles, size_in_bytes, l1_address, data_format);
 }
 
 CircularBuffer *CreateCircularBuffer(
@@ -196,13 +236,11 @@ CircularBuffer *CreateCircularBuffer(
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format) {
-    CircularBuffer *circular_buffer =
-        new CircularBuffer(device, core, buffer_index, num_tiles, size_in_bytes, data_format);
-    program.add_circular_buffer(circular_buffer);
-    return circular_buffer;
+    CoreRange single_core_range = {.start = core, .end = core};
+    return CreateCircularBuffers(program, device, buffer_index, {single_core_range}, num_tiles, size_in_bytes, data_format);
 }
 
-std::vector<CircularBuffer *> CreateCircularBuffers(
+CircularBuffer *CreateCircularBuffers(
     Program &program,
     Device *device,
     uint32_t buffer_index,
@@ -211,23 +249,10 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
     uint32_t size_in_bytes,
     uint32_t l1_address,
     DataFormat data_format) {
-    std::vector<CircularBuffer *> circular_buffers;
-    auto start_core = core_range.first;
-    auto end_core = core_range.second;
-    TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
-    for (auto x = start_core.x; x <= end_core.x; x++) {
-        for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto core = CoreCoord(x, y);
-            CircularBuffer *circular_buffer =
-                new CircularBuffer(device, core, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
-            program.add_circular_buffer(circular_buffer);
-            circular_buffers.push_back(circular_buffer);
-        }
-    }
-    return circular_buffers;
+    return CreateCircularBuffers(program, device, buffer_index, {core_range}, num_tiles, size_in_bytes, l1_address, data_format);
 }
 
-std::vector<CircularBuffer *> CreateCircularBuffers(
+CircularBuffer *CreateCircularBuffers(
     Program &program,
     Device *device,
     uint32_t buffer_index,
@@ -235,35 +260,44 @@ std::vector<CircularBuffer *> CreateCircularBuffers(
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format) {
-    uint32_t l1_address = allocator::get_address_for_circular_buffers_across_core_range(*device->allocator_, core_range, size_in_bytes);
-    std::vector<CircularBuffer *> circular_buffers;
-    auto start_core = core_range.first;
-    auto end_core = core_range.second;
-    TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
-    for (auto x = start_core.x; x <= end_core.x; x++) {
-        for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto logical_core = CoreCoord(x, y);
-            CircularBuffer *circular_buffer =
-                new CircularBuffer(device, logical_core, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
-            // CBs constructed with address don't invoke the allocator, so we need to manually invoke it by reserving space
-            circular_buffer->reserve();
-            program.add_circular_buffer(circular_buffer);
-            circular_buffers.push_back(circular_buffer);
-        }
-    }
-    return circular_buffers;
+    return CreateCircularBuffers(program, device, buffer_index, {core_range}, num_tiles, size_in_bytes, data_format);
 }
 
-std::vector<Semaphore *> CreateSemaphores(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value) {
-    std::vector<Semaphore *> semaphores;
-    auto start_core = core_range.first;
-    auto end_core = core_range.second;
-    auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
-    TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
+CircularBuffer *CreateCircularBuffers(
+    Program &program,
+    Device *device,
+    uint32_t buffer_index,
+    const CoreRangeSet &core_ranges,
+    uint32_t num_tiles,
+    uint32_t size_in_bytes,
+    uint32_t l1_address,
+    DataFormat data_format) {
+    CircularBuffer *circular_buffer = new CircularBuffer(device, core_ranges, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
+    program.add_circular_buffer(circular_buffer);
+    return circular_buffer;
+}
+
+CircularBuffer *CreateCircularBuffers(
+    Program &program,
+    Device *device,
+    uint32_t buffer_index,
+    const CoreRangeSet &core_ranges,
+    uint32_t num_tiles,
+    uint32_t size_in_bytes,
+    DataFormat data_format) {
+    CircularBuffer *circular_buffer = new CircularBuffer(device, core_ranges, buffer_index, num_tiles, size_in_bytes, data_format);
+    program.add_circular_buffer(circular_buffer);
+    return circular_buffer;
+}
+
+uint32_t get_semaphore_address(const Program &program, const CoreRange &core_range) {
     uint32_t address = -1;
+    auto start_core = core_range.start;
+    auto end_core = core_range.end;
+    auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto logical_core = CoreCoord(x, y);
+            auto logical_core = CoreCoord{x, y};
             auto semaphores_on_core = program.semaphores_on_core(logical_core);
             if (semaphores_on_core.size() == NUM_SEMAPHORES) {
                 TT_THROW("Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" + std::to_string(NUM_SEMAPHORES) + ") reached!");
@@ -271,15 +305,38 @@ std::vector<Semaphore *> CreateSemaphores(Program &program, Device *device, cons
             uint32_t addr = semaphores_on_core.empty() ? SEMAPHORE_BASE : semaphores_on_core.back()->address() + size_per_semaphore;
             if (address == -1) {
                 address = addr;
-            } else {
-                TT_ASSERT(addr == address);
+            } else if (addr != address) {
+                TT_THROW("Expected semaphore on logical core " + logical_core.str() + " to be initialized at L1 address " + std::to_string(address) + " but it is at " + std::to_string(addr));
             }
-            Semaphore *semaphore = new Semaphore(device, logical_core, address, initial_value);
-            program.add_semaphore(semaphore);
-            semaphores.push_back(semaphore);
         }
     }
-    return semaphores;
+    return address;
+}
+
+Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value) {
+    auto start_core = core_range.start;
+    auto end_core = core_range.end;
+    TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
+    uint32_t address = get_semaphore_address(program, core_range);
+    Semaphore *semaphore = new Semaphore(device, {core_range}, address, initial_value);
+    program.add_semaphore(semaphore);
+    return semaphore;
+}
+
+Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_ranges, uint32_t initial_value) {
+    auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
+    uint32_t address = -1;
+    for (auto core_range : core_ranges) {
+        auto addr = get_semaphore_address(program, core_range);
+        if (address == -1) {
+            address = addr;
+        } else {
+            TT_ASSERT(addr == address);
+        }
+    }
+    Semaphore *semaphore = new Semaphore(device, core_ranges, address, initial_value);
+    program.add_semaphore(semaphore);
+    return semaphore;
 }
 
 void WriteToDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
@@ -796,33 +853,27 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 }
 
 bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args) {
-    TT_ASSERT(core_range.first == core_range.second or core_range.first < core_range.second && "Invalid core range!");
-    CoreBlocks core_blocks = {core_range};
-    return WriteRuntimeArgsToDevice(device, kernel, core_blocks, {runtime_args});
+    TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
+    CoreRangeSet core_ranges = {core_range};
+    return WriteRuntimeArgsToDevice(device, kernel, core_ranges, {runtime_args});
 }
 
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &runtime_args_spec) {
+bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRangeSet &core_ranges, const std::vector<std::vector<uint32_t>> &runtime_args_spec) {
     bool pass = true;
-    TT_ASSERT(core_blocks.size() == runtime_args_spec.size());
-    for (auto index = 0; index < core_blocks.size(); index++) {
-        auto core = core_blocks.at(index);
+    int index = 0;
+    TT_ASSERT(core_ranges.size() == runtime_args_spec.size());
+    for (auto core_range : core_ranges) {
+        auto start_core = core_range.start;
+        auto end_core = core_range.end;
         auto runtime_args = runtime_args_spec.at(index);
-        std::visit(overloaded_core {
-            [device, kernel, runtime_args](CoreCoord single_core) {
-                WriteRuntimeArgsToDevice(device, kernel, single_core, runtime_args);
-            },
-            [device, kernel, runtime_args](CoreRange core_range) {
-                auto start_core = core_range.first;
-                auto end_core = core_range.second;
-                TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
-                for (auto x = start_core.x; x <= end_core.x; x++) {
-                    for (auto y = start_core.y; y <= end_core.y; y++) {
-                        auto core_in_range = CoreCoord(x, y);
-                        WriteRuntimeArgsToDevice(device, kernel, core_in_range, runtime_args);
-                    }
-                }
+        TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
+        for (auto x = start_core.x; x <= end_core.x; x++) {
+            for (auto y = start_core.y; y <= end_core.y; y++) {
+                auto core_in_range = CoreCoord{.x=x, .y=y};
+                WriteRuntimeArgsToDevice(device, kernel, core_in_range, runtime_args);
             }
-        }, core);
+        }
+        index++;
     }
     return pass;
 }

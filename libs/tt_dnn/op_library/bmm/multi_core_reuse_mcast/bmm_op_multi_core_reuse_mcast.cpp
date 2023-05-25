@@ -36,33 +36,33 @@ tt_metal::Program create_program_mcast_in0_in1(
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
-    tt_metal::CoreRange all_cores(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange all_cores{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange left_column(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange left_column{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange all_except_left_column(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange all_except_left_column{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange in0_sender_in1_sender(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y});
+    CoreRange in0_sender_in1_sender{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y}};
 
-    tt_metal::CoreRange in0_sender_in1_receiver(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange in0_sender_in1_receiver{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange in0_receiver_in1_sender(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y});
+    CoreRange in0_receiver_in1_sender{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
 
-    tt_metal::CoreRange in0_receiver_in1_receiver(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange in0_receiver_in1_receiver{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
     tt_metal::KernelArgs reader_writer_compile_time_args;
@@ -358,16 +358,16 @@ tt_metal::Program create_program_mcast_in0(
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
-    tt_metal::CoreRange all_cores(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange all_cores{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange mcast_senders(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1});
-    tt_metal::CoreRange mcast_receivers(
-        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange mcast_senders{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange mcast_receivers{
+        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
     tt_metal::KernelArgs reader_writer_compile_time_args;
@@ -611,16 +611,16 @@ tt_metal::Program create_program_mcast_in1(
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
-    tt_metal::CoreRange all_cores(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange all_cores{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    tt_metal::CoreRange mcast_senders(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y});
-    tt_metal::CoreRange mcast_receivers(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
+    CoreRange mcast_senders{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
+    CoreRange mcast_receivers{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
     tt_metal::KernelArgs reader_writer_compile_time_args;

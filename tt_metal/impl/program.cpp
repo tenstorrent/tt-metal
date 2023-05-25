@@ -5,20 +5,20 @@ namespace tt {
 namespace tt_metal {
 
 Program::Program(Program &&other)
-    : kernels_(other.kernels_), circular_buffers_(other.circular_buffers_), logical_core_to_semaphores_(other.logical_core_to_semaphores_) {
+    : kernels_(other.kernels_), circular_buffers_(other.circular_buffers_), semaphores_(other.semaphores_) {
         other.kernels_.clear();
         other.circular_buffers_.clear();
-        other.logical_core_to_semaphores_.clear();
+        other.semaphores_.clear();
 }
 
 Program &Program::operator=(Program &&other) {
     if (this != &other) {
         this->kernels_ = other.kernels_;
         this->circular_buffers_ = other.circular_buffers_;
-        this->logical_core_to_semaphores_ = other.logical_core_to_semaphores_;
+        this->semaphores_ = other.semaphores_;
         other.kernels_.clear();
         other.circular_buffers_.clear();
-        other.logical_core_to_semaphores_.clear();
+        other.semaphores_.clear();
     }
     return *this;
 }
@@ -120,7 +120,7 @@ std::vector<std::string> Program::cores_to_ops() const {
 std::vector<CircularBuffer *> Program::circular_buffers_on_core(const CoreCoord &core) const {
     std::vector<CircularBuffer *> cbs_on_core;
     for (auto circular_buffer : circular_buffers_) {
-        if (circular_buffer->logical_core() == core) {
+        if (circular_buffer->is_on_logical_core(core)) {
             cbs_on_core.push_back(circular_buffer);
         }
     }
@@ -128,10 +128,13 @@ std::vector<CircularBuffer *> Program::circular_buffers_on_core(const CoreCoord 
 }
 
 std::vector<Semaphore *> Program::semaphores_on_core(const CoreCoord &core) const {
-    if (this->logical_core_to_semaphores_.find(core) == this->logical_core_to_semaphores_.end()) {
-        return {};
+    std::vector<Semaphore *> semaphores;
+    for (auto semaphore : this->semaphores_) {
+        if (semaphore->initialized_on_logical_core(core)) {
+            semaphores.push_back(semaphore);
+        }
     }
-    return this->logical_core_to_semaphores_.at(core);
+    return semaphores;
 }
 
 std::vector<CoreCoord> Program::logical_cores() const {

@@ -11,35 +11,25 @@ KernelArgs::KernelArgs(const CoreCoord &logical_core, const std::vector<uint32_t
     core_to_compile_time_args_.insert({logical_core, compile_time_args});
 }
 
-void KernelArgs::set_kernel_args_map(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &args_spec, bool set_compile_time_args) {
-    for (auto index = 0; index < core_blocks.size(); index++) {
-        auto core = core_blocks.at(index);
-        auto args = args_spec.at(index);
-
-        std::visit(overloaded_core {
-            [this, args, set_compile_time_args](CoreCoord single_core) {
+void KernelArgs::set_kernel_args_map(const CoreRangeSet &core_ranges, const std::vector<std::vector<uint32_t>> &args_spec, bool set_compile_time_args) {
+    TT_ASSERT(core_ranges.size() == args_spec.size());
+    int core_range_index = 0;
+    // TODO: validate core_ranges
+    for (auto core_range : core_ranges) {
+        auto start_core = core_range.start;
+        auto end_core = core_range.end;
+        auto args = args_spec.at(core_range_index);
+        for (auto x = start_core.x; x <= end_core.x; x++) {
+            for (auto y = start_core.y; y <= end_core.y; y++) {
+                auto core_in_range = CoreCoord{.x=x, .y=y};
                 if (set_compile_time_args) {
-                    this->core_to_compile_time_args_.insert({single_core, args});
+                    this->core_to_compile_time_args_.insert({core_in_range, args});
                 } else {
-                    this->core_to_runtime_args_.insert({single_core, args});
-                }
-            },
-            [this, args, set_compile_time_args](CoreRange core_range) {
-                auto start_core = core_range.first;
-                auto end_core = core_range.second;
-                TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
-                for (auto x = start_core.x; x <= end_core.x; x++) {
-                    for (auto y = start_core.y; y <= end_core.y; y++) {
-                        auto core_in_range = CoreCoord(x, y);
-                        if (set_compile_time_args) {
-                            this->core_to_compile_time_args_.insert({core_in_range, args});
-                        } else {
-                            this->core_to_runtime_args_.insert({core_in_range, args});
-                        }
-                    }
+                    this->core_to_runtime_args_.insert({core_in_range, args});
                 }
             }
-        }, core);
+        }
+        core_range_index++;
     }
 }
 
@@ -47,9 +37,8 @@ KernelArgs::KernelArgs(const CoreRange &core_range, const std::vector<uint32_t> 
     this->set_kernel_args_map({core_range}, {compile_time_args}, /*set_compile_time_args=*/true);
 }
 
-KernelArgs::KernelArgs(const CoreBlocks &core_blocks, const std::vector<std::vector<uint32_t>> &compile_time_args) {
-    TT_ASSERT(core_blocks.size() == compile_time_args.size());
-    this->set_kernel_args_map(core_blocks, compile_time_args, /*set_compile_time_args=*/true);
+KernelArgs::KernelArgs(const CoreRangeSet &core_ranges, const std::vector<std::vector<uint32_t>> &compile_time_args) {
+    this->set_kernel_args_map(core_ranges, compile_time_args, /*set_compile_time_args=*/true);
 }
 
 KernelArgs::KernelArgs(const KernelArgs &other) : core_to_compile_time_args_(other.core_to_compile_time_args_), core_to_runtime_args_(other.core_to_runtime_args_) {}

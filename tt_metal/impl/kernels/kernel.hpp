@@ -38,17 +38,9 @@ void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t &b
 
 class Kernel {
    public:
-    Kernel(const std::string &kernel_path_file_name, const CoreRange &core_range, KernelType kernel_type) :
-        kernel_path_file_name_(kernel_path_file_name), start_core_(core_range.first), end_core_(core_range.second), kernel_type_(kernel_type) {}
+    Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_ranges, KernelType kernel_type);
 
-    Kernel(const std::string &kernel_path_file_name, const CoreCoord &core, KernelType kernel_type) :
-        kernel_path_file_name_(kernel_path_file_name), start_core_(core), end_core_(core), kernel_type_(kernel_type) {}
-
-    Kernel(const std::string &kernel_path_file_name, const CoreRange &core_range, const KernelArgs &kernel_args, KernelType kernel_type) :
-        kernel_path_file_name_(kernel_path_file_name), start_core_(core_range.first), end_core_(core_range.second), kernel_args_(kernel_args), kernel_type_(kernel_type) {}
-
-    Kernel(const std::string &kernel_path_file_name, const CoreCoord &core, const KernelArgs &kernel_args, KernelType kernel_type) :
-        kernel_path_file_name_(kernel_path_file_name), start_core_(core), end_core_(core), kernel_args_(kernel_args), kernel_type_(kernel_type) {}
+    Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_ranges, const KernelArgs &kernel_args, KernelType kernel_type);
 
     virtual ~Kernel() {}
 
@@ -56,7 +48,9 @@ class Kernel {
 
     std::string name() const;
 
-    std::vector<CoreCoord> logical_cores() const;
+    CoreRangeSet core_ranges() const { return core_ranges_; }
+
+    std::set<CoreCoord> logical_cores() const;
 
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
@@ -85,8 +79,7 @@ class Kernel {
 
    protected:
     std::string kernel_path_file_name_;                 // Full kernel path and file name
-    CoreCoord start_core_;                             // First logical Tensix coordinates within core grid
-    CoreCoord end_core_;                               // Last logical Tensix coordinates within core grid
+    CoreRangeSet core_ranges_;
     KernelType kernel_type_;
     std::map<CoreCoord, std::string> binary_path_;     //
     KernelArgs kernel_args_;
@@ -103,10 +96,29 @@ class DataMovementKernel : public Kernel {
    public:
     DataMovementKernel(
         const std::string &kernel_path_file_name,
+        const CoreRangeSet &core_ranges,
+        DataMovementProcessor processor,
+        NOC noc) :
+        Kernel(kernel_path_file_name, core_ranges, KernelType::DataMovement),
+        processor_(processor),
+        noc_(noc) {}
+
+    DataMovementKernel(
+        const std::string &kernel_path_file_name,
+        const CoreRangeSet &core_ranges,
+        const KernelArgs &kernel_args,
+        DataMovementProcessor processor,
+        NOC noc) :
+        Kernel(kernel_path_file_name, core_ranges, kernel_args, KernelType::DataMovement),
+        processor_(processor),
+        noc_(noc) {}
+
+    DataMovementKernel(
+        const std::string &kernel_path_file_name,
         const CoreRange &core_range,
         DataMovementProcessor processor,
         NOC noc) :
-        Kernel(kernel_path_file_name, core_range, KernelType::DataMovement),
+        Kernel(kernel_path_file_name, {core_range}, KernelType::DataMovement),
         processor_(processor),
         noc_(noc) {}
 
@@ -116,7 +128,7 @@ class DataMovementKernel : public Kernel {
         const KernelArgs &kernel_args,
         DataMovementProcessor processor,
         NOC noc) :
-        Kernel(kernel_path_file_name, core_range, kernel_args, KernelType::DataMovement),
+        Kernel(kernel_path_file_name, {core_range}, kernel_args, KernelType::DataMovement),
         processor_(processor),
         noc_(noc) {}
 
@@ -125,7 +137,7 @@ class DataMovementKernel : public Kernel {
         const CoreCoord &core,
         DataMovementProcessor processor,
         NOC noc) :
-        Kernel(kernel_path_file_name, core, KernelType::DataMovement),
+        Kernel(kernel_path_file_name, {{.start=core, .end=core}}, KernelType::DataMovement),
         processor_(processor),
         noc_(noc) {}
 
@@ -135,7 +147,7 @@ class DataMovementKernel : public Kernel {
         const KernelArgs &kernel_args,
         DataMovementProcessor processor,
         NOC noc) :
-        Kernel(kernel_path_file_name, core, kernel_args, KernelType::DataMovement),
+        Kernel(kernel_path_file_name, {{.start=core, .end=core}}, kernel_args, KernelType::DataMovement),
         processor_(processor),
         noc_(noc) {}
 
@@ -162,12 +174,24 @@ class ComputeKernel : public Kernel {
    public:
     ComputeKernel(
         const std::string &kernel_path_file_name,
+        const CoreRangeSet &core_ranges,
+        const KernelArgs &kernel_args,
+        MathFidelity math_fidelity,
+        bool fp32_dest_acc_en,
+        bool math_approx_mode) :
+        Kernel(kernel_path_file_name, core_ranges, kernel_args, KernelType::Compute),
+        math_fidelity_(math_fidelity),
+        fp32_dest_acc_en_(fp32_dest_acc_en),
+        math_approx_mode_(math_approx_mode) {}
+
+    ComputeKernel(
+        const std::string &kernel_path_file_name,
         const CoreRange &core_range,
         const KernelArgs &kernel_args,
         MathFidelity math_fidelity,
         bool fp32_dest_acc_en,
         bool math_approx_mode) :
-        Kernel(kernel_path_file_name, core_range, kernel_args, KernelType::Compute),
+        Kernel(kernel_path_file_name, {core_range}, kernel_args, KernelType::Compute),
         math_fidelity_(math_fidelity),
         fp32_dest_acc_en_(fp32_dest_acc_en),
         math_approx_mode_(math_approx_mode) {}
@@ -179,7 +203,7 @@ class ComputeKernel : public Kernel {
         MathFidelity math_fidelity,
         bool fp32_dest_acc_en,
         bool math_approx_mode) :
-        Kernel(kernel_path_file_name, core, kernel_args, KernelType::Compute),
+        Kernel(kernel_path_file_name, {{.start=core, .end=core}}, kernel_args, KernelType::Compute),
         math_fidelity_(math_fidelity),
         fp32_dest_acc_en_(fp32_dest_acc_en),
         math_approx_mode_(math_approx_mode) {}

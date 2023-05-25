@@ -104,7 +104,7 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
-    tt_metal::CoreRange all_cores(start_core, end_core);
+    CoreRange all_cores{.start=start_core, .end=end_core};
 
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {
