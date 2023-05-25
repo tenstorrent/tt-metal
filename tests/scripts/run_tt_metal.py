@@ -5,6 +5,8 @@ from pathlib import Path
 from itertools import chain
 from functools import partial
 
+from loguru import logger
+
 from tests.scripts.common import run_single_test, run_process_and_get_result, report_tests, TestEntry, error_out_if_test_report_has_failures, TestSuiteType, get_git_home_dir_str
 from tests.scripts.cmdline_args import get_tt_metal_arguments_from_cmdline_args, get_cmdline_args
 
@@ -170,7 +172,9 @@ def build_programming_example_executable_path(namespace, executable_name, extra_
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.TT_METAL)
 
-    timeout, = get_tt_metal_arguments_from_cmdline_args(cmdline_args)
+    timeout, tt_arch = get_tt_metal_arguments_from_cmdline_args(cmdline_args)
+
+    logger.warning("We are not yet parameterizing tt_metal tests on tt_arch")
 
     programming_example_entries = get_programming_example_entries()
 
