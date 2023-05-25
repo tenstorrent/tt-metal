@@ -418,7 +418,7 @@ inline void record_kernel_runtime(uint64_t kernel_runtime) {
     debug_mailbox_base[mailbox_end - 1] = (kernel_runtime >> 48) & 0xffff;
 }
 
-void debug_dump(uint8_t *data, uint32_t byte_size);
+void debug_dump(const uint8_t *data, uint32_t byte_size);
 void debug_dump_seek(uint8_t offset);
 
 #if DELAY_EN > 0
