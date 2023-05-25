@@ -108,114 +108,111 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
     );
 }
 
-Tensor bmm_single_core_tilize_untilize(const Tensor &a,
-                                       const Tensor &b,
-                                       uint32_t a_height_nblocks,
-                                       uint32_t a_width_nblocks,
-                                       uint32_t b_width_nblocks,
-                                       uint32_t a_block_height_ntiles,
-                                       uint32_t a_block_width_ntiles,
-                                       uint32_t b_block_width_ntiles,
+Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
+                                       const Tensor &in1,
+                                       uint32_t in0_height_nblocks,
+                                       uint32_t in0_width_nblocks,
+                                       uint32_t in1_width_nblocks,
+                                       uint32_t in0_block_height_ntiles,
+                                       uint32_t in0_block_width_ntiles,
+                                       uint32_t in1_block_width_ntiles,
                                        uint32_t out_subblock_height_ntiles,
                                        uint32_t out_subblock_width_ntiles) {
-    const auto [a_batch, a_channel, a_height, a_width] = a.shape();
-    const auto [b_batch, b_channel, b_height, b_width] = b.shape();
+    const auto [in0_batch, in0_channel, in0_height, in0_width] = in0.shape();
+    const auto [in1_batch, in1_channel, in1_height, in1_width] = in1.shape();
 
     const uint32_t dtype_nbytes = 2;
 
     // input matrix shape checks
-    TT_ASSERT(a_batch == 1, "Supports only batch = 1");
-    TT_ASSERT(b_batch == a_batch, "Batch dimension needs to match for two inputs");
-    TT_ASSERT(a_channel == b_channel, "Channel dimension needs to match for two inputs");
-    TT_ASSERT(a_width == b_height, "Input matrices should be compatible for multiplication");
+    TT_ASSERT(in0_batch == 1, "Supports only batch = 1");
+    TT_ASSERT(in1_batch == in0_batch, "Batch dimension needs to match for two inputs");
+    TT_ASSERT(in0_channel == in1_channel, "Channel dimension needs to match for two inputs");
+    TT_ASSERT(in0_width == in1_height, "Input matrices should be compatible for multiplication");
 
     // tile size checks
-    TT_ASSERT(a_height % constants::TILE_HEIGHT == 0, "Input tensor A height needs to be divisible by TILE_HEIGHT");
-    TT_ASSERT(b_height % constants::TILE_HEIGHT == 0, "Input tensor B height needs to be divisible by TILE_HEIGHT");
-    TT_ASSERT(a_width % constants::TILE_WIDTH == 0, "Input tensor A width needs to be divisible by TILE_WIDTH");
-    TT_ASSERT(b_width % constants::TILE_WIDTH == 0, "Input tensor B width needs to be divisible by TILE_WIDTH");
+    TT_ASSERT(in0_height % constants::TILE_HEIGHT == 0, "Input tensor in0 height needs to be divisible by TILE_HEIGHT");
+    TT_ASSERT(in1_height % constants::TILE_HEIGHT == 0, "Input tensor in1 height needs to be divisible by TILE_HEIGHT");
+    TT_ASSERT(in0_width % constants::TILE_WIDTH == 0, "Input tensor in0 width needs to be divisible by TILE_WIDTH");
+    TT_ASSERT(in1_width % constants::TILE_WIDTH == 0, "Input tensor in1 width needs to be divisible by TILE_WIDTH");
 
     // device compatibility checks
-    TT_ASSERT(!a.on_host() && !b.on_host(), "Operands need to be on the device!");
-    TT_ASSERT(a.device() == b.device(), "Operands need to be on the same device!");
-    TT_ASSERT(a.buffer() != nullptr && b.buffer() != nullptr, "Operands need to have buffers allocated on the device!");
+    TT_ASSERT(!in0.on_host() && !in1.on_host(), "Operands need to be on the device!");
+    TT_ASSERT(in0.device() == in1.device(), "Operands need to be on the same device!");
+    TT_ASSERT(in0.buffer() != nullptr && in1.buffer() != nullptr, "Operands need to have buffers allocated on the device!");
 
     // Data format checks
-    TT_ASSERT(a.dtype() == b.dtype() && a.dtype() == DataType::BFLOAT16, "Datatypes of operands should match. Only BFLOAT16 supported for now");
+    TT_ASSERT(in0.dtype() == in1.dtype() && in0.dtype() == DataType::BFLOAT16, "Datatypes of operands should match. Only BFLOAT16 supported for now");
 
     const uint32_t tile_size_bytes = dtype_nbytes * constants::TILE_HW;   // TODO: use datatype size
-    Buffer *src0_dram_buffer = a.buffer();
-    Buffer *src1_dram_buffer = b.buffer();
+    Buffer *src0_dram_buffer = in0.buffer();
+    Buffer *src1_dram_buffer = in1.buffer();
 
-    TT_ASSERT(src0_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor a must be divisible by tile_size_bytes");
-    TT_ASSERT(src1_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor b must be divisible by tile_size_bytes");
+    TT_ASSERT(src0_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor in0 must be divisible by tile_size_bytes");
+    TT_ASSERT(src1_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor in1 must be divisible by tile_size_bytes");
 
     CoreCoord core = {0, 0};
     CoreCoord debug_core = {1, 1};
     Program program = Program();
-    Device *device = a.device();
+    Device *device = in0.device();
 
     // for kernel debug print
     // int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
     tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
 
-    const std::array<uint32_t, 4> out_shape{a_batch, a_channel, a_height, b_width};
+    const std::array<uint32_t, 4> out_shape{in0_batch, in0_channel, in0_height, in1_width};
     Tensor output = Tensor(out_shape,
-                            a.dtype(),
+                            in0.dtype(),
                             Layout::ROW_MAJOR,
                             device);
     Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // Convert tensor dims to tile dims
-    uint32_t a_height_ntiles = a_height / constants::TILE_HEIGHT;   // == a_height_nblocks * a_block_height_ntiles
-    uint32_t a_width_ntiles = a_width / constants::TILE_WIDTH;      // == a_width_nblocks * a_block_width_ntiles
-    uint32_t b_width_ntiles = b_width / constants::TILE_WIDTH;      // == b_width_nblocks * b_block_width_ntiles
+    uint32_t in0_height_ntiles = in0_height / constants::TILE_HEIGHT;   // == in0_height_nblocks * in0_block_height_ntiles
+    uint32_t in0_width_ntiles = in0_width / constants::TILE_WIDTH;      // == in0_width_nblocks * in0_block_width_ntiles
+    uint32_t in1_width_ntiles = in1_width / constants::TILE_WIDTH;      // == in1_width_nblocks * in1_block_width_ntiles
     // Ensure the size arguments match the input tensors
-    TT_ASSERT(a_height_ntiles == a_height_nblocks * a_block_height_ntiles, "Mismatch in tensor A height!");
-    TT_ASSERT(a_width_ntiles == a_width_nblocks * a_block_width_ntiles, "Mismatch tensor A width!");
-    TT_ASSERT(b_width_ntiles == b_width_nblocks * b_block_width_ntiles, "Mismatch tensor B width!");
-    log_debug("a_height_ntiles = {}", a_height_ntiles);
-    log_debug("a_width_ntiles = {}", a_width_ntiles);
-    log_debug("b_width_ntiles = {}", b_width_ntiles);
+    TT_ASSERT(in0_height_ntiles == in0_height_nblocks * in0_block_height_ntiles, "Mismatch in tensor in0 height!");
+    TT_ASSERT(in0_width_ntiles == in0_width_nblocks * in0_block_width_ntiles, "Mismatch tensor in0 width!");
+    TT_ASSERT(in1_width_ntiles == in1_width_nblocks * in1_block_width_ntiles, "Mismatch tensor in1 width!");
 
-    // NOTE: In the following, a == in0, b == in1, c == out
+    {   // debug
+        log_debug("in0_height_ntiles = {}", in0_height_ntiles);
+        log_debug("in0_width_ntiles = {}", in0_width_ntiles);
+        log_debug("in1_width_ntiles = {}", in1_width_ntiles);
+    }
 
     // in0
     uint32_t in0_dram_addr = src0_dram_buffer->address();
     // in0 block info
     uint32_t in0_subblock_h = out_subblock_height_ntiles;
-    uint32_t in0_num_blocks_w = a_width_nblocks;
-    uint32_t in0_num_blocks_h = a_height_nblocks;
-    uint32_t in0_block_w = a_width_ntiles / in0_num_blocks_w;
-    uint32_t in0_block_h = a_height_ntiles / in0_num_blocks_h;
+    uint32_t in0_num_blocks_w = in0_width_nblocks;
+    uint32_t in0_num_blocks_h = in0_height_nblocks;
+    uint32_t in0_block_w = in0_width_ntiles / in0_num_blocks_w;
+    uint32_t in0_block_h = in0_height_ntiles / in0_num_blocks_h;
     uint32_t in0_block_num_tiles = in0_block_h * in0_block_w;
     uint32_t in0_num_subblocks = in0_block_h / in0_subblock_h;
     uint32_t in0_subblock_num_tiles = in0_subblock_h * in0_block_w;
     uint32_t in0_partial_row_size_bytes = (in0_block_w * constants::TILE_WIDTH) * dtype_nbytes; // TODO: use datatype
+    TT_ASSERT(in0_block_h % out_subblock_height_ntiles == 0);
 
     // in1
     uint32_t in1_dram_addr = src1_dram_buffer->address();
     // in1 block info
-    // uint32_t in1_num_subblocks = in1_block_w / out_subblock_width_ntiles;
-    // uint32_t in1_block_num_tiles = out_subblock_width_ntiles * in0_block_w * in1_num_subblocks;
-    // uint32_t in1_block_w = out_subblock_width_ntiles * in1_num_subblocks;
-    // uint32_t in1_block_h = in0_block_w;
-    uint32_t in1_num_blocks_w = b_width_nblocks;
-    uint32_t in1_num_blocks_h = a_width_nblocks;
-    uint32_t in1_block_w = b_block_width_ntiles;
-    assert(in1_block_w % out_subblock_width_ntiles == 0);
+    uint32_t in1_num_blocks_w = in1_width_nblocks;
+    uint32_t in1_num_blocks_h = in0_width_nblocks;
+    uint32_t in1_block_w = in1_block_width_ntiles;
     uint32_t in1_num_subblocks = in1_block_w / out_subblock_width_ntiles;
     uint32_t in1_block_h = in0_block_w;
     uint32_t in1_block_num_tiles = in1_block_w * in1_block_h;
-
+    TT_ASSERT(in1_block_w % out_subblock_width_ntiles == 0);
 
     // out
     uint32_t out_dram_addr = dst_dram_buffer->address();
     auto out_dram_noc_xy = dst_dram_buffer->noc_coordinates();
     uint32_t out_dram_noc_x = out_dram_noc_xy.x;
     uint32_t out_dram_noc_y = out_dram_noc_xy.y;
-    uint32_t out_row_size_bytes = b_width * dtype_nbytes;  // TODO: use datatype info
+    uint32_t out_row_size_bytes = in1_width * dtype_nbytes;  // TODO: use datatype info
     uint32_t out_subblock_ntiles = out_subblock_height_ntiles * out_subblock_width_ntiles;
     TT_ASSERT(out_subblock_ntiles <= 8, "Subblock can have at most 8 tiles to fit computed intermediates in dst[half]");
 
@@ -247,7 +244,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &a,
 
     create_cb_bmm_single_core_tilize_untilize(
         program,
-        a.device(),
+        in0.device(),
         core,
         in0_block_w,
         in0_block_h,
@@ -263,8 +260,8 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &a,
         in0_num_blocks_h,
         in0_num_blocks_w,
         in0_block_num_tiles,
-        0,                                                      // start row id
-        a_width * dtype_nbytes,                                 // size of an in0 row
+        0,                                                  // start row id
+        in0_width * dtype_nbytes,                           // size of an in0 row
         in0_block_w * constants::TILE_WIDTH * dtype_nbytes, // size of partial row to fit within a block width
         // in1
         in1_dram_addr,
@@ -272,8 +269,8 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &a,
         in1_block_w,
         in1_num_blocks_w,
         in1_block_num_tiles,
-        b_width_ntiles,
-        b_width_ntiles * in1_block_h,
+        in1_width_ntiles,
+        in1_width_ntiles * in1_block_h,
         in1_block_w
     };
     auto reader = CreateDataMovementKernel(
@@ -284,7 +281,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &a,
         NOC::RISCV_1_default);
 
     // number of data elements along height of an in0 block
-    uint32_t in0_block_h_data = a_height / in0_num_blocks_h;
+    uint32_t in0_block_h_data = in0_height / in0_num_blocks_h;
 
     // Writer kernel
     std::string writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp";
@@ -295,7 +292,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &a,
         1,
         in0_num_blocks_h,
         in1_num_blocks_w,
-        b_width * dtype_nbytes
+        in1_width * dtype_nbytes
     };
     auto writer = CreateDataMovementKernel(
         program,
