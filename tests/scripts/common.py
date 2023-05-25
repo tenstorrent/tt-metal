@@ -165,9 +165,9 @@ def run_single_test(namespace: str, test_entry: TestEntry, timeout, tt_arch="gra
     reset_tensix = completed_process_failed(completed_process) and uses_tensix
 
     if reset_tensix:
-        print("Detected error on test that uses silicon - resetting")
+        logger.warning("Detected error on test that uses silicon - resetting")
         run_process_and_get_result("./device/bin/silicon/tensix-reset")
-        print("Silicon reset complete - returning status of FAILURE for this test")
+        logger.warning("Silicon reset complete - returning status of FAILURE for this test")
 
     return completed_process
 
