@@ -260,6 +260,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
         in0_num_blocks_h,
         in0_num_blocks_w,
         in0_block_num_tiles,
+        in0_block_h * constants::TILE_HEIGHT,               // in0_block_nrows,
         0,                                                  // start row id
         in0_width * dtype_nbytes,                           // size of an in0 row
         in0_block_w * constants::TILE_WIDTH * dtype_nbytes, // size of partial row to fit within a block width
