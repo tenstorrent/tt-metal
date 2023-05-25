@@ -16,10 +16,10 @@ bool collapse_transformations(DataTransformations * dtx) {
     if (DEBUG) cout << s(2) << "consumer_node = " << consumer_node->opcode << endl;
     int spaces = 0;
 
-    int collapse_itteration = 0;
+    int collapse_iteration = 0;
     while (dtx->transformations.size() > 2) {
 
-        if (DEBUG) cout << s(4) << "There are more than 2 tx. Starting to resolve - COLLAPSE ITERATION = " << collapse_itteration << endl;
+        if (DEBUG) cout << s(4) << "There are more than 2 tx. Starting to resolve - COLLAPSE ITERATION = " << collapse_iteration << endl;
 
         // The node being currently processed - to be deleted. It's always the second from the back
         TransformationNode * producer_node = dtx->transformations[dtx->transformations.size()-2];
@@ -101,7 +101,7 @@ bool collapse_transformations(DataTransformations * dtx) {
         }
         delete dtx->transformations[dtx->transformations.size() - 2];
         dtx->transformations.erase(dtx->transformations.end() - 2);
-
+        collapse_iteration += 1;
     } // while: transformations > 2
 
     /*

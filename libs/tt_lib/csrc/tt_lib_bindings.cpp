@@ -1382,15 +1382,6 @@ void TensorModule(py::module &m_tensor) {
         | arg3                | Value to pad input tensor                            | float        |                                                     | Yes      |
         +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
     )doc");
-    m_tensor.def("tilize_conv_activation", &tilize_conv_activation, R"doc(
-        Converts conv activation to 2d Matrix and tilizes it on device. Pads zeroes height-wise if required.
-
-        +----------+----------------------+-----------+-------------+----------+
-        | Argument | Description          | Data type | Valid range | Required |
-        +==========+======================+===========+=============+==========+
-        | a        | Input tensor         | Tensor    |             | Yes      |
-        +----------+----------------------+-----------+-------------+----------+
-    )doc");
 
     m_tensor.def("convert_conv_weight_tensor_to_tiled_layout", &convert_conv_weight_tensor_to_tiled_layout, R"doc(
        Converts convolution weights to 2d matrix tiled layout on host
@@ -1509,8 +1500,16 @@ void DTXModule(py::module &m_dtx) {
         | output shape     | shape of the dst tensor |  vector of int |      | Yes      |
         +------------------+-----------------------------+----------------------+-------------+----------+
     )doc");
-    m_dtx.def("conv_transform", [](vector<int> shape, vector<int> conv_params, std::pair<vector<int>,vector<int>> block_info, uint32_t num_bytes_of_df){
-        return conv_transform(shape, conv_params, block_info, num_bytes_of_df);
+    m_dtx.def("conv_transform", [](vector<int> activation_shape,
+                                        vector<int> weight_shape,
+                                        vector<int> conv_params,
+                                        uint32_t in0_block_w,
+                                        uint32_t in0_block_h,
+                                        uint32_t in1_block_w,
+                                        uint32_t num_blocks_in0_h,
+                                        uint32_t num_blocks_in1_w,
+                                        uint32_t num_bytes_of_df){
+        return conv_transform(activation_shape, weight_shape, conv_params, in0_block_h, in0_block_w, in1_block_w, num_blocks_in0_h, num_blocks_in1_w, num_bytes_of_df);
     });
 }
 

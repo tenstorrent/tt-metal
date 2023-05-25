@@ -89,9 +89,11 @@ void TensorData::generate_csv(string filename){
 
 
 int DTXTensor::volume() {
-    if (this->rank == 0 || this->rank == -1) return 0;
+    assert(this->rank > 0);
 
     int volume = 1;
+    assert(this->end.size() == this->rank);
+    assert(this->str.size() == this->rank);
     for (int d=0; d<this->rank; d++) {
         assert(this->end[d] >= this->str[d]);
         int dim_size = this->end[d] - this->str[d] + 1;

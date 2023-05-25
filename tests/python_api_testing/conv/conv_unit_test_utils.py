@@ -21,7 +21,7 @@ def create_conv_act_tensor(torch_tensor, N, C, H, W):
 
 def create_conv_weight_tensor(torch_tensor, K, C, R, S):
     weights_shape = [K,C,R,S]
-    weights_channels_padded_shape = [K,_nearest_32(C),R,S]
+    weights_channels_padded_shape = [_nearest_32(K),_nearest_32(C),R,S]
     B_ = ttl.tensor.Tensor(
         torch.flatten(torch_tensor).tolist(),
         weights_shape,

@@ -43,17 +43,17 @@ import torch
         (32, 32, 5, 5, 1, 1, 1, 1, 0, 0),
         # Hat = 2, Wat = 1, Wbt = 1
         (32, 32, 8, 8, 1, 1, 1, 1, 0, 0),
-        # # Hat = 1, Wat = 2, Wbt = 1
+        # Hat = 1, Wat = 2, Wbt = 1
         (32, 64, 5, 5, 1, 1, 1, 1, 0, 0),
-        # # Hat = 2, Wat = 2, Wbt = 1
+        # Hat = 2, Wat = 2, Wbt = 1
         (32, 64, 8, 8, 1, 1, 1, 1, 0, 0),
-        # # Hat = 1, Wat = 1, Wbt = 2
+        # Hat = 1, Wat = 1, Wbt = 2
         (64, 32, 5, 5, 1, 1, 1, 1, 0, 0),
-        # # Hat = 1, Wat = 2, Wbt = 2
+        # Hat = 1, Wat = 2, Wbt = 2
         (64, 64, 5, 5, 1, 1, 1, 1, 0, 0),
-        # # Hat = 2, Wat = 1, Wbt = 2
+        # Hat = 2, Wat = 1, Wbt = 2
         (64, 32, 8, 8, 1, 1, 1, 1, 0, 0),
-        # # Hat = 2, Wat = 2, Wbt = 2
+        # Hat = 2, Wat = 2, Wbt = 2
         (64, 64, 8, 8, 1, 1, 1, 1, 0, 0),
     ),
 )
@@ -79,7 +79,7 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
     # Prepare weights
     B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
     B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S)
-    B_tiled = B_tiled_host.to(device)
+    B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(False, 1))
     # Calculate conv result with golden result. Run Pytorch conv
     out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w))
 

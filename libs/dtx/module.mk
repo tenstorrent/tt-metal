@@ -21,6 +21,7 @@ DTX_SRCS = \
 	libs/dtx/pass_tilize.cpp \
 	libs/dtx/pass_pad_2d_matrix.cpp \
 	libs/dtx/pass_block_2d_matrix.cpp \
+	libs/dtx/pass_block_2d_with_duplicate_blocks.cpp \
 	libs/dtx/pass_generate_groups_outermost_dim.cpp \
 	libs/dtx/pass_util.cpp \
 	libs/dtx/pass_simple_high_level_pass.cpp \

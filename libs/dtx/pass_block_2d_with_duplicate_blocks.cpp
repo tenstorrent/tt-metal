@@ -4,7 +4,7 @@
 #include "util_vector_of_ints.hpp"
 
 
-vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order, vector<int> block_shape) {
+vector<vector<int>> dim_order_counting_with_duplicates(vector<int> shape, vector<int> dim_order, vector<int> block_shape, int num_duplicates, int dim_to_duplicate) {
     bool DEBUG = false;
     if (DEBUG) cout << "\n\nHelper function: dim order counting" << endl;
 
@@ -48,22 +48,51 @@ vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order,
             }
         }
     }
+    vector<vector<int>> list_of_counted_dims_with_duplicates;
+    vector<vector<int>> duplicate_list;
+    assert(dim_to_duplicate < rank);
+    for (uint32_t c = 0; c < list_of_counted_dims.size(); c++) {
+        auto & dims = list_of_counted_dims[c];
+        duplicate_list.push_back(dims);
+        bool collected_all_dims_to_duplicate = false;
+        if(c == list_of_counted_dims.size() - 1) {
+            assert(dims[dim_to_duplicate] == shape[dim_to_duplicate]-1);
+            collected_all_dims_to_duplicate = true;
+        }
+        else {
+            int next_at_dim_to_duplicate = list_of_counted_dims[c+1][dim_to_duplicate];
+            if(next_at_dim_to_duplicate > dims[dim_to_duplicate]) {
+                collected_all_dims_to_duplicate = true;
+            }
+        }
+        if(collected_all_dims_to_duplicate) {
+            for(uint32_t i = 0; i < num_duplicates; i++) {
+                list_of_counted_dims_with_duplicates.insert(list_of_counted_dims_with_duplicates.end(), duplicate_list.begin(), duplicate_list.end());
+            }
+            duplicate_list.clear();
+        }
+    }
+    if(DEBUG) {
+        std::cout << "list of counted dims - " << std::endl;
+        for(int i = 0; i < list_of_counted_dims_with_duplicates.size(); i++) {
+            std::cout << v2s(list_of_counted_dims_with_duplicates[i]) << std::endl;
+        }
 
-    return list_of_counted_dims;
+    }
+    return list_of_counted_dims_with_duplicates;
 }
 
-
-bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<int> block_shape_yx) {
+bool block_2d_with_duplicate_blocks(DataTransformations * dtx, vector<int> dim_order, vector<int> block_shape_yx, int num_duplicates, int dim_to_duplicate) {
     bool DEBUG = false;
     assert(dim_order.size() == 3);
     assert(block_shape_yx.size() == 2);
     assert(block_shape_yx[0] > 0);
     assert(block_shape_yx[1] > 0);
-    if (DEBUG) cout << "\n\nPASS: Block 2d matrix" << endl;
+    if (DEBUG) cout << "\n\nPASS: Block 2d matrix with duplicate blocks" << endl;
 
     // Identify producer TX & Consumer
     TransformationNode * producer = dtx->transformations.back();
-    TransformationNode * consumer = new TransformationNode("block_2d_matrix", producer->groups.size());  // TODO: generalize for groups>1
+    TransformationNode * consumer = new TransformationNode("tilize_and_store", producer->groups.size());  // TODO: generalize for groups>1
     dtx->transformations.push_back(consumer);
 
     for (int group_idx=0; group_idx<producer->groups.size(); group_idx++) {
@@ -81,16 +110,16 @@ bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<in
         if (DEBUG) cout << s(4) << "block shape      = " << v2s(block_shape) << endl;
         if (DEBUG) cout << s(4) << "shape      = " << v2s(shape) << endl;
         vector<int> shape_blocked = vector_division(shape, block_shape);
-        vector<vector<int>> list_of_counted_dims = dim_order_counting(shape_blocked,   dim_order, block_shape);
+        vector<vector<int>> list_of_counted_dims = dim_order_counting_with_duplicates(shape_blocked,   dim_order, block_shape, num_duplicates, dim_to_duplicate);
 
         vector<int> consumer_str = zeros(rank);
         vector<int> consumer_end = vector_addition(consumer_str, block_shape, -1);
 
-
         if (shape.size() != dim_order.size()) throw std::runtime_error("shape and dim_order dont have the same rank!");
 
         int block_size = block_shape[Y(rank)] * block_shape[X(rank)];
-        int num_blocks = (shape[Y(rank)] / block_shape[Y(rank)]) * (shape[X(rank)] / block_shape[X(rank)]);
+        int num_blocks = (shape[Y(rank)] / block_shape[Y(rank)]) * (shape[X(rank)] / block_shape[X(rank)]) * num_duplicates;
+        if (DEBUG) std::cout << "num blocks - " << num_blocks << std::endl;
         assert(list_of_counted_dims.size() == num_blocks);
         int consumer_shape_z = Z(rank) >= 0 ? shape[Z(rank)] * num_blocks : num_blocks;
         assert(consumer_shape_z == num_blocks); // TODO: generalize for z > 1

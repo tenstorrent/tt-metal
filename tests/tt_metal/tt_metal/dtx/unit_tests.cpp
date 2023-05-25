@@ -543,9 +543,15 @@ bool test_channels_last_to_2D_matrix_conv1x1() {
 }
 
 bool test_run_conv_transform_no_evaluate() {
-    vector<int> shape = {32, 8, 8};
+    vector<int> act_shape = {32, 5, 5};
+    vector<int> weight_shape = {32, 32, 1, 1};
     vector<int> conv_params = {1,1,1,1,0,0};
-    auto address_map = conv_transform(shape, conv_params, {{0,1,2},{64,32}}, 1);
+    uint32_t num_blocks_act_h = 1;
+    uint32_t num_blocks_weight_w = 1;
+    uint32_t act_block_h = 32;
+    uint32_t act_block_w = 32;
+    uint32_t weight_block_w = 32;
+    auto address_map = conv_transform(act_shape, weight_shape, conv_params, act_block_h, act_block_w, weight_block_w, num_blocks_act_h, num_blocks_weight_w, 1);
     return true;
 }
 

@@ -205,6 +205,4 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.tilize_with_zero_padding
 
-.. autofunction:: tt_lib.tensor.tilize_conv_activation
-
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout

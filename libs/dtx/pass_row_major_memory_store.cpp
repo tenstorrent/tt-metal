@@ -20,6 +20,7 @@ bool row_major_memory_store(DataTransformations * dtx) {
         // Calculate producer and consumer shapes
         vector<int> producer_shape = producer_group->shape;
         int rank = producer_shape.size();
+        assert(rank == 3); // TODO: generalize for rank
         vector<int> consumer_shape = {1, 1, vector_product(producer_shape)};
         consumer_group->shape = consumer_shape;
         if(DEBUG) cout << "Producer shape - " << v2s(producer_shape) << endl;

@@ -3,9 +3,13 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
-vector<uint32_t> generate_address_map(DataTransformations * dtx) {
+vector<uint32_t> generate_address_map(DataTransformations * dtx, bool in_bytes, uint32_t num_df_bytes) {
     assert(dtx->transformations.size() == 2);
     auto transformation_node = dtx->transformations.back();
+    uint32_t data_size = 1;
+    if(in_bytes) {
+        data_size = num_df_bytes;
+    }
     uint32_t num_groups = transformation_node->groups.size();
     vector<vector<uint32_t>>address_maps;
     for(uint32_t g = 0; g < num_groups; g++) {
@@ -14,9 +18,9 @@ vector<uint32_t> generate_address_map(DataTransformations * dtx) {
         std::vector<uint32_t> address_map_this_group;
         // Generate address map
         for(auto transfer : transformation_node->groups[g]->transfers){
-            address_map_this_group.push_back(transfer->src_address);
-            address_map_this_group.push_back(transfer->dst_address);
-            address_map_this_group.push_back(transfer->size);
+            address_map_this_group.push_back(transfer->src_address * data_size);
+            address_map_this_group.push_back(transfer->dst_address * data_size);
+            address_map_this_group.push_back(transfer->size * data_size);
             address_map_this_group.push_back(transfer->pad);
         }
         address_maps.push_back(address_map_this_group);
