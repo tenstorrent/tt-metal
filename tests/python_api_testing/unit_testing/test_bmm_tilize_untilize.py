@@ -65,8 +65,8 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
 
     torch.manual_seed(0)
     a = torch.randn(a_shape, dtype=torch.bfloat16).float()
-    # b = torch.randn(b_shape, dtype=torch.bfloat16).float()
-    b = torch.zeros(b_shape, dtype=torch.bfloat16).float()
+    b = torch.randn(b_shape, dtype=torch.bfloat16).float()
+    # b = torch.zeros(b_shape, dtype=torch.bfloat16).float()
 
     ## a in row-major
     tta = ttl.tensor.Tensor(
