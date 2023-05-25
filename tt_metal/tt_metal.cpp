@@ -191,14 +191,14 @@ ComputeKernel *CreateComputeKernel(
 ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
-    const CoreRangeSet &core_ranges,
+    const CoreRangeSet &core_range_set,
     const KernelArgs &kernel_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
     ComputeKernel *kernel = new ComputeKernel(
         file_name,
-        core_ranges,
+        core_range_set,
         kernel_args,
         math_fidelity,
         fp32_dest_acc_en,
@@ -225,7 +225,7 @@ CircularBuffer *CreateCircularBuffer(
     uint32_t l1_address,
     DataFormat data_format) {
     CoreRange single_core_range = {.start = core, .end = core};
-    return CreateCircularBuffers(program, device, buffer_index, {single_core_range}, num_tiles, size_in_bytes, l1_address, data_format);
+    return CreateCircularBuffers(program, device, buffer_index, CoreRangeSet({single_core_range}), num_tiles, size_in_bytes, l1_address, data_format);
 }
 
 CircularBuffer *CreateCircularBuffer(
@@ -237,7 +237,7 @@ CircularBuffer *CreateCircularBuffer(
     uint32_t size_in_bytes,
     DataFormat data_format) {
     CoreRange single_core_range = {.start = core, .end = core};
-    return CreateCircularBuffers(program, device, buffer_index, {single_core_range}, num_tiles, size_in_bytes, data_format);
+    return CreateCircularBuffers(program, device, buffer_index, CoreRangeSet({single_core_range}), num_tiles, size_in_bytes, data_format);
 }
 
 CircularBuffer *CreateCircularBuffers(
@@ -249,7 +249,7 @@ CircularBuffer *CreateCircularBuffers(
     uint32_t size_in_bytes,
     uint32_t l1_address,
     DataFormat data_format) {
-    return CreateCircularBuffers(program, device, buffer_index, {core_range}, num_tiles, size_in_bytes, l1_address, data_format);
+    return CreateCircularBuffers(program, device, buffer_index, CoreRangeSet({core_range}), num_tiles, size_in_bytes, l1_address, data_format);
 }
 
 CircularBuffer *CreateCircularBuffers(
@@ -260,19 +260,19 @@ CircularBuffer *CreateCircularBuffers(
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format) {
-    return CreateCircularBuffers(program, device, buffer_index, {core_range}, num_tiles, size_in_bytes, data_format);
+    return CreateCircularBuffers(program, device, buffer_index, CoreRangeSet({core_range}), num_tiles, size_in_bytes, data_format);
 }
 
 CircularBuffer *CreateCircularBuffers(
     Program &program,
     Device *device,
     uint32_t buffer_index,
-    const CoreRangeSet &core_ranges,
+    const CoreRangeSet &core_range_set,
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     uint32_t l1_address,
     DataFormat data_format) {
-    CircularBuffer *circular_buffer = new CircularBuffer(device, core_ranges, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
+    CircularBuffer *circular_buffer = new CircularBuffer(device, core_range_set, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
     program.add_circular_buffer(circular_buffer);
     return circular_buffer;
 }
@@ -281,11 +281,11 @@ CircularBuffer *CreateCircularBuffers(
     Program &program,
     Device *device,
     uint32_t buffer_index,
-    const CoreRangeSet &core_ranges,
+    const CoreRangeSet &core_range_set,
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format) {
-    CircularBuffer *circular_buffer = new CircularBuffer(device, core_ranges, buffer_index, num_tiles, size_in_bytes, data_format);
+    CircularBuffer *circular_buffer = new CircularBuffer(device, core_range_set, buffer_index, num_tiles, size_in_bytes, data_format);
     program.add_circular_buffer(circular_buffer);
     return circular_buffer;
 }
@@ -318,15 +318,15 @@ Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &co
     auto end_core = core_range.end;
     TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
     uint32_t address = get_semaphore_address(program, core_range);
-    Semaphore *semaphore = new Semaphore(device, {core_range}, address, initial_value);
+    Semaphore *semaphore = new Semaphore(device, CoreRangeSet({core_range}), address, initial_value);
     program.add_semaphore(semaphore);
     return semaphore;
 }
 
-Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_ranges, uint32_t initial_value) {
+Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_range_set, uint32_t initial_value) {
     auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
     uint32_t address = -1;
-    for (auto core_range : core_ranges) {
+    for (auto core_range : core_range_set.ranges()) {
         auto addr = get_semaphore_address(program, core_range);
         if (address == -1) {
             address = addr;
@@ -334,7 +334,7 @@ Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet 
             TT_ASSERT(addr == address);
         }
     }
-    Semaphore *semaphore = new Semaphore(device, core_ranges, address, initial_value);
+    Semaphore *semaphore = new Semaphore(device, core_range_set, address, initial_value);
     program.add_semaphore(semaphore);
     return semaphore;
 }
@@ -854,22 +854,23 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 
 bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args) {
     TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
-    CoreRangeSet core_ranges = {core_range};
-    return WriteRuntimeArgsToDevice(device, kernel, core_ranges, {runtime_args});
+    CoreRangeSet core_range_set = CoreRangeSet({core_range});
+    return WriteRuntimeArgsToDevice(device, kernel, core_range_set, {runtime_args});
 }
 
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRangeSet &core_ranges, const std::vector<std::vector<uint32_t>> &runtime_args_spec) {
+bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRangeSet &core_range_set, const std::vector<std::vector<uint32_t>> &runtime_args_spec) {
     bool pass = true;
     int index = 0;
-    TT_ASSERT(core_ranges.size() == runtime_args_spec.size());
-    for (auto core_range : core_ranges) {
+    TT_ASSERT(core_range_set.ranges().size() == runtime_args_spec.size());
+    for (auto core_range : core_range_set.ranges()) {
         auto start_core = core_range.start;
         auto end_core = core_range.end;
         auto runtime_args = runtime_args_spec.at(index);
         TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
         for (auto x = start_core.x; x <= end_core.x; x++) {
             for (auto y = start_core.y; y <= end_core.y; y++) {
-                auto core_in_range = CoreCoord{.x=x, .y=y};
+                //auto core_in_range = CoreCoord{.x=x, .y=y};
+                CoreCoord core_in_range = {.x=x, .y=y};
                 WriteRuntimeArgsToDevice(device, kernel, core_in_range, runtime_args);
             }
         }

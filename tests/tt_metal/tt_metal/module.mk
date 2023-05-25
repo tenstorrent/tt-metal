@@ -72,6 +72,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_bfp8_conversion \
 		 tests/tt_metal/test_semaphores \
 		 tests/tt_metal/tt_dispatch/test_enqueue_read_and_write \
+		 tests/tt_metal/test_core_range_set \
 		 # test/tt_metal/test_datacopy_multi_core_multi_dram \  # this does not compile
 
 TT_METAL_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(TT_METAL_TESTS:tests/%=%)))

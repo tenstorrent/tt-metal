@@ -250,7 +250,7 @@ DataMovementKernel *CreateDataMovementKernel(
  * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
  * | program        | The program to which this kernel will be added to                                                            | Program &                |                                                                | Yes      |
  * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
- * | core_ranges    | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
+ * | core_range_set    | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
  * | kernel_args    | Compile and runtime kernel arguments passed at compile time and runtime respectively                         | const KernelArgs &       |                                                                | Yes      |
  * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
  * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
@@ -258,7 +258,7 @@ DataMovementKernel *CreateDataMovementKernel(
 DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
-    const CoreRangeSet &core_ranges,
+    const CoreRangeSet &core_range_set,
     const KernelArgs &kernel_args,
     DataMovementProcessor processor_type,
     NOC noc);
@@ -272,14 +272,14 @@ DataMovementKernel *CreateDataMovementKernel(
  * |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------|----------------------------------------------------------------|----------|
  * | program        | The program to which this kernel will be added to                                                            | Program *                |                                                                | Yes      |
  * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
- * | core_ranges    | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
+ * | core_range_set    | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
  * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
  * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
  */
 DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
-    const CoreRangeSet &core_ranges,
+    const CoreRangeSet &core_range_set,
     DataMovementProcessor processor_type,
     NOC noc);
 
@@ -340,7 +340,7 @@ ComputeKernel *CreateComputeKernel(
  * |------------------|--------------------------------------------------------------------------------------------------------------|---------------------|--------------------------------------------------------|----------|
  * | program          | The program to which this kernel will be added to                                                            | Program &           |                                                        | Yes      |
  * | file_name        | Name of file containing the kernel                                                                           | const std::string   |                                                        | Yes      |
- * | core_ranges      | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
+ * | core_range_set   | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
  * | kernel_args      | Kernel arguments, passed at compile time                                                                     | const KernelArgs &  |                                                        | Yes      |
  * | math_fidelity    | The percision of the matrix compute engine                                                                   | enum                | MathFidelity::HiFi4                                    | Yes      |
  * | fp32_dest_acc_en | Specifies the type of accumulation performed in the matrix compute engine.                                   | bool                | false (for Grayskull)                                  | Yes      |
@@ -349,7 +349,7 @@ ComputeKernel *CreateComputeKernel(
 ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
-    const CoreRangeSet &core_ranges,
+    const CoreRangeSet &core_range_set,
     const KernelArgs &kernel_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -498,7 +498,7 @@ CircularBuffer *CreateCircularBuffers(
  * | program       | The program to which buffer will be added to.                                  | Program *          |                                         | True     |
  * | device        | The device where the L1 buffer resides.                                        | Device *           |                                         | True     |
  * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 DOX-TODO: specify more detail here. | True     |
- * | core_ranges   | Ranges of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRangeSet & (std::set<CoreRange>) | DOX-TODO: { , } –> { , }                    | True     |
+ * | core_range_set   | Ranges of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRangeSet & (std::set<CoreRange>) | DOX-TODO: { , } –> { , }                    | True     |
  * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | DOX-TODO: range?                            | True     |
  * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (DOX-TODO: in Bytes)              | True     |
  * | l1_address    | Address at which the CB buffer will reside                                     | uint32_t           | 200 kB to 1MB (DOX-TODO: in bytes)          | True     |
@@ -508,7 +508,7 @@ CircularBuffer *CreateCircularBuffers(
     Program &program,
     Device *device,
     uint32_t buffer_index,
-    const CoreRangeSet &core_ranges,
+    const CoreRangeSet &core_range_set,
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     uint32_t l1_address,
@@ -525,7 +525,7 @@ CircularBuffer *CreateCircularBuffers(
  * | program       | The program to which buffer will be added to.                                  | Program *          |                                         | True     |
  * | device        | The device where the L1 buffer resides.                                        | Device *           |                                         | True     |
  * | buffer_index  | The index/ID of the CB.                                                        | uint32_t           | 0 to 32 DOX-TODO: specify more detail here. | True     |
- * | core_ranges   | Ranges of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRange & (std::set<CoreRange>) | DOX-TODO: { , } –> { , }                    | True     |
+ * | core_range_set   | Ranges of the Tensix co-ordinates where buffer will reside (Logical co-ordinates)  | const CoreRange & (std::set<CoreRange>) | DOX-TODO: { , } –> { , }                    | True     |
  * | num_tiles     | Total number of tiles to be stored in the CB                                   | uint32_t           | DOX-TODO: range?                            | True     |
  * | size_in_bytes | Size of CB buffer in Bytes                                                     | uint32_t           | 0 to 1 MB (DOX-TODO: in Bytes)              | True     |
  * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
@@ -534,7 +534,7 @@ CircularBuffer *CreateCircularBuffers(
     Program &program,
     Device *device,
     uint32_t buffer_index,
-    const CoreRangeSet &core_ranges,
+    const CoreRangeSet &core_range_set,
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format);
@@ -562,10 +562,10 @@ Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &co
  * |----------------|-------------------------------------------------------------|------------------------|-----------------------------------------------------------|----------|
  * | program        | The program to which semaphore will be added to             | Program &              |                                                           | Yes      |
  * | device         | The device where the semaphore resides                      | Device *               |                                                           | Yes      |
- * | core_ranges    | Set of Range of the Tensix co-ordinates using the semaphore | const CoreRangeSet &   | Pairs of logical coords where first coord <= second coord | Yes      |
+ * | core_range_set    | Set of Range of the Tensix co-ordinates using the semaphore | const CoreRangeSet &   | Pairs of logical coords where first coord <= second coord | Yes      |
  * | initial_value  | Initial value of the semaphore                              | uint32_t               |                                                           | Yes      |
  */
-Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_ranges, uint32_t initial_value);
+Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_range_set, uint32_t initial_value);
 
 /**
 * Copies data from a host buffer into the specified buffer

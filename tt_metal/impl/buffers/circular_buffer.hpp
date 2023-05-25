@@ -12,7 +12,7 @@ class CircularBuffer {
    public:
     CircularBuffer(
         Device *device,
-        const CoreRangeSet &core_ranges,
+        const CoreRangeSet &core_range_set,
         uint32_t buffer_index,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
@@ -20,7 +20,7 @@ class CircularBuffer {
 
     CircularBuffer(
         Device *device,
-        const CoreRangeSet &core_ranges,
+        const CoreRangeSet &core_range_set,
         uint32_t buffer_index,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
@@ -36,7 +36,7 @@ class CircularBuffer {
 
     ~CircularBuffer();
 
-    CoreRangeSet core_ranges() const { return core_ranges_; }
+    CoreRangeSet core_range_set() const { return core_range_set_; }
 
     uint32_t buffer_index() const { return buffer_index_; }
 
@@ -57,7 +57,7 @@ class CircularBuffer {
     friend void DeallocateBuffer(Buffer &buffer);
 
     Device *device_;
-    CoreRangeSet core_ranges_;
+    CoreRangeSet core_range_set_;
     uint32_t buffer_index_;               // A buffer ID unique within a Tensix core (0 to 32)
     uint32_t num_tiles_;                  // Size in tiles
     uint32_t size_;

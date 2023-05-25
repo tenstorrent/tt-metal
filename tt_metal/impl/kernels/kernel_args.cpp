@@ -11,11 +11,10 @@ KernelArgs::KernelArgs(const CoreCoord &logical_core, const std::vector<uint32_t
     core_to_compile_time_args_.insert({logical_core, compile_time_args});
 }
 
-void KernelArgs::set_kernel_args_map(const CoreRangeSet &core_ranges, const std::vector<std::vector<uint32_t>> &args_spec, bool set_compile_time_args) {
-    TT_ASSERT(core_ranges.size() == args_spec.size());
+void KernelArgs::set_kernel_args_map(const CoreRangeSet &core_range_set, const std::vector<std::vector<uint32_t>> &args_spec, bool set_compile_time_args) {
+    TT_ASSERT(core_range_set.ranges().size() == args_spec.size());
     int core_range_index = 0;
-    // TODO: validate core_ranges
-    for (auto core_range : core_ranges) {
+    for (auto core_range : core_range_set.ranges()) {
         auto start_core = core_range.start;
         auto end_core = core_range.end;
         auto args = args_spec.at(core_range_index);
@@ -34,11 +33,11 @@ void KernelArgs::set_kernel_args_map(const CoreRangeSet &core_ranges, const std:
 }
 
 KernelArgs::KernelArgs(const CoreRange &core_range, const std::vector<uint32_t> &compile_time_args) {
-    this->set_kernel_args_map({core_range}, {compile_time_args}, /*set_compile_time_args=*/true);
+    this->set_kernel_args_map(CoreRangeSet({core_range}), {compile_time_args}, /*set_compile_time_args=*/true);
 }
 
-KernelArgs::KernelArgs(const CoreRangeSet &core_ranges, const std::vector<std::vector<uint32_t>> &compile_time_args) {
-    this->set_kernel_args_map(core_ranges, compile_time_args, /*set_compile_time_args=*/true);
+KernelArgs::KernelArgs(const CoreRangeSet &core_range_set, const std::vector<std::vector<uint32_t>> &compile_time_args) {
+    this->set_kernel_args_map(core_range_set, compile_time_args, /*set_compile_time_args=*/true);
 }
 
 KernelArgs::KernelArgs(const KernelArgs &other) : core_to_compile_time_args_(other.core_to_compile_time_args_), core_to_runtime_args_(other.core_to_runtime_args_) {}

@@ -4,6 +4,8 @@
 #include <string>
 #include <regex>
 #include <set>
+
+#include "common/assert.hpp"
 // #include <boost/functional/hash.hpp>
 // #include <command_assembler/xy_pair.h>
 
@@ -82,18 +84,44 @@ constexpr inline bool operator<(const CoreRange &left, const CoreRange &right) {
   return (left.start < right.start || (left.start == right.start && left.end < right.end));
 }
 
-using CoreRangeSet = std::set<CoreRange>;
-
-inline bool core_coord_in_core_range_set(const CoreRangeSet &core_ranges, const CoreCoord &core_coord) {
-  for (auto core_range : core_ranges) {
-    bool in_x_range = (core_coord.x >= core_range.start.x) and (core_coord.x <= core_range.end.x);
-    bool in_y_range = (core_coord.y >= core_range.start.y) and (core_coord.y <= core_range.end.y);
-    if (in_x_range and in_y_range) {
-      return true;
+class CoreRangeSet {
+  public:
+    CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges) {
+      for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
+        for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
+          if (outer_it == inner_it) {
+            continue;
+          }
+          CoreRange first_core_range = *outer_it;
+          CoreRange second_core_range = *inner_it;
+          bool first_core_left_of_second = first_core_range.end.x < second_core_range.start.x;
+          bool first_core_right_of_second = first_core_range.start.x > second_core_range.end.x;
+          bool first_core_above_second = first_core_range.end.y < second_core_range.start.y;
+          bool first_core_below_second = first_core_range.start.y > second_core_range.end.y;
+          auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or first_core_below_second;
+          if (not no_overlap) {
+            TT_THROW("Cannot create CoreRangeSet with specified core ranges because core ranges " + first_core_range.str() + " and " + second_core_range.str() + " overlap!");
+          }
+        }
+      }
     }
-  }
-  return false;
-}
+
+    bool core_coord_in_core_ranges(const CoreCoord &core_coord) const {
+      for (auto core_range : this->ranges_) {
+        bool in_x_range = (core_coord.x >= core_range.start.x) and (core_coord.x <= core_range.end.x);
+        bool in_y_range = (core_coord.y >= core_range.start.y) and (core_coord.y <= core_range.end.y);
+        if (in_x_range and in_y_range) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    std::set<CoreRange> ranges() const { return this->ranges_; }
+
+  private:
+    std::set<CoreRange> ranges_;
+};
 
 namespace std {
 template <>

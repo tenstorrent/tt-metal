@@ -324,7 +324,7 @@ bool test_multi_core_kernel_unique_runtime_same_compile_time_args(tt_metal::Devi
     CoreRange core_group{.start={0, 1}, .end={1, 1}};
     CoreRange single_core = {.start={1, 0}, .end={1, 0}};
     CoreRange all_cores{.start=start_core, .end=end_core};
-    CoreRangeSet core_blocks = {start_core_range, single_core, core_group};
+    CoreRangeSet core_blocks = CoreRangeSet({start_core_range, single_core, core_group});
 
     uint32_t single_tile_size = 2 * 1024;
     int32_t num_tiles = 2048;
@@ -403,7 +403,7 @@ bool test_multi_core_kernel_unique_runtime_unique_compile_time_args(tt_metal::De
     CoreRange core_group{.start={0, 1}, .end={1, 1}};
     CoreRange single_core = {.start={1, 0}, .end={1, 0}};
     CoreRange all_cores{.start=start_core, .end=end_core};
-    CoreRangeSet core_blocks = {start_core_range, single_core, core_group};
+    CoreRangeSet core_blocks = CoreRangeSet({start_core_range, single_core, core_group});
 
     uint32_t single_tile_size = 2 * 1024;
     int32_t num_tiles_1 = 2048;

@@ -10,14 +10,6 @@ namespace tt {
 
 namespace tt_metal {
 
-Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_ranges, KernelType kernel_type) :
-    kernel_path_file_name_(kernel_path_file_name), core_ranges_(core_ranges), kernel_type_(kernel_type) {
-}
-
-Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_ranges, const KernelArgs &kernel_args, KernelType kernel_type) :
-    kernel_path_file_name_(kernel_path_file_name), core_ranges_(core_ranges), kernel_args_(kernel_args), kernel_type_(kernel_type) {
-}
-
 std::string Kernel::name() const {
     auto pos_of_name = kernel_path_file_name_.rfind("/") + 1;
     auto pos_of_dot = kernel_path_file_name_.rfind(".");
@@ -27,12 +19,13 @@ std::string Kernel::name() const {
 
 std::set<CoreCoord> Kernel::logical_cores() const {
     std::set<CoreCoord> cores;
-    for (auto core_range : this->core_ranges_) {
+    for (auto core_range : this->core_range_set_.ranges()) {
         auto start = core_range.start;
         auto end = core_range.end;
         for (auto x = start.x; x <= end.x; x++) {
             for (auto y = start.y; y <= end.y; y++) {
-                cores.insert(CoreCoord(x, y));
+                CoreCoord logical_core({.x=x, .y=y});
+                cores.insert(logical_core);
             }
         }
     }
@@ -40,7 +33,7 @@ std::set<CoreCoord> Kernel::logical_cores() const {
 }
 
 bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
-    return core_coord_in_core_range_set(this->core_ranges_, logical_core);
+    return this->core_range_set_.core_coord_in_core_ranges(logical_core);
 }
 
 std::string Kernel::binary_path(const CoreCoord &logical_core) const {

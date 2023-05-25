@@ -14,9 +14,9 @@ class Semaphore {
    public:
     Semaphore(
         Device *device,
-        const CoreRangeSet &core_ranges,
+        const CoreRangeSet &core_range_set,
         uint32_t address,
-        uint32_t initial_value) : device_(device), core_ranges_(core_ranges), address_(address), initial_value_(initial_value) {}
+        uint32_t initial_value) : device_(device), core_range_set_(core_range_set), address_(address), initial_value_(initial_value) {}
 
     Semaphore(const Semaphore &other);
 
@@ -32,7 +32,7 @@ class Semaphore {
 
     uint32_t address() const { return address_; }
 
-    CoreRangeSet core_ranges() const { return core_ranges_; }
+    CoreRangeSet core_range_set() const { return core_range_set_; }
 
     uint32_t initial_value() const { return initial_value_; }
 
@@ -40,7 +40,7 @@ class Semaphore {
 
    private:
     Device *device_;
-    CoreRangeSet core_ranges_;             // Ranges of cores where this semaphore is initialized
+    CoreRangeSet core_range_set_;             // Ranges of cores where this semaphore is initialized
     uint32_t address_;
     uint32_t initial_value_;              // Initial value of semaphore
 };

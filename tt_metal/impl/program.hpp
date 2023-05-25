@@ -123,7 +123,7 @@ class Program {
     friend ComputeKernel *CreateComputeKernel(
         Program &program,
         const std::string &file_name,
-        const CoreRangeSet &core_ranges,
+        const CoreRangeSet &core_range_set,
         const KernelArgs &kernel_args,
         MathFidelity math_fidelity,
         bool fp32_dest_acc_en,
@@ -133,7 +133,7 @@ class Program {
         Program &program,
         Device *device,
         uint32_t buffer_id,
-        const CoreRangeSet &core_ranges,
+        const CoreRangeSet &core_range_set,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
         uint32_t l1_address,
@@ -143,14 +143,14 @@ class Program {
         Program &program,
         Device *device,
         uint32_t buffer_index,
-        const CoreRangeSet &core_ranges,
+        const CoreRangeSet &core_range_set,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
         DataFormat data_format);
 
     friend Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value);
 
-    friend Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_ranges, uint32_t initial_value);
+    friend Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_range_set, uint32_t initial_value);
 
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
 
