@@ -15,9 +15,13 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
         output_format["dtype"] = tt_tensor.dtype()
 
     # Convert to PT Tensor
-    return torch.Tensor(
-        tt_tensor.to(host).to(ttl_tensor.Layout.ROW_MAJOR).data()
-    ).reshape(tt_tensor.shape())
+    if not tt_tensor.on_host():
+        tt_tensor = tt_tensor.to(host)
+
+    if tt_tensor.layout() != ttl_tensor.Layout.ROW_MAJOR:
+        tt_tensor = tt_tensor.to(ttl_tensor.Layout.ROW_MAJOR)
+
+    return torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
 
 
 def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
@@ -37,8 +41,9 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
             tt_tensor = tt_tensor.to(output_format["device"])
         else:
             tt_tensor = tt_tensor.to(ttl_device.GetDefaultDevice())
+        return tt_tensor
 
-    elif output_format["layout"] == ttl_tensor.Layout.TILE:
+    if output_format["layout"] == ttl_tensor.Layout.TILE:
         if (
             tt_tensor.shape()[2] % 32 == 0 and tt_tensor.shape()[3] % 32 == 0
         ):  # Restore tile layout only if legal or else leave as RM
@@ -46,9 +51,11 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
     else:
         if output_format["layout"] != ttl_tensor.Layout.ROW_MAJOR:
             tt_tensor = tt_tensor.to(output_format["layout"])
+
     if isinstance(output_format["device"], ttl_device.Device):
         if (
-            tt_tensor.layout() == ttl_tensor.Layout.ROW_MAJOR
+            tt_tensor.layout() == ttl_tensor.Layout.TILE
+            or tt_tensor.layout() == ttl_tensor.Layout.ROW_MAJOR
             and tt_tensor.shape()[3] % 2 == 0
             or tt_tensor.layout() == ttl_tensor.Layout.CHANNELS_LAST
             and tt_tensor.shape()[1] % 2 == 0

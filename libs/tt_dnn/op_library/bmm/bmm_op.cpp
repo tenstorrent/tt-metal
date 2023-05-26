@@ -297,7 +297,7 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
         device = b.device();
     }
 
-    TT_ASSERT(a.shape()[3] == b.shape()[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_ASSERT(a.shape()[3] == b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(b.shape()[0]*b.shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
 
     auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape());
@@ -365,7 +365,7 @@ Tensor bmm(const Tensor& a, const Tensor& b) {
         device = b.device();
     }
 
-    TT_ASSERT(a.shape()[3] == b.shape()[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_ASSERT(a.shape()[3] == b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(a.shape()[1] == b.shape()[1] && a.shape()[0] == b.shape()[0]
         && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
 

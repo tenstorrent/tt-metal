@@ -869,7 +869,7 @@ Tensor matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, bool bca
     TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0);
 
-    TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[2] and B.shape[3]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
     TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
     TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
