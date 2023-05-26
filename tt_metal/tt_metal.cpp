@@ -714,7 +714,7 @@ private:
     std::unordered_set<size_t> hashes_;
 };
 
-void SetBuildKernelOptions(const KernelGroup &kernel_group, build_kernel_for_riscv_options_t &build_options, const std::string &binary_path) {
+void SetBuildKernelOptions(const KernelGroup &kernel_group, const CoreCoord &logical_core, build_kernel_for_riscv_options_t &build_options, const std::string &binary_path) {
     if (kernel_group.compute != nullptr) {
         build_options.set_hlk_file_name_all_cores(kernel_group.compute->kernel_path_file_name());
         build_options.set_hlk_math_fidelity_all_cores(kernel_group.compute->math_fidelity());
@@ -722,15 +722,15 @@ void SetBuildKernelOptions(const KernelGroup &kernel_group, build_kernel_for_ris
         //build_kernel_for_riscv_options->set_hlk_math_approx_mode_all_cores(kernel_group.compute->math_approx_mode());
         build_options.fp32_dest_acc_en = kernel_group.compute->fp32_dest_acc_en();
         build_options.hlk_defines = kernel_group.compute->defines();
-        kernel_group.compute->set_binary_path(binary_path);
+        kernel_group.compute->set_binary_path(logical_core, binary_path);
     }
     TT_ASSERT(kernel_group.riscv_0 != nullptr and kernel_group.riscv_1 != nullptr);
     build_options.brisc_kernel_file_name = kernel_group.riscv_0->kernel_path_file_name();
     build_options.brisc_defines = kernel_group.riscv_0->defines();
-    kernel_group.riscv_0->set_binary_path(binary_path);
+    kernel_group.riscv_0->set_binary_path(logical_core, binary_path);
     build_options.ncrisc_kernel_file_name = kernel_group.riscv_1->kernel_path_file_name();
     build_options.ncrisc_defines = kernel_group.riscv_1->defines();
-    kernel_group.riscv_1->set_binary_path(binary_path);
+    kernel_group.riscv_1->set_binary_path(logical_core, binary_path);
 }
 
 void SetBinaries(const KernelGroup &kernel_group, const std::string &binary_path) {
@@ -772,7 +772,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         SetCircularBufferDataFormat(program, logical_core, build_options, op_path);
 
         string root_dir = tt::utils::get_root_dir();
-        SetBuildKernelOptions(kernel_group, build_options, op_path);
+        SetBuildKernelOptions(kernel_group, logical_core, build_options, op_path);
 
         if (HashLookup::inst().exists(kernel_group_hash)) {
             //std::cout << "--- Kernel Cache hit" << std::endl;

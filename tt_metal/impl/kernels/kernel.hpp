@@ -56,7 +56,7 @@ class Kernel {
 
     KernelType kernel_type() const { return kernel_type_; }
 
-    std::string binary_path() const { return binary_path_; }
+    std::string binary_path(const CoreCoord &logical_core) const;
 
     std::vector<ll_api::memory> binaries() const;
 
@@ -83,14 +83,14 @@ class Kernel {
     std::string kernel_path_file_name_;                 // Full kernel path and file name
     CoreRangeSet core_range_set_;
     KernelType kernel_type_;
-    std::string binary_path_;
+    std::map<CoreCoord, std::string> binary_path_;
     std::vector<ll_api::memory> binaries_;      // DataMovement kernels have one binary each and Compute kernels have three binaries
     std::vector<uint32_t> compile_time_args_;
     std::map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;
     std::map<std::string, std::string> defines_; // preprocessor defines. this is to be able to generate generic instances.
 
-    void set_binary_path(const std::string &binary_path);
-    friend void SetBuildKernelOptions(const KernelGroup &kernel_group, build_kernel_for_riscv_options_t &build_options, const std::string &binary_path);
+    void set_binary_path(const CoreCoord &logical_core, const std::string &binary_path) { binary_path_.insert({logical_core, binary_path}); }
+    friend void SetBuildKernelOptions(const KernelGroup &kernel_group, const CoreCoord &logical_core, build_kernel_for_riscv_options_t &build_options, const std::string &binary_path);
 
     void set_binaries(const std::string &binary_path);
     friend void SetBinaries(const KernelGroup &kernel_group, const std::string &binary_path);

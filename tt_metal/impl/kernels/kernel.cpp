@@ -36,6 +36,13 @@ bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.core_coord_in_core_ranges(logical_core);
 }
 
+std::string Kernel::binary_path(const CoreCoord &logical_core) const {
+    if (not is_on_logical_core(logical_core)) {
+        TT_THROW("Cannot access binary for " + name() + " because it is not on core " + logical_core.str());
+    }
+    return binary_path_.at(logical_core);
+}
+
 std::vector<ll_api::memory> Kernel::binaries() const {
     const static std::map<KernelType, int> kernel_type_to_expected_num_binaries = {
         {KernelType::Compute, 3},
@@ -73,22 +80,15 @@ size_t Kernel::define_args_hash(const CoreCoord& logical_core) const {
     return KernelDefinesHash{logical_core}(defines_);
 }
 
-void Kernel::set_binary_path(const std::string &binary_path) {
-    if (not this->binary_path_.empty() and binary_path != this->binary_path_) {
-        TT_ASSERT(false, "Setting a different binary path on kernel " + this->name() + " that has already been compiled");
-    }
-    this->binary_path_ = binary_path;
-}
-
 void Kernel::set_binaries(const std::string &binary_path) {
-    TT_ASSERT(this->binaries_.empty());
+    std::vector<ll_api::memory> binaries;
     switch (this->kernel_type_) {
         case KernelType::Compute: {
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
                 std::string hex_path = binary_path + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
                 ll_api::memory binary_mem = llrt::get_risc_binary(hex_path);
-                this->binaries_.push_back(binary_mem);
+                binaries.push_back(binary_mem);
             }
         }
         break;
@@ -109,12 +109,17 @@ void Kernel::set_binaries(const std::string &binary_path) {
                     TT_ASSERT(false, "Unsupported data movement processor!");
             }
             ll_api::memory binary_mem = llrt::get_risc_binary(binary_path + binary_path_suffix);
-            this->binaries_.push_back(binary_mem);
+            binaries.push_back(binary_mem);
         }
         break;
         default:
             TT_ASSERT(false, "Unsupported kernel type");
     };
+    if (not this->binaries_.empty()) {
+        TT_ASSERT(this->binaries_ == binaries);
+    } else {
+        this->binaries_ = std::move(binaries);
+    }
 }
 
 void init_test_mailbox(Device *device, const CoreCoord &core, uint64_t test_mailbox_addr) {
@@ -173,6 +178,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
+    auto binary_path = binary_path_.at(logical_core);
 
     int riscv_id;
     std::string binary_path_suffix;
@@ -195,7 +201,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     }
 
     pass &= tt::llrt::test_load_write_read_risc_binary(
-        cluster, this->binary_path_ + binary_path_suffix, pcie_slot, worker_core, riscv_id);
+        cluster, binary_path + binary_path_suffix, pcie_slot, worker_core, riscv_id);
     init_test_mailbox(device, worker_core, test_mailbox_addr);
     if (processor_ == DataMovementProcessor::RISCV_1) {
         tt::llrt::enable_ncrisc(cluster, pcie_slot, worker_core);
@@ -211,12 +217,13 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
+    auto binary_path = binary_path_.at(logical_core);
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         std::string trisc_id_str = std::to_string(trisc_id);
         pass &= tt::llrt::test_load_write_read_trisc_binary(
             cluster,
-            this->binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex",
+            binary_path + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex",
             pcie_slot,
             worker_core,
             trisc_id);
