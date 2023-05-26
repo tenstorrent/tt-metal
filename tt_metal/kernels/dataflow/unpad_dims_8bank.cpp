@@ -23,7 +23,7 @@ void kernel_main() {
 
     #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
     #if (tile_size_is_pow2)
-    const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(14);
+    const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(12);
     const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = src_addr,
         .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor

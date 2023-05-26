@@ -266,6 +266,7 @@ Tensor unpad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_
         compile_time_args_vec.push_back(0);
         reader_kernel_args.push_back(0);
     }
+    compile_time_args = tt_metal::KernelArgs(core, compile_time_args_vec);
 
     // Tilized reader
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
