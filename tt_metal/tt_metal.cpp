@@ -714,6 +714,34 @@ private:
     std::unordered_set<size_t> hashes_;
 };
 
+void SetBuildKernelOptions(const KernelGroup &kernel_group, build_kernel_for_riscv_options_t &build_options, const std::string &binary_path) {
+    if (kernel_group.compute != nullptr) {
+        build_options.set_hlk_file_name_all_cores(kernel_group.compute->kernel_path_file_name());
+        build_options.set_hlk_math_fidelity_all_cores(kernel_group.compute->math_fidelity());
+        // TODO(AP): see issue #504
+        //build_kernel_for_riscv_options->set_hlk_math_approx_mode_all_cores(kernel_group.compute->math_approx_mode());
+        build_options.fp32_dest_acc_en = kernel_group.compute->fp32_dest_acc_en();
+        build_options.hlk_defines = kernel_group.compute->defines();
+        kernel_group.compute->set_binary_path(binary_path);
+    }
+    TT_ASSERT(kernel_group.riscv_0 != nullptr and kernel_group.riscv_1 != nullptr);
+    build_options.brisc_kernel_file_name = kernel_group.riscv_0->kernel_path_file_name();
+    build_options.brisc_defines = kernel_group.riscv_0->defines();
+    kernel_group.riscv_0->set_binary_path(binary_path);
+    build_options.ncrisc_kernel_file_name = kernel_group.riscv_1->kernel_path_file_name();
+    build_options.ncrisc_defines = kernel_group.riscv_1->defines();
+    kernel_group.riscv_1->set_binary_path(binary_path);
+}
+
+void SetBinaries(const KernelGroup &kernel_group, const std::string &binary_path) {
+    if (kernel_group.compute != nullptr) {
+        kernel_group.compute->set_binaries(binary_path);
+    }
+    TT_ASSERT(kernel_group.riscv_0 != nullptr and kernel_group.riscv_1 != nullptr);
+    kernel_group.riscv_0->set_binaries(binary_path);
+    kernel_group.riscv_1->set_binaries(binary_path);
+}
+
 bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
@@ -744,9 +772,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         SetCircularBufferDataFormat(program, logical_core, build_options, op_path);
 
         string root_dir = tt::utils::get_root_dir();
-        ConfigureForCompilation(kernel_group.compute, build_options, logical_core, op_path);
-        ConfigureForCompilation(kernel_group.riscv_0, build_options, logical_core, op_path);
-        ConfigureForCompilation(kernel_group.riscv_1, build_options, logical_core, op_path);
+        SetBuildKernelOptions(kernel_group, build_options, op_path);
 
         if (HashLookup::inst().exists(kernel_group_hash)) {
             //std::cout << "--- Kernel Cache hit" << std::endl;
@@ -766,6 +792,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
             //    cout << "======= Compiling" << std::endl;
             // PROF_BEGIN("CCGEN_BIN")
             GenerateBinaries(device, &build_options, op_path, profile_kernel, kernel_group, logical_core);
+            SetBinaries(kernel_group, op_path);
             // PROF_END("CCGEN_BIN")
         } else {
             //if (enable_compile_cache)

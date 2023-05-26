@@ -31,9 +31,7 @@ enum class KernelType {
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);
 std::ostream& operator<<(std::ostream& os, const KernelType& type);
 
-class Kernel;
-
-void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const CoreCoord &logical_core, const std::string &out_dir_path);
+struct KernelGroup;
 
 class Kernel {
    public:
@@ -57,11 +55,15 @@ class Kernel {
 
     KernelType kernel_type() const { return kernel_type_; }
 
-    std::string binary_path(const CoreCoord &logical_core) const;
+    std::string binary_path() const { return binary_path_; }
+
+    std::vector<std::vector<uint32_t>> binaries() const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
     size_t compile_time_args_hash() const;
+
+    std::map<std::string, std::string> defines() const { return defines_; }
 
     std::vector<uint32_t> runtime_args(const CoreCoord &logical_core) const;
 
@@ -80,16 +82,17 @@ class Kernel {
     std::string kernel_path_file_name_;                 // Full kernel path and file name
     CoreRangeSet core_range_set_;
     KernelType kernel_type_;
-    std::map<CoreCoord, std::string> binary_path_;
+    std::string binary_path_;
+    std::vector<std::vector<uint32_t>> binaries_;      // DataMovement kernels have one binary each and Compute kernels have three binaries
     std::vector<uint32_t> compile_time_args_;
     std::map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;
     std::map<std::string, std::string> defines_; // preprocessor defines. this is to be able to generate generic instances.
 
-    void set_binary_path(const CoreCoord &logical_core, const std::string &binary_path) { binary_path_.insert({logical_core, binary_path}); }
+    void set_binary_path(const std::string &binary_path);
+    friend void SetBuildKernelOptions(const KernelGroup &kernel_group, build_kernel_for_riscv_options_t &build_options, const std::string &binary_path);
 
-    virtual void configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const CoreCoord &logical_core, const std::string &out_dir_path) = 0;
-
-    friend void ConfigureForCompilation(Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const CoreCoord &logical_core, const std::string &out_dir_path);
+    void set_binaries(const std::string &binary_path);
+    friend void SetBinaries(const KernelGroup &kernel_group, const std::string &binary_path);
 };
 
 class DataMovementKernel : public Kernel {
@@ -160,8 +163,6 @@ class DataMovementKernel : public Kernel {
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
    private:
-    void configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const CoreCoord &logical_core, const std::string &out_dir_path);
-
     void write_runtime_args_to_device(Device *device, const CoreCoord &logical_core) const;
 
     friend bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
@@ -212,9 +213,13 @@ class ComputeKernel : public Kernel {
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
-   private:
-    void configure_for_compilation(build_kernel_for_riscv_options_t &build_options, const CoreCoord &logical_core, const std::string &out_dir_path);
+    MathFidelity math_fidelity() const { return math_fidelity_; }
 
+    bool fp32_dest_acc_en() const { return fp32_dest_acc_en_; }
+
+    bool math_approx_mode() const { return math_approx_mode_; }
+
+   private:
     MathFidelity math_fidelity_;  // Math fidelity
     bool fp32_dest_acc_en_;       //
     bool math_approx_mode_;       // Run math in approx mode
