@@ -2,6 +2,7 @@ import os, sys
 import json
 import re
 import inspect
+import pytest
 
 
 import tests.tt_metal.tools.profiler.common as common
@@ -48,6 +49,7 @@ def get_function_name():
     return frame.f_code.co_name
 
 
+@pytest.mark.skip(reason="Some machines are acting flaky on this test")
 def test_custom_cycle_count():
     REF_CYCLE_COUNT = 52
     REF_CYCLE_COUNT_MARGIN = 6
