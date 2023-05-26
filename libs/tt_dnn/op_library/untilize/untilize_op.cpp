@@ -284,13 +284,13 @@ Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &o
     };
     // Writer compile-time args
     bool stick_size_is_power_of_two = (ceil(log2(unpadded_stick_size)) == floor(log2(unpadded_stick_size)));
-    KernelArgs compile_time_args;
+    std::vector<uint32_t> compile_time_args;
     if (stick_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args = tt_metal::KernelArgs(core, {1});
+        compile_time_args = {1};
         writer_kernel_args.push_back((std::uint32_t)log2(unpadded_stick_size));
     } else {
-        compile_time_args = tt_metal::KernelArgs(core, {0});
+        compile_time_args = {0};
     }
 
 
@@ -315,7 +315,6 @@ Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &o
         uint32_t(num_padded_sticks / TILE_HEIGHT), // per_core_block_cnt
         uint32_t(a.shape()[3] / TILE_WIDTH) // per_core_block_tile_cnt
     };
-    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -323,7 +322,7 @@ Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &o
         program,
         "tt_metal/kernels/compute/untilize.cpp",
         core,
-        eltwise_unary_args,
+        compute_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

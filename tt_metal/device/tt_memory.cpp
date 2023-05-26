@@ -60,6 +60,13 @@ void memory::fill_from_discontiguous_hex(std::istream& is) {
         link_spans_.back().len++;
         last_addr = word_addr;
     });
+    // align data to be 32B aligned
+    uint32_t data_size_bytes = data_.size() * sizeof(word_t);
+    const static uint32_t alignment = 32;
+    size_t num_pad_elements = ((alignment - data_size_bytes % alignment) % alignment) / sizeof(word_t);
+    if (num_pad_elements > 0) {
+        data_.resize(data_.size() + num_pad_elements, 0);
+    }
 }
 
 void memory::fill_from_mem_template(const memory& mem_template, const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {

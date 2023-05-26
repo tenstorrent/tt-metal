@@ -87,6 +87,7 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
     TestEntry("tt_metal/tests/test_pipeline_across_rows", "test_pipeline_across_rows"),
     TestEntry("tt_metal/tests/test_core_range_set", "test_core_range_set"),
+    TestEntry("tt_metal/tests/test_compile_sets_kernel_binaries", "test_compile_sets_kernel_binaries"),
 
     # Allocator Tests
     TestEntry("tt_metal/tests/allocator/test_free_list_allocator_algo", "allocator/test_free_list_allocator_algo"),

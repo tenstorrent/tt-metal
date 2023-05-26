@@ -36,7 +36,7 @@ bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.core_coord_in_core_ranges(logical_core);
 }
 
-std::vector<std::vector<uint32_t>> Kernel::binaries() const {
+std::vector<ll_api::memory> Kernel::binaries() const {
     const static std::map<KernelType, int> kernel_type_to_expected_num_binaries = {
         {KernelType::Compute, 3},
         {KernelType::DataMovement, 1}
@@ -80,15 +80,6 @@ void Kernel::set_binary_path(const std::string &binary_path) {
     this->binary_path_ = binary_path;
 }
 
-void align_binary_to_32B(std::vector<uint32_t> &binary) {
-    uint32_t binary_size_bytes = binary.size() * sizeof(uint32_t);
-    const static uint32_t alignment = 32;
-    size_t num_pad_elements = ((32 - binary_size_bytes % 32) % 32) / sizeof(uint32_t);
-    if (num_pad_elements > 0) {
-        binary.resize(binary.size() + num_pad_elements, 0);
-    }
-}
-
 void Kernel::set_binaries(const std::string &binary_path) {
     TT_ASSERT(this->binaries_.empty());
     switch (this->kernel_type_) {
@@ -96,36 +87,29 @@ void Kernel::set_binaries(const std::string &binary_path) {
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
                 std::string hex_path = binary_path + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                bool id_is_trisc = true;
-                std::vector<uint32_t> hex_vec = llrt::get_risc_binary(hex_path, trisc_id, id_is_trisc);
-                align_binary_to_32B(hex_vec);
-                this->binaries_.push_back(hex_vec);
+                ll_api::memory binary_mem = llrt::get_risc_binary(hex_path);
+                this->binaries_.push_back(binary_mem);
             }
         }
         break;
         case KernelType::DataMovement: {
             auto dm_kernel = dynamic_cast<DataMovementKernel *>(this);
             TT_ASSERT(dm_kernel != nullptr);
-            uint32_t riscv_id;
             std::string binary_path_suffix;
             switch (dm_kernel->data_movement_processor()) {
                 case (DataMovementProcessor::RISCV_0): {
-                    riscv_id = 0;
                     binary_path_suffix = "/brisc/brisc.hex";
                 }
                 break;
                 case (DataMovementProcessor::RISCV_1): {
-                    riscv_id = 1;
                     binary_path_suffix = "/ncrisc/ncrisc.hex";
                 }
                 break;
                 default:
                     TT_ASSERT(false, "Unsupported data movement processor!");
             }
-            bool id_is_trisc = false;
-            std::vector<uint32_t> hex_vec = llrt::get_risc_binary(binary_path + binary_path_suffix, riscv_id, id_is_trisc);
-            align_binary_to_32B(hex_vec);
-            this->binaries_.push_back(hex_vec);
+            ll_api::memory binary_mem = llrt::get_risc_binary(binary_path + binary_path_suffix);
+            this->binaries_.push_back(binary_mem);
         }
         break;
         default:

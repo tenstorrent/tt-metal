@@ -90,7 +90,6 @@ Tensor pad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shap
         dst_buffer_l1.address()
     };
 
-    KernelArgs compile_time_args;
     std::vector<uint32_t> compile_time_args_vec;
     // Reader compile-time args
     // Data is 32 byte aligned
@@ -113,14 +112,13 @@ Tensor pad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shap
         compile_time_args_vec.push_back(0);
         reader_kernel_args.push_back(0);
     }
-    compile_time_args = tt_metal::KernelArgs(core, compile_time_args_vec);
 
     // Tilized reader
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/pad_dims_rm_8bank.cpp",
         core,
-        compile_time_args,
+        compile_time_args_vec,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -132,13 +130,12 @@ Tensor pad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shap
     vector<uint32_t> compute_args = {
         0 // dummy
     };
-    tt_metal::KernelArgs blank_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program, "tt_metal/kernels/compute/blank.cpp",
-        core, blank_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
+        core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
@@ -230,7 +227,6 @@ Tensor pad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_sh
         src_buffer_l1.address()
     };
 
-    KernelArgs compile_time_args;
     std::vector<uint32_t> compile_time_args_vec;
     // Reader compile-time args
     // Data is 32 byte aligned
@@ -244,14 +240,12 @@ Tensor pad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_sh
         reader_kernel_args.push_back(0);
     }
 
-    compile_time_args = tt_metal::KernelArgs(core, compile_time_args_vec);
-
     // Tilized reader
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/pad_dims_8bank.cpp",
         core,
-        compile_time_args,
+        compile_time_args_vec,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -263,13 +257,12 @@ Tensor pad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_sh
     vector<uint32_t> compute_args = {
         0 // dummy
     };
-    tt_metal::KernelArgs blank_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program, "tt_metal/kernels/compute/blank.cpp",
-        core, blank_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
+        core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application

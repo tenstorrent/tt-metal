@@ -438,17 +438,17 @@ Tensor tilize_with_val_padding(const Tensor &a, const std::array<uint32_t, 4> &o
         packed_pad_value,
         temp_buffer_l1.address()
     };
-    KernelArgs compile_time_args;
+    std::vector<uint32_t> compile_time_args;
     // Reader compile-time args
     // Data is 32 byte aligned
     uint32_t stick_size = unpadded_row_size_bytes;
     bool stick_size_is_power_of_two = (ceil(log2(stick_size)) == floor(log2(stick_size)));
     if (stick_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args = tt_metal::KernelArgs(core, {1});
+        compile_time_args = {1};
         reader_kernel_args.push_back((std::uint32_t)log2(stick_size));
     } else {
-        compile_time_args = tt_metal::KernelArgs(core, {0});
+        compile_time_args = {0};
     }
 
     // Tilized reader
@@ -468,13 +468,10 @@ Tensor tilize_with_val_padding(const Tensor &a, const std::array<uint32_t, 4> &o
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    tt_metal::KernelArgs eltwise_unary_args;
-
     vector<uint32_t> compute_kernel_args = {
         uint32_t((num_rows_padded / TILE_HEIGHT) * num_2d_faces),
         uint32_t(padded_row_size_datum / TILE_WIDTH)
     };
-    eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -482,7 +479,7 @@ Tensor tilize_with_val_padding(const Tensor &a, const std::array<uint32_t, 4> &o
         program,
         "tt_metal/kernels/compute/tilize.cpp",
         core,
-        compute_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
@@ -636,7 +633,7 @@ Tensor tilize_conv_activation(const Tensor &a, bool conv1x1) {
         program,
         "tt_metal/kernels/compute/tilize.cpp",
         core,
-        eltwise_unary_args,
+        compute_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
