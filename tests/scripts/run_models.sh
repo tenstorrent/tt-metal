@@ -59,3 +59,16 @@ env pytest tests/python_api_testing/models/bloom -k bloom_mlp
 env pytest tests/python_api_testing/models/bloom -k bloom_attention
 env pytest tests/python_api_testing/models/bloom -k bloom_block
 env pytest tests/python_api_testing/models/bloom -k bloom_gelu_forward
+
+env pytest tests/python_api_testing/models/roberta -k roberta_self_attention
+env pytest tests/python_api_testing/models/roberta -k roberta_self_output
+env pytest tests/python_api_testing/models/roberta -k roberta_attention
+env pytest tests/python_api_testing/models/roberta -k roberta_intermediate
+env pytest tests/python_api_testing/models/roberta -k roberta_output
+env pytest tests/python_api_testing/models/roberta -k roberta_layer
+env pytest tests/python_api_testing/models/roberta -k roberta_encoder
+env pytest tests/python_api_testing/models/roberta -k roberta_pooler
+env pytest tests/python_api_testing/models/roberta -k roberta_model
+env pytest tests/python_api_testing/models/roberta -k roberta_lm_head
+env pytest tests/python_api_testing/models/roberta -k roberta_for_masked_lm
+env pytest tests/python_api_testing/models/roberta -k roberta_for_qa

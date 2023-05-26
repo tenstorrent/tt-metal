@@ -25,7 +25,8 @@ from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt
 from python_api_testing.models.whisper.whisper_model import TtWhisperModel, TtWhisperModelOutput
 
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-
+from utility_functions import enable_compile_cache, disable_compile_cache
+import time
 
 def run_whisper_model(device):
     pytorch_model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
@@ -91,8 +92,8 @@ def run_whisper_model(device):
 
     does_pass, pcc_message = comp_pcc(pytorch_output.last_hidden_state, tt_out_to_torch, 0.96)
 
-    print(comp_allclose(pytorch_output.last_hidden_state, tt_out_to_torch))
-    print(pcc_message)
+    logger.info(comp_allclose(pytorch_output.last_hidden_state, tt_out_to_torch))
+    logger.info(pcc_message)
 
     if does_pass:
         logger.info("Model Passed!")

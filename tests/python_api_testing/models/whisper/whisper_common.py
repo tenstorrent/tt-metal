@@ -50,7 +50,6 @@ def create_padded_tensor(input_tensors_shape, input_tensor, output_tensor_shape,
         ttm.tensor.DataType.BFLOAT16,
         ttm.tensor.Layout.ROW_MAJOR,
     )
-    logger.info(f"Padding tensor with value {pad_value}")
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
     #a_pt = torch.Tensor(a_pad.data()).reshape(*output_tensor_shape)
