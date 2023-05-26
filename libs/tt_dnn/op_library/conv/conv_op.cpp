@@ -563,14 +563,13 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
         untilize_out
     };
 
-    tt_metal::KernelArgs bmm_args = tt_metal::KernelArgs(core, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/matmul_large_block_generalized.cpp",
         core,
-        bmm_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

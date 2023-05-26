@@ -21,14 +21,13 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
         all_cores, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::RISCV_1_default);
 
     vector<uint32_t> trisc_kernel_args = {};
-    tt_metal::KernelArgs trisc_args = tt_metal::KernelArgs(all_cores, trisc_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     tt_metal::ComputeKernel *trisc_kernel = tt_metal::CreateComputeKernel(
         program, "tt_metal/programming_examples/profiler/device/grayskull/test_full_buffer/kernels/full_buffer_compute.cpp",
         all_cores,
-        trisc_args,
+        trisc_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

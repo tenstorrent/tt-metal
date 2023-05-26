@@ -55,13 +55,12 @@ tt_metal::Tensor fill_rm(int N, int C, int H, int W, int hFill, int wFill, const
     vector<uint32_t> compute_args = {
         0 // dummy
     };
-    tt_metal::KernelArgs blank_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program, "tt_metal/kernels/compute/blank.cpp",
-        core, blank_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
+        core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
     // Compile kernels
 

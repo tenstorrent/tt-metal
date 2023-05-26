@@ -103,7 +103,6 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         Wt, // Wt
         NC, // NC
     };
-    tt_metal::KernelArgs compute_args = tt_metal::KernelArgs(core, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     TT_ASSERT(int(reduce_dim) >= 0 && int(reduce_dim) <= ReduceOpDim::all().size());
@@ -114,7 +113,7 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         program,
         compute_kernel_name,
         core,
-        compute_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

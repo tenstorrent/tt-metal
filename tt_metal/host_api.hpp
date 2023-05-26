@@ -166,7 +166,7 @@ void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<
  * | program        | The program to which this kernel will be added to                                                            | Program &                |                                                                | Yes      |
  * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
  * | core           | The location of the Tensix core on which the kernel will execute (Logical co-ordinates)                      | const CoreCoord &       | {0, 0} –> {9, 11}                                              | Yes      |
- * | kernel_args    | Compile and runtime kernel arguments passed at compile time and runtime respectively                         | const KernelArgs &       |                                                                | Yes      |
+ * | compile_args   | Compile arguments passed to kernel at compile time                                                           | const std::vector<uint32_t> &       |                                                                | Yes      |
  * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
  * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
  */
@@ -175,7 +175,7 @@ DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
     const CoreCoord &core,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     DataMovementProcessor processor_type,
     NOC noc);
 
@@ -209,7 +209,7 @@ DataMovementKernel *CreateDataMovementKernel(
  * | program        | The program to which this kernel will be added to                                                            | Program &                |                                                                | Yes      |
  * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
  * | core_range     | The range of the Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)                 | const CoreRange &        | Any range encompassing cores within {0 , 0} –> {9, 11}         | Yes      |
- * | kernel_args    | Compile and runtime kernel arguments passed at compile time and runtime respectively                         | const KernelArgs &       |                                                                | Yes      |
+ * | compile_args   | Compile arguments passed to kernel at compile time                                                           | const std::vector<uint32_t> &       |                                                                | Yes      |
  * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
  * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
  */
@@ -217,7 +217,7 @@ DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
     const CoreRange &core_range,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     DataMovementProcessor processor_type,
     NOC noc);
 
@@ -251,7 +251,7 @@ DataMovementKernel *CreateDataMovementKernel(
  * | program        | The program to which this kernel will be added to                                                            | Program &                |                                                                | Yes      |
  * | file_name      | Name of file containing the kernel                                                                           | const std::string        |                                                                | Yes      |
  * | core_range_set    | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
- * | kernel_args    | Compile and runtime kernel arguments passed at compile time and runtime respectively                         | const KernelArgs &       |                                                                | Yes      |
+ * | compile_args   | Compile arguments passed to kernel at compile time                                                           | const std::vector<uint32_t> &       |                                                                | Yes      |
  * | processor_type | The target RISC-V processor on which the kernel will execute, on the given Tensix core (1 kernel per RISC-V) | enum                     | DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1 | Yes      |
  * | noc            | The NoC ID on which the kernel will perform data transfers                                                   | enum                     | RISCV_0_default, RISCV_1_default, NOC_0, NOC_1,                | Yes      |
  */
@@ -259,7 +259,7 @@ DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
     const CoreRangeSet &core_range_set,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     DataMovementProcessor processor_type,
     NOC noc);
 
@@ -293,7 +293,7 @@ DataMovementKernel *CreateDataMovementKernel(
  * | program          | The program to which this kernel will be added to                                       | Program &           |                       | Yes      |
  * | file_name        | Name of file containing the kernel                                                      | const std::string   |                       | Yes      |
  * | core             | The location of the Tensix core on which the kernel will execute (Logical co-ordinates) | const CoreCoord &  | {0, 0} –> {9, 11}     | Yes      |
- * | kernel_args      | Kernel arguments, passed at compile time                                                | const KernelArgs &  |                       | Yes      |
+ * | compile_args     | Compile arguments passed to kernel at compile time                                                           | const std::vector<uint32_t> &       |                                                                | Yes      |
  * | math_fidelity    | The percision of the matrix compute engine                                              | enum                | MathFidelity::HiFi4   | Yes      |
  * | fp32_dest_acc_en | Specifies the type of accumulation performed in the matrix compute engine.              | bool                | false (for Grayskull) | Yes      |
  * | math_approx_mode | Used by the vector compute engine. (will be depricated)                                 | bool                | true, false           | Yes      |
@@ -302,7 +302,7 @@ ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     const CoreCoord &core,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode);
@@ -317,7 +317,7 @@ ComputeKernel *CreateComputeKernel(
  * | program          | The program to which this kernel will be added to                                            | Program &           |                                                        | Yes      |
  * | file_name        | Name of file containing the kernel                                                           | const std::string   |                                                        | Yes      |
  * | core_range       | The range of the Tensix co-ordinates on which the kernel will execute (Logical co-ordinates) | const CoreRange &   | Any range encompassing cores within {0 , 0} –> {9, 11} | Yes      |
- * | kernel_args      | Kernel arguments, passed at compile time                                                     | const KernelArgs &  |                                                        | Yes      |
+ * | compile_args     | Compile arguments passed to kernel at compile time                                                           | const std::vector<uint32_t> &       |                                                                | Yes      |
  * | math_fidelity    | The percision of the matrix compute engine                                                   | enum                | MathFidelity::HiFi4                                    | Yes      |
  * | fp32_dest_acc_en | Specifies the type of accumulation performed in the matrix compute engine.                   | bool                | false (for Grayskull)                                  | Yes      |
  * | math_approx_mode | Used by the vector compute engine. (will be depricated)                                      | bool                | true, false                                            | Yes      |
@@ -326,7 +326,7 @@ ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     const CoreRange &core_range,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode);
@@ -341,7 +341,7 @@ ComputeKernel *CreateComputeKernel(
  * | program          | The program to which this kernel will be added to                                                            | Program &           |                                                        | Yes      |
  * | file_name        | Name of file containing the kernel                                                                           | const std::string   |                                                        | Yes      |
  * | core_range_set   | A set of ranges (inclusive) of Tensix co-ordinates on which the kernel will execute (Logical co-ordinates)   | const CoreRangeSet &     | Ranges encompassing cores within {0 , 0} –> {9, 11}            | Yes      |
- * | kernel_args      | Kernel arguments, passed at compile time                                                                     | const KernelArgs &  |                                                        | Yes      |
+ * | compile_args     | Compile arguments passed to kernel at compile time                                                           | const std::vector<uint32_t> &       |                                                                | Yes      |
  * | math_fidelity    | The percision of the matrix compute engine                                                                   | enum                | MathFidelity::HiFi4                                    | Yes      |
  * | fp32_dest_acc_en | Specifies the type of accumulation performed in the matrix compute engine.                                   | bool                | false (for Grayskull)                                  | Yes      |
  * | math_approx_mode | Used by the vector compute engine. (will be depricated)                                                      | bool                | true, false                                            | Yes      |
@@ -350,7 +350,7 @@ ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     const CoreRangeSet &core_range_set,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode);

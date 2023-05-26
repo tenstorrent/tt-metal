@@ -89,7 +89,6 @@ Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
         num_tiles, // per_core_block_cnt
         1 // per_core_block_size
     };
-    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -97,7 +96,7 @@ Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
         program,
         "tt_metal/kernels/compute/eltwise_copy.cpp",
         core,
-        eltwise_unary_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
@@ -230,20 +229,20 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
     // Reader compile-time args
     bool old_stick_size_is_power_of_two = (ceil(log2(old_stick_size)) == floor(log2(old_stick_size)));
     vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(), num_old_sticks, old_stick_size};
-    KernelArgs reader_compile_time_args;
+    std::vector<uint32_t> reader_compile_time_args;
     if (old_stick_size_is_power_of_two) {
         reader_kernel_args.push_back(log2(old_stick_size));
 
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_compile_time_args = tt_metal::KernelArgs(core, {1});
+        reader_compile_time_args = {1};
     } else {
-        reader_compile_time_args = tt_metal::KernelArgs(core, {0});
+        reader_compile_time_args = {0};
     }
 
     // Writer compile-time args
     bool new_stick_size_is_power_of_two = (ceil(log2(new_stick_size)) == floor(log2(new_stick_size)));
     vector<uint32_t> writer_kernel_args = {dst_dram_buffer->address(), num_new_sticks, new_stick_size};
-    KernelArgs writer_compile_time_args;
+    std::vector<uint32_t> writer_compile_time_args;
     if (new_stick_size_is_power_of_two) {
         writer_kernel_args.push_back(log2(new_stick_size));
     }
@@ -268,7 +267,6 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
         uint(a.volume() / TILE_HW), // per_core_block_cnt
         1 // per_core_block_size
     };
-    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -276,7 +274,7 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
         program,
         "tt_metal/kernels/compute/eltwise_copy.cpp",
         core,
-        eltwise_unary_args,
+        compute_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

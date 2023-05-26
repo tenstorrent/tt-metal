@@ -125,14 +125,14 @@ int main(int argc, char **argv) {
         vector<uint32_t> compute_kernel_args = {
             uint(num_tensor_tiles)
         };
-        tt_metal::KernelArgs kernel_args = tt_metal::KernelArgs(core, compute_kernel_args);
+
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto blank_binary_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/eltwise_copy.cpp",
             core,
-            kernel_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

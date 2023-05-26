@@ -315,15 +315,13 @@ int main(int argc, char **argv) {
             uint(out_subblock_num_tiles)
         };
 
-        tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(core, compute_kernel_args);
-
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
         auto matmul_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/matmul_large_block_zm.cpp",
             core,
-            mm_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

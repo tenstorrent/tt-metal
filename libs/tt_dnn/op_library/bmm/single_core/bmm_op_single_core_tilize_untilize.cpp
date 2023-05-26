@@ -320,12 +320,11 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
         out_subblock_width_ntiles,
         out_subblock_ntiles
     };
-    KernelArgs compute_args = KernelArgs(core, compute_comptime_args);
     auto bmm_compute = CreateComputeKernel(
         program,
         compute_kernel,
         core,
-        compute_args,
+        compute_comptime_args,
         MathFidelity::HiFi4,
         false,  // fp32_dest_acc_en
         false   // math_approx_mode

@@ -104,12 +104,12 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     );
 
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    tt_metal::KernelArgs reader_writer_compile_time_args;
+    std::vector<uint32_t> reader_writer_compile_time_args;
     if (tile_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = tt_metal::KernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
+        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
     } else {
-        reader_writer_compile_time_args = tt_metal::KernelArgs(core, {0, 0});
+        reader_writer_compile_time_args = {0, 0};
     }
     auto reader = tt_metal::CreateDataMovementKernel(
         program,
@@ -127,14 +127,13 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         Kt, // Kt
         Nt // Nt
     };
-    tt_metal::KernelArgs bmm_args = tt_metal::KernelArgs(core, compute_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm.cpp",
         core,
-        bmm_args,
+        compute_args,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
@@ -875,14 +874,13 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_act,
                 untilize_out
             };
 
-            tt_metal::KernelArgs bmm_args = tt_metal::KernelArgs(core, compute_kernel_args);
             bool fp32_dest_acc_en = false;
             bool math_approx_mode = false;
             auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
                 program,
                 "tt_metal/kernels/compute/matmul_large_block.cpp",
                 core,
-                bmm_args,
+                compute_kernel_args,
                 MathFidelity::HiFi4,
                 fp32_dest_acc_en,
                 math_approx_mode

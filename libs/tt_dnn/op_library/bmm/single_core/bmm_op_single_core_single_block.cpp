@@ -443,8 +443,6 @@ Tensor large_bmm_single_core_single_block_(const Tensor& a, const Tensor &b, boo
             uint(untilize_out)
         };
 
-        tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(core, compute_kernel_args);
-
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
 
@@ -454,7 +452,7 @@ Tensor large_bmm_single_core_single_block_(const Tensor& a, const Tensor &b, boo
             program,
             compute_kernel,
             core,
-            mm_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

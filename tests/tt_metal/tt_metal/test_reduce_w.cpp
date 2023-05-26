@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
             uint(Wt),
             uint(NC),
         };
-        tt_metal::KernelArgs compute_args = tt_metal::KernelArgs(core, compute_kernel_args);
+
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
 
@@ -147,7 +147,7 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/compute/reduce_w.cpp",
             core,
-            compute_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

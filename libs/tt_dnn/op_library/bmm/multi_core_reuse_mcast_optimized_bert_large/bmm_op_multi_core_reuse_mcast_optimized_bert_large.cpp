@@ -103,12 +103,12 @@ tt_metal::Program create_program_mcast_in0_in1(
 
     /* Old compile time args
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    tt_metal::KernelArgs reader_writer_compile_time_args;
+    std::vector<uint32_t> reader_writer_compile_time_args;
     if (tile_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {1, (std::uint32_t)log2(single_tile_size)});
+        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
     } else {
-        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {0, 0});
+        reader_writer_compile_time_args = {0, 0};
     }
     */
     // Mcast args
@@ -129,8 +129,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    tt_metal::KernelArgs in0_sender_compile_time_args = tt_metal::KernelArgs(
-        left_column, {
+    std::vector<uint32_t> in0_sender_compile_time_args = {
             // interleaved accessor args
             (std::uint32_t) tile_size_is_power_of_two,
             (std::uint32_t) tile_size_pow2_exponent,
@@ -156,10 +155,8 @@ tt_metal::Program create_program_mcast_in0_in1(
             // batch args
             (std::uint32_t)  M * K, // MtKt
             (std::uint32_t)  B // batch
-        }
-    );
-    tt_metal::KernelArgs in1_sender_writer_compile_time_args = tt_metal::KernelArgs(
-        top_row, {
+    };
+    std::vector<uint32_t> in1_sender_writer_compile_time_args = {
             // interleaved accessor args
             (std::uint32_t) tile_size_is_power_of_two,
             (std::uint32_t) tile_size_pow2_exponent,
@@ -202,10 +199,8 @@ tt_metal::Program create_program_mcast_in0_in1(
             (std::uint32_t)  (out_subblock_w * out_subblock_h), // out_subblocks_w * out_subblocks_h
             // batch args
             (std::uint32_t)  M * N // MtNt
-        }
-    );
-    tt_metal::KernelArgs in0_receiver_compile_time_args = tt_metal::KernelArgs(
-        all_except_left_column, {
+    };
+    std::vector<uint32_t> in0_receiver_compile_time_args = {
             // in0 block args
             (std::uint32_t)  in0_block_w * per_core_M, // in0_block_num_tiles
             // in0/in1 common args
@@ -216,10 +211,8 @@ tt_metal::Program create_program_mcast_in0_in1(
             (std::uint32_t)  in0_mcast_receiver_semaphore->address(),
             // batch args
             (std::uint32_t)  B // batch
-        }
-    );
-    tt_metal::KernelArgs in1_receiver_writer_compile_time_args = tt_metal::KernelArgs(
-        all_except_top_row, {
+    };
+    std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
             // interleaved accessor args
             (std::uint32_t) tile_size_is_power_of_two,
             (std::uint32_t) tile_size_pow2_exponent,
@@ -250,8 +243,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             (std::uint32_t)  (out_subblock_w * out_subblock_h), // out_subblocks_w * out_subblocks_h
             // batch args
             (std::uint32_t)  M * N // MtNt
-        }
-    );
+    };
 
     auto mm_kernel_in0_sender = tt_metal::CreateDataMovementKernel(
         program,
@@ -368,14 +360,13 @@ tt_metal::Program create_program_mcast_in0_in1(
     };
 
     // Create compute kernel
-    tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
-        mm_args,
+        compute_kernel_args,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode

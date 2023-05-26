@@ -162,7 +162,6 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
             //DataMovementProcessor::RISCV_0, NOC::NOC_1);
 
         vector<uint32_t> compute_args = { wtpc, Wt, num_gamma_tiles>0, num_beta_tiles>0 };
-        KernelArgs softmax_args = KernelArgs(core, compute_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = true;
@@ -170,7 +169,7 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
             program,
             "kernels/compute/layernorm.cpp",
             core,
-            softmax_args,
+            compute_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

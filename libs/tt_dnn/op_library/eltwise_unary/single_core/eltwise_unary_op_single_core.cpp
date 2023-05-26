@@ -89,7 +89,6 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
         num_tiles, // per_core_block_cnt
         1 // per_core_block_size
     };
-    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -97,7 +96,7 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         core,
-        eltwise_unary_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

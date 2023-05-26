@@ -70,11 +70,10 @@ Compile-time compute kernel arguments
 
 .. code-block:: cpp
 
-  void *compute_kernel_args = new eltwise_binary::compute_kernel_args{
-      .per_core_block_cnt = 2048,
-      .per_core_block_size = 1
+  std::vector<uint32_t> eltwise_binary_compile_args = {
+      /*.per_core_block_cnt =*/ 2048,
+      /*.per_core_block_size =*/ 1
   };
-  ComputeKernelArgs *eltwise_binary_args = InitializeCompileTimeComputeKernelArgs(core, compute_kernel_args, sizeof(eltwise_binary::compute_kernel_args_t));
 
 We have to declare some compile-time arguments for compute kernel. Some default
 parameters here will suffice.

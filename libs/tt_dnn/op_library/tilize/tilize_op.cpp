@@ -82,14 +82,14 @@ Tensor tilize(const Tensor &a) {
     // Reader compile-time args
     bool stick_size_is_power_of_two = (ceil(log2(stick_size)) == floor(log2(stick_size)));
     vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(), num_sticks, stick_size};
-    KernelArgs compile_time_args;
+    std::vector<uint32_t> compile_time_args;
     if (stick_size_is_power_of_two) {
         reader_kernel_args.push_back(log2(stick_size));
 
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args = tt_metal::KernelArgs(core, {1});
+        compile_time_args = {1};
     } else {
-        compile_time_args = tt_metal::KernelArgs(core, {0});
+        compile_time_args = {0};
     }
 
     // Tilized reader
@@ -113,7 +113,6 @@ Tensor tilize(const Tensor &a) {
         uint32_t(num_sticks / 32), // per_core_block_cnt
         uint32_t(stick_s / 32) // per_core_block_tile_cnt
     };
-    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -121,7 +120,7 @@ Tensor tilize(const Tensor &a) {
         program,
         "tt_metal/kernels/compute/tilize.cpp",
         core,
-        eltwise_unary_args,
+        compute_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
@@ -249,14 +248,14 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
                                             num_rows_padded,
                                             row_size_bytes,
                                             zero_buffer_l1_addr};
-    KernelArgs compile_time_args;
+    std::vector<uint32_t> compile_time_args;
     if (stick_size_is_power_of_two) {
         reader_kernel_args.push_back(log2(row_size_bytes));
 
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args = tt_metal::KernelArgs(core, {1});
+        compile_time_args = {1};
     } else {
-        compile_time_args = tt_metal::KernelArgs(core, {0});
+        compile_time_args = {0};
     }
 
     // Tilized reader
@@ -281,15 +280,13 @@ Tensor tilize_with_zero_padding(const Tensor &a) {
         uint32_t(row_size_datum / TILE_WIDTH)
     };
 
-    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
-
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto tilize_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/tilize.cpp",
         core,
-        eltwise_unary_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
@@ -485,7 +482,7 @@ Tensor tilize_with_val_padding(const Tensor &a, const std::array<uint32_t, 4> &o
         program,
         "tt_metal/kernels/compute/tilize.cpp",
         core,
-        eltwise_unary_args,
+        compute_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
@@ -632,7 +629,6 @@ Tensor tilize_conv_activation(const Tensor &a, bool conv1x1) {
         uint32_t(num_tiles_r), // per_core_block_cnt
         uint32_t(num_tiles_c) // per_core_block_tile_cnt
     };
-    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;

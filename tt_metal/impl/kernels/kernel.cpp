@@ -43,25 +43,19 @@ std::string Kernel::binary_path(const CoreCoord &logical_core) const {
     return binary_path_.at(logical_core);
 }
 
-std::vector<uint32_t> Kernel::compile_time_args(const CoreCoord &logical_core) const {
-    if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot access compile time args for " + name() + " because it is not on core " + logical_core.str());
-    }
-    return kernel_args_.compile_time_args(logical_core);
-}
-
 std::vector<uint32_t> Kernel::runtime_args(const CoreCoord &logical_core) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot access runtime args for " + name() + " because it is not on core " + logical_core.str());
     }
-    return kernel_args_.runtime_args(logical_core);
+    return this->core_to_runtime_args_.at(logical_core);
 }
 
-size_t Kernel::compile_time_args_hash(const CoreCoord &logical_core) const {
-    if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
-    }
-    return KernelArgsHash{logical_core}(kernel_args_);
+void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> runtime_args) {
+    this->core_to_runtime_args_.insert_or_assign(logical_core, runtime_args);
+}
+
+size_t Kernel::compile_time_args_hash() const {
+    return tt::utils::vector_hash<uint32_t>{}(this->compile_time_args_);
 }
 
 size_t Kernel::define_args_hash(const CoreCoord& logical_core) const {
@@ -116,12 +110,12 @@ void DataMovementKernel::write_runtime_args_to_device(Device *device, const Core
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
 
-    auto runtime_args = kernel_args_.runtime_args(logical_core);
+    auto rt_args = this->runtime_args(logical_core);
     uint32_t core_x = logical_core.x;
     uint32_t core_y = logical_core.y;
-    runtime_args.push_back(core_x);
-    runtime_args.push_back(core_y);
-    uint32_t runtime_args_size = runtime_args.size() * sizeof(uint32_t);
+    rt_args.push_back(core_x);
+    rt_args.push_back(core_y);
+    uint32_t runtime_args_size = rt_args.size() * sizeof(uint32_t);
 
     uint64_t l1_arg_base;
     uint64_t result_base;
@@ -145,7 +139,7 @@ void DataMovementKernel::write_runtime_args_to_device(Device *device, const Core
             Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
     }
 
-    tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, runtime_args, l1_arg_base);
+    tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, rt_args, l1_arg_base);
 }
 
 bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core) const {
@@ -215,6 +209,13 @@ std::ostream& operator<<(std::ostream& os, const KernelType& type) {
         default: TT_THROW("Unknown kernel type");
     }
     return os;
+}
+
+size_t KernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {
+    size_t hash_value = 0;
+    for (auto it = c_defines.begin(); it != c_defines.end(); ++it)
+        boost::hash_combine(hash_value, std::hash<std::string>{}(it->first + it->second));
+    return hash_value;
 }
 
 }  // namespace tt_metal

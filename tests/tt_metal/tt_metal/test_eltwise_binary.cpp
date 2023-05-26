@@ -125,7 +125,6 @@ int main(int argc, char **argv) {
             2048, // per_core_block_cnt
             1, // per_core_block_size
         };
-        tt_metal::KernelArgs eltwise_binary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -133,7 +132,7 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             core,
-            eltwise_binary_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

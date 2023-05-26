@@ -10,7 +10,6 @@ TT_METAL_IMPL_SRCS = \
 	tt_metal/impl/buffers/buffer.cpp \
 	tt_metal/impl/buffers/circular_buffer.cpp \
 	tt_metal/impl/buffers/semaphore.cpp \
-	tt_metal/impl/kernels/kernel_args.cpp \
 	tt_metal/impl/kernels/kernel.cpp \
 	tt_metal/impl/allocator/algorithms/free_list.cpp \
 	tt_metal/impl/allocator/allocator.cpp \

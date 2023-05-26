@@ -108,7 +108,6 @@ bool run_sfpu_test(string sfpu_name) {
             uint(num_tiles),
             1
         };
-        tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = true;
         string hlk_kernel_name = "tt_metal/kernels/compute/eltwise_sfpu.cpp";
@@ -116,7 +115,7 @@ bool run_sfpu_test(string sfpu_name) {
             program,
             hlk_kernel_name,
             core,
-            eltwise_unary_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

@@ -102,8 +102,8 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
-        auto reader_cb_kernel_args = tt_metal::KernelArgs(core, {8, 2});
-        auto writer_cb_kernel_args = tt_metal::KernelArgs(core, {8, 4});
+        std::vector<uint32_t> reader_cb_kernel_args = {8, 2};
+        std::vector<uint32_t> writer_cb_kernel_args = {8, 4};
 
         auto reader_cb_kernel = tt_metal::CreateDataMovementKernel(
             program,

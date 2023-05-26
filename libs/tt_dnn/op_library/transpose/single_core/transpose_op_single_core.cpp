@@ -90,7 +90,6 @@ Tensor transpose_wh_single_core(const Tensor &a) {
     vector<uint32_t> compute_args = {
         Ht*Wt*NC // NHtWt
     };
-    tt_metal::KernelArgs eltwise_binary_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -98,7 +97,7 @@ Tensor transpose_wh_single_core(const Tensor &a) {
         program,
         "tt_metal/kernels/compute/transpose_wh.cpp",
         core,
-        eltwise_binary_args,
+        compute_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
@@ -228,7 +227,6 @@ Tensor transpose_hc_single_core(const Tensor &a) {
     vector<uint32_t> compute_args = {
         num_tensor_tiles // num_tensor_tiles
     };
-    tt_metal::KernelArgs eltwise_binary_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -236,7 +234,7 @@ Tensor transpose_hc_single_core(const Tensor &a) {
         program,
         "tt_metal/kernels/compute/eltwise_copy.cpp",
         core,
-        eltwise_binary_args,
+        compute_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
@@ -367,7 +365,6 @@ Tensor transpose_cn_single_core(const Tensor &a) {
     vector<uint32_t> compute_args = {
         num_tensor_tiles // num_tensor_tiles
     };
-    tt_metal::KernelArgs eltwise_binary_args = tt_metal::KernelArgs(core, compute_args);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -375,7 +372,7 @@ Tensor transpose_cn_single_core(const Tensor &a) {
         program,
         "tt_metal/kernels/compute/eltwise_copy.cpp",
         core,
-        eltwise_binary_args,
+        compute_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

@@ -84,14 +84,13 @@ tt_metal::Program setup_program_one(tt_metal::Device *device, const CoreCoord &c
         1, // per_core_block_cnt
         1 // per_core_block_size
     };
-    tt_metal::KernelArgs eltwise_binary_args = tt_metal::KernelArgs(core, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_binary.cpp",
         core,
-        eltwise_binary_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode
@@ -163,14 +162,14 @@ tt_metal::Program setup_program_two(tt_metal::Device *device, const CoreCoord &c
         1, // in1_block_tile_cnt
         1 // out_block_tile_cnt
     };
-    tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(core, compute_kernel_args);
+
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/matmul.cpp",
         core,
-        mm_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

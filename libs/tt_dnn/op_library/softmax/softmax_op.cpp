@@ -129,12 +129,11 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
         // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
         // if wtpc >= Ht then tpc should be a multiple of Ht
         vector<uint32_t> compute_args = { wtpc, partHt, Wt };
-        KernelArgs softmax_args = KernelArgs(core, compute_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = true;
         auto softmax_kernel = CreateComputeKernel(
-            program, "kernels/compute/softmax.cpp", core, softmax_args,
+            program, "kernels/compute/softmax.cpp", core, compute_args,
             MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
         softmax_kernel->add_define("BLOCK_SIZE", block_size);

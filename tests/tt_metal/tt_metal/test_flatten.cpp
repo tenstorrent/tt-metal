@@ -148,7 +148,6 @@ int main(int argc, char **argv) {
         vector<uint32_t> compute_kernel_args = {
             num_tiles * 32 // per_core_tile_cnt
         };
-        tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -156,7 +155,7 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/compute/eltwise_copy.cpp",
             core,
-            eltwise_unary_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

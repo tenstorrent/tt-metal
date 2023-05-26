@@ -82,10 +82,10 @@ DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
     const CoreCoord &core,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     DataMovementProcessor processor_type,
     NOC noc) {
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core, kernel_args, processor_type, noc);
+    DataMovementKernel *kernel = new DataMovementKernel(file_name, core, compile_args, processor_type, noc);
     program.add_kernel(kernel);
     return kernel;
 }
@@ -105,11 +105,11 @@ DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
     const CoreRange &core_range,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     DataMovementProcessor processor_type,
     NOC noc) {
     TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, kernel_args, processor_type, noc);
+    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, compile_args, processor_type, noc);
     program.add_kernel(kernel);
     return kernel;
 }
@@ -130,10 +130,10 @@ DataMovementKernel *CreateDataMovementKernel(
     Program &program,
     const std::string &file_name,
     const CoreRangeSet &core_range_set,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     DataMovementProcessor processor_type,
     NOC noc) {
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, kernel_args, processor_type, noc);
+    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, compile_args, processor_type, noc);
     program.add_kernel(kernel);
     return kernel;
 }
@@ -153,14 +153,14 @@ ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     const CoreCoord &core,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
     ComputeKernel *kernel = new ComputeKernel(
         file_name,
         core,
-        kernel_args,
+        compile_args,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode);
@@ -172,7 +172,7 @@ ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     const CoreRange &core_range,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
@@ -180,7 +180,7 @@ ComputeKernel *CreateComputeKernel(
     ComputeKernel *kernel = new ComputeKernel(
         file_name,
         core_range,
-        kernel_args,
+        compile_args,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode);
@@ -192,14 +192,14 @@ ComputeKernel *CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     const CoreRangeSet &core_range_set,
-    const KernelArgs &kernel_args,
+    const std::vector<uint32_t> &compile_args,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
     ComputeKernel *kernel = new ComputeKernel(
         file_name,
         core_range_set,
-        kernel_args,
+        compile_args,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode);
@@ -508,7 +508,7 @@ bool GenerateBinaries(
             op_path,
             arch_name,
             kernel_group.riscv_0->noc(),
-            kernel_group.riscv_0->compile_time_args(logical_core),
+            kernel_group.riscv_0->compile_time_args(),
             profile_kernel); };
     auto ncrisc_lambda = [=]() {
         generate_binary_for_ncrisc(
@@ -516,7 +516,7 @@ bool GenerateBinaries(
             op_path,
             arch_name,
             kernel_group.riscv_1->noc(),
-            kernel_group.riscv_1->compile_time_args(logical_core),
+            kernel_group.riscv_1->compile_time_args(),
             profile_kernel); };
 
     generate_descriptors(build_options, op_path);
@@ -526,7 +526,7 @@ bool GenerateBinaries(
         if (kernel_group.compute != nullptr) {
             auto triscs_lambda = [=]() {
                 generate_binaries_for_triscs(
-                    build_options, op_path, arch_name, kernel_group.compute->compile_time_args(logical_core), profile_kernel);
+                    build_options, op_path, arch_name, kernel_group.compute->compile_time_args(), profile_kernel);
             };
             std::thread tr_thread(triscs_lambda);
             tr_thread.join();
@@ -618,14 +618,12 @@ void PopulateKernelGroupWithDataMovementKernels(Program &program, KernelGroup &k
         return default_noc;
     };
 
-    KernelArgs empty_kernel_args;
     if (kernel_group.riscv_0 == nullptr) {
         NOC riscv_0_noc = get_noc_id(kernel_group.riscv_1, NOC::RISCV_0_default);
         auto riscv_0_kernel = CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/blank.cpp",
             logical_core,
-            empty_kernel_args,
             DataMovementProcessor::RISCV_0,
             riscv_0_noc);
         kernel_group.riscv_0 = riscv_0_kernel;
@@ -637,7 +635,6 @@ void PopulateKernelGroupWithDataMovementKernels(Program &program, KernelGroup &k
             program,
             "tt_metal/kernels/dataflow/blank.cpp",
             logical_core,
-            empty_kernel_args,
             DataMovementProcessor::RISCV_1,
             riscv_1_noc);
         kernel_group.riscv_1 = riscv_1_kernel;
@@ -667,11 +664,11 @@ std::string GetOpName(const KernelGroup &kernel_group) {
 size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const CoreCoord &logical_core, const std::string &op_name, const int &pcie_slot) {
     size_t kg_compile_hash = 0;
     if (kernel_group.compute != nullptr) {
-        tt::utils::hash_combine(kg_compile_hash, kernel_group.compute->compile_time_args_hash(logical_core));
+        tt::utils::hash_combine(kg_compile_hash, kernel_group.compute->compile_time_args_hash());
         tt::utils::hash_combine(kg_compile_hash, kernel_group.compute->define_args_hash(logical_core));
     }
-    tt::utils::hash_combine(kg_compile_hash, kernel_group.riscv_0->compile_time_args_hash(logical_core));
-    tt::utils::hash_combine(kg_compile_hash, kernel_group.riscv_1->compile_time_args_hash(logical_core));
+    tt::utils::hash_combine(kg_compile_hash, kernel_group.riscv_0->compile_time_args_hash());
+    tt::utils::hash_combine(kg_compile_hash, kernel_group.riscv_1->compile_time_args_hash());
     tt::utils::hash_combine(kg_compile_hash, size_t(kernel_group.riscv_0->noc()));
     tt::utils::hash_combine(kg_compile_hash, size_t(kernel_group.riscv_1->noc()));
     tt::utils::hash_combine(kg_compile_hash, std::hash<std::string>{}(op_name));
@@ -683,10 +680,10 @@ size_t KernelGroupCompileHash(const KernelGroup &kernel_group, const CoreCoord &
     {
         unique_lock<mutex> lock;
         f << op_name << " :: "
-          << ( kernel_group.compute ? kernel_group.compute->compile_time_args_hash(logical_core) : 0 ) << " :: "
+          << ( kernel_group.compute ? kernel_group.compute->compile_time_args_hash() : 0 ) << " :: "
           << ( kernel_group.compute ? kernel_group.compute->define_args_hash(logical_core) : 0 ) << " :: "
-          << kernel_group.riscv_0->compile_time_args_hash(logical_core) << " :: "
-          << kernel_group.riscv_1->compile_time_args_hash(logical_core) << " :: "
+          << kernel_group.riscv_0->compile_time_args_hash() << " :: "
+          << kernel_group.riscv_1->compile_time_args_hash() << " :: "
           << kernel_group.riscv_0->noc() << " :: "
           << kernel_group.riscv_1->noc() << " :: "
           << std::hash<std::string>{}(op_name) << " :: "
@@ -846,8 +843,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
 
 bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
     bool pass = true;
-    auto &kernel_args = kernel->kernel_args();
-    kernel_args.set_runtime_args(logical_core, runtime_args);
+    kernel->set_runtime_args(logical_core, runtime_args);
     kernel->write_runtime_args_to_device(device, logical_core);
     return pass;
 }

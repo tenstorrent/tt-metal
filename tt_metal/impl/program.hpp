@@ -61,7 +61,7 @@ class Program {
         Program &program,
         const std::string &file_name,
         const CoreCoord &core,
-        const KernelArgs &kernel_args,
+        const std::vector<uint32_t> &compile_args,
         DataMovementProcessor processor_type,
         NOC noc);
 
@@ -76,7 +76,7 @@ class Program {
         Program &program,
         const std::string &file_name,
         const CoreRange &core_range,
-        const KernelArgs &kernel_args,
+        const std::vector<uint32_t> &compile_args,
         DataMovementProcessor processor_type,
         NOC noc);
 
@@ -91,7 +91,7 @@ class Program {
         Program &program,
         const std::string &file_name,
         const CoreRangeSet &core_range_set,
-        const KernelArgs &kernel_args,
+        const std::vector<uint32_t> &compile_args,
         DataMovementProcessor processor_type,
         NOC noc);
 
@@ -106,7 +106,7 @@ class Program {
         Program &program,
         const std::string &file_name,
         const CoreCoord &core,
-        const KernelArgs &kernel_args,
+        const std::vector<uint32_t> &compile_args,
         MathFidelity math_fidelity,
         bool fp32_dest_acc_en,
         bool math_approx_mode);
@@ -115,7 +115,7 @@ class Program {
         Program &program,
         const std::string &file_name,
         const CoreRange &core_range,
-        const KernelArgs &kernel_args,
+        const std::vector<uint32_t> &compile_args,
         MathFidelity math_fidelity,
         bool fp32_dest_acc_en,
         bool math_approx_mode);
@@ -124,7 +124,7 @@ class Program {
         Program &program,
         const std::string &file_name,
         const CoreRangeSet &core_range_set,
-        const KernelArgs &kernel_args,
+        const std::vector<uint32_t> &compile_args,
         MathFidelity math_fidelity,
         bool fp32_dest_acc_en,
         bool math_approx_mode);

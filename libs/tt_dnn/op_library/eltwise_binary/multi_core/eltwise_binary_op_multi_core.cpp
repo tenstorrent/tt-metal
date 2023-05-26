@@ -90,12 +90,12 @@ Tensor eltwise_binary_multi_core(const Tensor &a, const Tensor &b, BinaryOpType:
             DataFormat::Float16_b
         );
         bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-        tt_metal::KernelArgs reader_writer_compile_time_args;
+        std::vector<uint32_t> reader_writer_compile_time_args;
         if (tile_size_is_power_of_two) {
             // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-            reader_writer_compile_time_args = tt_metal::KernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
+            reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
         } else {
-            reader_writer_compile_time_args = tt_metal::KernelArgs(core, {0, 0});
+            reader_writer_compile_time_args = {0, 0};
         }
         tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -118,7 +118,6 @@ Tensor eltwise_binary_multi_core(const Tensor &a, const Tensor &b, BinaryOpType:
             num_tiles_per_core[i], // per_core_block_cnt
             1, // per_core_block_size
         };
-        tt_metal::KernelArgs eltwise_binary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -126,7 +125,7 @@ Tensor eltwise_binary_multi_core(const Tensor &a, const Tensor &b, BinaryOpType:
             program,
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             core,
-            eltwise_binary_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

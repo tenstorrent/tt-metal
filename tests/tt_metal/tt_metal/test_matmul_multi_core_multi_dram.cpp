@@ -214,14 +214,13 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
         uint(out_subblock_num_tiles)
     };
 
-    tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/matmul_large_block_zm.cpp",
         all_cores,
-        mm_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

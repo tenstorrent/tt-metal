@@ -167,14 +167,13 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
         uint(num_blocks_per_core)
     };
 
-    tt_metal::KernelArgs eltwise_copy_block = tt_metal::KernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto compute_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_copy_block.cpp",
         all_cores,
-        eltwise_copy_block,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

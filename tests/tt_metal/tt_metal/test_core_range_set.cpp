@@ -22,7 +22,7 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
                     TT_ASSERT(kernel->is_on_logical_core(logical_core));
                     // Check that compute kernel compile time args are mapped to the correct cores
                     if (kernel->kernel_type() == tt_metal::KernelType::Compute) {
-                        auto kernel_compile_time_args = kernel->compile_time_args(logical_core);
+                        auto kernel_compile_time_args = kernel->compile_time_args();
                         TT_ASSERT(kernel_compile_time_args == compute_kernel_args);
                     }
                 }
@@ -120,11 +120,6 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     vector<uint32_t> compute_kernel_args = {
         uint(num_tiles) // per_core_tile_cnt
     };
-    std::vector<std::vector<uint32_t>> compute_kernel_args_for_core_ranges;
-    for (auto core_range : core_range_set.ranges()) {
-        compute_kernel_args_for_core_ranges.push_back(compute_kernel_args);
-    }
-    tt_metal::KernelArgs eltwise_unary_args = tt_metal::KernelArgs(core_range_set, compute_kernel_args_for_core_ranges);
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -132,7 +127,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         program,
         "tt_metal/kernels/compute/eltwise_copy_3m.cpp",
         core_range_set,
-        eltwise_unary_args,
+        compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode

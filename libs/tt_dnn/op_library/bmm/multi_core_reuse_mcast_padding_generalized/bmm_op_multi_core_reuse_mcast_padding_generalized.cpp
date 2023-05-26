@@ -72,12 +72,12 @@ tt_metal::Program create_program_mcast_in0_in1(
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    tt_metal::KernelArgs reader_writer_compile_time_args;
+    std::vector<uint32_t> reader_writer_compile_time_args;
     if (tile_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {1, (std::uint32_t)log2(single_tile_size)});
+        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
     } else {
-        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {0, 0});
+        reader_writer_compile_time_args = {0, 0};
     }
 
     auto mm_reader_kernel_in0_sender_in1_sender = tt_metal::CreateDataMovementKernel(
@@ -160,14 +160,13 @@ tt_metal::Program create_program_mcast_in0_in1(
     };
 
     // Create compute kernel
-    tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
-        mm_args,
+        compute_kernel_args,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
@@ -485,12 +484,12 @@ tt_metal::Program create_program_mcast_in0(
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    tt_metal::KernelArgs reader_writer_compile_time_args;
+    std::vector<uint32_t> reader_writer_compile_time_args;
     if (tile_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {1, (std::uint32_t)log2(single_tile_size)});
+        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
     } else {
-        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {0, 0});
+        reader_writer_compile_time_args = {0, 0};
     }
 
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
@@ -548,14 +547,13 @@ tt_metal::Program create_program_mcast_in0(
     };
 
     // Create compute kernel
-    tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
-        mm_args,
+        compute_kernel_args,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode
@@ -788,12 +786,12 @@ tt_metal::Program create_program_mcast_in1(
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    tt_metal::KernelArgs reader_writer_compile_time_args;
+    std::vector<uint32_t> reader_writer_compile_time_args;
     if (tile_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {1, (std::uint32_t)log2(single_tile_size)});
+        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
     } else {
-        reader_writer_compile_time_args = tt_metal::KernelArgs(all_cores, {0, 0});
+        reader_writer_compile_time_args = {0, 0};
     }
 
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
@@ -852,14 +850,13 @@ tt_metal::Program create_program_mcast_in1(
     };
 
     // Create compute kernel
-    tt_metal::KernelArgs mm_args = tt_metal::KernelArgs(all_cores, compute_kernel_args);
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
-        mm_args,
+        compute_kernel_args,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode

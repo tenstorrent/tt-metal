@@ -91,12 +91,12 @@ Tensor reduce_multi_core_h(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
             DataFormat::Float16_b
         );
         bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-        tt_metal::KernelArgs reader_writer_compile_time_args;
+        std::vector<uint32_t> reader_writer_compile_time_args;
         if (tile_size_is_power_of_two) {
             // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-            reader_writer_compile_time_args = tt_metal::KernelArgs(core, {1, (std::uint32_t)log2(single_tile_size)});
+            reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
         } else {
-            reader_writer_compile_time_args = tt_metal::KernelArgs(core, {0, 0});
+            reader_writer_compile_time_args = {0, 0};
         }
         tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -121,7 +121,6 @@ Tensor reduce_multi_core_h(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
             num_cols_per_core[i], // Wt
             1, // NC
         };
-        tt_metal::KernelArgs compute_args = tt_metal::KernelArgs(core, compute_kernel_args);
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
 
@@ -129,7 +128,7 @@ Tensor reduce_multi_core_h(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
             program,
             compute_kernel_name,
             core,
-            compute_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode

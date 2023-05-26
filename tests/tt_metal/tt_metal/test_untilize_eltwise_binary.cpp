@@ -193,7 +193,6 @@ int main(int argc, char **argv) {
             num_tiles_r,
             num_tiles_c
         };
-        tt_metal::KernelArgs eltwise_binary_args = tt_metal::KernelArgs(core, compute_kernel_args);
 
         bool fp32_dest_acc_en = false;
         bool math_approx_mode = false;
@@ -201,7 +200,7 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/compute/untilA_elwbin_3m.cpp",
             core,
-            eltwise_binary_args,
+            compute_kernel_args,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode
