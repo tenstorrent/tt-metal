@@ -77,16 +77,17 @@ class AutoPad {
         }
 
         static void format_output_tensor(const Tensor &a, Tensor &output, const std::array<uint32_t, 4>& shape, Device * device) {
+            bool no_unpad = output.shape() == shape;
             // Hack env variable to leave outputs on device if no unpadding needed
             if (std::getenv("TT_LEAVE_TILE_OUTPUT_ON_DEVICE") != nullptr) {
-                if (output.shape() == shape && output.layout() == Layout::TILE) {
+                if (no_unpad && output.layout() == Layout::TILE) {
                     return;
                 }
             }
 
             // ON DEVICE UNPADDING/CONVERSIONS
             if (!a.on_host()) {
-                if (output.shape() != shape) {
+                if (!no_unpad) {
                     if (a.layout() == Layout::TILE && output.layout() == Layout::TILE && shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0) {
                         output = unpad(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
                         return;
@@ -97,11 +98,19 @@ class AutoPad {
                 }
                 if (a.layout() != output.layout()) {
                     if (a.layout() == Layout::TILE) {
-                        output = tilize(output);
-                        return;
+                        // If we weren't able to unpad in the previous if, then we need to unpad on host, which is in RM so we don't tilize
+                        if (no_unpad) {
+                            if (output.shape()[2] % TILE_HEIGHT == 0 && output.shape()[3] % TILE_WIDTH == 0) {
+                                output = tilize(output);
+                            }
+                            return;
+                        }
                     } else if (a.layout() == Layout::ROW_MAJOR && output.layout() == Layout::TILE) {
                         output = untilize(output);
-                        return;
+                        // If we weren't able to unpad in the previous if, then we need to unpad on host
+                        if (no_unpad) {
+                            return;
+                        }
                     }
                 }
             }
@@ -109,7 +118,7 @@ class AutoPad {
             // ON HOST UNPADDING/CONVERSIONS
             auto host = GetHost();
             // Unpad output if necessary
-            if (output.shape() != shape) {
+            if (!no_unpad) {
 
                 output = output.to(host);
 
