@@ -11,7 +11,7 @@
       become: yes
       command:
         chdir: "/opt/tt_metal_infra/scripts/hw_verif"
-        cmd: "python3 verify_fw_version.py"
+        cmd: "python3 verify_fw_version.py --tt-arch {{ arch }}"
     - name: Verify Family
       become: yes
       command:
