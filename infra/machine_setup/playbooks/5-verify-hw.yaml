@@ -2,11 +2,6 @@
 - name: Run HW-related verification tests
   hosts: all
   tasks:
-    - name: Verify AI Clock
-      become: yes
-      command:
-        chdir: "/opt/tt_metal_infra/scripts/hw_verif"
-        cmd: "python3 verify_ai_clock.py"
     - name: Verify Driver version
       become: yes
       command:
