@@ -79,16 +79,14 @@ inline void llk_unpack_AB_mop_config() {
     }
 }
 
-template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_hw_configure(const llk_unpack_AB_params_t *unpack_AB_params) {
     configure_unpack_AB(get_operand_id(unpack_AB_params->unpA_operand), get_operand_id(unpack_AB_params->unpB_operand));
 }
 
-template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
-    llk_unpack_AB_hw_configure<BType>(&unpack_AB_params);
+    llk_unpack_AB_hw_configure(&unpack_AB_params);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>

@@ -8,6 +8,9 @@
 #include "cunpack_common.h"
 #include "ckernel_globals.h"
 
+// Need this for hw configure
+#include "llk_unpack_A.h"
+
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
@@ -22,23 +25,9 @@ inline void llk_unpack_transpose_yz_mop_config() {
     ckernel_unpack_template tmp = ckernel_unpack_template::lA(unpack_srca);
     tmp.program(instrn_buffer);
 }
-
-inline void llk_unpack_transpose_yz_hw_configure(const llk_unpack_A_params_t *unpack_A_params) {
-    configure_unpack_AB(
-        get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand));
-}
-
-inline void llk_unpack_transpose_yz_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
-    const llk_unpack_A_params_t unpack_A_params = {
-        .unpA_operand = unpA_operand,
-    };
-    llk_unpack_transpose_yz_hw_configure(&unpack_A_params);
-}
-
 inline void llk_unpack_transpose_yz_init(uint32_t within_face_16x16_transpose=0) {
     llk_unpack_transpose_yz_mop_config();
 }
-
 inline void llk_unpack_transpose_yz(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t phase) {
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;

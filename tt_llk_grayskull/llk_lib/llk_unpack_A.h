@@ -164,41 +164,16 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
     }
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false>
 inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params, const int transpose_xy = 0) {
-
-    if constexpr ((BType == BroadcastType::SCALAR) || (BType == BroadcastType::ROW)) {
-        //configure_unpack_AB(
-        //    get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand), 1, 1);
-        configure_unpack_AB(
-            get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand));
-    } else if constexpr ((BType == BroadcastType::COL) || (acc_to_dest)) {
-        // broadcast_type = p_movb2d::MOV_8_ROW_BRCST_D0_BRCST;
-        // MOVB2D with column broadcast doesn't work due to the bug in FPU tile
-        // which masks dest write enable signals when instrn_mode[1:0] == 2'b01
-        // ELTWADD with zeros will be used as a workaround
-        // TTI_ZEROSRC(0, 1, 1, 1); // Zero out SrcA
-        // TTI_SETDVALID(p_setrwc::SET_A);
-
-        // When accumulation is enabled we use MOVD2A instruction to load SrcA from dest
-        // Unpack SrcA instruction in the MOP is dummy write to undefined location only to set data valid signal which will be cleared by the math
-   
-        //configure_unpack_AB(
-        //    get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand), 0);
-        configure_unpack_AB(
-            get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand));
-    } else {
-        configure_unpack_AB(
-            get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand));
-    }
+    configure_unpack_AB(
+        get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand));
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false>
-inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0) {
+inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose) {
     const llk_unpack_A_params_t unpack_A_params = {
         .unpA_operand = unpA_operand,
     };
-    llk_unpack_A_hw_configure<BType, acc_to_dest>(&unpack_A_params, within_face_16x16_transpose);
+    llk_unpack_A_hw_configure(&unpack_A_params, within_face_16x16_transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
