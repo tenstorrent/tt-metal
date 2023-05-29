@@ -42,7 +42,6 @@ class TtRobertaForQuestionAnswering(nn.Module):
         base_address,
         device,
         reference_model,
-        add_pooling_layer=True,
     ):
         super().__init__()
         self.config = config

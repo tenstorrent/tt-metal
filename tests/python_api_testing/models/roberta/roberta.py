@@ -1,5 +1,9 @@
 from transformers import AutoTokenizer, RobertaModel
-from transformers import RobertaForMaskedLM, RobertaForQuestionAnswering
+from transformers import (
+    RobertaForMaskedLM,
+    RobertaForQuestionAnswering,
+    RobertaForMultipleChoice,
+)
 import torch
 
 """
@@ -40,6 +44,25 @@ def roberta_for_qa():
     tokenizer.decode(predict_answer_tokens, skip_special_tokens=True)
 
 
+def roberta_for_multiple_choice():
+    tokenizer = AutoTokenizer.from_pretrained("roberta-base")
+    model = RobertaForMultipleChoice.from_pretrained("roberta-base")
+
+    prompt = "In Italy, pizza served in formal settings, such as at a restaurant, is presented unsliced."
+    choice0 = "It is eaten with a fork and a knife."
+    choice1 = "It is eaten while held in the hand."
+    # labels = torch.tensor(0).unsqueeze(0)  # choice0 is correct (according to Wikipedia ;)), batch size 1
+
+    encoding = tokenizer(
+        [prompt, prompt], [choice0, choice1], return_tensors="pt", padding=True
+    )
+    outputs = model(
+        **{k: v.unsqueeze(0) for k, v in encoding.items()}
+    )  # batch size is 1
+    predicted_class = outputs.logits.argmax().item()
+
+
 if __name__ == "__main__":
     roberta_for_qa()
     roberta_for_masked_lm()
+    roberta_for_multiple_choice()

@@ -67,6 +67,10 @@ env pytest tests/python_api_testing/models/roberta -k roberta_model
 env pytest tests/python_api_testing/models/roberta -k roberta_lm_head
 env pytest tests/python_api_testing/models/roberta -k roberta_for_masked_lm
 env pytest tests/python_api_testing/models/roberta -k roberta_for_qa
+env pytest tests/python_api_testing/models/roberta -k roberta_for_sequence_classification
+env pytest tests/python_api_testing/models/roberta -k roberta_classification_head
+env pytest tests/python_api_testing/models/roberta -k roberta_for_token_classification
+env pytest tests/python_api_testing/models/roberta -k roberta_for_multiple_choice
 
 env pytest tests/python_api_testing/models/bloom_new -k baddbmm
 env pytest tests/python_api_testing/models/bloom_new -k bloom_attention

@@ -227,12 +227,18 @@ class TtRobertaSelfAttention(nn.Module):
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
             # attention_scores = tt_lib.tensor.add(attention_scores, attention_mask)
-            tt_lib.tensor.bcast(
-                attention_scores,
-                attention_mask,
-                tt_lib.tensor.BcastOpMath.ADD,
-                tt_lib.tensor.BcastOpDim.H,
-            )
+            if attention_mask.shape()[0] > 1:
+                torch_attention_mask = tt2torch_tensor(attention_mask)
+                torch_attention_scores = tt2torch_tensor(attention_scores)
+                torch_attention_scores = torch_attention_scores + torch_attention_mask
+                attention_scores = torch2tt_tensor(torch_attention_scores, self.device)
+            else:
+                tt_lib.tensor.bcast(
+                    attention_scores,
+                    attention_mask,
+                    tt_lib.tensor.BcastOpMath.ADD,
+                    tt_lib.tensor.BcastOpDim.H,
+                )
         # Normalize the attention scores to probabilities.
 
         # Fallback softmax drops PCC a bit from 0.9999 to 0.998
