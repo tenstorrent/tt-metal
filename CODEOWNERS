@@ -1,0 +1,8 @@
+# Order is important; the last matching pattern takes the most
+# precedence.
+
+.github/ @tt-rkim
+
+infra/ @tt-rkim
+
+conftest.py @tt-rkim
