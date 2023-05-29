@@ -13,12 +13,17 @@
 Thank you for your interest in this project.
 
 If you are interested in making a contribution, then please familiarize
-yourself with our technical contribution standards.
+yourself with our technical contribution standards as set forth in this guide.
+
+Next, please request appropriate write permissions by [opening an
+issue](https://github.com/tenstorrent-metal/tt-metal/issues/new/choose) for
+GitHub permissions.
 
 All contributions require a pull request (PR). Your PR must be approved by
-appropriate reviewers.
+appropriate reviewers. We do not accept PRs from forked repositories.
 
-Furthermore, all PRs must follow the [contribution standards](#contribution-standards).
+Furthermore, all PRs must follow the [contribution
+standards](#contribution-standards).
 
 ## Developing tt-metal
 
@@ -26,8 +31,9 @@ Currently, the most convenient way to develop is to do so on our cloud
 machines. They have prerequisite dependencies, model files, and other settings
 set up for users.
 
-Please refer to the [initial Getting Started page](docs/source/get_started/installation.rst)
-then please read the the [developer's page](docs/source/dev_onboarding/get_started.rst).
+Please refer to the [initial Getting Started
+page](docs/source/get_started/installation.rst) then please read the the
+[developer's page](docs/source/dev_onboarding/get_started.rst).
 
 ## Contribution standards
 

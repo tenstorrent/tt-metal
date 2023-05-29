@@ -1,4 +1,4 @@
-# Getting up and running
+## Getting up and running
 
 0. If you're using a customer-facing cloud machine, SSH into the cloud machine:
 
@@ -60,3 +60,12 @@ If you're using a customer-facing cloud machine, navigate to
 `http://localhost:8888`.
 
 7. Follow the `Getting Started` instructions on the Documentation page.
+
+## Contributing
+
+We appreciate any contributions. Please review the [contributor's
+guide](CONTRIBUTING.md) for more information.
+
+If you would like to request or propose a new feature, report a bug, or have
+issues with permissions, please through [GitHub
+issues](https://github.com/tenstorrent-metal/tt-metal/issues/new/choose).
