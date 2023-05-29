@@ -2,23 +2,25 @@ import copy
 import torch
 import warnings
 from torch import nn
-from libs import tt_lib as ttm
+import tt_lib
 from typing import Optional, Tuple
 
 from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.t5.t5_stack import TtT5Stack
-from fused_ops.linear import Linear as TtLinear
+from tt_lib.fused_ops.linear import Linear as TtLinear
 
 
-class Seq2SeqLMOutput():
-    def __init__(self, loss = None,
-        logits = None,
-        past_key_values = None,
-        decoder_hidden_states= None,
-        decoder_attentions = None,
-        cross_attentions = None,
-        encoder_outputs = None):
-
+class Seq2SeqLMOutput:
+    def __init__(
+        self,
+        loss=None,
+        logits=None,
+        past_key_values=None,
+        decoder_hidden_states=None,
+        decoder_attentions=None,
+        cross_attentions=None,
+        encoder_outputs=None,
+    ):
         self.loss = loss
         self.logits = logits
         self.past_key_values = past_key_values
@@ -35,7 +37,7 @@ def tuple_to_torch(tt_tuple):
     result = tuple()
 
     for tt_tensor in tt_tuple:
-        result = result + (tt2torch_tensor(tt_tensor), )
+        result = result + (tt2torch_tensor(tt_tensor),)
 
     return result
 
@@ -47,7 +49,7 @@ def tuple_tuple_to_torch(inputs):
     result = tuple()
 
     for tt_tuple in inputs:
-        result = result + (tuple_to_torch(tt_tuple), )
+        result = result + (tuple_to_torch(tt_tuple),)
 
     return result
 
@@ -69,7 +71,9 @@ class TtT5ForConditionalGeneration(nn.Module):
         self.device = device
         self.model_dim = config["d_model"]
         self.config_use_cache = config["use_cache"] if "use_cache" in config else False
-        self.config_use_return_dict = config["use_return_dict"] if "use_return_dict" in config else False
+        self.config_use_return_dict = (
+            config["use_return_dict"] if "use_return_dict" in config else False
+        )
         self.main_input_name = "input_ids"
 
         # Re-use embedding layer from reference_module
@@ -80,7 +84,9 @@ class TtT5ForConditionalGeneration(nn.Module):
         encoder_config["is_decoder"] = False
         encoder_config["use_cache"] = False
         encoder_config["is_encoder_decoder"] = False
-        self.encoder = TtT5Stack(encoder_config, state_dict, "encoder", device, self.shared)
+        self.encoder = TtT5Stack(
+            encoder_config, state_dict, "encoder", device, self.shared
+        )
 
         if "num_decoder_layers" not in config:
             config["num_decoder_layers"] = config["num_layers"]
@@ -89,16 +95,26 @@ class TtT5ForConditionalGeneration(nn.Module):
         decoder_config["is_decoder"] = True
         decoder_config["is_encoder_decoder"] = False
         decoder_config["num_layers"] = config["num_decoder_layers"]
-        self.decoder = TtT5Stack(decoder_config, state_dict, "decoder", device, self.shared)
+        self.decoder = TtT5Stack(
+            decoder_config, state_dict, "decoder", device, self.shared
+        )
 
-        self.lm_head_weights = torch2tt_tensor(state_dict[f"lm_head.weight"], ttm.device.GetHost())
-        self.lm_head = TtLinear(in_features=config["d_model"], out_features=config["vocab_size"], weight=self.lm_head_weights.data(), bias=None, device=device)
+        self.lm_head_weights = torch2tt_tensor(
+            state_dict[f"lm_head.weight"], tt_lib.device.GetHost()
+        )
+        self.lm_head = TtLinear(
+            in_features=config["d_model"],
+            out_features=config["vocab_size"],
+            weight=self.lm_head_weights.data(),
+            bias=None,
+            device=device,
+        )
 
         # self.lm_head = nn.Linear(config["d_model"], config["vocab_size"], bias=False)
         # self.lm_head.weight = nn.Parameter(state_dict[f"lm_head.weight"])
 
         # Initialize weights and apply final processing
-        #self.post_init()
+        # self.post_init()
 
         # Model parallel
         self.model_parallel = False
@@ -136,14 +152,20 @@ class TtT5ForConditionalGeneration(nn.Module):
         # shift inputs to the right
         if is_torch_fx_proxy(input_ids):
             # Item assignment is not supported natively for proxies.
-            shifted_input_ids = torch.full(input_ids.shape[:-1] + (1,), decoder_start_token_id)
-            shifted_input_ids = torch.cat([shifted_input_ids, input_ids[..., :-1]], dim=-1)
+            shifted_input_ids = torch.full(
+                input_ids.shape[:-1] + (1,), decoder_start_token_id
+            )
+            shifted_input_ids = torch.cat(
+                [shifted_input_ids, input_ids[..., :-1]], dim=-1
+            )
         else:
             shifted_input_ids = input_ids.new_zeros(input_ids.shape)
             shifted_input_ids[..., 1:] = input_ids[..., :-1].clone()
             shifted_input_ids[..., 0] = decoder_start_token_id
 
-        assert pad_token_id is not None, "self.model.config.pad_token_id has to be defined."
+        assert (
+            pad_token_id is not None
+        ), "self.model.config.pad_token_id has to be defined."
         # replace possible -100 values in labels by `pad_token_id`
         shifted_input_ids.masked_fill_(shifted_input_ids == -100, pad_token_id)
 
@@ -151,25 +173,27 @@ class TtT5ForConditionalGeneration(nn.Module):
 
     def forward(
         self,
-        input_ids = None, # Optional[torch.LongTensor]
-        attention_mask = None, # Optional[torch.FloatTensor]
-        decoder_input_ids = None, # Optional[torch.LongTensor]
-        decoder_attention_mask = None, # Optional[torch.BoolTensor]
-        head_mask = None, # Optional[torch.FloatTensor]
-        decoder_head_mask = None, # Optional[torch.FloatTensor]
-        cross_attn_head_mask = None, # Optional[torch.Tensor]
-        encoder_outputs = None, # Optional[Tuple[Tuple[torch.Tensor]]]
-        past_key_values = None, # Optional[Tuple[Tuple[torch.Tensor]]]
-        inputs_embeds = None, # Optional[torch.FloatTensor]
-        decoder_inputs_embeds = None, # Optional[torch.FloatTensor]
-        labels = None, # Optional[torch.LongTensor]
-        use_cache = None, # Optional[bool]
-        output_attentions = None, # Optional[bool]
-        output_hidden_states = None,
-        return_dict=None): # Optional[bool]
-
+        input_ids=None,  # Optional[torch.LongTensor]
+        attention_mask=None,  # Optional[torch.FloatTensor]
+        decoder_input_ids=None,  # Optional[torch.LongTensor]
+        decoder_attention_mask=None,  # Optional[torch.BoolTensor]
+        head_mask=None,  # Optional[torch.FloatTensor]
+        decoder_head_mask=None,  # Optional[torch.FloatTensor]
+        cross_attn_head_mask=None,  # Optional[torch.Tensor]
+        encoder_outputs=None,  # Optional[Tuple[Tuple[torch.Tensor]]]
+        past_key_values=None,  # Optional[Tuple[Tuple[torch.Tensor]]]
+        inputs_embeds=None,  # Optional[torch.FloatTensor]
+        decoder_inputs_embeds=None,  # Optional[torch.FloatTensor]
+        labels=None,  # Optional[torch.LongTensor]
+        use_cache=None,  # Optional[bool]
+        output_attentions=None,  # Optional[bool]
+        output_hidden_states=None,
+        return_dict=None,
+    ):  # Optional[bool]
         use_cache = use_cache if use_cache is not None else self.config_use_cache
-        return_dict = return_dict if return_dict is not None else self.config_use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config_use_return_dict
+        )
 
         # FutureWarning: head_mask was separated into two input args - head_mask, decoder_head_mask
         if head_mask is not None and decoder_head_mask is None:
@@ -204,7 +228,11 @@ class TtT5ForConditionalGeneration(nn.Module):
         # if self.model_parallel:
         #     torch.cuda.set_device(self.decoder.first_device)
 
-        if labels is not None and decoder_input_ids is None and decoder_inputs_embeds is None:
+        if (
+            labels is not None
+            and decoder_input_ids is None
+            and decoder_inputs_embeds is None
+        ):
             # get decoder inputs from shifting lm labels to the right
             print(f"_shift_right(labels)")
             decoder_input_ids = self._shift_right(labels)

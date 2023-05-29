@@ -1,28 +1,50 @@
 import torch
 from torch import nn
-from libs import tt_lib as ttm
 
 from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.t5.t5_layer_self_attention import TtT5LayerSelfAttention
-from python_api_testing.models.t5.t5_layer_cross_attention import TtT5LayerCrossAttention
+from python_api_testing.models.t5.t5_layer_cross_attention import (
+    TtT5LayerCrossAttention,
+)
 from python_api_testing.models.t5.t5_layer_ff import TtT5LayerFF
 
 
 class TtT5Block(nn.Module):
-    def __init__(self, config, state_dict, base_address, device, has_relative_attention_bias=False):
+    def __init__(
+        self,
+        config,
+        state_dict,
+        base_address,
+        device,
+        has_relative_attention_bias=False,
+    ):
         super().__init__()
         self.is_decoder = config["is_decoder"]
         self.device = device
 
         self.layer = nn.ModuleList()
-        self.layer.append(TtT5LayerSelfAttention(config, state_dict, f"{base_address}.layer.0", device, has_relative_attention_bias))
+        self.layer.append(
+            TtT5LayerSelfAttention(
+                config,
+                state_dict,
+                f"{base_address}.layer.0",
+                device,
+                has_relative_attention_bias,
+            )
+        )
         layer_cnt = 1
 
         if self.is_decoder:
-            self.layer.append(TtT5LayerCrossAttention(config, state_dict, f"{base_address}.layer.1", device))
+            self.layer.append(
+                TtT5LayerCrossAttention(
+                    config, state_dict, f"{base_address}.layer.1", device
+                )
+            )
             layer_cnt += 1
 
-        self.layer.append(TtT5LayerFF(config, state_dict, f"{base_address}.layer.{layer_cnt}", device))
+        self.layer.append(
+            TtT5LayerFF(config, state_dict, f"{base_address}.layer.{layer_cnt}", device)
+        )
 
     def forward(
         self,
@@ -41,7 +63,9 @@ class TtT5Block(nn.Module):
     ):
         if past_key_value is not None:
             if not self.is_decoder:
-                logger.warning("`past_key_values` is passed to the encoder. Please make sure this is intended.")
+                logger.warning(
+                    "`past_key_values` is passed to the encoder. Please make sure this is intended."
+                )
             expected_num_past_key_values = 2 if encoder_hidden_states is None else 4
 
             if len(past_key_value) != expected_num_past_key_values:
@@ -66,11 +90,13 @@ class TtT5Block(nn.Module):
             output_attentions=output_attentions,
         )
         hidden_states, present_key_value_state = self_attention_outputs[:2]
-        attention_outputs = self_attention_outputs[2:]  # Keep self-attention outputs and relative position weights
+        attention_outputs = self_attention_outputs[
+            2:
+        ]  # Keep self-attention outputs and relative position weights
 
         # clamp inf values to enable fp16 training
         # Always true for Tt
-        if True: # hidden_states.dtype == torch.float16:
+        if True:  # hidden_states.dtype == torch.float16:
             hidden_states = tt2torch_tensor(hidden_states)
 
             clamp_value = torch.where(
@@ -79,7 +105,9 @@ class TtT5Block(nn.Module):
                 torch.finfo(torch.float16).max,
             )
 
-            hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
+            hidden_states = torch.clamp(
+                hidden_states, min=-clamp_value, max=clamp_value
+            )
             hidden_states = torch2tt_tensor(hidden_states, self.device)
 
         do_cross_attention = self.is_decoder and encoder_hidden_states is not None
@@ -106,7 +134,7 @@ class TtT5Block(nn.Module):
 
             # clamp inf values to enable fp16 training
             # Always true for Tt
-            if False: # hidden_states.dtype == torch.float16:
+            if False:  # hidden_states.dtype == torch.float16:
                 hidden_states = tt2torch_tensor(hidden_states)
 
                 clamp_value = torch.where(
@@ -115,12 +143,16 @@ class TtT5Block(nn.Module):
                     torch.finfo(torch.float16).max,
                 )
 
-                hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
+                hidden_states = torch.clamp(
+                    hidden_states, min=-clamp_value, max=clamp_value
+                )
                 hidden_states = torch2tt_tensor(hidden_states, self.device)
 
             # Combine self attn and cross attn key value states
             if present_key_value_state is not None:
-                present_key_value_state = present_key_value_state + cross_attention_outputs[1]
+                present_key_value_state = (
+                    present_key_value_state + cross_attention_outputs[1]
+                )
 
             # Keep cross-attention outputs and relative position weights
             attention_outputs = attention_outputs + cross_attention_outputs[2:]
@@ -130,7 +162,7 @@ class TtT5Block(nn.Module):
 
         # clamp inf values to enable fp16 training
         # Always true for Tt
-        if False: # hidden_states.dtype == torch.float16:
+        if False:  # hidden_states.dtype == torch.float16:
             hidden_states = tt2torch_tensor(hidden_states)
 
             clamp_value = torch.where(
@@ -139,7 +171,9 @@ class TtT5Block(nn.Module):
                 torch.finfo(torch.float16).max,
             )
 
-            hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
+            hidden_states = torch.clamp(
+                hidden_states, min=-clamp_value, max=clamp_value
+            )
             hidden_states = torch2tt_tensor(hidden_states, self.device)
 
         outputs = (hidden_states,)
