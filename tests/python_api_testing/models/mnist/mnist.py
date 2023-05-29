@@ -74,8 +74,6 @@ class TtMnistModel(torch.nn.Module):
         self.lin2 = tt_linear(fc2_weight_tt, fc2_bias_tt, self.device)
         self.lin3 = tt_linear(fc3_weight_tt, fc3_bias_tt, self.device)
 
-        # We are doing identity since back to back matmul and activation produces garbage results...
-        # probably reading from wrong address
         self.act = tt_lib.tensor.relu
 
     def forward(self, X):
