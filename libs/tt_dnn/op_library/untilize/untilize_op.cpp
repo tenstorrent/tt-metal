@@ -19,6 +19,37 @@ namespace tt {
 
 namespace tt_metal {
 
+// This function needs to be up to date with untilize to ensure accurate l1 usage calcaulation
+bool check_untilize_l1_size(const Tensor &a) {
+    if(a.layout() == Layout::TILE) {
+        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
+        uint32_t single_tile_size = a.element_size() * TILE_HW;
+        uint32_t stick_s = a.shape()[3];
+        uint32_t cb_buffers_size = 2 * (stick_s / TILE_WIDTH * single_tile_size);
+        return max_l1_size >=cb_buffers_size;
+    } else {
+        return false;
+    }
+}
+
+// This function needs to be up to date with untilize_with_unpadding to ensure accurate l1 usage calcaulation
+bool check_untilize_with_unpadding_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+    if(a.layout() == Layout::TILE) {
+        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
+        uint32_t single_tile_size = a.element_size() * TILE_HW;
+        uint32_t stick_s = a.shape()[3];
+        const uint32_t alignment = 32;
+        uint32_t output_shape_3 = output_tensor_end[3] - output_tensor_start[3] + 1;
+        uint32_t unpadded_stick_size = output_shape_3 * a.element_size();
+        uint32_t cb_buffers_size = 2 * (stick_s / TILE_WIDTH * single_tile_size);
+        uint32_t cache_buffer_size = alignment * a.device()->num_dram_channels();
+        uint32_t temp_buffer_size = alignment + unpadded_stick_size;
+        return max_l1_size >= cb_buffers_size + temp_buffer_size + cache_buffer_size;
+    } else {
+        return false;
+    }
+}
+
 Tensor untilize(const Tensor &a) {
 
     if (a.layout() == Layout::ROW_MAJOR) {

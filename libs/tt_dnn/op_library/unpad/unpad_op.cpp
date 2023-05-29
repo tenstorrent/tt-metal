@@ -8,6 +8,47 @@ namespace tt {
 
 namespace tt_metal {
 
+// This function needs to be up to date with unpad_rm to ensure accurate l1 usage calcaulation
+bool check_unpad_rm_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+    if (a.layout() == Layout::ROW_MAJOR) {
+        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
+        uint32_t alignment = 32;
+
+        uint32_t output_shape_3 = output_tensor_end[3] - output_tensor_start[3] + 1;
+
+        uint32_t src_stick_size = a.shape()[3] * a.element_size();
+        uint32_t dst_stick_size = output_shape_3 * a.element_size();
+
+        uint32_t src_buffer_size = alignment + src_stick_size;
+        uint32_t dst_buffer_size = alignment + dst_stick_size;
+        uint32_t cache_buffer_size = alignment * a.device()->num_dram_channels();
+        return max_l1_size >= src_buffer_size + dst_buffer_size + cache_buffer_size;
+    } else {
+        return false;
+    }
+}
+
+// This function needs to be up to date with unpad_tile to ensure accurate l1 usage calcaulation
+bool check_unpad_tile_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+    if (a.layout() == Layout::TILE) {
+        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
+        uint32_t single_tile_size = a.element_size() * TILE_HW;
+        return max_l1_size >= single_tile_size;
+    } else {
+        return false;
+    }
+}
+
+bool check_unpad_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+    if (a.layout() == Layout::ROW_MAJOR) {
+        return check_unpad_rm_l1_size(a, output_tensor_start, output_tensor_end);
+    } else if (a.layout() == Layout::TILE) {
+        return check_unpad_tile_l1_size(a, output_tensor_start, output_tensor_end);
+    } else {
+        return false;
+    }
+}
+
 Tensor unpad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR);

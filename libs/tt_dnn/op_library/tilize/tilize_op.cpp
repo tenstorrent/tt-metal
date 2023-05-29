@@ -12,6 +12,35 @@ namespace tt {
 
 namespace tt_metal {
 
+// This function needs to be up to date with tilize to ensure accurate l1 usage calcaulation
+bool check_tilize_l1_size(const Tensor &a) {
+    if (a.layout() == Layout::ROW_MAJOR || a.layout() == Layout::CHANNELS_LAST) {
+        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
+        uint32_t single_tile_size = a.element_size() * TILE_HW;
+        uint32_t stick_s =  a.layout() == Layout::ROW_MAJOR ? a.shape()[3] : a.shape()[1];
+        uint32_t cb_buffers_size = 2 * (stick_s / TILE_WIDTH * single_tile_size);
+        return max_l1_size >= cb_buffers_size;
+    } else {
+        return false;
+    }
+}
+
+// This function needs to be up to date with tilize to ensure accurate l1 usage calcaulation
+bool check_tilize_with_val_padding_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start) {
+    if (a.layout() == Layout::ROW_MAJOR) {
+        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
+        uint32_t single_tile_size = a.element_size() * TILE_HW;
+        const uint32_t alignment = 32;
+        uint32_t unpadded_row_size_bytes = a.shape()[3] * a.element_size();
+        uint32_t padded_row_size_datum = output_tensor_shape[3];
+        uint32_t cb_buffers_size = 2 * (padded_row_size_datum / TILE_WIDTH * single_tile_size);
+        uint32_t temp_buffer_size = alignment + unpadded_row_size_bytes;
+        return max_l1_size >= cb_buffers_size + temp_buffer_size;
+    } else {
+        return false;
+    }
+}
+
 Tensor tilize(const Tensor &a) {
     if (a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
@@ -418,7 +447,6 @@ Tensor tilize_with_val_padding(const Tensor &a, const std::array<uint32_t, 4> &o
     auto l1_bank_ids = device->bank_ids_from_logical_core(core);
     TT_ASSERT(not l1_bank_ids.empty());
     auto l1_bank_id = l1_bank_ids.at(0);
-    auto pad_value_buffer_l1 = tt_metal::Buffer(device, sizeof(uint32_t), l1_bank_id, sizeof(uint32_t), tt_metal::BufferType::L1);
     auto temp_buffer_l1 = tt_metal::Buffer(device, temp_buffer_size, l1_bank_id, temp_buffer_size, tt_metal::BufferType::L1);
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});

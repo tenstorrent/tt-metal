@@ -40,37 +40,76 @@ class AutoPad {
         }
 
         static Tensor format_input_tensor(const Tensor &a, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value=0) {
-            if (a.layout() != Layout::TILE || a.shape() != padded_shape) {
+            bool pad_input = a.shape() != padded_shape;
+            if (a.layout() != Layout::TILE || pad_input) {
                 // ON DEVICE PADDING/CONVERSIONS
                 if (!a.on_host()) {
-                    if (a.layout() == Layout::ROW_MAJOR && a.shape()[3] % 2 == 0) {
-                        auto out = tilize_with_val_padding(a, padded_shape, {0, 0, 0, 0}, pad_value);
-                        return out;
+                    if (a.layout() == Layout::ROW_MAJOR) {
+                        if (!pad_input) {
+                            if (check_tilize_l1_size(a)) {
+                                auto out = tilize(a);
+                                return out;
+                            }
+                        } else if (check_tilize_with_val_padding_l1_size(a, padded_shape, {0, 0, 0, 0})) {
+                            auto out = tilize_with_val_padding(a, padded_shape, {0, 0, 0, 0}, pad_value);
+                            return out;
+                        } else if (check_pad_l1_size(a, padded_shape, {0, 0, 0, 0}) && check_tilize_l1_size(a)) {
+                            auto out = pad(a, padded_shape, {0, 0, 0, 0}, pad_value);
+                            out = tilize(out);
+                            return out;
+                        }
                     } else if (a.layout() == Layout::TILE) {
-                        auto out = pad(a, padded_shape, {0, 0, 0, 0}, pad_value);
-                        return out;
+                        if (check_pad_l1_size(a, padded_shape, {0, 0, 0, 0})) {
+                            auto out = pad(a, padded_shape, {0, 0, 0, 0}, pad_value);
+                            return out;
+                        }
                     }
-                }
-
-                // ON HOST PADDING/CONVERSIONS
-                auto host = GetHost();
-                auto input = a.to(host);
-                if (a.shape()!= padded_shape) {
-                    if (a.layout() != Layout::ROW_MAJOR) {
-                        input = input.to(Layout::ROW_MAJOR);
+                    // ON HOST PADDING/CONVERSIONS
+                    auto host = GetHost();
+                    auto input = a.to(host);
+                    if (pad_input) {
+                        if (input.layout() != Layout::ROW_MAJOR) {
+                            input = input.to(Layout::ROW_MAJOR);
+                        }
+                        input = input.pad(padded_shape, {0, 0, 0, 0}, pad_value);
                     }
-                    input = input.pad(padded_shape, {0, 0, 0, 0}, pad_value);
-                }
-                if(input.layout() != Layout::TILE) {
-                    input = input.to(Layout::TILE);
-                }
-                input = input.to(device);
+                    if(input.layout() != Layout::TILE) {
+                        input = input.to(Layout::TILE);
+                    }
+                    input = input.to(device);
 
-                delete host;
-                return input;
+                    return input;
+                // TODO: Code duplication is to avoid copies. Refactor to eliminate duplication
+                } else {
+                    if (pad_input) {
+                        if (a.layout() != Layout::ROW_MAJOR) {
+                            auto input = a.to(Layout::ROW_MAJOR);
+                            input = input.pad(padded_shape, {0, 0, 0, 0}, pad_value);
+                            input = input.to(Layout::TILE);
+                            input = input.to(device);
+                            return input;
+                        } else {
+                            auto input = a.pad(padded_shape, {0, 0, 0, 0}, pad_value);
+                            input = input.to(Layout::TILE);
+                            input = input.to(device);
+                            return input;
+                        }
+                    }
+                    if(a.layout() != Layout::TILE) {
+                        auto input = a.to(Layout::TILE);
+                        input = input.to(device);
+                        return input;
+                    }
+
+                    // Should not hit this
+                    auto input = a.to(device);
+                    return input;
+                }
 
             } else if (a.on_host()) {
                 return a.to(device);
+
+            // Should never hit this to avoid unnecessary copies
             } else {
                 return a;
             }
@@ -89,11 +128,19 @@ class AutoPad {
             if (!a.on_host()) {
                 if (!no_unpad) {
                     if (a.layout() == Layout::TILE && output.layout() == Layout::TILE && shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0) {
-                        output = unpad(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
-                        return;
+                        if (check_unpad_l1_size(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1})) {
+                            output = unpad(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                            return;
+                        }
                     } else if (shape[3] % 2 == 0 && ((a.layout() == Layout::ROW_MAJOR && output.layout() == Layout::TILE) || (a.layout() == Layout::TILE && output.layout() == Layout::TILE))) {
-                        output = untilize_with_unpadding(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
-                        return;
+                        if (check_untilize_with_unpadding_l1_size(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1})) {
+                            output = untilize_with_unpadding(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                            return;
+                        } else if(check_untilize_l1_size(output) && check_unpad_l1_size(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1})) {
+                            output = untilize(output);
+                            output = unpad(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                            return;
+                        }
                     }
                 }
                 if (a.layout() != output.layout()) {
@@ -101,15 +148,21 @@ class AutoPad {
                         // If we weren't able to unpad in the previous if, then we need to unpad on host, which is in RM so we don't tilize
                         if (no_unpad) {
                             if (output.shape()[2] % TILE_HEIGHT == 0 && output.shape()[3] % TILE_WIDTH == 0) {
-                                output = tilize(output);
+                                if (check_tilize_l1_size(output)) {
+                                    output = tilize(output);
+                                    return;
+                                }
+                            } else {
+                                return;
                             }
-                            return;
                         }
                     } else if (a.layout() == Layout::ROW_MAJOR && output.layout() == Layout::TILE) {
-                        output = untilize(output);
-                        // If we weren't able to unpad in the previous if, then we need to unpad on host
-                        if (no_unpad) {
-                            return;
+                        if (check_untilize_l1_size(output)) {
+                            output = untilize(output);
+                            // If we weren't able to unpad in the previous if, then we need to unpad on host
+                            if (no_unpad) {
+                                return;
+                            }
                         }
                     }
                 }
@@ -120,7 +173,9 @@ class AutoPad {
             // Unpad output if necessary
             if (!no_unpad) {
 
-                output = output.to(host);
+                if (!output.on_host()) {
+                    output = output.to(host);
+                }
 
                 // Requires RM for unpad
                 if (output.layout() != Layout::ROW_MAJOR) {
