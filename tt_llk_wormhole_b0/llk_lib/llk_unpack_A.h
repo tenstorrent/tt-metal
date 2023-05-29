@@ -199,9 +199,8 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
     }
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
+template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
 inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params, const int transpose_xy = 0) {
-
     constexpr bool is_row_pool = false;
     constexpr uint32_t srca_height = 16;
     constexpr uint32_t srcb_height = 16;
@@ -210,12 +209,13 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
         srca_height, srcb_height, is_row_pool, transpose_xy, is_fp32_dest_acc_en, srnd_fpu_en);
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
+template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
 inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0) {
+
     const llk_unpack_A_params_t unpack_A_params = {
         .unpA_operand = unpA_operand,
     };
-    llk_unpack_A_hw_configure<BType, acc_to_dest, is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_A_params, within_face_16x16_transpose);
+    llk_unpack_A_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_A_params, within_face_16x16_transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
