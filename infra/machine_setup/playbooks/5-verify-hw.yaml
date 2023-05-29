@@ -21,4 +21,4 @@
       become: yes
       command:
         chdir: "/opt/tt_metal_infra/scripts/hw_verif"
-        cmd: "python3 verify_gs_family.py"
+        cmd: "python3 verify_family.py --tt-arch {{ arch }}"

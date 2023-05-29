@@ -1,5 +1,10 @@
 import os
-from common import get_smi_log_lines, check_same, check_not_empty
+from common import (
+    get_smi_log_lines,
+    check_same,
+    check_not_empty,
+    get_tt_arch_from_cmd_line,
+)
 
 
 def check_same(list):
@@ -35,5 +40,14 @@ if __name__ == "__main__":
     family_list = get_grayskull_family()
     print(family_list)
 
-    assert check_same(family_list), family_list
-    assert family_list[0] == "e150", family_list
+    tt_arch = get_tt_arch_from_cmd_line()
+
+    if tt_arch == "gs":
+        assert (
+            family_list[0] == "e150"
+        ), f"At least the first card is not E150: {family_list}"
+    elif tt_arch == "wh_b0":
+        assert check_same(family_list), family_list
+        assert family_list[0] in ("NEBULA_X2",)
+    else:
+        raise Exception(f"{tt_arch} not implemented")
