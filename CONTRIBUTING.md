@@ -19,8 +19,14 @@ Next, please request appropriate write permissions by [opening an
 issue](https://github.com/tenstorrent-metal/tt-metal/issues/new/choose) for
 GitHub permissions.
 
-All contributions require a pull request (PR). Your PR must be approved by
-appropriate reviewers. We do not accept PRs from forked repositories.
+All contributions require:
+- an issue
+  - Your issue should be filed under an appropriate project. Please file a
+    feature support request or bug report under Issues to get help with finding
+    an appropriate project to get a maintainer's attention.
+- a pull request (PR).
+  - Your PR must be approved by appropriate reviewers. We do not accept PRs
+    from forked repositories.
 
 Furthermore, all PRs must follow the [contribution
 standards](#contribution-standards).
