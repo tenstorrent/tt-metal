@@ -9,6 +9,8 @@ conftest.py @tt-rkim
 
 CONTRIBUTING.md @tt-rkim
 
+CODEOWNERS @tt-rkim
+
 setup.py @tt-rkim
 
 Makefile @tt-rkim
