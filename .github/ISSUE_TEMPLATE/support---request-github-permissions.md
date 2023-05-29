@@ -1,5 +1,5 @@
 ---
-name: Request GitHub permissions
+name: Support - Request GitHub permissions
 about: Request new or an issue with permissions with repos.
 title: "[GH Permissions] ..."
 labels: gh-permissions
