@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -9,13 +10,11 @@ sys.path.append(f"{f}/../../../..")
 import torch
 import json
 import warnings
-from libs import tt_lib as ttm
+import tt_lib
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from transformers.generation.configuration_utils import GenerationConfig
-
-from utility_functions import print_diff_argmax
-from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
 import python_api_testing.models.bloom_new.bloom_causal_lm as bloom_causal_lm
@@ -51,16 +50,20 @@ from transformers.generation.logits_process import (
 
 
 def _merge_criteria_processor_list(
-    default_list, # Union[LogitsProcessorList, StoppingCriteriaList],
-    custom_list, # Union[LogitsProcessorList, StoppingCriteriaList],
-): # -> Union[LogitsProcessorList, StoppingCriteriaList]:
+    default_list,  # Union[LogitsProcessorList, StoppingCriteriaList],
+    custom_list,  # Union[LogitsProcessorList, StoppingCriteriaList],
+):  # -> Union[LogitsProcessorList, StoppingCriteriaList]:
     if len(custom_list) == 0:
         return default_list
 
     for default in default_list:
         for custom in custom_list:
             if type(custom) is type(default):
-                object_type = "stopping criteria" if isinstance(custom, StoppingCriteria) else "logits processor"
+                object_type = (
+                    "stopping criteria"
+                    if isinstance(custom, StoppingCriteria)
+                    else "logits processor"
+                )
                 raise ValueError(
                     f"A custom {object_type} of type {type(custom)} with values {custom} has been passed to"
                     f" `generate`, but it has already been created with the values {default}. {default} has been"
@@ -75,10 +78,10 @@ def _merge_criteria_processor_list(
 def _get_logits_processor(
     generation_config: GenerationConfig,
     input_ids_seq_length: int,
-    encoder_input_ids, # torch.LongTensor
-    prefix_allowed_tokens_fn, # Callable[[int, torch.Tensor], List[int]],
-    logits_processor, # Optional[LogitsProcessorList]
-): # -> LogitsProcessorList:
+    encoder_input_ids,  # torch.LongTensor
+    prefix_allowed_tokens_fn,  # Callable[[int, torch.Tensor], List[int]],
+    logits_processor,  # Optional[LogitsProcessorList]
+):  # -> LogitsProcessorList:
     """
     This class returns a [`LogitsProcessorList`] list object that contains all relevant [`LogitsProcessor`]
     instances used to modify the scores of the language model head.
@@ -88,7 +91,10 @@ def _get_logits_processor(
 
     # the following idea is largely copied from this PR: https://github.com/huggingface/transformers/pull/5420/files
     # all samplers can be found in `generation_utils_samplers.py`
-    if generation_config.diversity_penalty is not None and generation_config.diversity_penalty > 0.0:
+    if (
+        generation_config.diversity_penalty is not None
+        and generation_config.diversity_penalty > 0.0
+    ):
         processors.append(
             HammingDiversityLogitsProcessor(
                 diversity_penalty=generation_config.diversity_penalty,
@@ -102,13 +108,26 @@ def _get_logits_processor(
     ):
         processors.append(
             EncoderRepetitionPenaltyLogitsProcessor(
-                penalty=generation_config.encoder_repetition_penalty, encoder_input_ids=encoder_input_ids
+                penalty=generation_config.encoder_repetition_penalty,
+                encoder_input_ids=encoder_input_ids,
             )
         )
-    if generation_config.repetition_penalty is not None and generation_config.repetition_penalty != 1.0:
-        processors.append(RepetitionPenaltyLogitsProcessor(penalty=generation_config.repetition_penalty))
-    if generation_config.no_repeat_ngram_size is not None and generation_config.no_repeat_ngram_size > 0:
-        processors.append(NoRepeatNGramLogitsProcessor(generation_config.no_repeat_ngram_size))
+    if (
+        generation_config.repetition_penalty is not None
+        and generation_config.repetition_penalty != 1.0
+    ):
+        processors.append(
+            RepetitionPenaltyLogitsProcessor(
+                penalty=generation_config.repetition_penalty
+            )
+        )
+    if (
+        generation_config.no_repeat_ngram_size is not None
+        and generation_config.no_repeat_ngram_size > 0
+    ):
+        processors.append(
+            NoRepeatNGramLogitsProcessor(generation_config.no_repeat_ngram_size)
+        )
     if (
         generation_config.encoder_no_repeat_ngram_size is not None
         and generation_config.encoder_no_repeat_ngram_size > 0
@@ -125,14 +144,20 @@ def _get_logits_processor(
             )
     if generation_config.bad_words_ids is not None:
         processors.append(
-            NoBadWordsLogitsProcessor(generation_config.bad_words_ids, generation_config.eos_token_id)
+            NoBadWordsLogitsProcessor(
+                generation_config.bad_words_ids, generation_config.eos_token_id
+            )
         )
     if (
         generation_config.min_length is not None
         and generation_config.eos_token_id is not None
         and generation_config.min_length > 0
     ):
-        processors.append(MinLengthLogitsProcessor(generation_config.min_length, generation_config.eos_token_id))
+        processors.append(
+            MinLengthLogitsProcessor(
+                generation_config.min_length, generation_config.eos_token_id
+            )
+        )
     if (
         generation_config.min_new_tokens is not None
         and generation_config.eos_token_id is not None
@@ -140,20 +165,27 @@ def _get_logits_processor(
     ):
         processors.append(
             MinNewTokensLengthLogitsProcessor(
-                input_ids_seq_length, generation_config.min_new_tokens, generation_config.eos_token_id
+                input_ids_seq_length,
+                generation_config.min_new_tokens,
+                generation_config.eos_token_id,
             )
         )
     if prefix_allowed_tokens_fn is not None:
         processors.append(
             PrefixConstrainedLogitsProcessor(
-                prefix_allowed_tokens_fn, generation_config.num_beams // generation_config.num_beam_groups
+                prefix_allowed_tokens_fn,
+                generation_config.num_beams // generation_config.num_beam_groups,
             )
         )
     if generation_config.forced_bos_token_id is not None:
-        processors.append(ForcedBOSTokenLogitsProcessor(generation_config.forced_bos_token_id))
+        processors.append(
+            ForcedBOSTokenLogitsProcessor(generation_config.forced_bos_token_id)
+        )
     if generation_config.forced_eos_token_id is not None:
         processors.append(
-            ForcedEOSTokenLogitsProcessor(generation_config.max_length, generation_config.forced_eos_token_id)
+            ForcedEOSTokenLogitsProcessor(
+                generation_config.max_length, generation_config.forced_eos_token_id
+            )
         )
     if generation_config.remove_invalid_values is True:
         processors.append(InfNanRemoveLogitsProcessor())
@@ -166,22 +198,31 @@ def _get_logits_processor(
             )
         )
     if generation_config.suppress_tokens is not None:
-        processors.append(SuppressTokensLogitsProcessor(generation_config.suppress_tokens))
+        processors.append(
+            SuppressTokensLogitsProcessor(generation_config.suppress_tokens)
+        )
     if generation_config.begin_suppress_tokens is not None:
         begin_index = input_ids_seq_length
         begin_index = (
             begin_index
-            if (input_ids_seq_length > 1 or generation_config.forced_bos_token_id is None)
+            if (
+                input_ids_seq_length > 1
+                or generation_config.forced_bos_token_id is None
+            )
             else begin_index + 1
         )
         if generation_config.forced_decoder_ids is not None:
             # generation starts after the last token that is forced
             begin_index += generation_config.forced_decoder_ids[-1][0]
         processors.append(
-            SuppressTokensAtBeginLogitsProcessor(generation_config.begin_suppress_tokens, begin_index)
+            SuppressTokensAtBeginLogitsProcessor(
+                generation_config.begin_suppress_tokens, begin_index
+            )
         )
     if generation_config.forced_decoder_ids is not None:
-        processors.append(ForceTokensLogitsProcessor(generation_config.forced_decoder_ids))
+        processors.append(
+            ForceTokensLogitsProcessor(generation_config.forced_decoder_ids)
+        )
     processors = _merge_criteria_processor_list(processors, logits_processor)
     # `LogitNormalization` should always be the last logit processor, when present
     if generation_config.renormalize_logits is True:
@@ -190,7 +231,6 @@ def _get_logits_processor(
 
 
 def get_logits_processor(input_ids, config):
-
     generation_config = GenerationConfig.from_model_config(config)
     input_ids_seq_length = input_ids.shape[-1]
 
@@ -205,8 +245,9 @@ def get_logits_processor(input_ids, config):
     return logits_processor
 
 
-def run_generate(input_sentance, run_tt_model, tokenizer, hf_reference_model, tt_model, device):
-
+def run_generate(
+    input_sentance, run_tt_model, tokenizer, hf_reference_model, tt_model, device
+):
     # Prepare input
     tokenized = tokenizer(input_sentance, return_tensors="pt")  # Batch size 1
     generation_config = hf_reference_model.generation_config
@@ -215,7 +256,9 @@ def run_generate(input_sentance, run_tt_model, tokenizer, hf_reference_model, tt
     attention_mask = tokenized.attention_mask
 
     logger.debug(f"input_ids {input_ids.shape} {input_ids}")
-    input_ids = bloom_utils.pad_input_tensor(tokenized.input_ids, generation_config.pad_token_id, 2)
+    input_ids = bloom_utils.pad_input_tensor(
+        tokenized.input_ids, generation_config.pad_token_id, 2
+    )
     logger.debug(f"padded input_ids {input_ids.shape} {input_ids}")
 
     # Start to generate i'th token
@@ -224,19 +267,26 @@ def run_generate(input_sentance, run_tt_model, tokenizer, hf_reference_model, tt
     logits_processor = get_logits_processor(input_ids, hf_reference_model.config)
 
     # Input IDs expansion
-    input_ids_expansion = generation_config.pad_token_id * torch.ones(1, 2).to(torch.long)
+    input_ids_expansion = generation_config.pad_token_id * torch.ones(1, 2).to(
+        torch.long
+    )
 
-    while i < 128:
-
+    while i < 64:
         # PyTorch forward pass
-        pt_out = hf_reference_model(input_ids=input_ids) # , attention_mask=attention_mask)
+        pt_out = hf_reference_model(
+            input_ids=input_ids
+        )  # , attention_mask=attention_mask)
         pt_next_token_logits = pt_out.logits
 
         if run_tt_model:
-            tt_out = tt_model.forward(device, input_ids=input_ids, return_dict=False) # attention_mask=attention_mask,
+            tt_out = tt_model.forward(
+                device, input_ids=input_ids, return_dict=False
+            )  # attention_mask=attention_mask,
             next_token_logits = tt_out[0]
 
-            does_pass, pcc_message = comp_pcc(pt_next_token_logits, next_token_logits, 0.6)
+            does_pass, pcc_message = comp_pcc(
+                pt_next_token_logits, next_token_logits, 0.6
+            )
             logger.debug(pcc_message)
         else:
             next_token_logits = pt_next_token_logits
@@ -252,7 +302,7 @@ def run_generate(input_sentance, run_tt_model, tokenizer, hf_reference_model, tt
         logger.debug(f"tt_next_tokens {next_tokens}")
         logger.debug(f"pt_next_tokens {pt_next_tokens}")
 
-        if next_tokens[0][i-1] == generation_config.eos_token_id:
+        if next_tokens[0][i - 1] == generation_config.eos_token_id:
             break
 
         # We need to expand decoder_input_ids
@@ -260,7 +310,7 @@ def run_generate(input_sentance, run_tt_model, tokenizer, hf_reference_model, tt
             input_ids = torch.cat([input_ids, input_ids_expansion], dim=1)
 
         # Append predicted token
-        input_ids[0][i] = next_tokens[0][i-1]
+        input_ids[0][i] = next_tokens[0][i - 1]
 
         logger.debug(f"input_ids {input_ids[0]}")
         i += 1
@@ -269,25 +319,38 @@ def run_generate(input_sentance, run_tt_model, tokenizer, hf_reference_model, tt
 
 
 def test_bloom_generation(input_sentance, run_tt_model=True):
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
 
     tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
-    hf_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
+    hf_reference_model = BloomForCausalLM.from_pretrained(
+        "bigscience/bloom-560m", torchscript=False
+    )
     hf_reference_model.eval()
-    tt_model = bloom_causal_lm.TtBloomForCausalLM(hf_reference_model.config, hf_reference_model.state_dict(), device)
+    tt_model = bloom_causal_lm.TtBloomForCausalLM(
+        hf_reference_model.config, hf_reference_model.state_dict(), device
+    )
 
-    output_sentance = run_generate(input_sentance, run_tt_model=run_tt_model, tokenizer=tokenizer, hf_reference_model=hf_reference_model, tt_model=tt_model, device=device)
-    ttm.device.CloseDevice(device)
+    output_sentance = run_generate(
+        input_sentance,
+        run_tt_model=run_tt_model,
+        tokenizer=tokenizer,
+        hf_reference_model=hf_reference_model,
+        tt_model=tt_model,
+        device=device,
+    )
+    tt_lib.device.CloseDevice(device)
 
     return output_sentance
 
 
 def test_bloom_causal_lm():
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
 
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
+        "bigscience/bloom-560m", torchscript=False
+    )
     hugging_bloom_reference_model.eval()
 
     config = hugging_bloom_reference_model.config
@@ -303,15 +366,11 @@ def test_bloom_causal_lm():
     input_ids = tokenized.input_ids
 
     pt_out = pt_bloom_causal_lm.forward(input_ids)
-    logger.info("PT finished")
-
     tt_out = tt_bloom_causal_lm.forward(device, input_ids)
-    logger.info("TT finished")
 
     pt_out = pt_out[0]
     tt_out = tt_out[0]
 
-    print_diff_argmax(pt_out, tt_out)
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.50)
 
     logger.info(comp_allclose(pt_out, tt_out))
@@ -323,13 +382,14 @@ def test_bloom_causal_lm():
         logger.warning("bloom_causal_lm: Failed!")
 
     assert does_pass
-    ttm.device.CloseDevice(device)
+    tt_lib.device.CloseDevice(device)
 
 
 if __name__ == "__main__":
-
     output_sentance_night = test_bloom_generation("It was a dark and stormy night")
-    output_sentance_alice = test_bloom_generation("Alice stepped through the small door")
+    output_sentance_alice = test_bloom_generation(
+        "Alice stepped through the small door"
+    )
 
     logger.info(f"Decoded output night: {output_sentance_night}")
     logger.info(f"Decoded output alice: {output_sentance_alice}")

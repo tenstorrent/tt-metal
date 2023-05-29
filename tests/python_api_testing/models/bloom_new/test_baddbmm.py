@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -7,10 +8,9 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
-from libs import tt_lib as ttm
+import tt_lib
 
-from utility_functions import print_diff_argmax
-from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
 import python_api_testing.models.bloom_new.bloom_utils as bloom_utils
@@ -44,14 +44,15 @@ def run_baddbmm_test(device):
     batch1 = bloom_utils.torch2tt_tensor(batch1, device)
     batch2 = bloom_utils.torch2tt_tensor(batch2, device)
 
-    tt_out = baddbmm.tt_baddbmm(device, input, batch1, batch2, beta=tt_beta, alpha=tt_alpha)
+    tt_out = baddbmm.tt_baddbmm(
+        device, input, batch1, batch2, beta=tt_beta, alpha=tt_alpha
+    )
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 
-    print_diff_argmax(pt_out, tt_out_converted)
     does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.99)
 
-    print(comp_allclose(pt_out, tt_out_converted))
-    print(pcc_message)
+    logger.info(comp_allclose(pt_out, tt_out_converted))
+    logger.info(pcc_message)
 
     if does_pass:
         logger.info("baddbmm: Passed!")
@@ -62,10 +63,10 @@ def run_baddbmm_test(device):
 
 
 def test_baddbmm():
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
     run_baddbmm_test(device)
-    ttm.device.CloseDevice(device)
+    tt_lib.device.CloseDevice(device)
 
 
 if __name__ == "__main__":

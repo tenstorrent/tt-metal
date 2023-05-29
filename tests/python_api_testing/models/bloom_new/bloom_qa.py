@@ -1,5 +1,5 @@
 import torch
-from libs import tt_lib as ttm
+import tt_lib
 import python_api_testing.models.bloom_new.bloom_utils as bloom_utils
 import python_api_testing.models.bloom_new.bloom_model as bloom_model
 from typing import Optional
@@ -90,15 +90,20 @@ from typing import Optional
 #         )
 
 
-class TtBloomForQuestionAnswering():
-
+class TtBloomForQuestionAnswering:
     def __init__(self, config, state_dict, device):
-        self.transformer = bloom_model.TtBloomModel(config, state_dict, "transformer", device)
-        self.qa_outputs_weight = bloom_utils.torch2tt_tensor(state_dict["qa_outputs.weight"], device)
-        self.qa_outputs_bias = bloom_utils.torch2tt_tensor(state_dict["qa_outputs.bias"], device)
+        self.transformer = bloom_model.TtBloomModel(
+            config, state_dict, "transformer", device
+        )
+        self.qa_outputs_weight = bloom_utils.torch2tt_tensor(
+            state_dict["qa_outputs.weight"], device
+        )
+        self.qa_outputs_bias = bloom_utils.torch2tt_tensor(
+            state_dict["qa_outputs.bias"], device
+        )
 
         # Transpose the weights
-        self.qa_outputs_weight = ttm.tensor.transpose(self.qa_outputs_weight)
+        self.qa_outputs_weight = tt_lib.tensor.transpose(self.qa_outputs_weight)
 
     def forward(
         self,
@@ -130,19 +135,24 @@ class TtBloomForQuestionAnswering():
         outputs = self.transformer.forward(
             device,
             input_ids,
-            attention_mask = attention_mask,
-            position_ids = position_ids,
-            head_mask = head_mask,
-            inputs_embeds = inputs_embeds,
-            output_attentions = output_attentions,
-            output_hidden_states = output_hidden_states,
-            return_dict = return_dict
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
         )
 
         sequence_output = outputs[0]
 
-        logits = ttm.tensor.matmul(sequence_output, self.qa_outputs_weight)
-        logits = ttm.tensor.bcast(logits, self.qa_outputs_bias, ttm.tensor.BcastOpMath.ADD, ttm.tensor.BcastOpDim.H)
+        logits = tt_lib.tensor.matmul(sequence_output, self.qa_outputs_weight)
+        logits = tt_lib.tensor.bcast(
+            logits,
+            self.qa_outputs_bias,
+            tt_lib.tensor.BcastOpMath.ADD,
+            tt_lib.tensor.BcastOpDim.H,
+        )
         logits = bloom_utils.tt2torch_tensor(logits)
 
         start_logits, end_logits = logits.split(1, dim=-1)
