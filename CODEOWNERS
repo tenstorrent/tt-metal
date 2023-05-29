@@ -6,3 +6,10 @@
 infra/ @tt-rkim
 
 conftest.py @tt-rkim
+
+CONTRIBUTING.md @tt-rkim
+
+setup.py @tt-rkim
+
+Makefile @tt-rkim
+module.mk @tt-rkim
