@@ -1,5 +1,5 @@
 import os
-from common import get_smi_log_lines, check_not_empty
+from common import get_smi_log_lines, check_not_empty, get_tt_arch_from_cmd_line
 
 
 def get_fw_versions_and_dates():
@@ -39,9 +39,31 @@ if __name__ == "__main__":
     assert len(version_list) == len(date_list)
     assert check_not_empty(version_list)
 
+    expected_fw_values_by_arch = {
+        "gs": (
+            ("2022-08-31", "2022-09-06"),
+            ("1.0.0",),
+        ),
+        "wh_b0": (
+            ("2023-03-29",),
+            ("9.0.0",),
+        ),
+    }
+
+    tt_arch = get_tt_arch_from_cmd_line()
+
+    expected_tt_archs = tuple(expected_fw_values_by_arch.keys())
+
+    assert (
+        tt_arch in expected_tt_archs
+    ), f"{tt_arch} not in list of supported archs: {expected_tt_archs}"
+
+    expected_date_list = expected_fw_values_by_arch[tt_arch][0]
+    expected_version_list = expected_fw_values_by_arch[tt_arch][1]
+
     for version, date in zip(version_list, date_list):
-        assert date in ("2022-08-31", "2022-09-06"), date_list
-        assert version in ("1.0.0"), version_list
+        assert date in expected_date_list, date_list
+        assert version in expected_version_list, version_list
 
     print(version_list)
     print(date_list)
