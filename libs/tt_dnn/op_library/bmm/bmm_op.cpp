@@ -444,6 +444,7 @@ Tensor bert_large_fused_qkv_matmul(const Tensor& a, const Tensor& b, const Memor
 }
 
 Tensor bert_large_ff1_matmul(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config) {
+    TT_ASSERT((a.dtype() != DataType::BFLOAT16) or (mem_config.buffer_type == BufferType::DRAM) or (a.buffer_type() == BufferType::DRAM and b.buffer_type() == BufferType::DRAM), "For BFLOAT16, if output is on L1, one of in0 or in1 must be on DRAM!");
     TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
     TT_ASSERT((b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 4096})), "Unsupported input shape");
     CoreCoord compute_and_storage_grid_size = {12, 9};
