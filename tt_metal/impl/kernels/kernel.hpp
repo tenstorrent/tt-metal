@@ -6,7 +6,6 @@
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
 #include "common/base_types.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/device/tt_memory.h"
 
 namespace tt {
 
@@ -58,7 +57,7 @@ class Kernel {
 
     std::string binary_path(const CoreCoord &logical_core) const;
 
-    std::vector<ll_api::memory> binaries() const;
+    std::vector<std::vector<uint32_t>> const &binaries() const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
@@ -84,7 +83,7 @@ class Kernel {
     CoreRangeSet core_range_set_;
     KernelType kernel_type_;
     std::map<CoreCoord, std::string> binary_path_;
-    std::vector<ll_api::memory> binaries_;      // DataMovement kernels have one binary each and Compute kernels have three binaries
+    std::vector<std::vector<uint32_t>> binaries_;      // DataMovement kernels have one binary each and Compute kernels have three binaries
     std::vector<uint32_t> compile_time_args_;
     std::map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;
     std::map<std::string, std::string> defines_; // preprocessor defines. this is to be able to generate generic instances.
