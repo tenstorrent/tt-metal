@@ -100,7 +100,7 @@ def llrt_to_dos():
 
 
 @pytest.mark.post_commit
-@pytest.mark.hyperquotidian
+@pytest.mark.frequent
 @pytest.mark.parametrize(
     "llrt_test_entry", POST_COMMIT_LLRT_TEST_ENTRIES, ids=generate_test_entry_id
 )
