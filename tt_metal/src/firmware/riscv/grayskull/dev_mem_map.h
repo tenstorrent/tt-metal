@@ -27,18 +27,19 @@
 #define MEM_L1_SIZE           (1024 * 1024)
 
 #define MEM_LOCAL_BASE        0xFFB00000
-#define MEM_BRISC_LOCAL_SIZE  (4 * 1024)
-#define MEM_NCRISC_LOCAL_SIZE (4 * 1024)
+#define MEM_LOCAL_SIZE        (4 * 1024)
 #define MEM_TRISC_LOCAL_SIZE  (2 * 1024)
 
+#define MEM_L0_BASE           0xFFC00000
 #define MEM_NCRISC_IRAM_BASE  0xFFC00000
 #define MEM_NCRISC_IRAM_SIZE  (16 * 1024)
 
 /////////////
 // Firmware/kernel code holes
 #define MEM_BOOT_CODE_SIZE             4
-#define MEM_BRISC_FIRMWARE_SIZE        ( 7 * 1024)
-#define MEM_NCRISC_FIRMWARE_SIZE       (16 * 1024)
+#define MEM_BRISC_FIRMWARE_SIZE        (20 * 1024)
+#define MEM_BRISC_FIRMWARE_CODE_SIZE   ( 7 * 1024)
+#define MEM_NCRISC_FIRMWARE_SIZE       (32 * 1024)
 #define MEM_TRISC0_SIZE                (20 * 1024)
 #define MEM_TRISC1_SIZE                (16 * 1024)
 #define MEM_TRISC2_SIZE                (20 * 1024)
@@ -70,11 +71,9 @@
 
 /////////////
 // Initialization relocation L1 memory
-// Host downloads to these addresses, fw copies to destination
-// Memory is free after init
-// Starts at the to of L1, works backwards
-#define MEM_BRISC_INIT_LOCAL_L1_BASE      (MEM_L1_SIZE - MEM_BRISC_LOCAL_SIZE)
-#define MEM_NCRISC_INIT_LOCAL_L1_BASE     (MEM_BRISC_INIT_LOCAL_L1_BASE - MEM_NCRISC_LOCAL_SIZE)
+// (host downloads to these address fw copies to destination
+#define MEM_BRISC_INIT_LOCAL_L1_BASE      (MEM_L1_SIZE - MEM_LOCAL_SIZE)
+#define MEM_NCRISC_INIT_LOCAL_L1_BASE     (MEM_BRISC_INIT_LOCAL_L1_BASE - MEM_LOCAL_SIZE)
 #define MEM_TRISC0_INIT_LOCAL_L1_BASE     (MEM_NCRISC_INIT_LOCAL_L1_BASE - MEM_TRISC_LOCAL_SIZE)
 #define MEM_TRISC1_INIT_LOCAL_L1_BASE     (MEM_TRISC0_INIT_LOCAL_L1_BASE - MEM_TRISC_LOCAL_SIZE)
 #define MEM_TRISC2_INIT_LOCAL_L1_BASE     (MEM_TRISC1_INIT_LOCAL_L1_BASE - MEM_TRISC_LOCAL_SIZE)

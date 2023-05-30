@@ -24,21 +24,22 @@
 /////////////
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE           0x0
-#define MEM_L1_SIZE           (1464 * 1024)
+#define MEM_L1_SIZE           (1536 * 1024)
 
 #define MEM_LOCAL_BASE        0xFFB00000
-#define MEM_BRISC_LOCAL_SIZE  (4 * 1024)
-#define MEM_NCRISC_LOCAL_SIZE (4 * 1024)
-#define MEM_TRISC_LOCAL_SIZE  (2 * 1024)
+#define MEM_LOCAL_SIZE        (4 * 1024)
+#define MEM_TRISC_LOCAL_SIZE  (2 *1024)
 
+#define MEM_L0_BASE           0xFFC00000
 #define MEM_NCRISC_IRAM_BASE  0xFFC00000
 #define MEM_NCRISC_IRAM_SIZE  (16 * 1024)
 
 /////////////
 // Firmware/kernel code holes
 #define MEM_BOOT_CODE_SIZE             4
-#define MEM_BRISC_FIRMWARE_SIZE        ( 7 * 1024)
-#define MEM_NCRISC_FIRMWARE_SIZE       (16 * 1024)
+#define MEM_BRISC_FIRMWARE_SIZE        (20 * 1024)
+#define MEM_BRISC_FIRMWARE_CODE_SIZE   ( 7 * 1024)
+#define MEM_NCRISC_FIRMWARE_SIZE       (32 * 1024)
 #define MEM_TRISC0_SIZE                (20 * 1024)
 #define MEM_TRISC1_SIZE                (16 * 1024)
 #define MEM_TRISC2_SIZE                (20 * 1024)
@@ -70,11 +71,9 @@
 
 /////////////
 // Initialization relocation L1 memory
-// Host downloads to these addresses, fw copies to destination
-// Memory is free after init
-// Starts at the to of L1, works backwards
+// (host downloads to these address fw copies to destination
 // Note: using xmov to copy ncrisc to addresses above 1M hangs the chip
-#define MEM_INIT_LOCAL_L1_BASE            (MEM_L1_SIZE - 440 * 1024)
+#define MEM_INIT_LOCAL_L1_BASE            (MEM_L1_SIZE - 512 * 1024)
 #define MEM_BRISC_INIT_LOCAL_L1_BASE      (MEM_INIT_LOCAL_L1_BASE - MEM_BRISC_LOCAL_SIZE)
 #define MEM_NCRISC_INIT_LOCAL_L1_BASE     (MEM_BRISC_INIT_LOCAL_L1_BASE - MEM_NCRISC_LOCAL_SIZE)
 #define MEM_TRISC0_INIT_LOCAL_L1_BASE     (MEM_NCRISC_INIT_LOCAL_L1_BASE - MEM_TRISC_LOCAL_SIZE)
