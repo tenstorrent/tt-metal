@@ -16,6 +16,7 @@ GOLDEN_OUTPUTS_DIR = f"{TT_METAL_PATH}/third_party/lfs/profiler/tests/golden/dev
 PROFILER_DIR = f"{TT_METAL_PATH}/tools/profiler/"
 
 RE_RANDOM_ID_STRINGS = [r'if \(document.getElementById\("{0}"\)\) {{', r'    Plotly.newPlot\("{0}", \[{{']
+DIFF_LINE_COUNT_LIMIT = 40
 
 
 def replace_random_id(line):
@@ -84,9 +85,14 @@ def run_device_log_compare_golden(test):
         diffStr = f"\n{diffFile}\n"
         with open(goldenFile) as golden, open(underTestFile) as underTest:
             differ = Differ()
+            lineCount = 0
             for line in differ.compare(golden.readlines(), underTest.readlines()):
                 if line[0] in ["-", "+", "?"]:
                     diffStr += line
+                    lineCount += 1
+                if lineCount > DIFF_LINE_COUNT_LIMIT:
+                    diffStr += "[NOTE: limited lines on log output, run locally without line count limits for more info]"
+                    break
         logger.error(diffStr)
 
     assert not dcmp.diff_files, f"{dcmp.diff_files} cannot be different from golden"
