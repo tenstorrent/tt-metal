@@ -77,7 +77,7 @@ These regressions will also run after every pushed commit to the GitHub repo.
     make tests
     export TT_METAL_HOME=<this repo dir>
     source build/python_env/bin/activate
-    ./tests/scripts/run_pre_post_commit_regressions.sh
+    ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
 
 If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests which tests `tensor` APIs and `tt_dnn` ops. For `tt_dnn` ops, the tests aim to hit all different parallelizations of ops currently available.
 
