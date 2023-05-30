@@ -42,11 +42,11 @@ if __name__ == "__main__":
 
     tt_arch = get_tt_arch_from_cmd_line()
 
-    if tt_arch == "gs":
+    if tt_arch == "grayskull":
         assert (
             family_list[0] == "e150"
         ), f"At least the first card is not E150: {family_list}"
-    elif tt_arch == "wh_b0":
+    elif tt_arch == "wormhole_b0":
         assert check_same(family_list), family_list
         assert family_list[0] in ("NEBULA_X2",)
     else:

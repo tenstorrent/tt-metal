@@ -38,10 +38,10 @@ GS_TT_SMI_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.n
 # WH_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
 GS_TT_DRIVER_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_DRIVER_FILENAME)\")" | jq '.url' | tr \" \ )
 
-GS_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/gs
-WH_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/wh
-GS_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/gs
-WH_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/wh
+GS_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/grayskull
+WH_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/wormhole_b0
+GS_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/grayskull
+WH_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/wormhole_b0
 TT_DRIVER_LOCAL_FOLDER=$ASSETS_DIR/tt_driver
 
 mkdir -p $GS_TT_SMI_LOCAL_FOLDER

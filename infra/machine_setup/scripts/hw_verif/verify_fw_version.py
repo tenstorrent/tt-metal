@@ -40,11 +40,11 @@ if __name__ == "__main__":
     assert check_not_empty(version_list)
 
     expected_fw_values_by_arch = {
-        "gs": (
+        "grayskull": (
             ("2022-08-31", "2022-09-06"),
             ("1.0.0",),
         ),
-        "wh_b0": (
+        "wormhole_b0": (
             ("2023-03-29",),
             ("9.0.0",),
         ),
