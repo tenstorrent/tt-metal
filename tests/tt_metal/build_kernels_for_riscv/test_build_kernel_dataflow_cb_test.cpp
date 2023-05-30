@@ -2,7 +2,6 @@
 #include <filesystem>
 
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
-#include "build_kernels_for_riscv/build_kernel_options.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 
 
@@ -12,13 +11,14 @@ namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
 
+    std::string root_dir = tt::utils::get_root_dir();
     std::string arch_name = tt::test_utils::get_env_arch_name();
 
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("test","dataflow_cb_test");
-    std::string out_dir_path = tt::get_kernel_compile_outpath() + build_kernel_for_riscv_options.name;
+    std::string out_dir_path = root_dir + "/built_kernels/" + build_kernel_for_riscv_options.name;
 
-    log_info(tt::LogBuildKernels, "Compiling OP: {}", build_kernel_for_riscv_options.name);
+    log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
 
     build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::c_in0, tt::DataFormat::Float16_b);
     build_kernel_for_riscv_options.set_cb_dataformat_all_cores(tt::CB::c_out0, tt::DataFormat::Float16_b);
@@ -39,10 +39,10 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/writer_cb_test.cpp";
 
     fs::create_directories(out_dir_path);
-    generate_data_format_descriptors(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name);
+    generate_data_format_descriptors(&build_kernel_for_riscv_options, out_dir_path);
 
-    generate_binary_for_ncrisc(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, arch_name, 1, {8, 4});
-    generate_binary_for_brisc(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, arch_name, 0, {8, 2});
+    generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, arch_name, 1, {8, 4});
+    generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, arch_name, 0, {8, 2});
 
     return 0;
 }

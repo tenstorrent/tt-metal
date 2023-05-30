@@ -21,12 +21,14 @@ struct hlk_args_t {
 
 int main(int argc, char* argv[]) {
 
+    std::string root_dir = tt::utils::get_root_dir();
     std::string arch_name = tt::test_utils::get_env_arch_name();
 
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("matmul","matmul_small_block");
+    std::string out_dir_path = root_dir + "/built_kernels/" + build_kernel_for_riscv_options.name;
 
-    log_info(tt::LogBuildKernels, "Compiling OP: {}", build_kernel_for_riscv_options.name);
+    log_info(tt::LogBuildKernels, "Compiling OP: {} to {}", build_kernel_for_riscv_options.name, out_dir_path);
 
     std::vector<uint32_t> compute_kernel_args = {
         1,
@@ -56,7 +58,7 @@ int main(int argc, char* argv[]) {
 
     // generate binaries
     generate_binaries_params_t params = {.compute_kernel_compile_time_args = compute_kernel_args};
-    generate_binaries_all_riscs(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, arch_name, params);
+    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, arch_name, params);
 
     return 0;
 }
