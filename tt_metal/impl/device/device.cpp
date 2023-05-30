@@ -33,6 +33,7 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
         .dram_bank_size = soc_desc.dram_bank_size,
         .worker_grid_size = this->post_harvested_worker_grid_size_,
         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
+        .storage_core_l1_bank_size = static_cast<size_t>(soc_desc.storage_core_l1_bank_size),
         .core_type_from_noc_coord_table = {},
         .logical_to_routing_coord_lookup_table=this->logical_to_routing_coord_lookup_table_
     });
@@ -68,6 +69,7 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
     }
     this->allocator_scheme_ = memory_allocator;
 }
+
 void Device::initialize_harvesting_information() {
     if (not cluster_is_initialized()) {
         tt::log_fatal("Device has not been initialized, did you forget to call InitializeDevice?");

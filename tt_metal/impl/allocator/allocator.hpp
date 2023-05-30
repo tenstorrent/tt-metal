@@ -17,27 +17,6 @@ namespace tt_metal {
 enum class BufferType;
 struct Allocator;
 
-enum class MemoryAllocator {
-    BASIC = 0,
-    L1_BANKING = 1,
-};
-
-struct AddressDescriptor {
-    uint32_t offset_bytes;
-    uint32_t relative_address;
-
-    uint32_t absolute_address()     const {
-        return offset_bytes + relative_address;
-    }
-};
-
-using BankIdToRelativeAddress = std::unordered_map<uint32_t, AddressDescriptor>;
-
-struct BankDescriptor {
-    uint32_t offset_bytes;
-    uint32_t size_bytes;
-};
-
 namespace allocator {
 
 inline bool accept_all_address_ranges(const std::pair<uint32_t, uint32_t> &range) { return true; }
@@ -105,19 +84,7 @@ void populate_candidate_address_ranges(
     std::function<bool(const std::pair<uint32_t, uint32_t> &)> filter = accept_all_address_ranges
 );
 
-struct InitAndAllocFuncs {
-    std::function<void(Allocator &, const AllocatorConfig &)> init;
-    std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, bool)> alloc;
-    std::function<BankIdToRelativeAddress(BankManager &, uint32_t, uint32_t, uint32_t, uint32_t)> alloc_at_addr;
-};
-
-// Holds callback functions required by allocators that specify how to initialize the bank managers and what the allocation scheme
-// is for a given storage substrate
-struct AllocDescriptor {
-    InitAndAllocFuncs dram;
-    InitAndAllocFuncs l1;
-};
-
+// Functions used to initiate allocator and allocate buffers
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config);
 
 void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config);
@@ -132,9 +99,9 @@ std::vector<uint32_t> bank_ids_from_dram_channel(const Allocator &allocator, uin
 
 std::vector<uint32_t> bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core);
 
-BankIdToRelativeAddress alloc_one_bank_per_storage_unit(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up);
+BankIdToRelativeAddress alloc_one_bank_per_storage_unit(const AllocatorConfig & config, BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up);
 
-BankIdToRelativeAddress alloc_at_addr_one_bank_per_storage_unit(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address);
+BankIdToRelativeAddress alloc_at_addr_one_bank_per_storage_unit(const AllocatorConfig & config, BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address);
 
 BankIdToRelativeAddress allocate_buffer(Allocator &allocator, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up);
 
@@ -164,6 +131,7 @@ struct Allocator {
     std::unordered_map<uint32_t, CoreCoord> bank_id_to_logical_core;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> logical_core_to_bank_ids;
 
+    AllocatorConfig config;
     // Callbacks to invoke during initialization and allocation
     allocator::AllocDescriptor descriptor;
 };

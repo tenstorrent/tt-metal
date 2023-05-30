@@ -312,19 +312,19 @@ std::vector<uint32_t> bank_ids_from_logical_core(const Allocator &allocator, con
     return allocator.logical_core_to_bank_ids.at(logical_core);
 }
 
-BankIdToRelativeAddress alloc_one_bank_per_storage_unit(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up) {
+BankIdToRelativeAddress alloc_one_bank_per_storage_unit(const AllocatorConfig &config, BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, bool bottom_up) {
     return bank_manager.allocate_buffer(starting_bank_id, size, page_size, bottom_up);
 }
 
-BankIdToRelativeAddress alloc_at_addr_one_bank_per_storage_unit(BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address) {
+BankIdToRelativeAddress alloc_at_addr_one_bank_per_storage_unit(const AllocatorConfig &config, BankManager &bank_manager, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address) {
     return bank_manager.allocate_buffer_at_address(starting_bank_id, size, page_size, absolute_address);
 }
 
 BankIdToRelativeAddress allocate_buffer(Allocator &allocator, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up) {
     BankIdToRelativeAddress bank_to_address;
     switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.dram_manager, starting_bank_id, size, page_size, bottom_up);
-        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.l1_manager, starting_bank_id, size, page_size, bottom_up);
+        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, starting_bank_id, size, page_size, bottom_up);
+        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, starting_bank_id, size, page_size, bottom_up);
         default: {
             TT_ASSERT(false && "Unsupported buffer type!");
         }
@@ -335,8 +335,8 @@ BankIdToRelativeAddress allocate_buffer(Allocator &allocator, uint32_t starting_
 BankIdToRelativeAddress allocate_buffer_at_address(Allocator &allocator, uint32_t starting_bank_id, uint32_t size, uint32_t page_size, uint32_t absolute_address, const BufferType &buffer_type) {
     BankIdToRelativeAddress bank_to_address;
     switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc_at_addr(allocator.dram_manager, starting_bank_id, size, page_size, absolute_address);
-        case BufferType::L1: return allocator.descriptor.l1.alloc_at_addr(allocator.l1_manager, starting_bank_id, size, page_size, absolute_address);
+        case BufferType::DRAM: return allocator.descriptor.dram.alloc_at_addr(allocator.config, allocator.dram_manager, starting_bank_id, size, page_size, absolute_address);
+        case BufferType::L1: return allocator.descriptor.l1.alloc_at_addr(allocator.config, allocator.l1_manager, starting_bank_id, size, page_size, absolute_address);
         default: {
             TT_ASSERT(false && "Unsupported buffer type!");
         }
@@ -412,7 +412,7 @@ uint32_t get_address_for_circular_buffers_across_core_range(Allocator &allocator
 
 }  // namespace allocator
 
-Allocator::Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor) : descriptor(alloc_descriptor) {
+Allocator::Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor) : config(alloc_config), descriptor(alloc_descriptor) {
     // TODO: add validation for allocator_descriptor?
     this->descriptor.dram.init(*this, alloc_config);
     this->descriptor.l1.init(*this, alloc_config);
