@@ -47,9 +47,7 @@ def run_bloom_model_test(device):
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
     tt_out_converted = tt_out_converted.squeeze(0)
 
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.65)
-
-    logger.info(comp_allclose(pt_out, tt_out_converted))
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.99)
     logger.info(pcc_message)
 
     if does_pass:

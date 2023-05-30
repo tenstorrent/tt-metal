@@ -68,7 +68,11 @@ env pytest tests/python_api_testing/models/roberta -k roberta_lm_head
 env pytest tests/python_api_testing/models/roberta -k roberta_for_masked_lm
 env pytest tests/python_api_testing/models/roberta -k roberta_for_qa
 
-env pytest tests/python_api_testing/models/bloom_new/test_bloom_attention.py
-env pytest tests/python_api_testing/models/bloom_new/test_bloom_gelu_forward.py
-env pytest tests/python_api_testing/models/bloom_new/test_bloom_mlp.py
-env pytest tests/python_api_testing/models/bloom_new/test_bloom_model.py
+env pytest tests/python_api_testing/models/bloom_new -k baddbmm
+env pytest tests/python_api_testing/models/bloom_new -k bloom_attention
+env pytest tests/python_api_testing/models/bloom_new -k bloom_block
+env pytest tests/python_api_testing/models/bloom_new -k bloom_gelu_forward
+env pytest tests/python_api_testing/models/bloom_new -k bloom_merge_heads
+env pytest tests/python_api_testing/models/bloom_new -k bloom_mlp
+env pytest tests/python_api_testing/models/bloom_new -k bloom_model
+env pytest tests/python_api_testing/models/bloom_new -k bloom_causal_lm

@@ -29,8 +29,6 @@ def run_bloom_merge_heads_test(device, num_heads, hidden_size, num_attention_hea
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
     does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out_converted))
     logger.info(pcc_message)
 
     if does_pass:
@@ -49,4 +47,4 @@ def test_bloom_merge_heads():
 
 
 if __name__ == "__main__":
-    test_bloom_attention_merge()
+    test_bloom_merge_heads()

@@ -203,6 +203,7 @@ class TtBloomAttention(torch.nn.Module):
         self.num_heads = config.n_head
         self.head_dim = self.hidden_size // self.num_heads
         self.hidden_dropout = config.hidden_dropout
+        self.use_tt_softmax = False
 
         if self.head_dim * self.num_heads != self.hidden_size:
             raise ValueError(
@@ -316,15 +317,20 @@ class TtBloomAttention(torch.nn.Module):
         )
         attention_scores = bloom_utils.tt2torch_tensor(attention_scores)
 
-        attn_weights = torch.masked_fill(
-            attention_scores, attention_mask, -10000.0
-        )  # torch.finfo(attention_scores.dtype).min)
-        attn_weights = bloom_utils.torch2tt_tensor(attn_weights, device)
-        attention_probs = tt_softmax(attn_weights, stable=False)
-
-        # attn_weights = torch.masked_fill(attention_scores, attention_mask, torch.finfo(attention_scores.dtype).min)
-        # attention_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(attention_scores.dtype)
-        # attention_probs = bloom_utils.torch2tt_tensor(attention_probs, device)
+        if self.use_tt_softmax:
+            attn_weights = torch.masked_fill(attention_scores, attention_mask, -100.0)
+            attn_weights = bloom_utils.torch2tt_tensor(attn_weights, device)
+            attention_probs = tt_softmax(attn_weights, stable=False)
+        else:
+            attn_weights = torch.masked_fill(
+                attention_scores,
+                attention_mask,
+                torch.finfo(attention_scores.dtype).min,
+            )
+            attention_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
+                attention_scores.dtype
+            )
+            attention_probs = bloom_utils.torch2tt_tensor(attention_probs, device)
 
         if head_mask is not None:
             head_mask = bloom_utils.torch2tt_tensor(head_mask, device)

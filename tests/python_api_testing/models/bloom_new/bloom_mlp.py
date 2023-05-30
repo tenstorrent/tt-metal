@@ -44,6 +44,7 @@ class TtBloomMLP(torch.nn.Module):
         self.hidden_size = config.hidden_size
         self.hidden_dropout = config.hidden_dropout
         self.training = False
+        self.use_tt_gelu = False
 
         # Get the weights
         self.tt_weight_mlp_h4h = state_dict[f"{base_address}.dense_h_to_4h.weight"]
@@ -69,7 +70,7 @@ class TtBloomMLP(torch.nn.Module):
             state_dict[f"{base_address}.dense_4h_to_h.bias"], device
         )
 
-        self.gelu_impl = bloom_gelu_forward.tt_bloom_gelu_forward
+        # self.gelu_impl = bloom_gelu_forward.tt_bloom_gelu_forward
         # self.gelu_impl = bloom_gelu_forward.bloom_gelu_forward
 
     def forward(self, hidden_states, residual, device):
@@ -82,11 +83,12 @@ class TtBloomMLP(torch.nn.Module):
             tt_lib.tensor.BcastOpDim.H,
         )
 
-        # h4h = bloom_utils.tt2torch_tensor(h4h)
-        # hidden_states = self.gelu_impl(h4h)
-        # hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
-
-        hidden_states = self.gelu_impl(h4h, device)
+        if self.use_tt_gelu:
+            hidden_states = bloom_gelu_forward.tt_bloom_gelu_forward(h4h, device)
+        else:
+            h4h = bloom_utils.tt2torch_tensor(h4h)
+            hidden_states = bloom_gelu_forward.bloom_gelu_forward(h4h)
+            hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
 
         intermediate_output = bloom_utils.tt_matmul(
             hidden_states, self.tt_weight_mlp_4hh, device

@@ -17,7 +17,6 @@ import python_api_testing.models.bloom_new.bloom_gelu_forward as bloom_gelu_forw
 
 
 def run_bloom_gelu_forward_test(device):
-    # Prepare input
     torch.manual_seed(0)
     test_in = torch.rand(1, 1, 61, 1024) / 1024
 
@@ -26,9 +25,7 @@ def run_bloom_gelu_forward_test(device):
     tt_out = bloom_gelu_forward.tt_bloom_gelu_forward(tt_test_in, device)
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.98)
-
-    logger.info(comp_allclose(pt_out, tt_out_converted))
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.99)
     logger.info(pcc_message)
 
     if does_pass:
