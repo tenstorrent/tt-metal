@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.t5.t5_stack import TtT5Stack
 from tt_lib.fused_ops.linear import Linear as TtLinear
+from loguru import logger
 
 
 class Seq2SeqLMOutput:
