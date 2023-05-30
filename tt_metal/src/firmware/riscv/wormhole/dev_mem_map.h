@@ -38,7 +38,7 @@
 // Firmware/kernel code holes
 #define MEM_BOOT_CODE_SIZE             4
 #define MEM_BRISC_FIRMWARE_SIZE        (20 * 1024)
-#define MEM_BRISC_FIRMWARE_CODE_SIZE   ( 7 * 1024)
+#define MEM_BRISC_FIRMWARE_CODE_SIZE   ( 7 * 1024 + 512)
 #define MEM_NCRISC_FIRMWARE_SIZE       (32 * 1024)
 #define MEM_TRISC0_SIZE                (20 * 1024)
 #define MEM_TRISC1_SIZE                (16 * 1024)
@@ -49,7 +49,8 @@
 #define MEM_MAILBOX_BASE               4
 #define MEM_ZEROS_BASE                 2048
 #define MEM_BRISC_FIRMWARE_BASE        (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
-#define MEM_TRISC0_BASE                (MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE)
+#define MEM_NCRISC_FIRMWARE_BASE       (MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE)
+#define MEM_TRISC0_BASE                (MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE)
 #define MEM_TRISC1_BASE                (MEM_TRISC0_BASE + MEM_TRISC0_SIZE)
 #define MEM_TRISC2_BASE                (MEM_TRISC1_BASE + MEM_TRISC1_SIZE)
 
@@ -68,26 +69,3 @@
 #define MEM_DEBUG_MAILBOX_ADDRESS      (MEM_MAILBOX_BASE + 152) // 16 bytes * 4 cores (not brisc)
 #define MEM_DEBUG_MAILBOX_SIZE         64
 #define MEM_MAILBOX_END                (MEM_MAILBOX_BASE + 216)
-
-/////////////
-// Initialization relocation L1 memory
-// (host downloads to these address fw copies to destination
-// Note: using xmov to copy ncrisc to addresses above 1M hangs the chip
-#define MEM_INIT_LOCAL_L1_BASE            (MEM_L1_SIZE - 512 * 1024)
-#define MEM_BRISC_INIT_LOCAL_L1_BASE      (MEM_INIT_LOCAL_L1_BASE - MEM_BRISC_LOCAL_SIZE)
-#define MEM_NCRISC_INIT_LOCAL_L1_BASE     (MEM_BRISC_INIT_LOCAL_L1_BASE - MEM_NCRISC_LOCAL_SIZE)
-#define MEM_TRISC0_INIT_LOCAL_L1_BASE     (MEM_NCRISC_INIT_LOCAL_L1_BASE - MEM_TRISC_LOCAL_SIZE)
-#define MEM_TRISC1_INIT_LOCAL_L1_BASE     (MEM_TRISC0_INIT_LOCAL_L1_BASE - MEM_TRISC_LOCAL_SIZE)
-#define MEM_TRISC2_INIT_LOCAL_L1_BASE     (MEM_TRISC1_INIT_LOCAL_L1_BASE - MEM_TRISC_LOCAL_SIZE)
-
-#define MEM_NCRISC_INIT_IRAM_L1_BASE      (MEM_TRISC2_INIT_LOCAL_L1_BASE - MEM_NCRISC_IRAM_SIZE)
-
-
-/////////////
-// Stack sizes
-// Increasing the stack size comes at the expense of less local memory for globals
-#define MEM_BRISC_STACK_SIZE  1024
-#define MEM_NCRISC_STACK_SIZE 1024
-#define MEM_TRISC0_STACK_SIZE  256
-#define MEM_TRISC1_STACK_SIZE  256
-#define MEM_TRISC2_STACK_SIZE  768

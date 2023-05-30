@@ -26,9 +26,11 @@
 #include "ckernel_include.h"
 #include "fw_debug.h"
 #include "tensix.h"
+#include "l1_address_map.h"
 #include "eth_l1_address_map.h"
 #include "noc_overlay_parameters.h"
 #include "stream_io_map.h"
+#include <l1_address_map.h>
 #include "hostdevcommon/common_runtime_address_map.h"
 // #include <cstring>
 //#include "perf_lib/scratch_api.h" // not used unless perf dump enabled?
@@ -475,28 +477,4 @@ inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsig
   return r;
 }
 
-inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t *l1_addr, int32_t len) {
-    // Cover L1 load latency of 6 cycles for the bulk of the copy
-    int32_t n = 0;
-    while (n < len - 5) {
-        uint32_t v0 = l1_addr[n + 0];
-        uint32_t v1 = l1_addr[n + 1];
-        uint32_t v2 = l1_addr[n + 2];
-        uint32_t v3 = l1_addr[n + 3];
-        uint32_t v4 = l1_addr[n + 4];
-        uint32_t v5 = l1_addr[n + 5];
-        local_mem_addr[n + 0] = v0;
-        local_mem_addr[n + 1] = v1;
-        local_mem_addr[n + 2] = v2;
-        local_mem_addr[n + 3] = v3;
-        local_mem_addr[n + 4] = v4;
-        local_mem_addr[n + 5] = v5;
-        n += 6;
-    }
-    // Could optimize this further (eg, loop of 2 or 4), probably not worth it
-    while (n < len) {
-        local_mem_addr[n] = l1_addr[n];
-        n++;
-    }
-}
 }

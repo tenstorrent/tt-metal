@@ -7,6 +7,7 @@
 #include "noc_parameters.h"
 #include "tensix.h"
 #include "risc.h"
+#include "l1_address_map.h"
 #include "eth_l1_address_map.h"
 #include "noc_overlay_parameters.h"
 #include "stream_io_map.h"
@@ -104,31 +105,6 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
   return result;
 }
 
-inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t *l1_addr, int32_t len) {
-    // Cover L1 load latency of 6 cycles for the bulk of the copy
-    int32_t n = 0;
-    while (n < len - 5) {
-        uint32_t v0 = l1_addr[n + 0];
-        uint32_t v1 = l1_addr[n + 1];
-        uint32_t v2 = l1_addr[n + 2];
-        uint32_t v3 = l1_addr[n + 3];
-        uint32_t v4 = l1_addr[n + 4];
-        uint32_t v5 = l1_addr[n + 5];
-        local_mem_addr[n + 0] = v0;
-        local_mem_addr[n + 1] = v1;
-        local_mem_addr[n + 2] = v2;
-        local_mem_addr[n + 3] = v3;
-        local_mem_addr[n + 4] = v4;
-        local_mem_addr[n + 5] = v5;
-        n += 6;
-    }
-    // Could optimize this further (eg, loop of 2 or 4), probably not worth it
-    while (n < len) {
-        local_mem_addr[n] = l1_addr[n];
-        n++;
-    }
-}
-
 inline uint32_t reg_read_barrier(uint32_t addr)
 {
     volatile uint32_t *p_reg = reinterpret_cast<volatile uint32_t *> (addr);
@@ -137,7 +113,7 @@ inline uint32_t reg_read_barrier(uint32_t addr)
     return data;
 }
 
-inline uint32_t reg_read_barrier_l1(uint32_t addr)
+inline __attribute__((section("code_l1"))) uint32_t reg_read_barrier_l1(uint32_t addr)
 {
     volatile uint32_t *p_reg = reinterpret_cast<volatile uint32_t *> (addr);
     uint32_t data = p_reg[0];
@@ -190,7 +166,7 @@ inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsig
 
 void risc_init();
 void replicate(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32_t chunk_size_bytes, uint32_t times_to_replicate);
-void replicate_l1(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32_t chunk_size_bytes, uint32_t times_to_replicate);
+void __attribute__((section("code_l1"))) replicate_l1(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32_t chunk_size_bytes, uint32_t times_to_replicate);
 void tile_header_buffer_init();
 
 // This call blocks until NCRISC indicates that all epoch start state

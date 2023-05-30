@@ -38,7 +38,6 @@ SECTIONS
   PROVIDE (__etext = .);
   PROVIDE (_etext = .);
   PROVIDE (etext = .);
-  PROVIDE (__local_mem_rodata_start_addr = __local_mem_rodata_start_addr);
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_RODATA
   .rodata1        : { *(.rodata1) } > REGION_RODATA
   . = ALIGN(4); /* in hex8tohex32.py we pad to 4 bytes */
@@ -159,6 +158,11 @@ SECTIONS
    __stack_bottom = .;
    . += __firmware_stack_size;
    __stack_top = .;
+  } > REGION_DATA
+
+  data_noinit (NOLOAD):
+  {
+    *(data_noinit)
   } > REGION_DATA
 
   l1_memory :

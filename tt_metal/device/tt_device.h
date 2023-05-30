@@ -12,6 +12,7 @@
 #include "common/core_coord.h"
 #include "device/kmdif.h"
 #include "eth_l1_address_map.h"
+#include "l1_address_map.h"
 #include "tt_silicon_driver_common.hpp"
 #include "common/logger.hpp"
 

@@ -21,6 +21,7 @@ SECTIONS
   {
     KEEP (*(SORT_NONE(.init)))
   } > REGION_CODE
+
   .text           :
   {
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
@@ -31,6 +32,12 @@ SECTIONS
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
   } > REGION_CODE
+
+  code_l1 :
+  {
+    *(code_l1)
+  } > REGION_L1_CODE
+
   .fini           :
   {
     KEEP (*(SORT_NONE(.fini)))
@@ -160,6 +167,16 @@ SECTIONS
    . += __firmware_stack_size;
    __stack_top = .;
   } > REGION_DATA
+
+  data_noinit (NOLOAD):
+  {
+    *(data_noinit)
+  } > REGION_DATA
+
+  data_l1_noinit (NOLOAD):
+  {
+    *(data_l1_noinit)
+  } > REGION_L1_DATA
 
   l1_memory :
   {

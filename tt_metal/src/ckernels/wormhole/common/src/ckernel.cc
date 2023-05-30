@@ -5,6 +5,7 @@
 #include "fw_debug.h"
 #include "ckernel_main.h"
 #include "ckernel_globals.h"
+#include <l1_address_map.h>
 #include <tensix.h>
 
 namespace ckernel
