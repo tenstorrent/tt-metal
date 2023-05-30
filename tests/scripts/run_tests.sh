@@ -65,7 +65,7 @@ run_post_commit_pipeline_tests() {
 
 }
 
-run_hyperquotidian_pipeline_tests() {
+run_frequent_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
 
@@ -101,8 +101,8 @@ run_pipeline_tests() {
     # Call the appropriate module tests based on pipeline
     if [[ $pipeline_type == "post_commit" ]]; then
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type"
-    elif [[ $pipeline_type == "hyperquotidian" ]]; then
-        run_hyperquotidian_pipeline_tests "$tt_arch" "$pipeline_type"
+    elif [[ $pipeline_type == "frequent" ]]; then
+        run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1
