@@ -74,15 +74,12 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-)
-@pytest.mark.parametrize(
-    "in0_mem_config",
+    "out_mem_config",
     (
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
     ),
+    ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in1_mem_config",
@@ -90,13 +87,19 @@ import pytest
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
     ),
+    ids=["in1_DRAM", "in1_L1"],
 )
 @pytest.mark.parametrize(
-    "out_mem_config",
+    "in0_mem_config",
     (
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
     ),
+    ids=["in0_DRAM", "in0_L1"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
 )
 def test_bert_large_post_softmax_bmm_test(
     dtype, in0_mem_config, in1_mem_config, out_mem_config
