@@ -1,8 +1,8 @@
 from torch import nn
-import tt_lib
+from libs import tt_lib as ttm
 
 from python_api_testing.models.t5.t5_utils import torch2tt_tensor
-from tt_lib.fused_ops.linear import Linear as TtLinear
+from fused_ops.linear import Linear as TtLinear
 
 
 # class T5DenseActDense(nn.Module):
@@ -41,34 +41,18 @@ class TtT5DenseActDense(nn.Module):
         d_model = config["d_model"]
         d_ff = config["d_ff"]
         dropout_rate = config["dropout_rate"]
-        # dense_act_fn = config["dense_act_fn"]
+        #dense_act_fn = config["dense_act_fn"]
 
-        self.out_proj_wi = torch2tt_tensor(
-            state_dict[f"{base_address}.wi.weight"], tt_lib.device.GetHost()
-        )
-        self.out_proj_w0 = torch2tt_tensor(
-            state_dict[f"{base_address}.wo.weight"], tt_lib.device.GetHost()
-        )
+        self.out_proj_wi = torch2tt_tensor(state_dict[f"{base_address}.wi.weight"], ttm.device.GetHost())
+        self.out_proj_w0 = torch2tt_tensor(state_dict[f"{base_address}.wo.weight"], ttm.device.GetHost())
 
-        self.wi = TtLinear(
-            in_features=d_model,
-            out_features=d_ff,
-            weight=self.out_proj_wi.data(),
-            bias=None,
-            device=device,
-        )
-        self.wo = TtLinear(
-            in_features=d_ff,
-            out_features=d_model,
-            weight=self.out_proj_w0.data(),
-            bias=None,
-            device=device,
-        )
+        self.wi = TtLinear(in_features=d_model, out_features=d_ff, weight=self.out_proj_wi.data(), bias=None, device=device)
+        self.wo = TtLinear(in_features=d_ff, out_features=d_model, weight=self.out_proj_w0.data(), bias=None, device=device)
 
         # self.dropout = nn.Dropout(dropout_rate)
 
         # activation function
-        self.act = tt_lib.tensor.relu
+        self.act = ttm.tensor.relu
 
     def forward(self, hidden_states):
         hidden_states = self.wi(hidden_states)

@@ -1,6 +1,5 @@
 from pathlib import Path
 import sys
-
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -8,10 +7,10 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
-import tt_lib
-
+from libs import tt_lib as tt_lib
 
 def test_T5Bcast_inference(device):
+
     py_variance = torch.randn((1, 32, 128, 32))
     tt_variance = (
         tt_lib.tensor.Tensor(
@@ -36,12 +35,7 @@ def test_T5Bcast_inference(device):
     )
 
     # This operation hangs
-    op_add = tt_lib.tensor.bcast(
-        tt_variance,
-        tt_variance_epsilon_const,
-        tt_lib.tensor.BcastOpMath.ADD,
-        tt_lib.tensor.BcastOpDim.H,
-    )
+    op_add = tt_lib.tensor.bcast(tt_variance, tt_variance_epsilon_const, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
 
 
 if __name__ == "__main__":

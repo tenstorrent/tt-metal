@@ -1,6 +1,5 @@
 from pathlib import Path
 import sys
-
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -9,13 +8,14 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 import json
-import tt_lib
+from libs import tt_lib as ttm
 from loguru import logger
 
 from transformers import T5Model
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from utility_functions import print_diff_argmax, comp_allclose, comp_pcc
 from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 from python_api_testing.models.t5.t5_stack import TtT5Stack
+
 
 
 def run_test_T5Stack_inference(device):
@@ -46,15 +46,20 @@ def run_test_T5Stack_inference(device):
     test_input = test_input.unsqueeze(0)
     test_input = torch2tt_tensor(test_input, device)
 
+    # T5-small config file: https://huggingface.co/t5-small/resolve/main/config.json
     tt_model = TtT5Stack(config, hf_reference_model.state_dict(), base_address, device)
     tt_model_outputs = tt_model(inputs_embeds=test_input)
     last_hidden_state = tt_model_outputs[0]
     tt_out = tt2torch_tensor(last_hidden_state)
 
+    print(pt_out[0, 0, 1:10, 1:10])
+    print(tt_out[0, 0, 1:10, 1:10])
+
+    print_diff_argmax(pt_out, tt_out)
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
 
-    logger.info(comp_allclose(pt_out, tt_out))
-    logger.info(pcc_message)
+    print(comp_allclose(pt_out, tt_out))
+    print(pcc_message)
 
     assert does_pass
 
@@ -65,7 +70,7 @@ def run_test_T5Stack_inference(device):
 
 
 def test_T5Stack_inference():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
+    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    ttm.device.InitializeDevice(device)
     run_test_T5Stack_inference(device)
-    tt_lib.device.CloseDevice(device)
+    ttm.device.CloseDevice(device)
