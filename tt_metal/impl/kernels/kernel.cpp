@@ -87,7 +87,7 @@ void Kernel::set_binaries(const std::string &binary_path) {
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
                 std::string hex_path = binary_path + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                ll_api::memory binary_mem = llrt::get_risc_binary(hex_path);
+                ll_api::memory binary_mem = ll_api::memory(0, llrt::get_risc_binary(hex_path, trisc_id, true));
                 binaries.push_back(binary_mem);
             }
         }
@@ -108,7 +108,7 @@ void Kernel::set_binaries(const std::string &binary_path) {
                 default:
                     TT_ASSERT(false, "Unsupported data movement processor!");
             }
-            ll_api::memory binary_mem = llrt::get_risc_binary(binary_path + binary_path_suffix);
+            ll_api::memory binary_mem = ll_api::memory(0, llrt::get_risc_binary(binary_path + binary_path_suffix, static_cast<uint32_t>(dm_kernel->data_movement_processor()), false));
             binaries.push_back(binary_mem);
         }
         break;

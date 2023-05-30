@@ -98,15 +98,15 @@ DramConfig construct_dram_config(string op) {
         return allocate(dram_addr, size, vec, addrs_and_sizes);
     };
 
-    vector<uint32_t> brisc_hex;// = allocate_helper(tt::llrt::get_risc_binary(brisc_hex_path), kernel_addrs_and_sizes);
-    vector<uint32_t> ncrisc_hex;// =
-    //        allocate_helper(tt::llrt::get_risc_binary(ncrisc_hex_path), kernel_addrs_and_sizes);
-    vector<uint32_t> trisc0_hex;// =
-    //allocate_helper(tt::llrt::get_risc_binary(trisc0_hex_path), kernel_addrs_and_sizes);
-    vector<uint32_t> trisc1_hex;// =
-    //allocate_helper(tt::llrt::get_risc_binary(trisc1_hex_path), kernel_addrs_and_sizes);
-    vector<uint32_t> trisc2_hex;// =
-    //allocate_helper(tt::llrt::get_risc_binary(trisc2_hex_path), kernel_addrs_and_sizes);
+    vector<uint32_t> brisc_hex = allocate_helper(tt::llrt::get_risc_binary(brisc_hex_path, 0), kernel_addrs_and_sizes);
+    vector<uint32_t> ncrisc_hex =
+        allocate_helper(tt::llrt::get_risc_binary(ncrisc_hex_path, 1), kernel_addrs_and_sizes);
+    vector<uint32_t> trisc0_hex =
+        allocate_helper(tt::llrt::get_trisc_binary(trisc0_hex_path, 0), kernel_addrs_and_sizes);
+    vector<uint32_t> trisc1_hex =
+        allocate_helper(tt::llrt::get_trisc_binary(trisc1_hex_path, 1), kernel_addrs_and_sizes);
+    vector<uint32_t> trisc2_hex =
+        allocate_helper(tt::llrt::get_trisc_binary(trisc2_hex_path, 2), kernel_addrs_and_sizes);
 
     uint32_t num_tiles = NUM_TILES;
     uint32_t num_bytes_per_tile = NUM_BYTES_PER_TILE;

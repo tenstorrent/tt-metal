@@ -149,16 +149,6 @@ class tt_device
 
     //! write vector to specific core -- address is byte address
     /*!
-        \param mem_ptr is a pointer into the vector to write.
-        \param target is xy coordinate that is the target of the read or write
-        \param address is byte address
-        \param len is length in words
-        \param host_resident is true if this write should be directed towards host dma buffer
-    */
-    virtual void write_vector(const std::uint32_t *mem_ptr, std::uint32_t len, tt_cxy_pair target, std::uint32_t address, bool host_resident = false, bool small_access = false, chip_id_t src_device_id = -1);
-
-    //! write vector to specific core -- address is byte address
-    /*!
         \param mem_vector is the vector to write.
         \param target is xy coordinate that is the target of the read or write
         \param address is byte address
@@ -166,16 +156,6 @@ class tt_device
     */
     virtual void write_vector(std::vector<std::uint32_t> &mem_vector, tt_cxy_pair target, std::uint32_t address, bool host_resident = false, bool small_access = false, chip_id_t src_device_id = -1);
 
-    //! read vector from specific core -- address is byte address
-    /*!
-        \param mem_ptr is a pointer into the vector to read
-        \param target is xy coordinate that is the target of the read or write
-        \param address is byte address
-        \param size_in_bytes is number of bytes to read
-        \param host_resident is true if this write should be directed towards host dma buffer
-    */
-    virtual void read_vector(
-        std::uint32_t *mem_ptr, tt_cxy_pair target, std::uint32_t address, std::uint32_t size_in_bytes, bool host_resident = false, bool small_access = false, chip_id_t src_device_id = -1);
 
     //! read vector from specific core -- address is byte address
     /*!
@@ -333,26 +313,8 @@ class tt_SiliconDevice: public tt_device
         bool small_access = false,
         chip_id_t src_device_id = -1);
 
-    virtual void write_vector(
-        const uint32_t *mem_ptr,
-        std::uint32_t len,
-        tt_cxy_pair target,
-        std::uint32_t address,
-        bool host_resident = false,
-        bool small_access = false,
-        chip_id_t src_device_id = -1);
-
     virtual void read_vector (
         std::vector<std::uint32_t> &mem_vector,
-        tt_cxy_pair target,
-        std::uint32_t address,
-        std::uint32_t size_in_bytes,
-        bool host_resident = false,
-        bool small_access = false,
-        chip_id_t src_device_id = -1);
-
-    virtual void read_vector (
-        uint32_t *mem_ptr,
         tt_cxy_pair target,
         std::uint32_t address,
         std::uint32_t size_in_bytes,
@@ -464,28 +426,26 @@ class tt_SiliconDevice: public tt_device
 
         //DMA reader/writers
         void read_dma_buffer(
-          std::uint32_t *mem_ptr,
+          std::vector<std::uint32_t> &mem_vector,
           std::uint32_t address,
           std::uint32_t size_in_bytes,
           chip_id_t src_device_id);
 
         void write_dma_buffer(
-          const std::uint32_t *mem_ptr,
-          std::uint32_t len,
+          std::vector<std::uint32_t> &mem_vector,
           std::uint32_t address,
           chip_id_t src_device_id);
 
 
         //Device memory reader/writer
         void write_device_memory(
-          const std::uint32_t *mem_ptr,
-          std::uint32_t len,
+          std::vector<std::uint32_t> &mem_vector,
           tt_cxy_pair target,
           std::uint32_t address,
           bool small_access = false);
 
         void read_device_memory(
-          std::uint32_t *mem_ptr,
+          std::vector<std::uint32_t> &mem_vector,
           tt_cxy_pair target,
           std::uint32_t address,
           std::uint32_t size_in_bytes,

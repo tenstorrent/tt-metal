@@ -100,7 +100,7 @@ std::vector<memory::word_t> read_contiguous_hex_file(std::istream& input) {
   return content;
 }
 
-void read_contiguous_hex_file(
+memory::address_t read_contiguous_hex_file(
     std::istream& input,
     const std::function<void(memory::address_t, memory::word_t)>& callback,
     memory::address_t base) {
@@ -108,9 +108,11 @@ void read_contiguous_hex_file(
 
   read_contiguous_hex_file_impl(
       input, [&callback, &current_address](memory::word_t value) { callback(current_address++, value); });
+
+  return current_address;
 }
 
-void read_discontiguous_hex_file(
+memory::address_t read_discontiguous_hex_file(
     std::istream& input, const std::function<void(memory::address_t, memory::word_t)>& callback) {
   string line;
   bool seen_at;
@@ -123,7 +125,7 @@ void read_discontiguous_hex_file(
   }
   if (line.empty() && input.eof()) {
     // Allow empty files.
-    return;
+    return 0;
   }
 
   if (!parse_hex_line(line, &seen_at, &addr) || !seen_at)
@@ -148,6 +150,8 @@ void read_discontiguous_hex_file(
       callback(addr++, value);
     }
   }
+
+  return addr;
 }
 
 discontiguous_hex_file_writer::discontiguous_hex_file_writer(std::ostream& output) : output(output) {

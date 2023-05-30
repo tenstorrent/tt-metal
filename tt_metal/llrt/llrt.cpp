@@ -34,22 +34,22 @@ struct HexNameToMemVectorCache {
         lock l(mutex_);
         return cache_.find(path) != cache_.end();
     }
-    ll_api::memory &get(const string &path) {
+    vector<uint32_t> &get(const string &path) {
         lock l(mutex_);
         return cache_[path];
     }
-    void add(const string &path, ll_api::memory &mem) {
+    void add(const string &path, vector<uint32_t> &&mem) {
         lock l(mutex_);
-        cache_[path] = mem;
+        cache_[path] = move(mem);
     }
 
-    unordered_map<string, ll_api::memory> cache_;
+    unordered_map<string, vector<uint32_t>> cache_;
     std::mutex mutex_;
 };
 
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
-ll_api::memory get_risc_binary(string path) {
+vector<uint32_t> get_risc_binary(string path, uint32_t id, bool id_is_trisc) {
     if (HexNameToMemVectorCache::inst().exists(path)) {
         // std::cout << "-- HEX2MEM CACHE HIT FOR " << path << std::endl;
         return HexNameToMemVectorCache::inst().get(path);
@@ -69,12 +69,18 @@ ll_api::memory get_risc_binary(string path) {
     }
 
     std::ifstream hex_istream(path_to_bin);
-    ll_api::memory mem(hex_istream);
+    ll_api::memory mem;
+    if (id_is_trisc)
+        mem = std::move(ll_api::memory::from_discontiguous_risc_hex(
+            hex_istream, (ll_api::memory::risc_type_t)((int)ll_api::memory::TRISC0 + id)));
+    else
+        mem = std::move(ll_api::memory::from_discontiguous_risc_hex(
+            hex_istream, id == 1 ? ll_api::memory::NCRISC : ll_api::memory::BRISC));
 
     // add this path to binary cache
-    HexNameToMemVectorCache::inst().add(path, mem);
+    HexNameToMemVectorCache::inst().add(path, mem.get_content());
 
-    return mem;
+    return mem.get_content();
 }
 
 // This deasserts reset for all BRISCs (on all devices, all cores), but not other RISC processors (NCRISC, TRISC)
@@ -167,91 +173,102 @@ void write_graph_interpreter_op_info_to_core(
     write_hex_vec_to_core(cluster, chip, core, op_info_vec, OP_INFO_BASE_ADDR + offset);
 }
 
-inline uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr) {
-    // Move addresses in the local memory range to l1 (copied by kernel)
-    uint64_t relo_addr = ((addr & MEM_LOCAL_BASE) == 0) ? addr : ((addr & ~MEM_LOCAL_BASE) | local_init_addr);
-    // Move addresses in the trisc memory range to l1 (copied by kernel)
-    relo_addr = ((addr & MEM_L0_BASE) == 0) ? addr : ((addr & ~MEM_L0_BASE) | MEM_NCRISC_INIT_IRAM_L1_BASE);
-    return relo_addr;
-}
-
-ll_api::memory read_mem_from_core(
-    tt_cluster *cluster, int chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
-
-    ll_api::memory read_mem;
-    read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
-        cluster->read_dram_vec(&*mem_ptr, tt_cxy_pair(chip, core), relo_addr, len * sizeof(uint32_t));
-    });
-    return read_mem;
-}
-
+// for BRISC and NCRISC
+// TODO(AP): deduplicate with trisc variant
 bool test_load_write_read_risc_binary(
     tt_cluster *cluster, std::string hex_file_path, int chip_id, const CoreCoord &core, int riscv_id) {
+    // PROF_BEGIN("get_risc")
+    assert(riscv_id == 0 || riscv_id == 1);
 
     assert(is_worker_core(cluster, core, chip_id));
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
-    ll_api::memory mem = get_risc_binary(hex_file_path);
+    std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id);  // 0 = BRISC, 1 = NCRISC
 
-    if (riscv_id == 0) {
-        // Options for handling brisc fw not starting at mem[0]:
-        // 1) Program the register for the start address out of reset
-        // 2) Encode a jump in crt0 for mem[0]
-        // 3) Write the jump to mem[0] here
-        // This does #3.  #1 may be best, #2 gets messy (elf files
-        // drop any section before .init, crt0 needs ifdefs, etc)
-        vector<uint32_t> jump_to_fw;
-        constexpr uint32_t jal_opcode = 0x6f;
-        constexpr uint32_t jal_max_offset = 0x0007ffff;
-        uint32_t opcode = jal_opcode;
-        assert(MEM_BRISC_FIRMWARE_BASE < jal_max_offset);
-        // See riscv spec for offset encoding below
-        uint32_t jal_offset_bit_20 = 0;
-        uint32_t jal_offset_bits_10_to_1 = (MEM_BRISC_FIRMWARE_BASE & 0x7fe) << 20;
-        uint32_t jal_offset_bit_11 = (MEM_BRISC_FIRMWARE_BASE & 0x800) << 9;
-        uint32_t jal_offset_bits_19_to_12 = (MEM_BRISC_FIRMWARE_BASE & 0xff000) << 0;
-        uint32_t jal_offset =
-            jal_offset_bit_20 |
-            jal_offset_bits_10_to_1 |
-            jal_offset_bit_11 |
-            jal_offset_bits_19_to_12;
-        jump_to_fw.push_back(jal_offset | opcode);
-        write_hex_vec_to_core(cluster, chip_id, core, jump_to_fw, 0);
-    }
+    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
+    auto fwsize = riscv_id == 0 ? MEM_BRISC_FIRMWARE_CODE_SIZE : MEM_NCRISC_FIRMWARE_SIZE;
+    if (hex_vec.size() * 4 >= fwsize && riscv_id != 0) // TODO(AP): what should this check be on BRISC?
+        std::cout << "WARNING: Hex size=" << hex_vec.size()*4 << " core=" << riscv_id << " path=" << hex_file_path << std::endl;
+    // PROF_END("get_risc")
 
-    uint64_t local_init_addr;
+    uint64_t addr = 0;
     switch (riscv_id) {
-        case 0: local_init_addr = MEM_BRISC_INIT_LOCAL_L1_BASE; break;
-        case 1: local_init_addr = MEM_NCRISC_INIT_LOCAL_L1_BASE; break;
-        case 2: local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE; break;
-        case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
-        case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
+        case 0: addr = MEM_BRISC_FIRMWARE_BASE;
+            {
+                // Options for handling brisc fw not starting at mem[0]:
+                // 1) Program the register for the start address out of reset
+                // 2) Encode a jump in crt0 for mem[0]
+                // 3) Write the jump to mem[0] here
+                // This does #3.  #1 may be best, #2 gets messy (elf files
+                // drop any section before .init, crt0 needs ifdefs, etc)
+                vector<uint32_t> jump_to_fw;
+                uint32_t opcode = 0x6f; // jal
+                assert(MEM_BRISC_FIRMWARE_BASE < 0x0007ffff);
+                uint32_t offset = ((MEM_BRISC_FIRMWARE_BASE & 0x7fe) << 20) |
+                    ((MEM_BRISC_FIRMWARE_BASE & 0x800) << 9) |
+                    ((MEM_BRISC_FIRMWARE_BASE & 0xff000) << 0);
+                jump_to_fw.push_back(offset | opcode);
+                write_hex_vec_to_core(cluster, chip_id, core, jump_to_fw, 0);
+            }
+            break;
+
+        case 1: addr = MEM_NCRISC_FIRMWARE_BASE;
+            break;
+        default: std::cout << "Unknown rsicv_id = " << riscv_id << std::endl; exit(1);
     }
 
-    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
-        cluster->write_dram_vec(&*mem_ptr, len, tt_cxy_pair(chip_id, core), relo_addr);
-    });
-
-    log_debug(tt::LogLLRuntime, "wrote hex to the core");
+    write_hex_vec_to_core(cluster, chip_id, core, hex_vec, addr);  // PROF_BEGIN("write_risc")
+    log_debug(tt::LogLLRuntime, "wrote hex to the core");          // PROF_END("write_risc")
 
     if (std::getenv("TT_KERNEL_READBACK_ENABLE") != nullptr) {
-        ll_api::memory read_mem = read_mem_from_core(cluster, chip_id, core, mem, local_init_addr);
-        log_debug(tt::LogLLRuntime, "read hex back from the core");
-        return mem == read_mem;
+        std::vector<uint32_t> read_hex_vec;  // PROF_BEGIN("read_risc")
+        read_hex_vec = read_hex_vec_from_core(
+            cluster, chip_id, core, addr, hex_vec.size() * sizeof(uint32_t));  // size to read in Bytes
+        log_debug(tt::LogLLRuntime, "read hex back from the core");            // PROF_END("read_risc")
+        return hex_vec == read_hex_vec;
     }
-
     return true;
 }
 
 // for TRISCs
 bool test_load_write_read_trisc_binary(
     tt_cluster *cluster, std::string hex_file_path, int chip_id, const CoreCoord &core, int triscv_id) {
-
     assert(triscv_id >= 0 and triscv_id <= 2);
-    return test_load_write_read_risc_binary(cluster, hex_file_path, chip_id, core, triscv_id + 2);
+
+    log_assert(
+        is_worker_core(cluster, core, chip_id),
+        "core=[.y={}, .x={}] is not a worker core",
+        core.y, core.x
+    );
+
+    // PROF_BEGIN("trisc_get")
+    std::vector<uint32_t> hex_vec = get_trisc_binary(hex_file_path, triscv_id);  // TRISC 0, 1, 2
+    // PROF_END("trisc_get")
+
+    log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_path);
+    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", hex_vec.size(), hex_vec.size()*sizeof(uint32_t));
+
+    uint32_t fwsize = 0, fwaddr = 0;
+    switch (triscv_id) {
+        case 0: fwaddr = MEM_TRISC0_BASE; fwsize = MEM_TRISC0_SIZE; break;
+        case 1: fwaddr = MEM_TRISC1_BASE; fwsize = MEM_TRISC1_SIZE; break;
+        case 2: fwaddr = MEM_TRISC2_BASE; fwsize = MEM_TRISC2_SIZE; break;
+        default: std::cout << "Unknown triscv_id = " << triscv_id << std::endl; exit(1);
+    }
+
+    write_hex_vec_to_core(cluster, chip_id, core, hex_vec, fwaddr);       // PROF_BEGIN("trisc_write")
+    log_debug(tt::LogLLRuntime, "wrote trisc binary hex to the core");  // PROF_END("trisc_write")
+    if (hex_vec.size() * 4 > fwsize)
+        std::cout << "WARNING: Hex size=" << hex_vec.size()*4 << " trisc core=" << triscv_id << " path=" << hex_file_path << std::endl;
+
+    if (std::getenv("TT_KERNEL_READBACK_ENABLE") != nullptr) {
+        std::vector<uint32_t> read_hex_vec;  // PROF_BEGIN("trisc_read_back")
+        read_hex_vec = read_hex_vec_from_core(
+            cluster, chip_id, core, fwaddr, hex_vec.size() * sizeof(uint32_t));     // size to read in Bytes
+        log_debug(tt::LogLLRuntime, "read trisc binary hex back from the core");  // PROF_END("trisc_read_back")
+        return hex_vec == read_hex_vec;
+    }
+    return true;
 }
 
 void disable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
