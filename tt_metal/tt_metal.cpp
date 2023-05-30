@@ -58,7 +58,6 @@ Device *CreateDevice(tt::ARCH arch, int pcie_slot) {
     TT_ASSERT(arch == tt::ARCH::GRAYSKULL, "Only Grayskull is supported!");
     return new Device(arch, pcie_slot);
 }
-
 bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
     return device->initialize(memory_allocator);
 }
@@ -491,7 +490,45 @@ bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t ad
     tt_metal_profiler.markStop("ReadFromDeviceL1");
     return pass;
 }
-
+void GenerateBankToNocCoordHeaders(
+    Device *device,
+    build_kernel_for_riscv_options_t *build_options,
+    const std::string &op_path)
+{
+    // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
+    // FIXME: Need to change and support for 12 banks dram in WH
+    const size_t num_dram_banks = device->num_banks(BufferType::DRAM);
+    const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
+    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks_pow2);
+    for (unsigned bank_id = 0; bank_id < num_dram_banks_pow2; bank_id++) {
+        if (bank_id < num_dram_banks) {
+            dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
+        } else {
+            dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(0); // Alias to another channel for now FIXME:
+        }
+    }
+    const size_t num_l1_banks = device->num_banks(BufferType::L1);
+    const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
+    std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks_pow2);
+    std::vector<i32> l1_offset_per_bank(num_l1_banks_pow2);
+    for (unsigned bank_id = 0; bank_id < num_l1_banks_pow2; bank_id++) {
+        if (bank_id < num_l1_banks) {
+            l1_noc_coord_per_bank[bank_id] = device->worker_core_from_logical_core(device->logical_core_from_bank_id(bank_id));
+            l1_offset_per_bank[bank_id] = device->l1_bank_offset_from_bank_id(bank_id);
+        } else {
+            l1_noc_coord_per_bank[bank_id] = device->worker_core_from_logical_core(device->logical_core_from_bank_id(0));
+            l1_offset_per_bank[bank_id] = device->l1_bank_offset_from_bank_id(0);
+        }
+    }
+    // Generate header file in proper location
+    generate_bank_to_noc_coord_descriptor (
+        build_options,
+        op_path,
+        dram_noc_coord_per_bank,
+        l1_noc_coord_per_bank,
+        l1_offset_per_bank
+    );
+}
 bool GenerateBinaries(
     Device *device,
     build_kernel_for_riscv_options_t *build_options,
@@ -501,7 +538,7 @@ bool GenerateBinaries(
     const CoreCoord &logical_core)
 {
     std::string arch_name = tt::get_string_lowercase(device->arch());
-
+    GenerateBankToNocCoordHeaders(device, build_options, op_path);
     auto brisc_lambda = [=]() {
         generate_binary_for_brisc(
             build_options,
@@ -569,6 +606,7 @@ void CompileBlankKernel(Device *device, const std::string &out_dir_path) {
     std::string arch_name = tt::get_string_lowercase(device->arch());
 
     generate_binaries_params_t default_params;
+    GenerateBankToNocCoordHeaders(device, &blank_build_options, out_dir_path + blank_build_options.name);
     generate_binaries_all_riscs(&blank_build_options, out_dir_path + blank_build_options.name, arch_name, default_params);
 }
 

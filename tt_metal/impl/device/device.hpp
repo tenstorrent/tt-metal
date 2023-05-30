@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -56,6 +57,10 @@ class Device {
 
     uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
+    CoreCoord core_from_dram_channel(uint32_t dram_channel) const;
+
+    i32 l1_bank_offset_from_bank_id(uint32_t bank_id) const;
+
     CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
     std::vector<uint32_t> bank_ids_from_dram_channel(uint32_t dram_channel) const;
@@ -68,10 +73,10 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC);
+    bool initialize(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC, const std::vector<uint32_t>& l1_bank_remap = {});
     friend bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator);
     void initialize_cluster();
-    void initialize_allocator(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC);
+    void initialize_allocator(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC, const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_harvesting_information();
     // Puts device into reset
     bool close();

@@ -41,6 +41,11 @@ int main(int argc, char* argv[]) {
     fs::create_directories(out_dir_path);
     generate_data_format_descriptors(&build_kernel_for_riscv_options, out_dir_path);
 
+    __internal::generate_default_bank_to_noc_coord_descriptor (
+        &build_kernel_for_riscv_options,
+        out_dir_path,
+        tt::get_arch_from_string(arch_name)
+    );
     generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, arch_name, 1, {8, 4});
     generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, arch_name, 0, {8, 2});
 

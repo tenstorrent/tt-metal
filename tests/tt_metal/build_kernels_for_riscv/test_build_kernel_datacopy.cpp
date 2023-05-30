@@ -33,6 +33,11 @@ int main(int argc, char* argv[]) {
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/writer_unary.cpp";
 
     // generate binaries
+    __internal::generate_default_bank_to_noc_coord_descriptor (
+        &build_kernel_for_riscv_options,
+        out_dir_path,
+        tt::get_arch_from_string(arch_name)
+    );
     generate_binaries_params_t params = {.compute_kernel_compile_time_args = compute_kernel_args};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, arch_name, params);
 

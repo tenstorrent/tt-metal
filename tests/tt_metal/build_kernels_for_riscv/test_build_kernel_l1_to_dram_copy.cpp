@@ -19,6 +19,11 @@ int main(int argc, char* argv[]) {
 
     build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/l1_to_dram_copy.cpp";
 
+    __internal::generate_default_bank_to_noc_coord_descriptor (
+        &build_kernel_for_riscv_options,
+        out_dir_path,
+        tt::get_arch_from_string(arch_name)
+    );
     generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, arch_name);
 
     return 0;

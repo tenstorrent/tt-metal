@@ -36,6 +36,11 @@ void compile_datacopy_kernel(std::string root_dir) {
 
 
     // generate binaries
+    __internal::generate_default_bank_to_noc_coord_descriptor (
+        &build_kernel_for_riscv_options,
+        out_dir_path,
+        tt::get_arch_from_string(arch_name)
+    );
     generate_binaries_params_t params = {.compute_kernel_compile_time_args = compute_kernel_args};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, arch_name, params);
 }
@@ -58,6 +63,11 @@ void compile_dispatch_kernel(std::string root_dir) {
     build_kernel_for_riscv_options.brisc_defines = brisc_defines;
 
     // generate binaries
+    __internal::generate_default_bank_to_noc_coord_descriptor (
+        &build_kernel_for_riscv_options,
+        out_dir_path,
+        tt::get_arch_from_string(arch_name)
+    );
     generate_binary_for_risc(RISCID::BR, &build_kernel_for_riscv_options, out_dir_path, arch_name);
 }
 

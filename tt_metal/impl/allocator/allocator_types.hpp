@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstdlib>
 #include "common/core_coord.h"
+#include "hostdevcommon/common_values.hpp"
 
 namespace tt::tt_metal {
 
@@ -21,6 +22,8 @@ enum class AllocCoreType {
     Invalid,
 };
 
+using BankMapping = std::vector<u32>;
+
 //! Allocator configuration -- decouples allocation from soc-desc - Up to user to populate from soc_desc
 struct AllocatorConfig {
     //! DRAM specific configuration
@@ -32,6 +35,7 @@ struct AllocatorConfig {
     size_t storage_core_l1_bank_size = 0;
     std::unordered_map<CoreCoord, AllocCoreType> core_type_from_noc_coord_table = {};
     std::unordered_map<CoreCoord, CoreCoord> logical_to_routing_coord_lookup_table = {};
+    BankMapping l1_bank_remap = {}; // for remapping which l1 bank points to which bank if we assume normal row-major assignment
 };
 
 enum class MemoryAllocator {
@@ -40,27 +44,30 @@ enum class MemoryAllocator {
 };
 
 struct AddressDescriptor {
-    uint32_t offset_bytes;
-    uint32_t relative_address;
+    u32 offset_bytes = 0;
+    u32 relative_address = 0;
 
-    uint32_t absolute_address()     const {
+    u32 absolute_address()     const {
         return offset_bytes + relative_address;
     }
 };
 
-using BankIdToRelativeAddress = std::unordered_map<uint32_t, AddressDescriptor>;
+using BankIdToRelativeAddress = std::unordered_map<u32, AddressDescriptor>;
 
 struct BankDescriptor {
-    uint32_t offset_bytes;
-    uint32_t size_bytes;
+    u32 offset_bytes = 0;
+    u32 size_bytes = 0;
+    // This is to store offsets for any banks that share a core (storage core), so we can view all banks similarly on storage cores
+    // set to 0 for cores with only 1 bank
+    i32 bank_offset_bytes = 0;
 };
 
 namespace allocator {
 
 struct InitAndAllocFuncs {
     std::function<void(Allocator &, const AllocatorConfig &)> init;
-    std::function<BankIdToRelativeAddress(const AllocatorConfig &, BankManager &, uint32_t, uint32_t, uint32_t, bool)> alloc;
-    std::function<BankIdToRelativeAddress(const AllocatorConfig &, BankManager &, uint32_t, uint32_t, uint32_t, uint32_t)> alloc_at_addr;
+    std::function<BankIdToRelativeAddress(const AllocatorConfig &, BankManager &, u32, u32, u32, bool)> alloc;
+    std::function<BankIdToRelativeAddress(const AllocatorConfig &, BankManager &, u32, u32, u32, u32)> alloc_at_addr;
 };
 
 // Holds callback functions required by allocators that specify how to initialize the bank managers and what the allocation scheme

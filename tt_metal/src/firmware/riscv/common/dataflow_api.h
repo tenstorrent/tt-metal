@@ -5,11 +5,13 @@
     #include "chlkc_pack_data_format.h"
     #define DATA_FORMATS_DEFINED
 #endif
+#if __has_include("generated_bank_to_noc_coord_mapping.h")
+    #include "generated_bank_to_noc_coord_mapping.h"
+#endif
 
 #include <stdint.h>
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
-#include "hostdevcommon/bank_to_noc_coord_mapping.h"
 // #include "frameworks/tt_dispatch/impl/command.hpp"
 #include "circular_buffer.h"
 
@@ -42,25 +44,16 @@ CBReadInterface cq_read_interface;
 // Use VC 1 for unicast writes, and VC 4 for mcast writes
 #define NOC_UNICAST_WRITE_VC 1
 #define NOC_MULTICAST_WRITE_VC 4
-// for GS is 8, need to set to a different value for WH and future architectures
-#define NUM_DRAM_BANKS 8
-#define NUM_L1_BANKS 128
-#define LOG_BASE_2_OF_NUM_DRAM_BANKS 3
-#define LOG_BASE_2_OF_NUM_L1_BANKS 7
 
 // dram channel to x/y lookup tables
-// TODO: these should be constexpr compile-time init'd, but it doesn't work on BRISC yet
-uint32_t dram_bank_to_noc_x[NUM_DRAM_BANKS];
-uint32_t dram_bank_to_noc_y[NUM_DRAM_BANKS];
+// The number of banks is generated based off device we are running on --> controlled by allocator
+uint8_t dram_bank_to_noc_x[NUM_DRAM_BANKS];
+uint8_t dram_bank_to_noc_y[NUM_DRAM_BANKS];
 uint32_t dram_bank_to_noc_xy[NUM_DRAM_BANKS];
 
-uint8_t shuffled_l1_bank_ids[NUM_L1_BANKS];
-
-uint32_t l1_bank_to_noc_x[NUM_L1_BANKS];
-uint32_t l1_bank_to_noc_y[NUM_L1_BANKS];
+uint8_t l1_bank_to_noc_x[NUM_L1_BANKS];
+uint8_t l1_bank_to_noc_y[NUM_L1_BANKS];
 uint32_t l1_bank_to_noc_xy[NUM_L1_BANKS];
-
-int32_t l1_bank_to_l1_offset[NUM_L1_BANKS];
 
 // GS RISC-V RTL bug workaround (l1 reads followed by local mem reads causes a hang)
 // in ncrisc.cc/brisc.cc: volatile uint32_t local_mem_barrier;
@@ -101,68 +94,16 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_ ## arg_idx
 
 void init_dram_bank_to_noc_coord_lookup_tables() {
-// this mapping is for GS
-// TODO: generalize for other architectures
-// Dram channel 0: 1, 0
-// Dram channel 1: 1, 6
-// Dram channel 2: 4, 0
-// Dram channel 3: 4, 6
-// Dram channel 4: 7, 0
-// Dram channel 5: 7, 6
-// Dram channel 6: 10, 0
-// Dram channel 7: 10, 6
-    dram_bank_to_noc_x[0] = dram_bank_to_noc_x[1] = 1;
-    dram_bank_to_noc_x[2] = dram_bank_to_noc_x[3] = 4;
-    dram_bank_to_noc_x[4] = dram_bank_to_noc_x[5] = 7;
-    dram_bank_to_noc_x[6] = dram_bank_to_noc_x[7] = 10;
-
-    dram_bank_to_noc_y[0] = dram_bank_to_noc_y[2] = dram_bank_to_noc_y[4] = dram_bank_to_noc_y[6] = 0;
-    dram_bank_to_noc_y[1] = dram_bank_to_noc_y[3] = dram_bank_to_noc_y[5] = dram_bank_to_noc_y[7] = 6;
-
-    dram_bank_to_noc_xy[0] = (NOC_Y(0) << NOC_ADDR_NODE_ID_BITS) | NOC_X(1);
-    dram_bank_to_noc_xy[1] = (NOC_Y(6) << NOC_ADDR_NODE_ID_BITS) | NOC_X(1);
-    dram_bank_to_noc_xy[2] = (NOC_Y(0) << NOC_ADDR_NODE_ID_BITS) | NOC_X(4);
-    dram_bank_to_noc_xy[3] = (NOC_Y(6) << NOC_ADDR_NODE_ID_BITS) | NOC_X(4);
-    dram_bank_to_noc_xy[4] = (NOC_Y(0) << NOC_ADDR_NODE_ID_BITS) | NOC_X(7);
-    dram_bank_to_noc_xy[5] = (NOC_Y(6) << NOC_ADDR_NODE_ID_BITS) | NOC_X(7);
-    dram_bank_to_noc_xy[6] = (NOC_Y(0) << NOC_ADDR_NODE_ID_BITS) | NOC_X(10);
-    dram_bank_to_noc_xy[7] = (NOC_Y(6) << NOC_ADDR_NODE_ID_BITS) | NOC_X(10);
+    init_dram_bank_coords(dram_bank_to_noc_x, dram_bank_to_noc_y);
+    for (uint8_t i = 0; i < NUM_DRAM_BANKS; i++) {
+        dram_bank_to_noc_xy[i] = (NOC_Y(dram_bank_to_noc_y[i]) << NOC_ADDR_NODE_ID_BITS) | NOC_X(dram_bank_to_noc_x[i]);
+    }
 }
 
 void init_l1_bank_to_noc_coord_lookup_tables() {
-    int id = 0;
-    int remapped_id;
-
-    init_shuffled_l1_bank_id_mapping(shuffled_l1_bank_ids);
-
-    // Single bank cores
-    for (uint32_t y = 1; y < 11; y++) {
-        if (y == 6) continue;
-        for (uint32_t x = 1; x < 13; x++) {
-            remapped_id = shuffled_l1_bank_ids[id];
-            l1_bank_to_noc_x[remapped_id] = x;
-            l1_bank_to_noc_y[remapped_id] = y;
-            l1_bank_to_noc_xy[remapped_id] = (NOC_Y(y) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
-            l1_bank_to_l1_offset[remapped_id] = 0;
-            id++;
-        }
-    }
-
-    // Storage cores
-    for (uint32_t x = 2; x < 13; x++) {
-        if (x == 7) continue;
-        remapped_id = shuffled_l1_bank_ids[id];
-        l1_bank_to_noc_x[remapped_id] = x;
-        l1_bank_to_noc_y[remapped_id] = 11;
-        l1_bank_to_noc_xy[remapped_id] = (NOC_Y(11) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
-        l1_bank_to_l1_offset[remapped_id] = -512 * 1024; // Bank 0 of storage core allocated top down from 512KB
-        id++;
-        remapped_id = shuffled_l1_bank_ids[id];
-        l1_bank_to_noc_x[remapped_id] = x;
-        l1_bank_to_noc_y[remapped_id] = 11;
-        l1_bank_to_noc_xy[remapped_id] = (NOC_Y(11) << NOC_ADDR_NODE_ID_BITS) | NOC_X(x);
-        l1_bank_to_l1_offset[remapped_id] = 0; // Bank 1 of storage core allocated top down from 1MB, like all other worker cores
-        id++;
+    init_l1_bank_coords(l1_bank_to_noc_x, l1_bank_to_noc_y, bank_to_l1_offset);
+    for (uint16_t i = 0; i < NUM_L1_BANKS; i++) {
+        l1_bank_to_noc_xy[i] = (NOC_Y(l1_bank_to_noc_y[i]) << NOC_ADDR_NODE_ID_BITS) | NOC_X(l1_bank_to_noc_x[i]);
     }
 }
 
@@ -570,7 +511,7 @@ struct InterleavedAddrGen {
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, this->page_size) + this->bank_base_address + offset;
-            addr += l1_bank_to_l1_offset[bank_id];
+            addr += bank_to_l1_offset[bank_id];
             noc_x = l1_bank_to_noc_x[bank_id];
             noc_y = l1_bank_to_noc_y[bank_id];
         }
@@ -606,7 +547,7 @@ struct InterleavedPow2AddrGen {
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address;
-            addr += l1_bank_to_l1_offset[bank_id];
+            addr += bank_to_l1_offset[bank_id];
             noc_x = l1_bank_to_noc_x[bank_id];
             noc_y = l1_bank_to_noc_y[bank_id];
         }
@@ -636,7 +577,7 @@ struct InterleavedAddrGenFast {
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) + this->bank_base_address + offset;
-            addr += l1_bank_to_l1_offset[bank_id];
+            addr += bank_to_l1_offset[bank_id];
             noc_x = l1_bank_to_noc_x[bank_id];
             noc_y = l1_bank_to_noc_y[bank_id];
         }
@@ -657,7 +598,7 @@ struct InterleavedAddrGenFast {
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             src_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) + this->bank_base_address + offset;
-            src_addr += l1_bank_to_l1_offset[bank_id];
+            src_addr += bank_to_l1_offset[bank_id];
             src_noc_xy = l1_bank_to_noc_xy[bank_id];
         }
 
@@ -683,7 +624,7 @@ struct InterleavedAddrGenFast {
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             dest_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) + this->bank_base_address;
-            dest_addr += l1_bank_to_l1_offset[bank_id];
+            dest_addr += bank_to_l1_offset[bank_id];
             dest_noc_xy = l1_bank_to_noc_xy[bank_id];
         }
 

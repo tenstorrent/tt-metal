@@ -37,6 +37,12 @@ int main(int argc, char* argv[]) {
 
 
     generate_binaries_params_t params;
+
+    __internal::generate_default_bank_to_noc_coord_descriptor (
+        &build_kernel_for_riscv_options,
+        out_dir_path,
+        tt::get_arch_from_string(arch_name)
+    );
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, arch_name, params);
 
     return 0;

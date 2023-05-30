@@ -37,6 +37,11 @@ int main(int argc, char* argv[]) {
 
 
     std::vector<uint32_t> compute_kernel_args = {1};
+    __internal::generate_default_bank_to_noc_coord_descriptor (
+        &build_kernel_for_riscv_options,
+        out_dir_path,
+        tt::get_arch_from_string(arch_name)
+    );
     generate_binaries_params_t params = {.compile_trisc = true, .compile_ncrisc = true, .compile_brisc = true, .compute_kernel_compile_time_args = compute_kernel_args};
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, arch_name, params);
 

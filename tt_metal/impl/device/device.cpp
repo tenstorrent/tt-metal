@@ -20,7 +20,7 @@ void Device::initialize_cluster() {
     llrt::assert_reset_for_all_chips(cluster_);
 }
 
-void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
+void Device::initialize_allocator(const MemoryAllocator &memory_allocator, const std::vector<uint32_t>& l1_bank_remap) {
     TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
     tt::log_assert(
         this->harvesting_initialized_,
@@ -34,10 +34,11 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
         .worker_grid_size = this->post_harvested_worker_grid_size_,
         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
         .storage_core_l1_bank_size = static_cast<size_t>(soc_desc.storage_core_l1_bank_size),
-        .core_type_from_noc_coord_table = {},
-        .logical_to_routing_coord_lookup_table=this->logical_to_routing_coord_lookup_table_
+        .core_type_from_noc_coord_table = {}, // Populated later
+        .logical_to_routing_coord_lookup_table=this->logical_to_routing_coord_lookup_table_,
+        .l1_bank_remap = l1_bank_remap,
     });
-    // Initialize core-type table
+    // Initialize core_type_from_noc_coord_table table
     for (const auto& core: soc_desc.cores) {
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
     }
@@ -54,7 +55,7 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator) {
         const auto noc_coord = this->logical_to_routing_coord_lookup_table_[logical_coord];
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
-    // Configuration end
+    // assign memory allocator with specified configuration
     switch (memory_allocator) {
         case MemoryAllocator::BASIC: {
             this->allocator_ = std::make_unique<BasicAllocator>(config);
@@ -124,10 +125,10 @@ void Device::initialize_harvesting_information() {
 }
 
 
-bool Device::initialize(const MemoryAllocator &memory_allocator) {
+bool Device::initialize(const MemoryAllocator &memory_allocator, const std::vector<uint32_t>& l1_bank_remap) {
     this->initialize_cluster();
     this->initialize_harvesting_information();
-    this->initialize_allocator(memory_allocator);
+    this->initialize_allocator(memory_allocator, l1_bank_remap);
     this->closed_ = false;
     return true;
 }
@@ -213,6 +214,18 @@ uint32_t Device::num_banks(const BufferType &buffer_type) const {
 uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
     this->check_allocator_is_initialized();
     return allocator::dram_channel_from_bank_id(*this->allocator_, bank_id);
+}
+
+CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
+    if (not cluster_is_initialized()) {
+        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
+    }
+    return this->cluster_->get_soc_desc(pcie_slot_).get_preferred_worker_core_for_dram_channel(dram_channel);
+}
+
+int32_t Device::l1_bank_offset_from_bank_id(uint32_t bank_id) const {
+    this->check_allocator_is_initialized();
+    return allocator::l1_bank_offset_from_bank_id(*this->allocator_, bank_id);
 }
 
 CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {

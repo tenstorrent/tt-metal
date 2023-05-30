@@ -20,6 +20,11 @@ int main() {
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
     build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/remote_read_remote_write_sync_db.cpp";
 
+    __internal::generate_default_bank_to_noc_coord_descriptor (
+        &build_kernel_for_riscv_options,
+        out_dir_path,
+        tt::get_arch_from_string(arch_name)
+    );
     generate_binary_for_brisc(&build_kernel_for_riscv_options, out_dir_path, arch_name);
     generate_binary_for_ncrisc(&build_kernel_for_riscv_options, out_dir_path, arch_name);
 

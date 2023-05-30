@@ -5,8 +5,10 @@
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
+#include "common/core_coord.h"
 #include "build_kernels_for_riscv/data_format.hpp"
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
+#include "hostdevcommon/common_values.hpp"
 
 enum RISCID { NC = 0, TR0 = 1, TR1 = 2, TR2 = 3, BR = 4 };
 static_assert(RISCID::TR1 == RISCID::TR0+1 && RISCID::TR2 == RISCID::TR1+1);
@@ -85,7 +87,23 @@ void generate_binaries_for_triscs(
     const std::vector<std::uint32_t>& kernel_compile_time_args = {},
     bool profile_kernel = false);
 
+void generate_bank_to_noc_coord_descriptor(
+    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
+    string out_dir_path,
+    std::vector<CoreCoord>& dram_bank_map,
+    std::vector<CoreCoord>& l1_bank_map,
+    std::vector<i32>& l1_bank_offset_map
+);
+
 void generate_descriptors(
     tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir);
 
 std::string get_string_aliased_arch_lowercase(tt::ARCH arch);
+
+namespace __internal {
+void generate_default_bank_to_noc_coord_descriptor(
+    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
+    string out_dir_path,
+    tt::ARCH arch
+);
+}
