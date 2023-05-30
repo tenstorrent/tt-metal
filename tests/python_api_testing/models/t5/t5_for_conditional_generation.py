@@ -234,7 +234,7 @@ class TtT5ForConditionalGeneration(nn.Module):
             and decoder_inputs_embeds is None
         ):
             # get decoder inputs from shifting lm labels to the right
-            print(f"_shift_right(labels)")
+            logger.debug(f"_shift_right(labels)")
             decoder_input_ids = self._shift_right(labels)
 
         # Set device for model parallelism
