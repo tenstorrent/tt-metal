@@ -31,4 +31,4 @@ jobs:
       - name: Run pre/post regression tests
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_pre_post_commit_regressions.sh
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
