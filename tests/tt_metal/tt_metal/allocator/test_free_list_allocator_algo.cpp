@@ -109,6 +109,22 @@ bool test_free_list() {
     auto addr_17 = free_list_allocator.allocate(224, true);
     pass &= addr_17 == 384;
 
+    // Allocate entire region
+    free_list_allocator.clear();
+    auto addr_18 = free_list_allocator.allocate(max_size_bytes, true);
+    TT_ASSERT(addr_18.has_value());
+    pass &= addr_18 == 0;
+
+    free_list_allocator.deallocate(0);
+
+    auto addr_19 = free_list_allocator.allocate(64, true);
+    TT_ASSERT(addr_19.has_value());
+    pass &= addr_19 == 0;
+
+    auto addr_20 = free_list_allocator.allocate(max_size_bytes - 64, true);
+    TT_ASSERT(addr_20.has_value());
+    pass &= addr_20 == 64;
+
     return pass;
 }
 

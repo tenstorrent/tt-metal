@@ -96,12 +96,18 @@ void FreeList::allocate_entire_free_block(Block *free_block_to_allocate) {
         free_block_to_allocate->next_free->prev_free = free_block_to_allocate->prev_free;
     }
     if (free_block_to_allocate == this->free_block_head_) {
-        this->free_block_head_ = free_block_to_allocate->next_free;
-        this->free_block_head_->prev_free = nullptr;
+        if (free_block_to_allocate->next_free == nullptr) {
+            this->free_block_head_ = nullptr;
+        } else {
+            this->free_block_head_ = free_block_to_allocate->next_free;
+        }
     }
     if (free_block_to_allocate == this->free_block_tail_) {
-        this->free_block_tail_ = free_block_to_allocate->prev_free;
-        this->free_block_tail_->next_free = nullptr;
+        if (free_block_to_allocate->prev_free == nullptr) {
+            this->free_block_tail_ = nullptr;
+        } else {
+            this->free_block_tail_ = free_block_to_allocate->prev_free;
+        }
     }
     free_block_to_allocate->prev_free = nullptr;
     free_block_to_allocate->next_free = nullptr;
