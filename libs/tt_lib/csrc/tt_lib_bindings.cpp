@@ -1302,6 +1302,18 @@ void TensorModule(py::module &m_tensor) {
         py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shape [9, 1, 384, 1024].
     )doc");
+    m_tensor.def("bert_large_create_q_head", &bert_large_create_q_head,
+        py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 384, 64].
+    )doc");
+    m_tensor.def("bert_large_create_k_head", &bert_large_create_k_head,
+        py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 64, 384].
+    )doc");
+    m_tensor.def("bert_large_create_v_head", &bert_large_create_v_head,
+        py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 384, 64].
+    )doc");
 
     // Custom BERT matmuls/bmms
     m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul,
