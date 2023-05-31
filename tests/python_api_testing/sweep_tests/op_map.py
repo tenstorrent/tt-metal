@@ -155,6 +155,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.reshape,
         "pytorch_op": pytorch_ops.reshape,
     },
+    "tilize": {
+        "tt_lib_op": tt_lib_ops.tilize,
+        "pytorch_op": pytorch_ops.tilize,
+    },
+    "untilize": {
+        "tt_lib_op": tt_lib_ops.untilize,
+        "pytorch_op": pytorch_ops.untilize,
+    },
     "tilize_with_val_padding": {
         "tt_lib_op": tt_lib_ops.tilize_with_val_padding,
         "pytorch_op": pytorch_ops.tilize_with_val_padding,

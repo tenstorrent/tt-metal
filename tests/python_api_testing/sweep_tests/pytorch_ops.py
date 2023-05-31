@@ -1,5 +1,9 @@
 import torch
-from tt_lib.utils import _nearest_32 as nearest_32, tilize, untilize
+from tt_lib.utils import (
+    _nearest_32 as nearest_32,
+    tilize as tilize_util,
+    untilize as untilize_util,
+)
 
 
 ################################################
@@ -93,6 +97,14 @@ def reshape(x, *args, **kwargs):
     return torch.reshape(x, reshape_dims)
 
 
+def tilize(x, *args, **kwargs):
+    return tilize_util(x)
+
+
+def untilize(x, *args, **kwargs):
+    return untilize_util(x)
+
+
 def tilize_with_val_padding(
     x, output_tensor_shape, input_tensor_start, pad_value, *args, **kwargs
 ):
@@ -105,12 +117,12 @@ def tilize_with_val_padding(
         ),
         value=pad_value,
     )
-    tilized = tilize(pad)
+    tilized = tilize_util(pad)
     return tilized
 
 
 def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **kwargs):
-    untilized = untilize(x)
+    untilized = untilize_util(x)
     unpad = untilized[
         output_tensor_start[0] : output_tensor_end[0] + 1,
         output_tensor_start[1] : output_tensor_end[1] + 1,

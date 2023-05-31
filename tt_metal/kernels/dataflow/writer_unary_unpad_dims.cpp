@@ -51,12 +51,14 @@ void kernel_main() {
     #endif
 
     uint32_t l1_cache_addr = cache_buffer_l1_addr;
-    for (uint32_t w = 0; w < num_total_W; w++) {
-        for (uint32_t z = 0; z < num_total_Z; z++) {
+    uint32_t padded_Z_diff_tile_rows = (num_total_Z - num_unpadded_Z) * num_total_Y / 32;
+    uint32_t padded_W_diff_tile_rows = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Y / 32;
+    for (uint32_t w = 0; w < num_unpadded_W; w++) {
+        for (uint32_t z = 0; z < num_unpadded_Z; z++) {
             uint32_t row_id_in_face = 0;
             for (uint32_t y_t = 0; y_t < num_total_Y / 32; y_t++) {
                 cb_wait_front(cb_id_out0, num_tiles_c);
-                if (w < num_unpadded_W && z < num_unpadded_Z && row_id_in_face < num_unpadded_Y) {
+                if (row_id_in_face < num_unpadded_Y) {
                     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
                     for (uint32_t k = 0; k < 32; k++) {
                         if (row_id_in_face < num_unpadded_Y) {
@@ -107,5 +109,13 @@ void kernel_main() {
                 cb_pop_front(cb_id_out0, num_tiles_c);
             }
         }
+        for (uint32_t i = 0; i < padded_Z_diff_tile_rows; i++) {
+            cb_wait_front(cb_id_out0, num_tiles_c);
+            cb_pop_front(cb_id_out0, num_tiles_c);
+        }
+    }
+    for (uint32_t i = 0; i < padded_W_diff_tile_rows; i++) {
+        cb_wait_front(cb_id_out0, num_tiles_c);
+        cb_pop_front(cb_id_out0, num_tiles_c);
     }
 }

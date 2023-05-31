@@ -47,14 +47,16 @@ void kernel_main() {
     #endif
 
     uint32_t row_id = 0;
-    for (uint32_t w = 0; w < num_total_W; w++) {
-        for (uint32_t z = 0; z < num_total_Z; z++) {
+    uint32_t padded_Z_diff_tile_rows = (num_total_Z - num_unpadded_Z) * num_total_Y / 32;
+    uint32_t padded_W_diff_tile_rows = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Y / 32;
+    for (uint32_t w = 0; w < num_unpadded_W; w++) {
+        for (uint32_t z = 0; z < num_unpadded_Z; z++) {
             uint32_t row_id_in_face = 0;
             for (uint32_t y_t = 0; y_t < num_total_Y / 32; y_t++) {
                 cb_reserve_back(cb_id_in0, num_tiles_c);
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
                 for (uint32_t k = 0; k < 32; k++) {
-                    if (row_id_in_face >= num_unpadded_Y || z >= num_unpadded_Z || w >= num_unpadded_W) {
+                    if (row_id_in_face >= num_unpadded_Y) {
                         // pad the tile by reading values from zero buffer in L1
                         volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
                         for(uint32_t z = 0; z < padded_X_size / 4; z++) {
@@ -94,5 +96,29 @@ void kernel_main() {
                 cb_push_back(cb_id_in0, num_tiles_c);
             }
         }
+        for (uint32_t i = 0; i < padded_Z_diff_tile_rows; i++) {
+            cb_reserve_back(cb_id_in0, num_tiles_c);
+            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+            // pad the tile by reading values from zero buffer in L1
+            volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
+            // * 32 / 4
+            for(uint32_t z = 0; z < padded_X_size * 8; z++) {
+                dst[z] = pad_value;
+            }
+            l1_write_addr += padded_X_size;
+            cb_push_back(cb_id_in0, num_tiles_c);
+        }
+    }
+    for (uint32_t i = 0; i < padded_W_diff_tile_rows; i++) {
+        cb_reserve_back(cb_id_in0, num_tiles_c);
+        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        // pad the tile by reading values from zero buffer in L1
+        volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
+        // * 32 / 4
+        for(uint32_t z = 0; z < padded_X_size * 8; z++) {
+            dst[z] = pad_value;
+        }
+        l1_write_addr += padded_X_size;
+        cb_push_back(cb_id_in0, num_tiles_c);
     }
 }

@@ -1411,7 +1411,6 @@ void TensorModule(py::module &m_tensor) {
         | arg3                | Value to pad input tensor                            | float        |                                                     | Yes      |
         +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
     )doc");
-
     m_tensor.def("convert_conv_weight_tensor_to_tiled_layout", &convert_conv_weight_tensor_to_tiled_layout, R"doc(
        Converts convolution weights to 2d matrix tiled layout on host
        Returns a new tensor with the converted layout.

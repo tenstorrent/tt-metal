@@ -1046,6 +1046,52 @@ def reshape(x, *args, host, device, dtype, layout, on_device, reshape_dims, **kw
 
 
 @setup_host_and_device
+def tilize(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    assert dtype == ttl.tensor.DataType.BFLOAT16
+    assert (
+        layout == ttl.tensor.Layout.ROW_MAJOR
+        or layout == ttl.tensor.Layout.CHANNELS_LAST
+    )
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.tilize(t0)
+
+    output = torch.Tensor(t1.to(host).data()).reshape(t1.shape())
+
+    return output
+
+
+@setup_host_and_device
+def untilize(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    assert dtype == ttl.tensor.DataType.BFLOAT16
+    assert layout == ttl.tensor.Layout.TILE
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.TILE,
+    )
+
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.untilize(t0)
+
+    output = torch.Tensor(t1.to(host).data()).reshape(t1.shape())
+
+    return output
+
+
+@setup_host_and_device
 def tilize_with_val_padding(
     x,
     *args,

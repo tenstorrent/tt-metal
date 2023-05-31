@@ -240,30 +240,59 @@ Tensor pad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_sh
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
     auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
-    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
-    TT_ASSERT(not l1_bank_ids.empty());
-    auto l1_bank_id = l1_bank_ids.at(0);
-    auto pad_value_buffer_l1 = tt_metal::Buffer(device, single_tile_size, l1_bank_id, single_tile_size, tt_metal::BufferType::L1);
-    auto src_buffer_l1 = tt_metal::Buffer(device, single_tile_size, l1_bank_id, single_tile_size, tt_metal::BufferType::L1);
+    uint32_t src0_cb_index = 0;
+    uint32_t num_input_tiles = 1;
+
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        src0_cb_index,
+        core,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        DataFormat::Float16_b
+    );
+
+    uint32_t src1_cb_index = 1; // For pad buffer
+
+    auto cb_src1 = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        src1_cb_index,
+        core,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        DataFormat::Float16_b
+    );
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
+    uint32_t num_unpadded_Xt = a.shape()[3] / TILE_WIDTH;
+    uint32_t num_total_Xt = output_shape[3] / TILE_WIDTH;
+    uint32_t num_padded_Xt = num_total_Xt - num_unpadded_Xt;
+    uint32_t num_unpadded_Yt = a.shape()[2] / TILE_HEIGHT;
+    uint32_t num_total_Yt = output_shape[2] / TILE_HEIGHT;
+    uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
+    uint32_t num_unpadded_Z = a.shape()[1];
+    uint32_t num_total_Z = output_shape[1];
+    uint32_t num_padded_Zt = (num_total_Z - num_unpadded_Z) * num_total_Yt * num_total_Xt;
+    uint32_t num_unpadded_W = a.shape()[0];
+    uint32_t num_total_W = output_shape[0];
+    uint32_t num_padded_Wt = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Yt * num_total_Xt;
+
     vector<uint32_t> reader_kernel_args = {
         src0_dram_buffer->address(),
         dst_dram_buffer->address(),
-        a.shape()[0],
-        output_shape[0],
-        a.shape()[1],
-        output_shape[1],
-        a.shape()[2] / TILE_HEIGHT,
-        output_shape[2] / TILE_HEIGHT,
-        a.shape()[3] / TILE_WIDTH,
-        output_shape[3]/ TILE_WIDTH,
-        single_tile_size,
+        num_unpadded_W,
+        num_padded_Wt,
+        num_unpadded_Z,
+        num_padded_Zt,
+        num_unpadded_Yt,
+        num_padded_Yt,
+        num_unpadded_Xt,
+        num_padded_Xt,
         packed_pad_value,
-        pad_value_buffer_l1.address(),
-        src_buffer_l1.address()
     };
 
     std::vector<uint32_t> compile_time_args_vec;

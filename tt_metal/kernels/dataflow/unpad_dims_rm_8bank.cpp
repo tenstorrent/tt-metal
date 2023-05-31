@@ -63,61 +63,63 @@ void kernel_main() {
     uint32_t src_stick_id = 0;
     uint32_t dst_stick_id = 0;
     uint32_t l1_cache_addr = cache_buffer_l1_addr;
-    for (uint32_t w = 0; w < num_total_W; w++) {
-        for (uint32_t z = 0; z < num_total_Z; z++) {
-            for (uint32_t y = 0; y < num_total_Y; y++) {
 
-                if (y >= num_unpadded_Y || z >= num_unpadded_Z || w >= num_unpadded_W) {
-                    // pad the tile by reading values from zero buffer in L1
-                    src_stick_id++;
-                } else {
-                    uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1);
-                    uint64_t dst_round_down_addr = round_down_32(dst_noc_addr);
-                    uint32_t dst_diff_bytes = dst_noc_addr - dst_round_down_addr;
-                    uint32_t dst_buffer_l1_addr_real = dst_buffer_l1_addr + dst_diff_bytes;
-                    volatile std::uint32_t* dst = (volatile uint32_t*)(dst_buffer_l1_addr);
+    uint32_t padded_Y_diff_rows = num_total_Y - num_unpadded_Y;
+    uint32_t padded_Z_diff_rows = (num_total_Z - num_unpadded_Z) * num_total_Y;
+    uint32_t padded_W_diff_rows = (num_total_W * num_unpadded_W) * num_total_Z * num_total_Y;
 
-                    uint64_t src_noc_addr = get_noc_addr(
-                        src_stick_id, s0);
+    for (uint32_t w = 0; w < num_unpadded_W; w++) {
+        for (uint32_t z = 0; z < num_unpadded_Z; z++) {
+            for (uint32_t y = 0; y < num_unpadded_Y; y++) {
+                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1);
+                uint64_t dst_round_down_addr = round_down_32(dst_noc_addr);
+                uint32_t dst_diff_bytes = dst_noc_addr - dst_round_down_addr;
+                uint32_t dst_buffer_l1_addr_real = dst_buffer_l1_addr + dst_diff_bytes;
+                volatile std::uint32_t* dst = (volatile uint32_t*)(dst_buffer_l1_addr);
 
-                    // Read from DRAM to src buffer
-                    uint64_t src_round_down_addr = round_down_32(src_noc_addr);
-                    uint64_t src_diff_bytes = src_noc_addr - src_round_down_addr;
-                    noc_async_read(src_round_down_addr, src_buffer_l1_addr, unpadded_X_size + src_diff_bytes);
+                uint64_t src_noc_addr = get_noc_addr(
+                    src_stick_id, s0);
 
-                    // Copy from cache to dst buffer
-                    volatile std::uint32_t* cache = (volatile uint32_t*)(l1_cache_addr);
-                    for(uint32_t z = 0; z < dst_diff_bytes / 4; z++) {
-                        dst[z] = cache[z];
-                    }
+                // Read from DRAM to src buffer
+                uint64_t src_round_down_addr = round_down_32(src_noc_addr);
+                uint64_t src_diff_bytes = src_noc_addr - src_round_down_addr;
+                noc_async_read(src_round_down_addr, src_buffer_l1_addr, unpadded_X_size + src_diff_bytes);
 
-                    dst = (volatile uint32_t*)(dst_buffer_l1_addr_real);
-
-                    // Block before copying data from src to dst buffer
-                    noc_async_read_barrier();
-                    volatile std::uint32_t* data_buffer = (volatile uint32_t*)(src_buffer_l1_addr + src_diff_bytes);
-                    for(uint32_t z = 0; z < unpadded_X_size / 4; z++) {
-                        dst[z] = data_buffer[z];
-                    }
-                    src_stick_id++;
-                    noc_async_write(dst_buffer_l1_addr, dst_round_down_addr, unpadded_X_size + dst_diff_bytes);
-                    // Copy from tmp to cache
-                    uint64_t end_noc_addr = dst_noc_addr + unpadded_X_size;
-                    uint64_t end_round_down_addr = round_down_32(end_noc_addr);
-                    uint32_t cache_to_write = end_noc_addr - end_round_down_addr;
-                    dst = (volatile uint32_t*)(dst_buffer_l1_addr_real + unpadded_X_size - cache_to_write);
-                    for(uint32_t z = 0; z < (cache_to_write) / 4; z++) {
-                        cache[z] = dst[z];
-                    }
-                    dst_stick_id++;
-                    if (dst_stick_id & 7) {
-                        l1_cache_addr += alignment;
-                    } else {
-                        l1_cache_addr = cache_buffer_l1_addr;
-                    }
-                    noc_async_write_barrier();
+                // Copy from cache to dst buffer
+                volatile std::uint32_t* cache = (volatile uint32_t*)(l1_cache_addr);
+                for(uint32_t z = 0; z < dst_diff_bytes / 4; z++) {
+                    dst[z] = cache[z];
                 }
+
+                dst = (volatile uint32_t*)(dst_buffer_l1_addr_real);
+
+                // Block before copying data from src to dst buffer
+                noc_async_read_barrier();
+                volatile std::uint32_t* data_buffer = (volatile uint32_t*)(src_buffer_l1_addr + src_diff_bytes);
+                for(uint32_t z = 0; z < unpadded_X_size / 4; z++) {
+                    dst[z] = data_buffer[z];
+                }
+                src_stick_id++;
+                noc_async_write(dst_buffer_l1_addr, dst_round_down_addr, unpadded_X_size + dst_diff_bytes);
+                // Copy from tmp to cache
+                uint64_t end_noc_addr = dst_noc_addr + unpadded_X_size;
+                uint64_t end_round_down_addr = round_down_32(end_noc_addr);
+                uint32_t cache_to_write = end_noc_addr - end_round_down_addr;
+                dst = (volatile uint32_t*)(dst_buffer_l1_addr_real + unpadded_X_size - cache_to_write);
+                for(uint32_t z = 0; z < (cache_to_write) / 4; z++) {
+                    cache[z] = dst[z];
+                }
+                dst_stick_id++;
+                if (dst_stick_id & 7) {
+                    l1_cache_addr += alignment;
+                } else {
+                    l1_cache_addr = cache_buffer_l1_addr;
+                }
+                noc_async_write_barrier();
             }
+            src_stick_id += padded_Y_diff_rows;
         }
+        src_stick_id += padded_Z_diff_rows;
     }
+    // src_stick_id += padded_W_diff_rows;
 }

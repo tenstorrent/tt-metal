@@ -260,13 +260,22 @@ def gen_unpad_from_tile_args(input_shapes):
 
 
 def gen_default_dtype_layout_device(input_shapes):
-    return [
-        {
-            "dtype": ttl.tensor.DataType.BFLOAT16,
-            "layout": ttl.tensor.Layout.TILE,
-            "on_device": True,
-        }
-    ]
+    if input_shapes[0][-2] % 32 == 0 and input_shapes[0][-1] % 32 == 0:
+        return [
+            {
+                "dtype": ttl.tensor.DataType.BFLOAT16,
+                "layout": ttl.tensor.Layout.TILE,
+                "on_device": True,
+            }
+        ]
+    else:
+        return [
+            {
+                "dtype": ttl.tensor.DataType.BFLOAT16,
+                "layout": ttl.tensor.Layout.ROW_MAJOR,
+                "on_device": True,
+            }
+        ]
 
 
 def sanitize_args(input_shapes, dtype_device_layout):

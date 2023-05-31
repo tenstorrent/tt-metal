@@ -13,7 +13,7 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-
+import tt_lib as ttl
 
 params = [
     pytest.param([[5, 5, 50, 50]], tilize_with_val_padding_args, 0)
@@ -25,6 +25,20 @@ params += [
     pytest.param([[5, 5, 64, 96]], tilize_with_val_padding_args, 0)
     for tilize_with_val_padding_args in generation_funcs.gen_tilize_with_val_padding_args(
         [[5, 5, 64, 96]]
+    )
+]
+params += [
+    pytest.param(
+        [[1, 1, 120, 7300]],
+        {
+            "dtype": ttl.tensor.DataType.BFLOAT16,
+            "on_device": True,
+            "layout": ttl.tensor.Layout.ROW_MAJOR,
+            "output_tensor_shape": [1, 1, 128, 7328],
+            "input_tensor_start": [0, 0, 0, 0],
+            "pad_value": 10,
+        },
+        0,
     )
 ]
 

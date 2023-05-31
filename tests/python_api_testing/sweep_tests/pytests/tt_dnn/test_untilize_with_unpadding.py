@@ -13,7 +13,7 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-
+import tt_lib as ttl
 
 params = [
     pytest.param([[5, 5, 32, 32]], untilize_with_unpadding_args, 0)
@@ -25,6 +25,20 @@ params += [
     pytest.param([[5, 5, 64, 96]], untilize_with_unpadding_args, 0)
     for untilize_with_unpadding_args in generation_funcs.gen_untilize_with_unpadding_args(
         [[5, 5, 64, 96]]
+    )
+]
+
+params += [
+    pytest.param(
+        [[1, 1, 128, 7328]],
+        {
+            "dtype": ttl.tensor.DataType.BFLOAT16,
+            "on_device": True,
+            "layout": ttl.tensor.Layout.TILE,
+            "output_tensor_start": [0, 0, 0, 0],
+            "output_tensor_end": [0, 0, 119, 7299],
+        },
+        0,
     )
 ]
 
