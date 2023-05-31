@@ -32,10 +32,21 @@ PYBUDA_GS_RELEASE_ASSETS=$(curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
 	-H "Accept: application/vnd.github+json" \
 	https://api.github.com/repos/$FULL_REPO_NAME/releases/$PYBUDA_GS_RELEASE_ID/assets)
 
+PYBUDA_WH_RELEASE_ID=$(curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
+	-H "X-GitHub-Api-Version: 2022-11-28" \
+	-H "Accept: application/vnd.github+json" \
+	https://api.github.com/repos/$FULL_REPO_NAME/releases/tags/$PYBUDA_WH_RELEASE |
+	jq '.id')
+
+PYBUDA_WH_RELEASE_ASSETS=$(curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
+	-H "X-GitHub-Api-Version: 2022-11-28" \
+	-H "Accept: application/vnd.github+json" \
+	https://api.github.com/repos/$FULL_REPO_NAME/releases/$PYBUDA_WH_RELEASE_ID/assets)
+
 GS_TT_SMI_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_SMI_FILENAME)\")" | jq '.url' | tr \" \ )
-# WH_TT_SMI_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_SMI_FILENAME)\")" | jq '.url' | tr \" \ )
+WH_TT_SMI_SERVER_LOCATION=$(echo $PYBUDA_WH_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_SMI_FILENAME)\")" | jq '.url' | tr \" \ )
 # GS_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
-# WH_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
+# WH_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_WS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
 GS_TT_DRIVER_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_DRIVER_FILENAME)\")" | jq '.url' | tr \" \ )
 
 GS_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/grayskull
@@ -62,6 +73,11 @@ curl -vL -H "Authorization: Bearer $GITHUB_TOKEN" \
 	-H "X-GitHub-Api-Version: 2022-11-28" \
 	-H "Accept: application/octet-stream" \
 	$GS_TT_SMI_SERVER_LOCATION -o $GS_TT_SMI_LOCAL_LOCATION
+
+curl -vL -H "Authorization: Bearer $GITHUB_TOKEN" \
+	-H "X-GitHub-Api-Version: 2022-11-28" \
+	-H "Accept: application/octet-stream" \
+	$WH_TT_SMI_SERVER_LOCATION -o $WH_TT_SMI_LOCAL_LOCATION
 
 curl -vL -H "Authorization: Bearer $GITHUB_TOKEN" \
 	-H "X-GitHub-Api-Version: 2022-11-28" \
