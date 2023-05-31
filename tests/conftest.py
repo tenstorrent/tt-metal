@@ -8,6 +8,10 @@ from itertools import chain
 from operator import contains, eq, getitem
 from pathlib import Path
 
+from loguru import logger
+
+from tests.scripts.common import run_process_and_get_result
+
 
 @pytest.fixture(scope="function")
 def reset_seeds():
@@ -169,3 +173,34 @@ def pytest_generate_tests(metafunc):
             # The values of these arch-specific fixtures should not be used in
             # the test function, so use any parameters, like [True]
             metafunc.parametrize(test_requested_silicon_arch_fixture, [True])
+
+
+# Report stashing to get outcomes etc
+phase_report_key = pytest.StashKey()
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    # execute all other hooks to obtain the report object
+    outcome = yield
+    rep = outcome.get_result()
+
+    # store test results for each phase of a call, which can
+    # be "setup", "call", "teardown"
+    item.stash.setdefault(phase_report_key, {})[rep.when] = rep
+
+
+@pytest.fixture(scope="function")
+def reset_tensix(request):
+    yield
+
+    report = request.node.stash[phase_report_key]
+
+    test_failed = ("call" not in report) or report["call"].failed
+
+    if test_failed:
+        logger.debug("Test failed - resetting with tensix-reset script")
+        result = run_process_and_get_result(
+            "./tt_metal/device/bin/silicon/tensix-reset"
+        )
+        assert result.returncode == 0, "Tensix reset script raised error"

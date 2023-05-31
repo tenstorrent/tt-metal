@@ -22,7 +22,6 @@ cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
 env python tests/scripts/run_build_kernels_for_riscv.py --tt-arch $ARCH_NAME
-env python tests/scripts/run_llrt.py --short-driver-tests --tt-arch $ARCH_NAME
 env pytest tests/tt_metal/llrt --tt-arch $ARCH_NAME -m post_commit
 
 if [ "$ARCH_NAME" == "grayskull" ]; then

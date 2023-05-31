@@ -1,6 +1,13 @@
 import pytest
 from functools import partial
-from tests.scripts.common import TestEntry, generate_test_entry_id
+from tests.scripts.common import (
+    TestEntry,
+    generate_test_entry_id,
+    run_single_test,
+    SpecificReturnCodes,
+)
+
+from loguru import logger
 
 SILICON_DRIVER_TEST_ENTRIES = set(
     [
@@ -49,14 +56,12 @@ LLRT_TEST_ENTRIES = set(
         ),
         TestEntry("llrt/tests/test_dispatch_v1", "test_dispatch_v1"),
     ]
-)
-
-
-SKIP_LLRT_ENTRIES = set(
+) - set(
     [
         TestEntry("llrt/tests/test_dispatch_v1", "test_dispatch_v1"),
     ]
 )
+
 
 SKIP_LLRT_WORMHOLE_ENTRIES = set(
     [
@@ -72,31 +77,26 @@ SKIP_LLRT_WORMHOLE_ENTRIES = set(
 
 POST_COMMIT_LLRT_TEST_ENTRIES = SHORT_SILICON_DRIVER_TEST_ENTRIES | LLRT_TEST_ENTRIES
 
+POST_COMMIT_LLRT_TEST_WH_B0_ENTRIES = (
+    POST_COMMIT_LLRT_TEST_ENTRIES - SKIP_LLRT_WORMHOLE_ENTRIES
+)
+
 LONG_LLRT_TEST_ENTRIES = SILICON_DRIVER_TEST_ENTRIES | LLRT_TEST_ENTRIES
 
 
-def detect_llrt_skip(test_entry, silicon_arch_name):
-    assert isinstance(test_entry, TestEntry)
+def run_single_llrt_test(test_entry, timeout=600, tt_arch="grayskull"):
+    run_test = partial(run_single_test, "llrt", timeout=timeout, tt_arch=tt_arch)
 
-    if test_entry in SKIP_LLRT_WORMHOLE_ENTRIES and "wormhole" in silicon_arch_name:
-        pytest.skip(f"Test {test_entry} not supported in wormhole")
+    test_process_result = run_test(test_entry)
 
-    if test_entry in SKIP_LLRT_ENTRIES:
-        pytest.skip(f"Test {test_entry} not functioning right now")
+    return_code = test_process_result.returncode
 
-
-@pytest.fixture
-def llrt_to_dos():
-    from loguru import logger
-
-    logger.warning("Need to do timeouts")
-    logger.warning("Need to do soft resets")
-    logger.warning("Need to do short versions")
-    logger.warning(
-        "Need to do cmd line parameterize pipeline type, arch, maybe module?"
-    )
-    logger.warning("Need to do randomization?")
-    logger.warning("Need to do multiple threads for build_kernels")
+    assert (
+        return_code != SpecificReturnCodes.TIMEOUT_RETURN_CODE.value
+    ), f"{test_entry} seems to have timed out - TIMEOUT ERROR"
+    assert (
+        return_code == SpecificReturnCodes.PASSED_RETURN_CODE.value
+    ), f"{test_entry} failed with an error return code of {return_code}"
 
 
 @pytest.mark.post_commit
@@ -104,12 +104,21 @@ def llrt_to_dos():
 @pytest.mark.parametrize(
     "llrt_test_entry", POST_COMMIT_LLRT_TEST_ENTRIES, ids=generate_test_entry_id
 )
-def test_run_llrt_test(silicon_arch_name, llrt_test_entry, llrt_to_dos):
-    detect_llrt_skip(llrt_test_entry, silicon_arch_name)
+def test_run_llrt_test_grayskull(
+    silicon_arch_grayskull, silicon_arch_name, llrt_test_entry, llrt_fixtures
+):
+    run_single_llrt_test(llrt_test_entry, tt_arch=silicon_arch_name)
 
-    from loguru import logger
 
-    logger.info(llrt_test_entry.test_name)
+@pytest.mark.post_commit
+@pytest.mark.frequent
+@pytest.mark.parametrize(
+    "llrt_test_entry", POST_COMMIT_LLRT_TEST_WH_B0_ENTRIES, ids=generate_test_entry_id
+)
+def test_run_llrt_test_wormhole_b0(
+    silicon_arch_name, silicon_arch_wormhole_b0, llrt_test_entry, llrt_fixtures
+):
+    run_single_llrt_test(llrt_test_entry, tt_arch=silicon_arch_name)
 
 
 @pytest.mark.long
@@ -117,10 +126,6 @@ def test_run_llrt_test(silicon_arch_name, llrt_test_entry, llrt_to_dos):
     "llrt_test_entry", LONG_LLRT_TEST_ENTRIES, ids=generate_test_entry_id
 )
 def test_run_llrt_test_long(
-    silicon_arch_name, silicon_arch_grayskull, llrt_test_entry, llrt_to_dos
+    silicon_arch_name, silicon_arch_grayskull, llrt_test_entry, llrt_fixtures
 ):
-    detect_llrt_skip(llrt_test_entry, silicon_arch_name)
-
-    from loguru import logger
-
-    logger.info(llrt_test_entry.test_name)
+    run_single_llrt_test(llrt_test_entry, tt_arch=silicon_arch_name)
