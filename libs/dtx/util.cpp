@@ -7,7 +7,7 @@
 //                      DTX HELPERS
 // ========================================================
 
-bool compare_two_vectors_of_ints(vector<int> a, vector<int> b) {
+bool compare_two_vectors_of_ints(const vector<int>& a, const vector<int>& b) {
     bool pass = true;
 
     if (a.size() != b.size()) return false;

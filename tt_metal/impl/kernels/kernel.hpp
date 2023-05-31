@@ -24,7 +24,7 @@ enum NOC : uint8_t {
 };
 
 enum class KernelType {
-    DataMovement = 0,  // reader / writter
+    DataMovement = 0,  // reader / writer
     Compute = 1,       // unpack -> math -> pack
 };
 

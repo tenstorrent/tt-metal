@@ -22,21 +22,29 @@ using namespace std;
 //                      CLASSES
 // ========================================================
 
-class TensorData {
+// skip copy-constructor and assign operators on these types
+template <typename T>
+struct tpl_nocopy {
+        tpl_nocopy() = default;
+        tpl_nocopy(const T& ) = delete;
+        T operator=(const T& ) = delete;
+};
+
+class TensorData : tpl_nocopy<TensorData> {
     public:
         vector<int> data;
         int rank;
         vector<int> shape;
         int volume;
 
-        TensorData(vector<int> shape);
+        explicit TensorData(vector<int> shape);
 
         void init_increasing();
         void print();
         void generate_csv(string filename);
 };
 
-class DTXTensor {
+class DTXTensor : tpl_nocopy<DTXTensor> {
     public:
         vector<int> str;
         vector<int> end;
@@ -58,7 +66,7 @@ class DTXTensor {
         string get_string();
 };
 
-class TensorPair {
+class TensorPair : tpl_nocopy<TensorPair> {
     public:
         DTXTensor * src_tensor;    // Tensor range
         int src_group;          // ID of the group to which the src_tensor is pointing
@@ -85,7 +93,7 @@ class TensorPair {
         }
 };
 
-class Transfer {
+class Transfer : tpl_nocopy<Transfer> {
     public:
     int src_address;
     int dst_address;
@@ -97,7 +105,7 @@ class Transfer {
 
 };
 
-class TensorPairGroup {
+class TensorPairGroup : tpl_nocopy<TensorPairGroup> {
     public:
     vector<int> shape;
     vector<TensorPair *> tensor_pairs;
@@ -126,7 +134,7 @@ class TensorPairGroup {
     }
 };
 
-class TransformationNode {
+class TransformationNode : tpl_nocopy<TransformationNode> {
     public:
 
     string opcode;
@@ -178,7 +186,7 @@ class Buffer {
 };
 */
 
-class DataTransformations {
+class DataTransformations : tpl_nocopy<DataTransformations> {
     public:
     vector<TransformationNode *> transformations;
 

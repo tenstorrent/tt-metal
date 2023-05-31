@@ -30,7 +30,7 @@ enum DataLayout {
 //                      DTX HELPERS
 // ========================================================
 
-bool compare_two_vectors_of_ints(vector<int> a, vector<int> b);
+bool compare_two_vectors_of_ints(const vector<int>& a,const vector<int>& b);
 bool compare_two_tensors(DTXTensor * a, DTXTensor * b);
 bool compare_two_tensor_pairs(TensorPair * a, TensorPair * b);
 bool compare_two_groups(TensorPairGroup * a, TensorPairGroup * b);

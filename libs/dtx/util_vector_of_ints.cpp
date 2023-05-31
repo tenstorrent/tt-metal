@@ -5,7 +5,7 @@
 //                      PRINT / DEBUG
 // ========================================================
 
-string v2s(vector<int> vector) {
+string v2s(const vector<int>& vector) {
     string output_string;
     output_string.append("[");
     for (int i=0; i<vector.size(); i++) {
@@ -17,58 +17,49 @@ string v2s(vector<int> vector) {
 }
 
 string s(int num_spaces) {
-    string out;
-    for (int i=0; i<num_spaces; i++) {
-        out.append(" ");
-    }
-    return out;
-}
-string sp(int num_spaces) {
-    string out;
-    for (int i=0; i<num_spaces; i++) {
-        out.append(" ");
-    }
-    return out;
+    string out(num_spaces,' ');
+    return std::move(out);
 }
 
+std::function<string (int)> sp = s;
 // ========================================================
 //                      VECTOR OF INTS
 // ========================================================
 
-vector<int> vector_addition(vector<int> a, vector<int> b, int const_value) {
-    vector<int> result;
+vector<int> vector_addition(const vector<int>& a, const vector<int>& b, int const_value) {
+    vector<int> result(a.size());
     for (int d=0; d<a.size(); d++) {
-        result.push_back(a[d] + b[d] + const_value);
+        result[d] = (a[d] + b[d] + const_value);
     }
-    return result;
+    return std::move(result);
  }
 
-vector<int> vector_subtraction(vector<int> a, vector<int> b) {
-    vector<int> result;
+vector<int> vector_subtraction(const vector<int>& a, const vector<int>& b) {
+    vector<int> result(a.size());
     for (int d=0; d<a.size(); d++) {
-        result.push_back(a[d] - b[d]);
+        result[d] =  (a[d] - b[d]);
     }
-    return result;
+    return std::move(result);
 }
 
-vector<int> vector_division(vector<int> a, vector<int> b) {
-    vector<int> result;
+vector<int> vector_division(const vector<int>& a, const vector<int>& b) {
+    vector<int> result(a.size());
     for (int d=0; d<a.size(); d++) {
         assert(a[d] % b[d] == 0);
-        result.push_back(a[d] / b[d]);
+        result[d] = (a[d] / b[d]);
     }
-    return result;
+    return std::move(result);
 }
 
-vector<int> vector_multiplication(vector<int> a, vector<int> b) {
-    vector<int> result;
+vector<int> vector_multiplication(const vector<int>& a, const vector<int>& b) {
+    vector<int> result(a.size());
     for (int d=0; d<a.size(); d++) {
-        result.push_back(a[d] * b[d]);
+        result[d] = (a[d] * b[d]);
     }
     return result;
 }
 
-int vector_product(vector<int> a) {
+int vector_product(const vector<int>& a) {
     if (a.size() == 0) return 0;
     int result = 1;
     for (int d=0; d<a.size(); d++) {
@@ -77,22 +68,19 @@ int vector_product(vector<int> a) {
     return result;
 }
 
-vector<int> copy_vector_of_ints(vector<int> a) {
+vector<int> copy_vector_of_ints(const vector<int>& a) {
     vector<int> result(a);
-    return result;
+    return std::move(result);
 }
 
-vector<int> copy(vector<int> a) {
+vector<int> copy(const vector<int>& a) {
     vector<int> result(a);
-    return result;
+    return std::move(result);
 }
 
 vector<int> zeros(int rank){
-    vector<int> zeros;
-    for (int d=0; d<rank; d++){
-        zeros.push_back(0);
-    }
-    return zeros;
+    vector<int> zeros(rank,0);
+    return std::move(zeros);
 }
 
 vector<int> ones(int rank){
@@ -100,10 +88,10 @@ vector<int> ones(int rank){
     for (int d=0; d<rank; d++){
         zeros.push_back(1);
     }
-    return zeros;
+    return std::move(zeros);
 }
 
-vector<int> vector_pad_on_left(vector<int> input, int pad_size, int pad_value){
+vector<int> vector_pad_on_left(const vector<int>& input, int pad_size, int pad_value){
     vector<int> output;
     for (int d=0; d<pad_size; d++){
         output.push_back(pad_value);
@@ -111,10 +99,10 @@ vector<int> vector_pad_on_left(vector<int> input, int pad_size, int pad_value){
     for (int d=0; d<input.size(); d++){
         output.push_back(input[d]);
     }
-    return output;
+    return std::move(output);
 }
 
-vector<int> increment(vector<int> current, vector<int> start, vector<int> end) {
+vector<int> increment(const vector<int>& current, const vector<int>& start, const vector<int>& end) {
     bool DEBUG = false;
 
     if (DEBUG) {
