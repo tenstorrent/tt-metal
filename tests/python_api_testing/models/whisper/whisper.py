@@ -4,8 +4,17 @@
 # print(transformers.__version__)
 
 import torch
-from transformers import WhisperProcessor, WhisperModel, WhisperForAudioClassification, WhisperForConditionalGeneration, WhisperConfig, AutoFeatureExtractor, AutoProcessor
+from transformers import (
+    WhisperProcessor,
+    WhisperModel,
+    WhisperForAudioClassification,
+    WhisperForConditionalGeneration,
+    WhisperConfig,
+    AutoFeatureExtractor,
+    AutoProcessor,
+)
 from datasets import load_dataset
+
 
 def run_for_conditional_generation():
     import torch
@@ -15,7 +24,9 @@ def run_for_conditional_generation():
     processor = AutoProcessor.from_pretrained("openai/whisper-tiny.en")
     model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en")
 
-    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    ds = load_dataset(
+        "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
+    )
 
     inputs = processor(ds[0]["audio"]["array"], return_tensors="pt")
     input_features = inputs.input_features
@@ -24,10 +35,13 @@ def run_for_conditional_generation():
 
     transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
+
 def run_HF_whisper():
     processor = WhisperProcessor.from_pretrained("openai/whisper-tiny.en")
     model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
-    model_audio_classification = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
+    model_audio_classification = WhisperForAudioClassification.from_pretrained(
+        "sanchit-gandhi/whisper-medium-fleurs-lang-id"
+    )
 
     model.eval()
     config = model.config
@@ -55,6 +69,7 @@ def run_HF_whisper():
     ```
     """
 
+
 def change_model_configuration():
     model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
     configuration = model.config
@@ -67,6 +82,7 @@ def change_model_configuration():
     configuration = model.config
     print(configuration)
 
+
 def run_HF_whisper_for_audio_classification():
     processor = AutoProcessor.from_pretrained("openai/whisper-tiny.en")
     # Whisper with language modeling head
@@ -77,7 +93,9 @@ def run_HF_whisper_for_audio_classification():
     state_dict = model.state_dict()
     print(state_dict)
 
-    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    ds = load_dataset(
+        "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
+    )
 
     # Process audio data
     inputs = processor(ds[0]["audio"]["array"], return_tensors="pt")
@@ -100,6 +118,7 @@ def run_HF_whisper_for_audio_classification():
 
     transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
     print(transcription)
+
 
 if __name__ == "__main__":
     torch.manual_seed(1234)

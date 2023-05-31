@@ -1,46 +1,31 @@
-import math
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
+import tt_lib
 import torch
 import torch.nn as nn
-import numpy as np
 from dataclasses import dataclass
-
-import random
 from typing import Optional, Tuple, Union
 
-from transformers import  WhisperConfig
-
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
+from python_api_testing.models.whisper.whisper_common import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+    create_padded_tensor,
+    create_unpadded_tensor,
+)
 from python_api_testing.models.whisper.whisper_encoder import TtWhisperEncoder
-from python_api_testing.fused_ops.linear import Linear as TtLinear
 from python_api_testing.models.whisper.whisper_linear_layer import WhisperPaddedLinear
 
-from libs import tt_lib as ttm
+from tt_lib.fused_ops.linear import Linear as TtLinear
 
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 @dataclass
-class TtWhisperForAudioClassificationOutput():
-    loss: Optional[ttm.tensor.Tensor] = None
-    logits: ttm.tensor.Tensor = None
-    hidden_states: Optional[Tuple[ttm.tensor.Tensor]] = None
-    attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
+class TtWhisperForAudioClassificationOutput:
+    loss: Optional[tt_lib.tensor.Tensor] = None
+    logits: tt_lib.tensor.Tensor = None
+    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+
 
 class TtWhisperForAudioClassification(nn.Module):
-    def __init__(
-        self,
-        state_dict,
-        device,
-        config
-    ):
+    def __init__(self, state_dict, device, config):
         super().__init__()
 
         self.state_dict = state_dict
@@ -53,24 +38,46 @@ class TtWhisperForAudioClassification(nn.Module):
             state_dict=state_dict,
             base_address="encoder",
             device=self.device,
-            config=config
+            config=config,
         )
 
-        num_layers = config.num_hidden_layers + 1  # transformer layers + input embeddings
+        num_layers = (
+            config.num_hidden_layers + 1
+        )  # transformer layers + input embeddings
         if config.use_weighted_layer_sum:
             # Not using this parameter for now
             N, C, H, W = 1, 1, 1, num_layers
             weight_init_const = 1.0 / num_layers
-            # TODO: Implement in ttm as soon as full is merged
+            # TODO: Implement in tt_lib as soon as full is merged
             self.layer_weights = nn.Parameter(torch.ones(num_layers) / num_layers)
-            self.layer_weights =  torch2tt_tensor(self.layer_weights, self.device)
+            self.layer_weights = torch2tt_tensor(self.layer_weights, self.device)
 
-        projector_weight = torch2tt_tensor(state_dict[f"projector.weight"], ttm.device.GetHost())
+        projector_weight = torch2tt_tensor(
+            state_dict[f"projector.weight"], tt_lib.device.GetHost()
+        )
         projector_bias = state_dict[f"projector.bias"]
-        projector_bias = create_padded_tensor(list(projector_bias.shape), projector_bias, [1, 1, 32, projector_bias.shape[-1]], 0, ttm.device.GetHost())
+        projector_bias = create_padded_tensor(
+            list(projector_bias.shape),
+            projector_bias,
+            [1, 1, 32, projector_bias.shape[-1]],
+            0,
+            tt_lib.device.GetHost(),
+        )
 
-        self.projector = TtLinear(in_features=config.hidden_size, out_features=config.classifier_proj_size, weight=projector_weight.data(), bias=projector_bias.data(), device=device)
-        self.classifier = WhisperPaddedLinear(config.classifier_proj_size, config.num_labels, state_dict[f"classifier.weight"], state_dict[f"classifier.bias"], device)
+        self.projector = TtLinear(
+            in_features=config.hidden_size,
+            out_features=config.classifier_proj_size,
+            weight=projector_weight.data(),
+            bias=projector_bias.data(),
+            device=device,
+        )
+        self.classifier = WhisperPaddedLinear(
+            config.classifier_proj_size,
+            config.num_labels,
+            state_dict[f"classifier.weight"],
+            state_dict[f"classifier.bias"],
+            device,
+        )
 
     def freeze_encoder(self):
         """
@@ -89,7 +96,7 @@ class TtWhisperForAudioClassification(nn.Module):
         self,
         input_features: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.Tensor] = None,
-        encoder_outputs: Optional[Tuple[Tuple[ttm.tensor.Tensor]]] = None,
+        encoder_outputs: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -130,14 +137,21 @@ class TtWhisperForAudioClassification(nn.Module):
         'af_za'
         ```"""
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         if encoder_outputs is None:
-
             encoder_outputs = self.encoder(
                 input_features,
                 head_mask=head_mask,
@@ -166,7 +180,13 @@ class TtWhisperForAudioClassification(nn.Module):
             input_tensors_shape = list(hidden_states.shape())
             output_tensor_shape = input_tensors_shape[:]
             output_tensor_shape[-2] = 1504
-            hidden_states = create_padded_tensor(input_tensors_shape, hidden_states, output_tensor_shape, pad_value=0, device=self.device)
+            hidden_states = create_padded_tensor(
+                input_tensors_shape,
+                hidden_states,
+                output_tensor_shape,
+                pad_value=0,
+                device=self.device,
+            )
 
         # Apply Linear layer
         hidden_states = self.projector(hidden_states)
@@ -178,7 +198,9 @@ class TtWhisperForAudioClassification(nn.Module):
             input_tensors_shape[-2] = 1500
             hidden_states = create_unpadded_tensor(hidden_states, input_tensors_shape)
             # Convert to Torch
-            torch_hidden_states = torch.Tensor(hidden_states.data()).reshape(hidden_states.shape())
+            torch_hidden_states = torch.Tensor(hidden_states.data()).reshape(
+                hidden_states.shape()
+            )
         else:
             torch_hidden_states = tt2torch_tensor(hidden_states)
 
@@ -186,7 +208,13 @@ class TtWhisperForAudioClassification(nn.Module):
         # If something changes these dimension -2 should always work
 
         if add_padding:
-            pooled_output = create_padded_tensor(list(torch_pooled_output.size()), torch_pooled_output, [1,1,32, torch_pooled_output.size()[-1]], pad_value=0, device=self.device)
+            pooled_output = create_padded_tensor(
+                list(torch_pooled_output.size()),
+                torch_pooled_output,
+                [1, 1, 32, torch_pooled_output.size()[-1]],
+                pad_value=0,
+                device=self.device,
+            )
         else:
             pooled_output = torch2tt_tensor(torch_pooled_output, self.device)
 

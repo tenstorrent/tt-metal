@@ -1,55 +1,57 @@
 import math
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
+import tt_lib
 import torch
 import torch.nn as nn
-import numpy as np
-from dataclasses import dataclass
 
 import random
+from dataclasses import dataclass
 from loguru import logger
 from typing import Optional, Tuple, Union
 
 from transformers import WhisperConfig
 
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
-from python_api_testing.models.whisper.whisper_decoder_layer import TtWhisperDecoderLayer
-from python_api_testing.fused_ops.linear import Linear as TtLinear
-from python_api_testing.fused_ops.layernorm import Layernorm as TtLayernorm
+from python_api_testing.models.whisper.whisper_common import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+    create_padded_tensor,
+    create_unpadded_tensor,
+)
+from python_api_testing.models.whisper.whisper_decoder_layer import (
+    TtWhisperDecoderLayer,
+)
 
-from libs import tt_lib as ttm
+from tt_lib.fused_ops.linear import Linear as TtLinear
+from tt_lib.fused_ops.layernorm import Layernorm as TtLayernorm
 
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 class WhisperPositionalEmbedding(nn.Embedding):
     """
     TODO: Implemented in PyTorch for now. And Initialized directly from HF reference model.
     """
-    def __init__(self, num_positions: int, embedding_dim: int, padding_idx: Optional[int] = None):
+
+    def __init__(
+        self, num_positions: int, embedding_dim: int, padding_idx: Optional[int] = None
+    ):
         super().__init__(num_positions, embedding_dim)
 
     def forward(self, input_ids, past_key_values_length=0):
-        return self.weight[past_key_values_length : past_key_values_length + input_ids.shape[-1]]
+        return self.weight[
+            past_key_values_length : past_key_values_length + input_ids.shape[-1]
+        ]
+
 
 @dataclass
-class TtWhisperDecoderOutput():
+class TtWhisperDecoderOutput:
     """
     TT implementation of HF Base class for model's outputs
     that may also contain a past key/values (to speed up sequential decoding).
     """
 
-    last_hidden_state: ttm.tensor.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[ttm.tensor.Tensor]]] = None
-    hidden_states: Optional[Tuple[ttm.tensor.Tensor]] = None
-    attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
-    cross_attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
+    last_hidden_state: tt_lib.tensor.Tensor = None
+    past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None
+    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    cross_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
 
 
 class TtWhisperDecoder(nn.Module):
@@ -59,7 +61,7 @@ class TtWhisperDecoder(nn.Module):
 
     Args:
         reference_model: WhisperModel
-        device: device: ttm.device.Device
+        device: device: tt_lib.device.Device
         config: WhisperConfig
     """
 
@@ -69,7 +71,7 @@ class TtWhisperDecoder(nn.Module):
         base_address,
         device,
         config: WhisperConfig,
-        already_padded_inputs: bool = False
+        already_padded_inputs: bool = False,
     ):
         super().__init__()
 
@@ -89,33 +91,57 @@ class TtWhisperDecoder(nn.Module):
         """
         TODO: Embeddings. Implemented from PyTorch for now.
         """
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.d_model, self.padding_idx)
-        self.embed_tokens.weight = nn.Parameter(state_dict[f"{base_address}.embed_tokens.weight"])
+        self.embed_tokens = nn.Embedding(
+            config.vocab_size, config.d_model, self.padding_idx
+        )
+        self.embed_tokens.weight = nn.Parameter(
+            state_dict[f"{base_address}.embed_tokens.weight"]
+        )
 
-        self.embed_positions = WhisperPositionalEmbedding(self.max_target_positions, config.d_model)
-        self.embed_positions.weight = nn.Parameter(state_dict[f"{base_address}.embed_positions.weight"])
+        self.embed_positions = WhisperPositionalEmbedding(
+            self.max_target_positions, config.d_model
+        )
+        self.embed_positions.weight = nn.Parameter(
+            state_dict[f"{base_address}.embed_positions.weight"]
+        )
 
-        self.layers = nn.ModuleList([
-            TtWhisperDecoderLayer(
-                base_address = f"{base_address}.layers.{ind}",
-                state_dict = state_dict,
-                device = self.device,
-                embed_dim = config.d_model,
-                num_heads = config.decoder_attention_heads,
-                decoder_ffn_dim = config.decoder_ffn_dim,
-                config = self.config,
-            )
-            for ind in range(config.decoder_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                TtWhisperDecoderLayer(
+                    base_address=f"{base_address}.layers.{ind}",
+                    state_dict=state_dict,
+                    device=self.device,
+                    embed_dim=config.d_model,
+                    num_heads=config.decoder_attention_heads,
+                    decoder_ffn_dim=config.decoder_ffn_dim,
+                    config=self.config,
+                )
+                for ind in range(config.decoder_layers)
+            ]
+        )
 
         gamma = self.state_dict[f"{base_address}.layer_norm.weight"]
-        gamma = create_padded_tensor(list(gamma.shape), gamma, [1, 1, 32, gamma.shape[-1]], 0, ttm.device.GetHost())
+        gamma = create_padded_tensor(
+            list(gamma.shape),
+            gamma,
+            [1, 1, 32, gamma.shape[-1]],
+            0,
+            tt_lib.device.GetHost(),
+        )
         beta = self.state_dict[f"{base_address}.layer_norm.bias"]
-        beta = create_padded_tensor(list(beta.shape), beta, [1, 1, 32, beta.shape[-1]], 0, ttm.device.GetHost())
+        beta = create_padded_tensor(
+            list(beta.shape),
+            beta,
+            [1, 1, 32, beta.shape[-1]],
+            0,
+            tt_lib.device.GetHost(),
+        )
         tt_gamma = gamma.data()
         tt_beta = beta.data()
 
-        self.layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, 1, config.d_model, self.device, 1)
+        self.layer_norm = TtLayernorm(
+            tt_gamma, tt_beta, 1e-05, 1, config.d_model, self.device, 1
+        )
 
         self.gradient_checkpointing = False
         self.cached_mask = None
@@ -130,7 +156,12 @@ class TtWhisperDecoder(nn.Module):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    def _make_causal_mask(self, input_ids_shape: torch.Size, dtype: torch.dtype, past_key_values_length: int = 0):
+    def _make_causal_mask(
+        self,
+        input_ids_shape: torch.Size,
+        dtype: torch.dtype,
+        past_key_values_length: int = 0,
+    ):
         """
         TODO: Implemented in PyTorch for now.
         """
@@ -149,11 +180,19 @@ class TtWhisperDecoder(nn.Module):
             self.cached_mask = mask
 
         if past_key_values_length > 0:
-            if self.cached_input_ids_shape == input_ids_shape and self.cached_past_key_values_length == past_key_values_length:
+            if (
+                self.cached_input_ids_shape == input_ids_shape
+                and self.cached_past_key_values_length == past_key_values_length
+            ):
                 mask = self.cached_concatenated_mask
             else:
-                mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype), mask], dim=-1)
-                mask = mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
+                mask = torch.cat(
+                    [torch.zeros(tgt_len, past_key_values_length, dtype=dtype), mask],
+                    dim=-1,
+                )
+                mask = mask[None, None, :, :].expand(
+                    bsz, 1, tgt_len, tgt_len + past_key_values_length
+                )
                 self.cached_concatenated_mask = mask
                 self.cached_past_key_values_length = past_key_values_length
 
@@ -167,7 +206,9 @@ class TtWhisperDecoder(nn.Module):
         return mask
 
     # Copied from transformers.models.bart.modeling_bart._expand_mask
-    def _expand_mask(self, mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+    def _expand_mask(
+        self, mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None
+    ):
         """
         TODO: Implemented in PyTorch for now.
         """
@@ -180,9 +221,13 @@ class TtWhisperDecoder(nn.Module):
         if self.bsz == bsz and self.tgt_len == tgt_len and self.src_len == src_len:
             return self.cached_expand_mask
         else:
-            expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+            expanded_mask = (
+                mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+            )
             inverted_mask = 1.0 - expanded_mask
-            inverted_mask = inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+            inverted_mask = inverted_mask.masked_fill(
+                inverted_mask.to(torch.bool), torch.finfo(dtype).min
+            )
             self.bsz = bsz
             self.tgt_len = tgt_len
             self.src_len = src_len
@@ -190,7 +235,9 @@ class TtWhisperDecoder(nn.Module):
 
             return inverted_mask
 
-    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
+    def _prepare_decoder_attention_mask(
+        self, attention_mask, input_shape, inputs_embeds, past_key_values_length
+    ):
         # create causal mask
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
         """
@@ -200,32 +247,38 @@ class TtWhisperDecoder(nn.Module):
 
         if input_shape[-1] > 1:
             combined_attention_mask = self._make_causal_mask(
-                input_shape, inputs_embeds.dtype, past_key_values_length=past_key_values_length
+                input_shape,
+                inputs_embeds.dtype,
+                past_key_values_length=past_key_values_length,
             ).to(inputs_embeds.device)
 
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            expanded_attn_mask = self._expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
+            expanded_attn_mask = self._expand_mask(
+                attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]
+            )
             combined_attention_mask = (
-                expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
+                expanded_attn_mask
+                if combined_attention_mask is None
+                else expanded_attn_mask + combined_attention_mask
             )
 
         return combined_attention_mask
 
     def forward(
         self,
-        input_ids:torch.Tensor = None,
-        attention_mask:torch.Tensor = None,
-        encoder_hidden_states:ttm.tensor.Tensor = None,
-        head_mask:torch.Tensor = None,
-        cross_attn_head_mask:torch.Tensor=None,
-        past_key_values:Optional[Tuple[ttm.tensor.Tensor]]=None,
-        inputs_embeds:torch.Tensor=None,
-        use_cache:bool=None,
-        output_attentions:bool=None,
-        output_hidden_states:bool=None,
-        return_dict:bool=None,
-    ) -> Union[Tuple[ttm.tensor.Tensor], TtWhisperDecoderOutput]:
+        input_ids: torch.Tensor = None,
+        attention_mask: torch.Tensor = None,
+        encoder_hidden_states: tt_lib.tensor.Tensor = None,
+        head_mask: torch.Tensor = None,
+        cross_attn_head_mask: torch.Tensor = None,
+        past_key_values: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        inputs_embeds: torch.Tensor = None,
+        use_cache: bool = None,
+        output_attentions: bool = None,
+        output_hidden_states: bool = None,
+        return_dict: bool = None,
+    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtWhisperDecoderOutput]:
         """
         Args:
             input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
@@ -283,27 +336,41 @@ class TtWhisperDecoder(nn.Module):
             return_dict (`bool`, *optional*):
                 Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
         """
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
+        )
         output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         """PyTorch implementation start"""
 
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
+            raise ValueError(
+                "You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time"
+            )
         elif input_ids is not None:
             input_shape = input_ids.size()
             input_ids = input_ids.view(-1, input_shape[-1])
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
         else:
-            raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
+            raise ValueError(
+                "You have to specify either decoder_input_ids or decoder_inputs_embeds"
+            )
 
-        past_key_values_length = past_key_values[0][0].shape[-1] if past_key_values is not None else 0
+        past_key_values_length = (
+            past_key_values[0][0].shape[-1] if past_key_values is not None else 0
+        )
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
@@ -314,9 +381,13 @@ class TtWhisperDecoder(nn.Module):
 
         # embed positions
         if input_ids is not None:
-            positions = self.embed_positions(input_ids, past_key_values_length=past_key_values_length)
+            positions = self.embed_positions(
+                input_ids, past_key_values_length=past_key_values_length
+            )
         else:
-            positions = self.embed_positions(inputs_embeds, past_key_values_length=past_key_values_length)
+            positions = self.embed_positions(
+                inputs_embeds, past_key_values_length=past_key_values_length
+            )
 
         hidden_states = inputs_embeds + positions
 
@@ -327,9 +398,15 @@ class TtWhisperDecoder(nn.Module):
             # Add padding
             output_tensor_shape = encoder_hidden_states.shape()
             while len(output_tensor_shape) < 4:
-                output_tensor_shape.insert(0,1)
+                output_tensor_shape.insert(0, 1)
             output_tensor_shape[-2] = 1504
-            encoder_hidden_states = create_padded_tensor(encoder_hidden_states.shape(), encoder_hidden_states, output_tensor_shape, pad_value=0.0, device=self.device)
+            encoder_hidden_states = create_padded_tensor(
+                encoder_hidden_states.shape(),
+                encoder_hidden_states,
+                output_tensor_shape,
+                pad_value=0.0,
+                device=self.device,
+            )
 
         padded_hidden_states = False
         if hidden_states.size(-2) % 32 != 0:
@@ -340,9 +417,15 @@ class TtWhisperDecoder(nn.Module):
 
             shape_before_pad = list(hidden_states.size())
             while len(output_tensor_shape) < 4:
-                output_tensor_shape.insert(0,1)
+                output_tensor_shape.insert(0, 1)
             output_tensor_shape[-2] = 32
-            hidden_states = create_padded_tensor(list(hidden_states.size()), hidden_states, output_tensor_shape, pad_value=0.0, device=self.device)
+            hidden_states = create_padded_tensor(
+                list(hidden_states.size()),
+                hidden_states,
+                output_tensor_shape,
+                pad_value=0.0,
+                device=self.device,
+            )
         else:
             hidden_states = torch2tt_tensor(hidden_states, self.device)
 
@@ -352,16 +435,22 @@ class TtWhisperDecoder(nn.Module):
                 output_tensor_shape = list(attention_mask.size())
 
                 while len(output_tensor_shape) < 4:
-                    output_tensor_shape.insert(0,1)
+                    output_tensor_shape.insert(0, 1)
                 output_tensor_shape[-2] = 32
                 output_tensor_shape[-1] = 32
-                attention_mask = create_padded_tensor(list(attention_mask.size()), attention_mask, output_tensor_shape, pad_value=0, device=self.device)
+                attention_mask = create_padded_tensor(
+                    list(attention_mask.size()),
+                    attention_mask,
+                    output_tensor_shape,
+                    pad_value=0,
+                    device=self.device,
+                )
 
             else:
                 attention_mask = torch2tt_tensor(attention_mask, self.device)
 
         # TODO: Dropout not supported for not
-        #hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         """TODO: Training not supported for now"""
         if self.gradient_checkpointing and self.training:
@@ -374,11 +463,15 @@ class TtWhisperDecoder(nn.Module):
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
+        all_cross_attentions = (
+            () if (output_attentions and encoder_hidden_states is not None) else None
+        )
         next_decoder_cache = () if use_cache else None
 
         # check if head_mask/cross_attn_head_mask has a correct number of layers specified if desired
-        for attn_mask, mask_name in zip([head_mask, cross_attn_head_mask], ["head_mask", "cross_attn_head_mask"]):
+        for attn_mask, mask_name in zip(
+            [head_mask, cross_attn_head_mask], ["head_mask", "cross_attn_head_mask"]
+        ):
             if attn_mask is not None:
                 assert attn_mask.size()[0] == (len(self.layers)), (
                     f"The `{mask_name}` should be specified for {len(self.layers)} layers, but it is for"
@@ -394,7 +487,9 @@ class TtWhisperDecoder(nn.Module):
             if self.training and (dropout_probability < self.layerdrop):
                 continue
 
-            past_key_value = past_key_values[idx] if past_key_values is not None else None
+            past_key_value = (
+                past_key_values[idx] if past_key_values is not None else None
+            )
 
             """TODO: Training not supported for now"""
             if self.gradient_checkpointing and self.training:
@@ -413,18 +508,22 @@ class TtWhisperDecoder(nn.Module):
                     encoder_hidden_states,
                     None,  # encoder attention mask
                     head_mask[idx] if head_mask is not None else None,
-                    cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None,
+                    cross_attn_head_mask[idx]
+                    if cross_attn_head_mask is not None
+                    else None,
                     None,  # past_key_value
                 )
 
             else:
                 layer_outputs = decoder_layer(
-                    hidden_states = hidden_states,
+                    hidden_states=hidden_states,
                     attention_mask=attention_mask,
                     encoder_hidden_states=encoder_hidden_states,
                     layer_head_mask=(head_mask[idx] if head_mask is not None else None),
                     cross_attn_layer_head_mask=(
-                        cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None
+                        cross_attn_head_mask[idx]
+                        if cross_attn_head_mask is not None
+                        else None
                     ),
                     past_key_value=past_key_value,
                     output_attentions=output_attentions,
@@ -442,7 +541,7 @@ class TtWhisperDecoder(nn.Module):
                     all_cross_attentions += (layer_outputs[2],)
 
         H_hidden_states = hidden_states.shape()[-2]
-        hidden_states = self.layer_norm(hidden_states,overrideH=H_hidden_states)
+        hidden_states = self.layer_norm(hidden_states, overrideH=H_hidden_states)
 
         if padded_hidden_states:
             # Unpad hidden states tensor to original size
@@ -458,7 +557,13 @@ class TtWhisperDecoder(nn.Module):
         if not return_dict:
             return tuple(
                 v
-                for v in [hidden_states, next_cache, all_hidden_states, all_self_attns, all_cross_attentions]
+                for v in [
+                    hidden_states,
+                    next_cache,
+                    all_hidden_states,
+                    all_self_attns,
+                    all_cross_attentions,
+                ]
                 if v is not None
             )
 

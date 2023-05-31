@@ -1,56 +1,47 @@
-import math
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
+import tt_lib
 import torch
 import torch.nn as nn
-import numpy as np
 from dataclasses import dataclass
 
-import random
 from typing import Optional, Tuple, Union
 from loguru import logger
 
 from transformers import WhisperConfig
 
-from libs import tt_lib as ttm
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
-from python_api_testing.models.whisper.whisper_encoder import TtWhisperEncoder, TtWhisperEncoderOutput
+from python_api_testing.models.whisper.whisper_common import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+    create_padded_tensor,
+    create_unpadded_tensor,
+)
+from python_api_testing.models.whisper.whisper_encoder import (
+    TtWhisperEncoder,
+    TtWhisperEncoderOutput,
+)
 from python_api_testing.models.whisper.whisper_decoder import TtWhisperDecoder
 
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 @dataclass
-class TtWhisperModelOutput():
-
-    last_hidden_state: ttm.tensor.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[ttm.tensor.Tensor]]] = None
-    decoder_hidden_states: Optional[Tuple[ttm.tensor.Tensor]] = None
-    decoder_attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
-    cross_attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
-    encoder_last_hidden_state: Optional[ttm.tensor.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ttm.tensor.Tensor]] = None
-    encoder_attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
+class TtWhisperModelOutput:
+    last_hidden_state: tt_lib.tensor.Tensor = None
+    past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None
+    decoder_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    decoder_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    cross_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    encoder_last_hidden_state: Optional[tt_lib.tensor.Tensor] = None
+    encoder_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    encoder_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
 
 
 class TtWhisperModel(nn.Module):
     """
     The bare Whisper Model outputting raw hidden-states without any specific head on top."
     """
+
     _keys_to_ignore_on_load_missing = [r"proj_out.weight"]
 
     def __init__(
-        self,
-        state_dict,
-        device,
-        base_address:str="",
-        config: WhisperConfig=None
+        self, state_dict, device, base_address: str = "", config: WhisperConfig = None
     ):
         super().__init__()
 
@@ -58,11 +49,21 @@ class TtWhisperModel(nn.Module):
         self.device = device
         self.config = config
 
-        if base_address!="":
-            base_address=base_address+"."
+        if base_address != "":
+            base_address = base_address + "."
 
-        self.encoder = TtWhisperEncoder(state_dict = state_dict, base_address=f"{base_address}"+"encoder", device=device, config=config)
-        self.decoder = TtWhisperDecoder(state_dict = state_dict, base_address=f"{base_address}"+"decoder", device=device, config=config)
+        self.encoder = TtWhisperEncoder(
+            state_dict=state_dict,
+            base_address=f"{base_address}" + "encoder",
+            device=device,
+            config=config,
+        )
+        self.decoder = TtWhisperDecoder(
+            state_dict=state_dict,
+            base_address=f"{base_address}" + "decoder",
+            device=device,
+            config=config,
+        )
 
     def get_input_embeddings(self):
         return self.decoder.embed_tokens
@@ -118,7 +119,9 @@ class TtWhisperModel(nn.Module):
                 attention_mask=attention_mask,
                 min_masks=self.config.mask_time_min_masks,
             )
-            mask_time_indices = torch.tensor(mask_time_indices, device=input_features.device, dtype=torch.bool)
+            mask_time_indices = torch.tensor(
+                mask_time_indices, device=input_features.device, dtype=torch.bool
+            )
             mask_time_indices = mask_time_indices[:, None].expand(-1, hidden_size, -1)
             input_features[mask_time_indices] = 0
 
@@ -130,7 +133,9 @@ class TtWhisperModel(nn.Module):
                 mask_length=self.config.mask_feature_length,
                 min_masks=self.config.mask_feature_min_masks,
             )
-            mask_feature_indices = torch.tensor(mask_feature_indices, device=input_features.device, dtype=torch.bool)
+            mask_feature_indices = torch.tensor(
+                mask_feature_indices, device=input_features.device, dtype=torch.bool
+            )
             input_features[mask_feature_indices] = 0
 
         return input_features
@@ -144,14 +149,14 @@ class TtWhisperModel(nn.Module):
         head_mask: Optional[torch.Tensor] = None,
         decoder_head_mask: Optional[torch.Tensor] = None,
         cross_attn_head_mask: Optional[torch.Tensor] = None,
-        encoder_outputs: Optional[Tuple[Tuple[ttm.tensor.Tensor]]] = None,
-        past_key_values: Optional[Tuple[Tuple[ttm.tensor.Tensor]]] = None,
+        encoder_outputs: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
         decoder_inputs_embeds: Optional[Tuple[torch.FloatTensor]] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[ttm.tensor.Tensor], TtWhisperModelOutput]:
+    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtWhisperModelOutput]:
         """
         Returns:
 
@@ -172,16 +177,26 @@ class TtWhisperModel(nn.Module):
          [1, 2, 512]
          ```"""
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
+        )
         output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         if encoder_outputs is None:
             logger.info("Running whisper encoder")
-            input_features = self._mask_input_features(input_features, attention_mask=attention_mask)
+            input_features = self._mask_input_features(
+                input_features, attention_mask=attention_mask
+            )
 
             encoder_outputs = self.encoder(
                 input_features,
@@ -193,9 +208,9 @@ class TtWhisperModel(nn.Module):
         # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
         elif return_dict and not isinstance(encoder_outputs, TtWhisperEncoderOutput):
             encoder_outputs = TtWhisperEncoderOutput(
-                last_hidden_state = encoder_outputs[0],
-                hidden_states = encoder_outputs[1] if len(encoder_outputs) > 1 else None,
-                attentions = encoder_outputs[2] if len(encoder_outputs) > 2 else None,
+                last_hidden_state=encoder_outputs[0],
+                hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
+                attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
             )
 
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)

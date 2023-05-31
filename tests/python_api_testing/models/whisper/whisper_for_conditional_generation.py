@@ -1,35 +1,31 @@
-import math
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
+import tt_lib
 import torch
 import torch.nn as nn
-import numpy as np
 from dataclasses import dataclass
 from loguru import logger
 
-import random
 from typing import Optional, Tuple, Union
-from transformers import WhisperProcessor, WhisperForConditionalGeneration, AutoFeatureExtractor, AutoProcessor
+from transformers import (
+    WhisperProcessor,
+    WhisperForConditionalGeneration,
+    AutoFeatureExtractor,
+    AutoProcessor,
+    WhisperConfig,
+)
 from datasets import load_dataset
 
-from transformers import WhisperModel, WhisperConfig
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_unpadded_tensor
-
+from python_api_testing.models.whisper.whisper_common import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+    create_unpadded_tensor,
+)
 from python_api_testing.models.whisper.whisper_model import TtWhisperModel
-
-from libs import tt_lib as ttm
-from utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float, untilize
-from python_api_testing.fused_ops.linear import Linear as TtLinear
 from python_api_testing.models.whisper.whisper_linear_layer import WhisperPaddedLinear
 
-def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
+
+def shift_tokens_right(
+    input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int
+):
     """
     Shift input ids one token to the right.
     """
@@ -44,18 +40,19 @@ def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start
 
     return shifted_input_ids
 
-@dataclass
-class TtWhisperLMOutput():
 
+@dataclass
+class TtWhisperLMOutput:
     loss: Optional[torch.FloatTensor] = None
-    logits: ttm.tensor.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[ttm.tensor.Tensor]]] = None
-    decoder_hidden_states: Optional[Tuple[ttm.tensor.Tensor]] = None
-    decoder_attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
-    cross_attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
-    encoder_last_hidden_state: Optional[ttm.tensor.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[ttm.tensor.Tensor]] = None
-    encoder_attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
+    logits: tt_lib.tensor.Tensor = None
+    past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None
+    decoder_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    decoder_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    cross_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    encoder_last_hidden_state: Optional[tt_lib.tensor.Tensor] = None
+    encoder_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    encoder_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+
 
 class TtWhisperForConditionalGeneration(nn.Module):
     base_model_prefix = "model"
@@ -71,13 +68,24 @@ class TtWhisperForConditionalGeneration(nn.Module):
     def __init__(self, state_dict, device, config: WhisperConfig):
         super().__init__()
 
-        self.state_dict=state_dict
+        self.state_dict = state_dict
         self.device = device
         self.config = config
 
-        self.model = TtWhisperModel(base_address="model", state_dict=self.state_dict, device=self.device, config=self.config)
+        self.model = TtWhisperModel(
+            base_address="model",
+            state_dict=self.state_dict,
+            device=self.device,
+            config=self.config,
+        )
 
-        self.proj_out = WhisperPaddedLinear(config.d_model, config.vocab_size, state_dict[f"proj_out.weight"], None, self.device)
+        self.proj_out = WhisperPaddedLinear(
+            config.d_model,
+            config.vocab_size,
+            state_dict[f"proj_out.weight"],
+            None,
+            self.device,
+        )
 
     def get_encoder(self):
         return self.model.get_encoder()
@@ -117,15 +125,15 @@ class TtWhisperForConditionalGeneration(nn.Module):
         head_mask: Optional[torch.Tensor] = None,
         decoder_head_mask: Optional[torch.Tensor] = None,
         cross_attn_head_mask: Optional[torch.Tensor] = None,
-        encoder_outputs: Optional[Tuple[Tuple[ttm.tensor.Tensor]]] = None,
-        past_key_values: Optional[Tuple[Tuple[ttm.tensor.Tensor]]] = None,
+        encoder_outputs: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
         decoder_inputs_embeds: Optional[Tuple[torch.FloatTensor]] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[ttm.tensor.Tensor], TtWhisperLMOutput]:
+    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtWhisperLMOutput]:
         """
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the language modeling loss. Indices should either be in `[0, ..., config.vocab_size]`
@@ -155,7 +163,9 @@ class TtWhisperForConditionalGeneration(nn.Module):
         >>> transcription
         ' Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.'
         ```"""
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         """TODO: Used in training mode"""
         if labels is not None:
@@ -180,12 +190,16 @@ class TtWhisperForConditionalGeneration(nn.Module):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        logger.info(f"Tt Whisper Model output shape {outputs.last_hidden_state.shape()}")
+        logger.info(
+            f"Tt Whisper Model output shape {outputs.last_hidden_state.shape()}"
+        )
 
         lm_logits = self.proj_out(outputs.last_hidden_state)
 
         # Unpad
-        lm_logits = create_unpadded_tensor(lm_logits, [1, 1, lm_logits.shape()[-2], self.config.vocab_size])
+        lm_logits = create_unpadded_tensor(
+            lm_logits, [1, 1, lm_logits.shape()[-2], self.config.vocab_size]
+        )
 
         # Convert to Torch
         logits_to_torch = torch.Tensor(lm_logits.data()).reshape(lm_logits.shape())
@@ -195,7 +209,9 @@ class TtWhisperForConditionalGeneration(nn.Module):
         loss = None
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(logits_to_torch.view(-1, self.config.vocab_size), labels.reshape(-1))
+            loss = loss_fct(
+                logits_to_torch.view(-1, self.config.vocab_size), labels.reshape(-1)
+            )
 
         if not return_dict:
             output = (logits_to_torch,) + outputs[1:]
@@ -238,5 +254,9 @@ class TtWhisperForConditionalGeneration(nn.Module):
     def _reorder_cache(past_key_values, beam_idx):
         reordered_past = ()
         for layer_past in past_key_values:
-            reordered_past += (tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),)
+            reordered_past += (
+                tuple(
+                    past_state.index_select(0, beam_idx) for past_state in layer_past
+                ),
+            )
         return reordered_past

@@ -1,35 +1,30 @@
 import math
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
+import tt_lib
 import torch
 import torch.nn as nn
-import numpy as np
 import random
 from typing import Optional, Tuple, Union
 
 from transformers import WhisperConfig
 from dataclasses import dataclass
 
-from python_api_testing.models.whisper.whisper_common import torch2tt_tensor, tt2torch_tensor, create_padded_tensor, create_unpadded_tensor
-from python_api_testing.models.whisper.whisper_encoder_layer import TtWhisperEncoderLayer
-from python_api_testing.fused_ops.layernorm import Layernorm as TtLayernorm
+from python_api_testing.models.whisper.whisper_common import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+    create_padded_tensor,
+    create_unpadded_tensor,
+)
+from python_api_testing.models.whisper.whisper_encoder_layer import (
+    TtWhisperEncoderLayer,
+)
+from tt_lib.fused_ops.layernorm import Layernorm as TtLayernorm
 
-from libs import tt_lib as ttm
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 @dataclass
-class TtWhisperEncoderOutput():
-
-    last_hidden_state: ttm.tensor.Tensor = None
-    hidden_states: Optional[Tuple[ttm.tensor.Tensor]] = None
-    attentions: Optional[Tuple[ttm.tensor.Tensor]] = None
+class TtWhisperEncoderOutput:
+    last_hidden_state: tt_lib.tensor.Tensor = None
+    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
 
 
 class TtWhisperEncoder(nn.Module):
@@ -39,17 +34,11 @@ class TtWhisperEncoder(nn.Module):
 
     Args:
         reference_model: WhisperModel
-        device: device: ttm.device.Device
+        device: device: tt_lib.device.Device
         config: WhisperConfig
     """
 
-    def __init__(
-        self,
-        state_dict,
-        base_address,
-        device,
-        config: WhisperConfig
-    ):
+    def __init__(self, state_dict, base_address, device, config: WhisperConfig):
         super().__init__()
 
         self.state_dict = state_dict
@@ -74,28 +63,46 @@ class TtWhisperEncoder(nn.Module):
         self.conv2.bias = nn.Parameter(state_dict[f"{base_address}.conv2.bias"])
 
         self.embed_positions = nn.Embedding(self.max_source_positions, embed_dim)
-        self.embed_positions.weight = nn.Parameter(state_dict[f"{base_address}.embed_positions.weight"])
+        self.embed_positions.weight = nn.Parameter(
+            state_dict[f"{base_address}.embed_positions.weight"]
+        )
 
-        self.layers = nn.ModuleList([
-            TtWhisperEncoderLayer(
-                base_address = f"{base_address}.layers.{ind}",
-                state_dict = state_dict,
-                device = device,
-                embed_dim = embed_dim,
-                num_heads = config.encoder_attention_heads,
-                encoder_ffn_dim = config.encoder_ffn_dim,
-                config = config,
-            )
-            for ind in range(config.encoder_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                TtWhisperEncoderLayer(
+                    base_address=f"{base_address}.layers.{ind}",
+                    state_dict=state_dict,
+                    device=device,
+                    embed_dim=embed_dim,
+                    num_heads=config.encoder_attention_heads,
+                    encoder_ffn_dim=config.encoder_ffn_dim,
+                    config=config,
+                )
+                for ind in range(config.encoder_layers)
+            ]
+        )
 
         gamma = self.state_dict[f"{base_address}.layer_norm.weight"]
-        gamma = create_padded_tensor(list(gamma.shape), gamma, [1, 1, 32, gamma.shape[-1]], 0, ttm.device.GetHost())
+        gamma = create_padded_tensor(
+            list(gamma.shape),
+            gamma,
+            [1, 1, 32, gamma.shape[-1]],
+            0,
+            tt_lib.device.GetHost(),
+        )
         beta = self.state_dict[f"{base_address}.layer_norm.bias"]
-        beta = create_padded_tensor(list(beta.shape), beta, [1, 1, 32, beta.shape[-1]], 0, ttm.device.GetHost())
+        beta = create_padded_tensor(
+            list(beta.shape),
+            beta,
+            [1, 1, 32, beta.shape[-1]],
+            0,
+            tt_lib.device.GetHost(),
+        )
         tt_gamma = gamma.data()
         tt_beta = beta.data()
-        self.layer_norm = TtLayernorm(tt_gamma, tt_beta, 1e-05, 1, config.d_model, self.device, 1)
+        self.layer_norm = TtLayernorm(
+            tt_gamma, tt_beta, 1e-05, 1, config.d_model, self.device, 1
+        )
 
         self.gradient_checkpointing = False
 
@@ -112,12 +119,12 @@ class TtWhisperEncoder(nn.Module):
 
     def forward(
         self,
-        input_features: torch.Tensor,#bc of shape
-        attention_mask: Optional[ttm.tensor.Tensor] = None, #  NOT used in whisper
-        head_mask: Optional[torch.Tensor] = None,#bc of shape []
-        output_attentions:  Optional[bool] = None,
-        output_hidden_states:  Optional[bool] = None,
-        return_dict:  Optional[bool] = None,
+        input_features: torch.Tensor,  # bc of shape
+        attention_mask: Optional[tt_lib.tensor.Tensor] = None,  #  NOT used in whisper
+        head_mask: Optional[torch.Tensor] = None,  # bc of shape []
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
     ):
         """
         Args:
@@ -144,11 +151,19 @@ class TtWhisperEncoder(nn.Module):
                 Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
         """
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         """PyTorch implementation start"""
         inputs_embeds = nn.functional.gelu(self.conv1(input_features))
@@ -165,12 +180,18 @@ class TtWhisperEncoder(nn.Module):
         # Add padding to 1504 to be divisible by 32
         output_tensor_shape = list(hidden_states.size())
         while len(output_tensor_shape) < 4:
-            output_tensor_shape.insert(0,1)
+            output_tensor_shape.insert(0, 1)
         output_tensor_shape[-2] = 1504
-        hidden_states = create_padded_tensor(list(hidden_states.size()), hidden_states, output_tensor_shape, pad_value=0.0, device=self.device)
+        hidden_states = create_padded_tensor(
+            list(hidden_states.size()),
+            hidden_states,
+            output_tensor_shape,
+            pad_value=0.0,
+            device=self.device,
+        )
 
         # Not suppporting dropout at moment
-        #hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         encoder_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
@@ -189,7 +210,9 @@ class TtWhisperEncoder(nn.Module):
             dropout_probability = random.uniform(0, 1)
 
             """Not supporting training at moment:"""
-            if self.training and (dropout_probability < self.layerdrop):  # skip the layer
+            if self.training and (
+                dropout_probability < self.layerdrop
+            ):  # skip the layer
                 layer_outputs = (None, None)
             else:
                 """Not supporting training at moment:"""
@@ -211,7 +234,9 @@ class TtWhisperEncoder(nn.Module):
                     layer_outputs = encoder_layer(
                         hidden_states,
                         None,
-                        layer_head_mask=(head_mask[idx] if head_mask is not None else None),
+                        layer_head_mask=(
+                            head_mask[idx] if head_mask is not None else None
+                        ),
                         output_attentions=output_attentions,
                     )
 
@@ -233,7 +258,11 @@ class TtWhisperEncoder(nn.Module):
             encoder_states = encoder_states + (hidden_states,)
 
         if not return_dict:
-            return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)
+            return tuple(
+                v
+                for v in [hidden_states, encoder_states, all_attentions]
+                if v is not None
+            )
 
         """
         model's outputs
@@ -251,5 +280,7 @@ class TtWhisperEncoder(nn.Module):
             heads.
         """
         return TtWhisperEncoderOutput(
-            last_hidden_state=hidden_states, hidden_states=encoder_states, attentions=all_attentions
+            last_hidden_state=hidden_states,
+            hidden_states=encoder_states,
+            attentions=all_attentions,
         )
