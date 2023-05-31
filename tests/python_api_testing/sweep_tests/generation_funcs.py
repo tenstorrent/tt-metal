@@ -16,7 +16,7 @@ supported_tt_dtypes = {ttl.tensor.DataType.BFLOAT16}
 supported_tt_layouts = [
     ttl.tensor.Layout.ROW_MAJOR,
     ttl.tensor.Layout.TILE,
-    ttl.tensor.Layout.CHANNELS_LAST,
+    # ttl.tensor.Layout.CHANNELS_LAST,
 ]
 
 on_device_options = [
