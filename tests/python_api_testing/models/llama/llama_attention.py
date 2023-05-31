@@ -2,18 +2,15 @@ import sys
 import math
 import torch
 from torch import nn
-from libs import tt_lib as ttl
-from python_api_testing.models.llama.llama_utils import tt2torch_tensor, torch2tt_tensor
-from typing import List, Optional, Tuple, Union
-from fused_ops.linear import Linear as TtLinear
-from fused_ops.softmax import softmax as TTsoftmax
+import tt_lib
+from typing import Optional, Tuple
 from python_api_testing.models.llama.llama_utils import *
-from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
+from tt_lib.fallback_ops import fallback_ops
 
 
 def shape_tt(states, batch_size, seq_len, n_heads, head_dim):
-    tt_out = ttl.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
-    tt_out = ttl.tensor.transpose_hc(tt_out)
+    tt_out = tt_lib.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
+    tt_out = tt_lib.tensor.transpose_hc(tt_out)
 
     return tt_out
 
@@ -25,7 +22,6 @@ def shape_pt(tensor: torch.Tensor, seq_len: int, bsz: int):
 
 
 def test_lamma_shape(device):
-
     batch_size = 1
     n_heads = 32
     seq_len = 128
@@ -55,24 +51,38 @@ class LlamaRotaryEmbedding(torch.nn.Module):
 
         # Build here to make `torch.jit.trace` work.
         self.max_seq_len_cached = max_position_embeddings
-        t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+        t = torch.arange(
+            self.max_seq_len_cached,
+            device=self.inv_freq.device,
+            dtype=self.inv_freq.dtype,
+        )
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos()[None, None, :, :], persistent=False)
-        self.register_buffer("sin_cached", emb.sin()[None, None, :, :], persistent=False)
+        self.register_buffer(
+            "cos_cached", emb.cos()[None, None, :, :], persistent=False
+        )
+        self.register_buffer(
+            "sin_cached", emb.sin()[None, None, :, :], persistent=False
+        )
 
     def forward(self, x, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
         # This `if` block is unlikely to be run after we build sin/cos in `__init__`. Keep the logic here just in case.
         if seq_len > self.max_seq_len_cached:
             self.max_seq_len_cached = seq_len
-            t = torch.arange(self.max_seq_len_cached, device=x.device, dtype=self.inv_freq.dtype)
+            t = torch.arange(
+                self.max_seq_len_cached, device=x.device, dtype=self.inv_freq.dtype
+            )
             freqs = torch.einsum("i,j->ij", t, self.inv_freq)
             # Different from paper, but it uses a different permutation in order to obtain the same calculation
             emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-            self.register_buffer("cos_cached", emb.cos()[None, None, :, :], persistent=False)
-            self.register_buffer("sin_cached", emb.sin()[None, None, :, :], persistent=False)
+            self.register_buffer(
+                "cos_cached", emb.cos()[None, None, :, :], persistent=False
+            )
+            self.register_buffer(
+                "sin_cached", emb.sin()[None, None, :, :], persistent=False
+            )
         return (
             self.cos_cached[:, :, :seq_len, ...].to(dtype=x.dtype),
             self.sin_cached[:, :, :seq_len, ...].to(dtype=x.dtype),
@@ -87,10 +97,11 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
-    gather_indices = position_ids[:, None, :, None]  # [bs, 1, seq_len, 1]
-    gather_indices = gather_indices.repeat(1, cos.shape[1], 1, cos.shape[3])
-    cos = torch.gather(cos.repeat(gather_indices.shape[0], 1, 1, 1), 2, gather_indices)
-    sin = torch.gather(sin.repeat(gather_indices.shape[0], 1, 1, 1), 2, gather_indices)
+    # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
+    cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
+    sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
+    cos = cos[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
+    sin = sin[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
@@ -115,7 +126,7 @@ class TtLlamaAttention(nn.Module):
         self.head_dim = hidden_size // num_heads
         self.max_position_embeddings = max_position_embeddings
         self.device = device
-        # self.base_url = base_url
+        self.state_dict = state_dict
 
         if (self.head_dim * num_heads) != self.hidden_size:
             raise ValueError(
@@ -123,28 +134,38 @@ class TtLlamaAttention(nn.Module):
                 f" and `num_heads`: {num_heads})."
             )
 
-        self.state_dict = state_dict
-        self.q_weights = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.self_attn.q_proj.weight"], ttl.device.GetHost())
-        self.k_weights = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.self_attn.k_proj.weight"], ttl.device.GetHost())
-        self.v_weights = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.self_attn.v_proj.weight"], ttl.device.GetHost())
-        self.o_weights = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.self_attn.o_proj.weight"], ttl.device.GetHost())
+        self.q_weights = torch2tt_tensor(
+            self.state_dict[f"{base_url}.{layer_num}.self_attn.q_proj.weight"],
+            self.device,
+        )
+        self.k_weights = torch2tt_tensor(
+            self.state_dict[f"{base_url}.{layer_num}.self_attn.k_proj.weight"],
+            self.device,
+        )
+        self.v_weights = torch2tt_tensor(
+            self.state_dict[f"{base_url}.{layer_num}.self_attn.v_proj.weight"],
+            self.device,
+        )
+        self.o_weights = torch2tt_tensor(
+            self.state_dict[f"{base_url}.{layer_num}.self_attn.o_proj.weight"],
+            self.device,
+        )
 
-        # Mesh TensorFlow initialization to avoid scaling before softmax
-        self.q_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.q_weights.data(), bias=None, device=self.device)
-        self.k_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.k_weights.data(), bias=None, device=self.device)
-        self.v_proj = TtLinear(self.hidden_size, self.num_heads * self.head_dim, weight=self.v_weights.data(), bias=None, device=self.device)
-        self.o_proj = TtLinear(self.num_heads * self.head_dim, self.hidden_size, weight=self.o_weights.data(), bias=None, device=self.device)
-
-        # self.rotary_emb = LlamaRotaryEmbedding(self.head_dim)
-        self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
+        self.rotary_emb = LlamaRotaryEmbedding(
+            self.head_dim, max_position_embeddings=self.max_position_embeddings
+        )
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
-        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        return (
+            tensor.view(bsz, seq_len, self.num_heads, self.head_dim)
+            .transpose(1, 2)
+            .contiguous()
+        )
         # return shape_tt(tensor, bsz, seq_len, self.num_heads, self.head_dim)
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
+        hidden_states: tt_lib.tensor.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
@@ -156,17 +177,13 @@ class TtLlamaAttention(nn.Module):
         bsz = hidden_states.shape()[0]
         q_len = hidden_states.shape()[2]
 
-        # ======================================================
-        # query_states = self.q_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        query = self.q_proj(hidden_states)
+        query = linear(hidden_states, self.q_weights)
         query_states = shape_tt(query, bsz, q_len, self.num_heads, self.head_dim)
 
-        # key_states = self.k_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key = self.k_proj(hidden_states)
+        key = linear(hidden_states, self.k_weights)
         key_states = shape_tt(key, bsz, q_len, self.num_heads, self.head_dim)
 
-        # value_states = self.v_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        value = self.v_proj(hidden_states)
+        value = linear(hidden_states, self.v_weights)
         value_states = shape_tt(value, bsz, q_len, self.num_heads, self.head_dim)
 
         # return all states to pytorch =============================
@@ -194,7 +211,9 @@ class TtLlamaAttention(nn.Module):
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(
+            query_states, key_states, cos, sin, position_ids
+        )
 
         if past_key_value is not None:
             # reuse k, v, self_attention
@@ -208,13 +227,15 @@ class TtLlamaAttention(nn.Module):
         key_states_tt = torch2tt_tensor(key_states, self.device)
         query_states_tt = torch2tt_tensor(query_states, self.device)
 
-        key_states_tt_trans = ttl.tensor.transpose(key_states_tt)
-        mul = ttl.tensor.bmm(query_states_tt, key_states_tt_trans)
+        key_states_tt_transposed = tt_lib.tensor.transpose(key_states_tt)
+        mul = tt_lib.tensor.bmm(query_states_tt, key_states_tt_transposed)
+
         # create constant tensor
-        const_tensor_tt = tt_const_tensor(math.sqrt(self.head_dim), mul.shape(), self.device)
+        const_tensor_tt = fallback_ops.full(mul.shape(), math.sqrt(self.head_dim))
+
         # divison
-        recip = ttl.tensor.recip(const_tensor_tt)
-        attn_weights = ttl.tensor.mul(mul, recip)
+        recip = tt_lib.tensor.recip(const_tensor_tt)
+        attn_weights = tt_lib.tensor.mul(mul, recip)
 
         if attn_weights.shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(
@@ -231,39 +252,37 @@ class TtLlamaAttention(nn.Module):
             # TT eltwise add operation, expand attention_mask shape
             attention_mask = attention_mask.repeat(1, self.num_heads, 1, 1)
             attention_mask = torch2tt_tensor(attention_mask, self.device)
-            attn_weights = ttl.tensor.add(attn_weights, attention_mask)
+            attn_weights = tt_lib.tensor.add(attn_weights, attention_mask)
             # convert to PyTorch tensor
             attn_weights = tt2torch_tensor(attn_weights)
-            attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
+            attn_weights = torch.max(
+                attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
+            )
 
         # TT implementation for:
         # PyTorch: upcast attention to fp32
         # attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         # attn_output = torch.matmul(attn_weights, value_states)
 
-        if not isinstance(attn_weights, ttl.tensor.Tensor):
+        if not isinstance(attn_weights, tt_lib.tensor.Tensor):
             attn_weights = torch2tt_tensor(attn_weights, self.device)
         value_states = torch2tt_tensor(value_states, self.device)
 
-        attn_weights = TTsoftmax(attn_weights)
-        attn_output = ttl.tensor.bmm(attn_weights, value_states)
+        # torch softmax
+        attn_weights = fallback_ops.softmax(attn_weights, dim=-1)
+        attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
 
-        # return to PyTorch
-        attn_output = tt2torch_tensor(attn_output)
-
-        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
+        if attn_output.shape() != [bsz, self.num_heads, q_len, self.head_dim]:
             raise ValueError(
                 f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
+                f" {attn_output.shape()}"
             )
 
-        # return to TT tensor
-        attn_output = torch2tt_tensor(attn_output, self.device)
-        attn_output = ttl.tensor.transpose_hc(attn_output)
-        attn_output = ttl.tensor.reshape(attn_output, bsz, 1, q_len, self.hidden_size)
-
-        # TT call for PyTorch: attn_output = self.o_proj(attn_output)
-        attn_output = self.o_proj(attn_output)
+        attn_output = tt_lib.tensor.transpose_hc(attn_output)
+        attn_output = tt_lib.tensor.reshape(
+            attn_output, bsz, 1, q_len, self.hidden_size
+        )
+        attn_output = linear(attn_output, self.o_weights)
 
         if not output_attentions:
             attn_weights = None

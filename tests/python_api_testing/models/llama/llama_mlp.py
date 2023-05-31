@@ -1,8 +1,12 @@
 import torch
 from torch import nn
-from libs import tt_lib as ttl
-from python_api_testing.models.llama.llama_utils import tt2torch_tensor, torch2tt_tensor
-from fused_ops.linear import Linear as TtLinear
+import tt_lib
+from tt_lib.fallback_ops import fallback_ops
+from python_api_testing.models.llama.llama_utils import (
+    tt2torch_tensor,
+    torch2tt_tensor,
+    linear,
+)
 
 
 class TtLlamaMLP(nn.Module):
@@ -22,29 +26,35 @@ class TtLlamaMLP(nn.Module):
         self.device = device
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
+        self.bias = None
 
-        self.out_gate_proj = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.mlp.gate_proj.weight"], ttl.device.GetHost())
-        self.out_down_proj = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.mlp.down_proj.weight"], ttl.device.GetHost())
-        self.out_up_proj = torch2tt_tensor(self.state_dict[f"{base_url}.{layer_num}.mlp.up_proj.weight"], ttl.device.GetHost())
+        self.out_gate_proj = torch2tt_tensor(
+            self.state_dict[f"{base_url}.{layer_num}.mlp.gate_proj.weight"], self.device
+        )
+        self.out_down_proj = torch2tt_tensor(
+            self.state_dict[f"{base_url}.{layer_num}.mlp.down_proj.weight"], self.device
+        )
+        self.out_up_proj = torch2tt_tensor(
+            self.state_dict[f"{base_url}.{layer_num}.mlp.up_proj.weight"], self.device
+        )
 
-        self.gate_proj = TtLinear(in_features=self.hidden_size, out_features=self.intermediate_size, weight=self.out_gate_proj.data(), bias=None, device=self.device)
-        self.down_proj = TtLinear(in_features=self.intermediate_size, out_features=self.hidden_size, weight=self.out_down_proj.data(), bias=None, device=self.device)
-        self.up_proj = TtLinear(in_features=self.hidden_size, out_features=self.intermediate_size, weight=self.out_up_proj.data(), bias=None, device=self.device)
-
-        if hidden_act == "silu": # $$ silu
-            self.act_fn = ttl.tensor.sigmoid
+        if hidden_act == "silu":  # silu
+            self.act_fn = fallback_ops.silu
 
     def forward(self, x):
         # gate proj
-        gate = self.gate_proj(x)
+        gate = linear(x, self.out_gate_proj, self.bias)
         # apply silu activation function
-        activation = self.act_fn(gate)
-        gate = ttl.tensor.mul(gate, activation)
+        gate = self.act_fn(gate)
+
         # up proj
-        up = self.up_proj(x)
+        up = linear(x, self.out_up_proj, self.bias)
+
         # product
-        prod = ttl.tensor.mul(gate, up)
+        prod = tt_lib.tensor.mul(gate, up)
+
         # down
-        hidden_states = self.down_proj(prod)
+        hidden_states = linear(prod, self.out_down_proj, self.bias)
+
         # return TT Tensor
         return hidden_states

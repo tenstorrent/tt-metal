@@ -13,26 +13,11 @@ from loguru import logger
 import torch
 import numpy as np
 from torch import nn
-from torch.nn import CrossEntropyLoss
-from torch.utils.checkpoint import checkpoint
-from libs import tt_lib as ttl
-from typing import List, Optional, Tuple, Union
 
-from transformers import T5Tokenizer, T5Model, AutoTokenizer, AutoModelForCausalLM
-from collections import OrderedDict
+import tt_lib
 
-from utility_functions import (
-    pad_activation,
-    pad_weight,
-    tilize_to_list,
-    untilize,
-    nearest_32,
-    print_diff_argmax,
-    tt2torch,
-    tt2torch_rm,
-)
-from fused_ops.linear import Linear as TtLinear
-from fused_ops.softmax import softmax as TTsoftmax
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
 from python_api_testing.models.llama.llama_utils import *
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from python_api_testing.models.llama.llama_attention import TtLlamaAttention
@@ -62,6 +47,7 @@ def run_test_LlamaAttention_inference(
         model_name, torch_dtype=torch.float32
     )
     hugging_face_reference_model.eval()
+
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 
@@ -113,12 +99,16 @@ def run_test_LlamaAttention_inference(
     tt_out = tt2torch_tensor(tt_out).squeeze(1)
 
     # check outputs ----------------------------------------------------------------------
-    print(comp_allclose(pytorch_out, tt_out))
-    print(comp_pcc(pytorch_out, tt_out))
+    logger.info(comp_allclose(pytorch_out, tt_out))
 
-    passing_pcc, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    logger.info(f"PCC value: {output_pcc}")
 
-    assert passing_pcc, f"PCC value is lower than {pcc}"
+    if does_pass:
+        logger.info("Llama Attention output Passed!")
+    else:
+        logger.warning("Llama Attention output Failed!")
+        assert does_pass, f"PCC value is lower than {pcc}"
 
 
 @pytest.mark.parametrize(
@@ -127,21 +117,21 @@ def run_test_LlamaAttention_inference(
         pytest.param(
             "decapoda-research/llama-7b-hf",
             "hf-internal-testing/llama-tokenizer",
-            32,
+            1,
             128,
             False,
-            0.68,
+            0.98,
         ),
     ),
 )
 def test_LlamaAttention_inference(
     model_version, tokenizer_version, batch, seq_len, on_weka, pcc
 ):
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    # host = ttl.device.GetHost()
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    tt_lib.device.SetDefaultDevice(device)
+
     run_test_LlamaAttention_inference(
         device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
     )
-    ttl.device.CloseDevice(device)
+    tt_lib.device.CloseDevice(device)

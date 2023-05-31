@@ -1,26 +1,25 @@
 import math
 import torch
 from torch import nn
-from libs import tt_lib as ttl
+import tt_lib
 from typing import List, Optional, Tuple, Union
-from fused_ops.linear import Linear as TtLinear
-from fused_ops.softmax import softmax as TTsoftmax
 from python_api_testing.models.llama.llama_mlp import TtLlamaMLP
 from python_api_testing.models.llama.llama_attention import TtLlamaAttention
 from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_utils import *
-from utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 
 
 class TtLlamaDecoderLayer(nn.Module):
-    def __init__(self, device, state_dict, base_url, decoder_idx, max_position_embeddings, config):
+    def __init__(
+        self, device, state_dict, base_url, decoder_idx, max_position_embeddings, config
+    ):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.state_dict = state_dict
-        self.base_url=base_url
-        self.device=device
-        self.decoder_idx=decoder_idx
-        self.max_position_embeddings=max_position_embeddings
+        self.base_url = base_url
+        self.device = device
+        self.decoder_idx = decoder_idx
+        self.max_position_embeddings = max_position_embeddings
 
         # PyTorch: self.self_attn = LlamaAttention(
         #     hidden_size=self.hidden_size,
@@ -33,7 +32,7 @@ class TtLlamaDecoderLayer(nn.Module):
             layer_num=decoder_idx,
             hidden_size=config.hidden_size,
             num_heads=config.num_attention_heads,
-            max_position_embeddings=self.max_position_embeddings
+            max_position_embeddings=self.max_position_embeddings,
         )
 
         # PyTorch: self.mlp = LlamaMLP(
@@ -56,10 +55,10 @@ class TtLlamaDecoderLayer(nn.Module):
             self.device,
             state_dict=self.state_dict,
             base_url=self.base_url,
-            layer_num = decoder_idx,
-            layer_position = 'input_layernorm',
+            layer_num=decoder_idx,
+            layer_position="input_layernorm",
             hidden_size=config.hidden_size,
-            eps=config.rms_norm_eps
+            eps=config.rms_norm_eps,
         )
 
         # PyTorch: self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -67,22 +66,23 @@ class TtLlamaDecoderLayer(nn.Module):
             self.device,
             state_dict=self.state_dict,
             base_url=self.base_url,
-            layer_num = decoder_idx,
-            layer_position = 'post_attention_layernorm',
+            layer_num=decoder_idx,
+            layer_position="post_attention_layernorm",
             hidden_size=config.hidden_size,
-            eps=config.rms_norm_eps
+            eps=config.rms_norm_eps,
         )
 
     def forward(
         self,
-        hidden_states, #: torch.Tensor,
+        hidden_states,  #: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        ast_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[
+        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
+    ]:
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -120,7 +120,7 @@ class TtLlamaDecoderLayer(nn.Module):
         )
 
         # Pytorch: hidden_states = residual + hidden_states
-        hidden_states = ttl.tensor.add(residual, hidden_states)
+        hidden_states = tt_lib.tensor.add(residual, hidden_states)
 
         # Fully Connected
         residual = hidden_states
@@ -132,7 +132,7 @@ class TtLlamaDecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
 
         # Pytorch: hidden_states = residual + hidden_states
-        hidden_states = ttl.tensor.add(residual, hidden_states)
+        hidden_states = tt_lib.tensor.add(residual, hidden_states)
 
         outputs = (hidden_states,)
 
