@@ -118,6 +118,7 @@ enum SfpuType {
     cosine,
     relu_max,
     relu_min,
+    cast_fp32_to_fp16a,
     unused,
 };
 }  // namespace ckernel

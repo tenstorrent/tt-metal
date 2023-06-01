@@ -1200,6 +1200,19 @@ inline void relu_min(uint uint_threshold)
         dst_reg++;
     }
 }
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void cast_fp32_to_fp16a()
+{
+    #pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat in = dst_reg[0];
+        float_to_fp16a(in);
+        dst_reg[0] = out;
+
+        dst_reg++;
+    }
+}
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int ITERATIONS=8>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
@@ -1282,6 +1295,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::relu_max) {
         relu_max<APPROXIMATION_MODE, ITERATIONS>(param0);
+    }
+    else if constexpr (operation == SfpuType::cast_fp32_to_fp16a) {
+        cast_fp32_to_fp16a<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
 }
 
