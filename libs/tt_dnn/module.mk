@@ -18,7 +18,6 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/reduce/single_core/reduce_op_single_core.cpp \
 	libs/tt_dnn/op_library/reduce/multi_core_h/reduce_op_multi_core_h.cpp \
 	libs/tt_dnn/op_library/reduce/multi_core_w/reduce_op_multi_core_w.cpp \
-	libs/tt_dnn/op_library/reduce/multi_core_hw/reduce_op_multi_core_hw.cpp \
 	libs/tt_dnn/op_library/bcast/bcast_op.cpp \
 	libs/tt_dnn/op_library/bcast/single_core/bcast_op_single_core.cpp \
 	libs/tt_dnn/op_library/bcast/multi_core_h/bcast_op_multi_core_h.cpp \

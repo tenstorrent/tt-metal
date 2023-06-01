@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor reduce_multi_core_w(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
+Program reduce_multi_core_w(const Tensor &a, Tensor& output, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
 
     TT_ASSERT(reduce_dim == ReduceOpDim::W);
     const auto shape = a.shape();
@@ -44,12 +44,6 @@ Tensor reduce_multi_core_w(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
     for(uint32_t i = 0; i < num_rows % num_cores; i++){
         num_rows_per_core[i]++;
     }
-
-    // This should allocate a DRAM buffer on the device
-    auto outshape = a.shape();
-    outshape[3] = 32;
-
-    tt_metal::Tensor output = tt_metal::Tensor(outshape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 
     string compute_kernel_name = reduce_op_utils::dim_to_kernel_name(reduce_dim, reduce_op);
 
@@ -137,17 +131,6 @@ Tensor reduce_multi_core_w(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
         reduce_op_utils::add_defines(reduce_compute_kernel, reduce_op, reduce_dim);
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
     uint32_t out_dim_divider = Wt;
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -177,10 +160,8 @@ Tensor reduce_multi_core_w(const Tensor &a, ReduceOpMath::Enum reduce_op, Reduce
         num_tiles_read+=num_tensor_tiles_per_core;
     }
 
-    tt_metal::LaunchKernels(device, program);
-
     // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 }  // namespace tt_metal

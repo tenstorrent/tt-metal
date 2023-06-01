@@ -3,6 +3,8 @@
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
+#include "tt_dnn/op_library/operation.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -22,11 +24,23 @@ struct ReduceOpParallelizationStrategy {
 };
 
 // TODO: Accept parallelization
-Tensor reduce(const Tensor &a, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
-Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
-Tensor reduce_multi_core_h(const Tensor &a, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
-Tensor reduce_multi_core_w(const Tensor &a, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
-Tensor reduce_multi_core_hw(const Tensor &a, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
+Program reduce_single_core(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
+Program reduce_multi_core_h(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
+Program reduce_multi_core_w(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
+
+struct Reduce : Operation {
+    const ReduceOpMath::Enum math_op;
+    const ReduceOpDim::Enum dim;
+    const float scaler;
+
+    Reduce(ReduceOpMath::Enum math_op, ReduceOpDim::Enum dim, float scaler) : math_op{math_op}, dim{dim}, scaler{scaler}  {}
+
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const override;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const override;
+    Program create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+};
+
+Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
 
 }  // namespace tt_metal
 

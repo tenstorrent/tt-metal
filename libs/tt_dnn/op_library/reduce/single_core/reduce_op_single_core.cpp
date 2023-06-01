@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
+Program reduce_single_core(const Tensor &a, Tensor& output, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
 
     const auto shape = a.shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
@@ -37,14 +37,6 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    auto outshape = a.shape();
-    switch(reduce_dim) {
-        case ReduceOpDim::W: outshape[3] = 32; break;
-        case ReduceOpDim::H: outshape[2] = 32; break;
-        case ReduceOpDim::HW: outshape[2] = outshape[3] = 32; break;
-        default: TT_ASSERT(false && "Invalid reduce_op!");
-    }
-    tt_metal::Tensor output = tt_metal::Tensor(outshape, a.dtype(), tt::tt_metal::Layout::TILE, device);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -121,16 +113,6 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
 
     reduce_op_utils::add_defines(reduce_compute_kernel, reduce_op, reduce_dim);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::CompileProgram(device, program);
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
     tt_metal::WriteRuntimeArgsToDevice(
         device, reader_kernel, core,
         {
@@ -160,10 +142,8 @@ Tensor reduce_single_core(const Tensor &a, ReduceOpMath::Enum reduce_op, ReduceO
         }
     );
 
-    tt_metal::LaunchKernels(device, program);
-
     // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 }  // namespace tt_metal

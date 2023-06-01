@@ -49,11 +49,12 @@ int main(int argc, char **argv) {
         Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
         Tensor host_a = a.to(host); // Move tensor a to host to validate
 
-        for (auto op_type: ReduceOpMath::all())
-        for (auto op_dim: ReduceOpDim::all()) {
-            Tensor c = reduce(a, op_type, op_dim);
-            Tensor d = c.to(host);
-            //pass &= (host_a.data() == d.data()); // TODO(AP)
+        for (auto op_type: ReduceOpMath::all()) {
+            for (auto op_dim: ReduceOpDim::all()) {
+                Tensor c = reduce(a, op_type, op_dim);
+                Tensor d = c.to(host);
+                //pass &= (host_a.data() == d.data()); // TODO(AP)
+            }
         }
 
         ////////////////////////////////////////////////////////////////////////////
