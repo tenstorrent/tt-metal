@@ -1,12 +1,9 @@
 import torch
 from torch.nn import functional as F
 
-from libs import tt_lib as ttm
-from fused_ops.linear import Linear as TtLinear
-
+import tt_lib
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
 import python_api_testing.models.bloom.bloom_gelu_forward as bloom_gelu_forward
-
 
 
 # class BloomMLP(nn.Module):
@@ -47,26 +44,64 @@ class TtBloomMLP(torch.nn.Module):
         self.hidden_size = config.hidden_size
         self.hidden_dropout = config.hidden_dropout
         self.training = False
+        self.use_tt_gelu = False
 
-        self.tt_weight_mlp_h4h = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.weight", state_dict)
-        self.tt_bias_mlp_h4h = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.bias", state_dict)
+        # Get the weights
+        self.tt_weight_mlp_h4h = state_dict[f"{base_address}.dense_h_to_4h.weight"]
+        self.tt_weight_mlp_4hh = state_dict[f"{base_address}.dense_4h_to_h.weight"]
 
-        self.tt_weight_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.weight", state_dict)
-        self.tt_bias_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.bias", state_dict)
+        # Transpose the weights
+        self.tt_weight_mlp_h4h = torch.transpose(self.tt_weight_mlp_h4h, -1, -2)
+        self.tt_weight_mlp_4hh = torch.transpose(self.tt_weight_mlp_4hh, -1, -2)
 
-        self.dense_h_to_4h = TtLinear(self.hidden_size, 4 * self.hidden_size, self.tt_weight_mlp_h4h.data(), self.tt_bias_mlp_h4h.data(), device)
-        self.dense_4h_to_h = TtLinear(4 * self.hidden_size, self.hidden_size, self.tt_weight_mlp_4hh.data(), self.tt_bias_mlp_4hh.data(), device)
+        # Push weights to Tt device
+        self.tt_weight_mlp_h4h = bloom_utils.torch2tt_tensor(
+            self.tt_weight_mlp_h4h, device
+        )
+        self.tt_weight_mlp_4hh = bloom_utils.torch2tt_tensor(
+            self.tt_weight_mlp_4hh, device
+        )
 
-        self.gelu_impl = bloom_gelu_forward.tt_bloom_gelu_forward
+        # Load biases
+        self.tt_bias_mlp_h4h = bloom_utils.torch2tt_tensor(
+            state_dict[f"{base_address}.dense_h_to_4h.bias"], device
+        )
+        self.tt_bias_mlp_4hh = bloom_utils.torch2tt_tensor(
+            state_dict[f"{base_address}.dense_4h_to_h.bias"], device
+        )
+
+        # self.gelu_impl = bloom_gelu_forward.tt_bloom_gelu_forward
+        # self.gelu_impl = bloom_gelu_forward.bloom_gelu_forward
 
     def forward(self, hidden_states, residual, device):
+        # h4h = self.dense_h_to_4h(hidden_states)
+        h4h = bloom_utils.tt_matmul(hidden_states, self.tt_weight_mlp_h4h, device)
+        h4h = tt_lib.tensor.bcast(
+            h4h,
+            self.tt_bias_mlp_h4h,
+            tt_lib.tensor.BcastOpMath.ADD,
+            tt_lib.tensor.BcastOpDim.H,
+        )
 
-        h4h = self.dense_h_to_4h(hidden_states)
-        hidden_states = self.gelu_impl(h4h, device)
-        intermediate_output = self.dense_4h_to_h(hidden_states)
+        if self.use_tt_gelu:
+            hidden_states = bloom_gelu_forward.tt_bloom_gelu_forward(h4h, device)
+        else:
+            h4h = bloom_utils.tt2torch_tensor(h4h)
+            hidden_states = bloom_gelu_forward.bloom_gelu_forward(h4h)
+            hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
+
+        intermediate_output = bloom_utils.tt_matmul(
+            hidden_states, self.tt_weight_mlp_4hh, device
+        )
+        intermediate_output = tt_lib.tensor.bcast(
+            intermediate_output,
+            self.tt_bias_mlp_4hh,
+            tt_lib.tensor.BcastOpMath.ADD,
+            tt_lib.tensor.BcastOpDim.H,
+        )
 
         # Dropout is used in training only
         # intermediate_output = F.dropout(intermediate_output, p=self.hidden_dropout, training=self.training)
-        output = ttm.tensor.add(residual, intermediate_output)
+        output = tt_lib.tensor.add(residual, intermediate_output)
 
         return output

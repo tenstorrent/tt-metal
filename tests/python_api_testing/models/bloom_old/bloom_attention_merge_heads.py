@@ -1,6 +1,6 @@
 import torch
 from libs import tt_lib as ttm
-import python_api_testing.models.bloom.bloom_utils as bloom_utils
+import python_api_testing.models.bloom_old.bloom_utils as bloom_utils
 
 
 def merge_heads(x: torch.Tensor, num_heads, hidden_size, num_attention_heads) -> torch.Tensor:

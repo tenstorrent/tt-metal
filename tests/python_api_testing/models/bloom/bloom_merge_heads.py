@@ -1,6 +1,6 @@
 import torch
 import tt_lib
-import python_api_testing.models.bloom_new.bloom_utils as bloom_utils
+import python_api_testing.models.bloom.bloom_utils as bloom_utils
 from tt_lib.fallback_ops import fallback_ops
 
 

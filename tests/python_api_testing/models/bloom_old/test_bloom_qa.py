@@ -14,7 +14,7 @@ from utility_functions import print_diff_argmax
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
-import python_api_testing.models.bloom.bloom_qa as bloom_qa
+import python_api_testing.models.bloom_old.bloom_qa as bloom_qa
 
 
 def pad_input_32(tensor, value):

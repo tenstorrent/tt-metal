@@ -72,11 +72,11 @@ env pytest tests/python_api_testing/models/roberta -k roberta_classification_hea
 env pytest tests/python_api_testing/models/roberta -k roberta_for_token_classification
 env pytest tests/python_api_testing/models/roberta -k roberta_for_multiple_choice
 
-env pytest tests/python_api_testing/models/bloom_new -k baddbmm
-env pytest tests/python_api_testing/models/bloom_new -k bloom_attention
-env pytest tests/python_api_testing/models/bloom_new -k bloom_block
-env pytest tests/python_api_testing/models/bloom_new -k bloom_gelu_forward
-env pytest tests/python_api_testing/models/bloom_new -k bloom_merge_heads
-env pytest tests/python_api_testing/models/bloom_new -k bloom_mlp
-env pytest tests/python_api_testing/models/bloom_new -k bloom_model
-env pytest tests/python_api_testing/models/bloom_new -k bloom_causal_lm
+env pytest tests/python_api_testing/models/bloom -k baddbmm
+env pytest tests/python_api_testing/models/bloom -k bloom_attention
+env pytest tests/python_api_testing/models/bloom -k bloom_block
+env pytest tests/python_api_testing/models/bloom -k bloom_gelu_forward
+env pytest tests/python_api_testing/models/bloom -k bloom_merge_heads
+env pytest tests/python_api_testing/models/bloom -k bloom_mlp
+env pytest tests/python_api_testing/models/bloom -k bloom_model
+env pytest tests/python_api_testing/models/bloom -k bloom_causal_lm

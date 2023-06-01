@@ -17,8 +17,8 @@ from transformers.generation.configuration_utils import GenerationConfig
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
-import python_api_testing.models.bloom_new.bloom_causal_lm as bloom_causal_lm
-import python_api_testing.models.bloom_new.bloom_utils as bloom_utils
+import python_api_testing.models.bloom.bloom_causal_lm as bloom_causal_lm
+import python_api_testing.models.bloom.bloom_utils as bloom_utils
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.generation.logits_process import (

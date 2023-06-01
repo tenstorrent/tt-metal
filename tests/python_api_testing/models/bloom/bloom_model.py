@@ -2,11 +2,9 @@ import torch
 import math
 from torch.nn import functional as F
 
-from libs import tt_lib as ttm
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
 import python_api_testing.models.bloom.bloom_block as bloom_block
-
-from fused_ops.layernorm import Layernorm as TtLayernorm
+from tt_lib.fallback_ops import fallback_ops
 from typing import Optional, Tuple, Union
 
 
@@ -17,7 +15,11 @@ def _make_causal_mask(
     Make causal mask used for self-attention.
     """
     batch_size, target_length = input_ids_shape
-    mask = torch.empty((target_length, target_length + past_key_values_length), dtype=torch.bool, device=device)
+    mask = torch.empty(
+        (target_length, target_length + past_key_values_length),
+        dtype=torch.bool,
+        device=device,
+    )
     # ONNX doesn't support `torch.Tensor.triu` properly, thus we use this workaround
     seq_ids = torch.arange(target_length, device=device)
     mask[:, past_key_values_length:] = seq_ids[:, None] < seq_ids[None, :]
@@ -25,7 +27,9 @@ def _make_causal_mask(
     if past_key_values_length > 0:
         mask[:, :past_key_values_length] = False
 
-    expanded_mask = mask[None, None, :, :].expand(batch_size, 1, target_length, target_length + past_key_values_length)
+    expanded_mask = mask[None, None, :, :].expand(
+        batch_size, 1, target_length, target_length + past_key_values_length
+    )
     return expanded_mask
 
 
@@ -39,7 +43,10 @@ def _expand_mask(mask: torch.Tensor, tgt_length: int) -> torch.BoolTensor:
     expanded_mask = ~(mask[:, None, None, :].to(torch.bool))
     return expanded_mask.expand(batch_size, 1, tgt_length, src_length)
 
-def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype) -> torch.Tensor:
+
+def build_alibi_tensor(
+    attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype
+) -> torch.Tensor:
     """
     Link to paper: https://arxiv.org/abs/2108.12409 Alibi tensor is not causal as the original paper mentions, it
     relies on a translation invariance of softmax for quick implementation: with l being a tensor, and a fixed value
@@ -59,18 +66,30 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
     closest_power_of_2 = 2 ** math.floor(math.log2(num_heads))
 
     base = torch.tensor(
-        2 ** (-(2 ** -(math.log2(closest_power_of_2) - 3))), device=attention_mask.device, dtype=torch.float32
+        2 ** (-(2 ** -(math.log2(closest_power_of_2) - 3))),
+        device=attention_mask.device,
+        dtype=torch.float32,
     )
 
-    powers = torch.arange(1, 1 + closest_power_of_2, device=attention_mask.device, dtype=torch.int32)
+    powers = torch.arange(
+        1, 1 + closest_power_of_2, device=attention_mask.device, dtype=torch.int32
+    )
     slopes = torch.pow(base, powers)
 
     if closest_power_of_2 != num_heads:
         extra_base = torch.tensor(
-            2 ** (-(2 ** -(math.log2(2 * closest_power_of_2) - 3))), device=attention_mask.device, dtype=torch.float32
+            2 ** (-(2 ** -(math.log2(2 * closest_power_of_2) - 3))),
+            device=attention_mask.device,
+            dtype=torch.float32,
         )
         num_remaining_heads = min(closest_power_of_2, num_heads - closest_power_of_2)
-        extra_powers = torch.arange(1, 1 + 2 * num_remaining_heads, 2, device=attention_mask.device, dtype=torch.int32)
+        extra_powers = torch.arange(
+            1,
+            1 + 2 * num_remaining_heads,
+            2,
+            device=attention_mask.device,
+            dtype=torch.int32,
+        )
         slopes = torch.cat([slopes, torch.pow(extra_base, extra_powers)], dim=0)
 
     # Note: alibi will added to the attention bias that will be applied to the query, key product of attention
@@ -295,44 +314,63 @@ class TtBloomModel(torch.nn.Module):
 
         # Embedding + LN Embedding
         self.word_embeddings = torch.nn.Embedding(config.vocab_size, self.embed_dim)
-        self.word_embeddings.weight = torch.nn.Parameter(state_dict[f"{base_address}.word_embeddings.weight"])
+        self.word_embeddings.weight = torch.nn.Parameter(
+            state_dict[f"{base_address}.word_embeddings.weight"]
+        )
 
-        self.word_embeddings_layernorm_bias = bloom_utils.tt_load_layer_weights(f"{base_address}.word_embeddings_layernorm.bias", state_dict)
-        self.word_embeddings_layernorm_weight = bloom_utils.tt_load_layer_weights(f"{base_address}.word_embeddings_layernorm.weight", state_dict)
+        self.word_embeddings_layernorm_bias = bloom_utils.torch2tt_tensor(
+            state_dict[f"{base_address}.word_embeddings_layernorm.bias"], device
+        )
+        self.word_embeddings_layernorm_weight = bloom_utils.torch2tt_tensor(
+            state_dict[f"{base_address}.word_embeddings_layernorm.weight"], device
+        )
 
-        self.word_embeddings_layernorm = TtLayernorm(
-            self.word_embeddings_layernorm_weight.data(),
-            self.word_embeddings_layernorm_bias.data(),
-            config.layer_norm_epsilon,
-            config.hidden_size,
-            config.hidden_size,
-            device,
-            1,
+        self.word_embeddings_layernorm = fallback_ops.LayerNorm(
+            self.word_embeddings_layernorm_weight,
+            self.word_embeddings_layernorm_bias,
+            eps=config.layer_norm_epsilon,
+            normalized_shape=config.hidden_size,
         )
 
         # Transformer blocks
         blocks = []
 
         for i in range(self.n_layer):
-            block = bloom_block.TtBloomBlock(config, state_dict, f"{base_address}.h.{i}", device)
+            block = bloom_block.TtBloomBlock(
+                config, state_dict, f"{base_address}.h.{i}", device
+            )
             blocks.append(block)
 
         self.h = torch.nn.ModuleList(blocks)
 
-        self.ln_f_bias = bloom_utils.tt_load_layer_weights(f"{base_address}.ln_f.bias", state_dict)
-        self.ln_f_weight = bloom_utils.tt_load_layer_weights(f"{base_address}.ln_f.weight", state_dict)
+        self.ln_f_bias = bloom_utils.torch2tt_tensor(
+            state_dict[f"{base_address}.ln_f.bias"], device
+        )
+        self.ln_f_weight = bloom_utils.torch2tt_tensor(
+            state_dict[f"{base_address}.ln_f.weight"], device
+        )
 
         # Final Layer Norm
-        self.ln_f = TtLayernorm(self.ln_f_weight.data(), self.ln_f_bias.data(), config.layer_norm_epsilon, config.hidden_size, config.hidden_size, device, 1)
+        self.ln_f = fallback_ops.LayerNorm(
+            self.ln_f_weight,
+            self.ln_f_bias,
+            eps=config.layer_norm_epsilon,
+            normalized_shape=config.hidden_size,
+        )
 
-    def build_alibi_tensor(self, attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype) -> torch.Tensor:
+    def build_alibi_tensor(
+        self, attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype
+    ) -> torch.Tensor:
         return build_alibi_tensor(attention_mask, num_heads, dtype)
 
     def get_input_embeddings(self):
         return self.word_embeddings
 
     def _prepare_attn_mask(
-        self, attention_mask: torch.Tensor, input_shape: Tuple[int, int], past_key_values_length: int
+        self,
+        attention_mask: torch.Tensor,
+        input_shape: Tuple[int, int],
+        past_key_values_length: int,
     ) -> torch.BoolTensor:
         # create causal mask
         # [batch_size, seq_length] -> [batch_size, 1, tgt_length, src_length]
@@ -342,13 +380,17 @@ class TtBloomModel(torch.nn.Module):
 
         if src_length > 1:
             combined_attention_mask = _make_causal_mask(
-                input_shape, device=device, past_key_values_length=past_key_values_length
+                input_shape,
+                device=device,
+                past_key_values_length=past_key_values_length,
             )
 
         # [batch_size, seq_length] -> [batch_size, 1, tgt_length, src_length]
         expanded_attn_mask = _expand_mask(attention_mask, tgt_length=src_length)
         combined_attention_mask = (
-            expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask | combined_attention_mask
+            expanded_attn_mask
+            if combined_attention_mask is None
+            else expanded_attn_mask | combined_attention_mask
         )
 
         return combined_attention_mask
@@ -395,9 +437,10 @@ class TtBloomModel(torch.nn.Module):
         return_dict: Optional[bool] = None,
         **deprecated_arguments,
     ):
-
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+            raise ValueError(
+                "You cannot specify both input_ids and inputs_embeds at the same time"
+            )
         elif input_ids is not None:
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
@@ -433,7 +476,9 @@ class TtBloomModel(torch.nn.Module):
         if attention_mask is None:
             attention_mask = torch.ones((batch_size, seq_length_with_past))
 
-        alibi = self.build_alibi_tensor(attention_mask, self.num_heads, dtype=torch.float32)
+        alibi = self.build_alibi_tensor(
+            attention_mask, self.num_heads, dtype=torch.float32
+        )
         alibi = bloom_utils.torch2tt_tensor(alibi, device)
 
         causal_mask = self._prepare_attn_mask(
@@ -442,14 +487,11 @@ class TtBloomModel(torch.nn.Module):
             past_key_values_length=past_key_values_length,
         )
 
-        print(f"Num blocks {self.n_layer}")
         i = 0
 
         for block in self.h:
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
-
-            print(f"Running block {i}")
 
             # if self.gradient_checkpointing and self.training:
 
@@ -472,7 +514,7 @@ class TtBloomModel(torch.nn.Module):
             outputs = block(
                 device,
                 hidden_states,
-                layer_past= None, #layer_past,
+                layer_past=None,  # layer_past,
                 attention_mask=causal_mask,
                 head_mask=head_mask[i],
                 use_cache=use_cache,
@@ -486,18 +528,31 @@ class TtBloomModel(torch.nn.Module):
                 presents = presents + (outputs[1],)
 
             if output_attentions:
-                all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
+                all_self_attentions = all_self_attentions + (
+                    outputs[2 if use_cache else 1],
+                )
 
             i = i + 1
 
         # Add last hidden state
-        hidden_states = self.ln_f(hidden_states, overrideH=hidden_states.shape()[-2])
+        hidden_states = self.ln_f(
+            hidden_states
+        )  # , overrideH=hidden_states.shape()[-2])
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
         if not return_dict:
-            return tuple(v for v in [hidden_states, presents, all_hidden_states, all_self_attentions] if v is not None)
+            return tuple(
+                v
+                for v in [
+                    hidden_states,
+                    presents,
+                    all_hidden_states,
+                    all_self_attentions,
+                ]
+                if v is not None
+            )
 
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,

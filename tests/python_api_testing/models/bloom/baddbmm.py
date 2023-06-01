@@ -1,16 +1,18 @@
-from libs import tt_lib as ttm
+import tt_lib
+import python_api_testing.models.bloom.bloom_utils as bloom_utils
 
 
-def tt_baddbmm(device, input, batch1, batch2, beta=1.0, alpha=1.0) -> ttm.tensor.Tensor:
-
+def tt_baddbmm(
+    device, input, batch1, batch2, beta=1.0, alpha=1.0
+) -> tt_lib.tensor.Tensor:
     if beta != 1.0:
-        input = ttm.tensor.mul(beta, input)
+        input = tt_lib.tensor.mul(beta, input)
 
-    tmp = ttm.tensor.bmm(batch1, batch2)
+    tmp = bloom_utils.tt_bmm(batch1, batch2, device)
 
     if alpha != 1.0:
-        tmp = ttm.tensor.mul(alpha, tmp)
+        tmp = tt_lib.tensor.mul(alpha, tmp)
 
-    result = ttm.tensor.add(input, tmp)
+    result = tt_lib.tensor.add(input, tmp)
 
     return result
