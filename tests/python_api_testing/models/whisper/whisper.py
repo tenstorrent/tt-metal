@@ -14,6 +14,7 @@ from transformers import (
     AutoProcessor,
 )
 from datasets import load_dataset
+from loguru import logger
 
 
 def run_for_conditional_generation():
@@ -45,7 +46,7 @@ def run_HF_whisper():
 
     model.eval()
     config = model.config
-    print(config)
+    logger.debug(config)
 
     """
     Example:
@@ -80,7 +81,7 @@ def change_model_configuration():
 
     # Accessing the model configuration
     configuration = model.config
-    print(configuration)
+    logger.debug(configuration)
 
 
 def run_HF_whisper_for_audio_classification():
@@ -88,10 +89,10 @@ def run_HF_whisper_for_audio_classification():
     # Whisper with language modeling head
     # Can be used for automatic speech recognition.
     model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en")
-    print(model)
+    logger.debug(model)
 
     state_dict = model.state_dict()
-    print(state_dict)
+    logger.debug(state_dict)
 
     ds = load_dataset(
         "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
@@ -100,16 +101,16 @@ def run_HF_whisper_for_audio_classification():
     # Process audio data
     inputs = processor(ds[0]["audio"]["array"], return_tensors="pt")
     input_features = inputs.input_features
-    print(input_features)
+    logger.debug(input_features)
 
     gen_config = model.generation_config
-    print(gen_config)
+    logger.debug(gen_config)
     # This model can be used for automatic speech recognition.
     # Here we generate transcription
     # Causal generative model Whisper generates data based on a given context
 
     generated_ids = model.generate(inputs=input_features)
-    print(generated_ids)
+    logger.debug(generated_ids)
 
     # Example output
     # tensor([[50257, 50362,  1770,    13,  2264,   346,   353,   318,   262, 46329,
@@ -117,7 +118,7 @@ def run_HF_whisper_for_audio_classification():
     #         7062,   465, 21443,    13, 50256]])
 
     transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    print(transcription)
+    logger.debug(transcription)
 
 
 if __name__ == "__main__":
