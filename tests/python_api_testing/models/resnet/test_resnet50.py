@@ -9,29 +9,27 @@ sys.path.append(f"{f}/../../../..")
 
 from loguru import logger
 import torch
-import torchvision
 from torchvision import models
-from torchvision import transforms
 import pytest
+import tt_lib
 
 from resnetBlock import ResNet, Bottleneck
-from libs import tt_lib as ttl
-from utility_functions import comp_allclose_and_pcc, comp_pcc
+from sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 
-batch_size=1
 
 @pytest.mark.parametrize("fold_batchnorm", [False, True], ids=['Batchnorm not folded', "Batchnorm folded"])
 def test_run_resnet50_inference(fold_batchnorm, imagenet_sample_input):
     image = imagenet_sample_input
+
     with torch.no_grad():
         torch.manual_seed(1234)
+
         # Initialize the device
-        device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-        ttl.device.InitializeDevice(device)
-        host = ttl.device.GetHost()
+        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+        tt_lib.device.InitializeDevice(device)
+        host = tt_lib.device.GetHost()
 
         torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
-
         torch_resnet50.eval()
 
         state_dict = torch_resnet50.state_dict()
@@ -46,7 +44,6 @@ def test_run_resnet50_inference(fold_batchnorm, imagenet_sample_input):
 
         torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
         tt_output = tt_resnet50(image)
-
 
         passing, info = comp_pcc(torch_output, tt_output)
         logger.info(info)

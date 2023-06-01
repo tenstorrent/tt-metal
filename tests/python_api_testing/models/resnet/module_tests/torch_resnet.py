@@ -1,22 +1,8 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
-
 import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Type, Union, Optional, Callable, List
-from tqdm import tqdm
 
-from libs import tt_lib as ttl
-
-batch_size=1
 
 class Bottleneck(nn.Module):
     expansion: int = 4

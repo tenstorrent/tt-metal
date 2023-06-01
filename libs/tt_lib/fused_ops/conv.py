@@ -1,6 +1,8 @@
 from typing import List, Union
 from .. import tensor
-from libs.tt_lib.utils import _nearest_32
+#from libs.tt_lib.utils import _nearest_32
+from ..utils import _nearest_32
+
 
 def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     """

@@ -15,14 +15,9 @@ import torch
 from torchvision import models, transforms
 import pytest
 
-from libs import tt_lib as ttl
 from torch_resnet import _make_layer, BasicBlock
+from sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 
-from utility_functions import comp_allclose_and_pcc, comp_pcc
-
-
-
-batch_size=1
 
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
 def test_resnet18_module1(fuse_ops, imagenet_sample_input):

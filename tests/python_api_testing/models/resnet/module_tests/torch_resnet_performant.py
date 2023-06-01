@@ -1,29 +1,7 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
-from tqdm import tqdm
-import math
-import torch
-
-
 import torch
 import torch.nn as nn
 from torch import Tensor
-import torchvision
-from torchvision import models
-from torchvision import transforms
-
-from libs import tt_lib as ttl
-
 from typing import Type, Union, Optional, Callable, Tuple
-
-batch_size=1
 
 
 def fold_bn_to_conv(conv: torch.nn.Conv2d, bn: torch.nn.BatchNorm2d) -> Tuple[nn.Parameter]:

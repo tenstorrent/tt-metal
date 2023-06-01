@@ -1,30 +1,7 @@
 from typing import Tuple
 import torch
 import torch.nn as nn
-import torchvision
-import torchvision.transforms as transforms
-from datasets import load_dataset
 
-from libs import tt_lib as ttl
-from utility_functions import tt2torch_tensor, torch2tt_tensor
-
-from libs.tt_lib.utils import (
-    _nearest_32 as nearest_32,
-    pad_activation,
-    pad_weight,
-    tilize,
-    tilize_to_list,
-    untilize,
-    print_diff_argmax,
-    tt2torch,
-    tt2torch_rm,
-    roundup,
-    roundup32,
-    float_to_bits,
-    divup,
-    channels_last,
-    convert_weights_2d_matrix
-)
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1, state_dict=None, base_address=None) -> nn.Conv2d:
     """3x3 convolution with padding"""
@@ -38,9 +15,8 @@ def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, d
         bias=False,
         dilation=dilation,
     )
+
     conv.weight = nn.Parameter(state_dict[f"{base_address}.weight"])
-
-
     return conv
 
 
@@ -49,6 +25,7 @@ def conv1x1(in_planes: int, out_planes: int, stride: int = 1, state_dict=None, b
     conv =  nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
     conv.weight = nn.Parameter(state_dict[f"{base_address}.weight"])
     return conv
+
 
 def fold_bn_to_conv(conv: torch.nn.Conv2d, bn: torch.nn.BatchNorm2d) -> Tuple[nn.Parameter]:
     # Note: this function is not used, however I am keeping it for reference

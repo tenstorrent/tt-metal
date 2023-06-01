@@ -1,23 +1,17 @@
-import math
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-
 from typing import Type, Union, Optional, List, Callable
 
+import tt_lib
 import torch
 import torch.nn as nn
 
 from utils import conv3x3, conv1x1, fold_bn_to_conv
-from utility_functions import pad_by_zero, unpad_from_zero
-from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from libs import tt_lib as ttl
-from python_api_testing.fused_ops.linear import Linear as TtLinear
-from python_api_testing.fused_ops.softmax import softmax as TtSoftmax
-from python_api_testing.models.conv_on_device_utils import is_conv_supported_on_device, run_conv_on_device_wrapper
+from utility_functions_new import pad_by_zero, unpad_from_zero
+from tt_lib.utils import pad_weight
+
+from tt_lib.fused_ops.linear import Linear as TtLinear
+from tt_lib.fused_ops.softmax import softmax as TtSoftmax
+from conv_on_device_utils_new import is_conv_supported_on_device, run_conv_on_device_wrapper
+
 
 class Bottleneck(nn.Module):
     # Bottleneck in torchvision places the stride for downsampling at 3x3 convolution(self.conv2)
@@ -104,7 +98,7 @@ class Bottleneck(nn.Module):
         self.bn3.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn3.num_batches_tracked"], requires_grad=False)
         self.bn3.eval()
 
-        self.relu = ttl.tensor.relu
+        self.relu = tt_lib.tensor.relu
         self.downsample = downsample
         self.stride = stride
 
@@ -146,7 +140,7 @@ class Bottleneck(nn.Module):
         out, out_initial_shape = pad_by_zero(out, self.device)
         identity, identity_initial_shape = pad_by_zero(identity, self.device)
 
-        out = ttl.tensor.add(out, identity)
+        out = tt_lib.tensor.add(out, identity)
 
         out = self.relu(out)
 
@@ -205,7 +199,7 @@ class BasicBlock(nn.Module):
         self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
         self.bn1.eval()
 
-        self.relu = ttl.tensor.relu
+        self.relu = tt_lib.tensor.relu
 
         conv2_weight = state_dict[f"{base_address}.conv2.weight"]
         self.conv2_params = [planes, planes, 3, 3, 1, 1, 1, 1, dilation, groups]
@@ -260,7 +254,7 @@ class BasicBlock(nn.Module):
         identity, identity_initial_shape = pad_by_zero(identity, self.device)
         out, out_initial_shape = pad_by_zero(out, self.device)
 
-        out = ttl.tensor.add(out, identity)
+        out = tt_lib.tensor.add(out, identity)
 
         out = self.relu(out)
         out = unpad_from_zero(out, out_initial_shape, self.host)
@@ -328,7 +322,7 @@ class ResNet(nn.Module):
             self.conv1.weight, self.conv1.bias = fold_bn_to_conv(self.conv1, self.bn1)
             self.bn1 = nn.Identity()
 
-        self.relu = ttl.tensor.relu
+        self.relu = tt_lib.tensor.relu
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict)
@@ -338,9 +332,9 @@ class ResNet(nn.Module):
 
 
         fc_weight = pad_weight(state_dict[f"{self.base_address_with_dot}fc.weight"])
-        fc_weight = ttl.tensor.Tensor(fc_weight.reshape(-1).tolist(), fc_weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        fc_weight = tt_lib.tensor.Tensor(fc_weight.reshape(-1).tolist(), fc_weight.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE).data()
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
-        fc_bias = ttl.tensor.Tensor(fc_bias.reshape(-1).tolist(), fc_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        fc_bias = tt_lib.tensor.Tensor(fc_bias.reshape(-1).tolist(), fc_bias.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE).data()
 
         self.fc = TtLinear(512 * block.expansion, 1024, fc_weight, fc_bias, self.device) # num_classes = 1000
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
