@@ -26,8 +26,8 @@ void kernel_main() {
     uint32_t out_subblock_tile_count    = get_arg_val<uint32_t>(8);
     uint32_t out_num_subblocks_w        = get_arg_val<uint32_t>(9);
     uint32_t out_num_subblocks_h        = get_arg_val<uint32_t>(10);
-    uint32_t out_num_blocks_w           = get_arg_val<uint32_t>(11);
-    uint32_t out_num_blocks_h           = get_arg_val<uint32_t>(12);
+    // uint32_t out_num_blocks_w           = get_arg_val<uint32_t>(11);
+    // uint32_t out_num_blocks_h           = get_arg_val<uint32_t>(12);
 
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
 

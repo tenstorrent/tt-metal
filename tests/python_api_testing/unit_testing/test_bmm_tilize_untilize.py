@@ -119,8 +119,8 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     if not untilize_out:
         ## output is in tiled format
         # out = out.to(ttl.tensor.Layout.TILE)
-        # out_pytorch = untilize(torch.tensor(out.data()).reshape(out_shape))
-        out_pytorch = torch.tensor(out.data()).reshape(out_shape)
+        out_pytorch = untilize(torch.tensor(out.data()).reshape(out_shape))
+        # out_pytorch = torch.tensor(out.data()).reshape(out_shape)
     else:
         out_pytorch = torch.tensor(out.data()).reshape(out_shape)
 
