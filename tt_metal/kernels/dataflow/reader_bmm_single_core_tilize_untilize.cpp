@@ -119,4 +119,6 @@ void kernel_main() {
         } // for in1_num_blocks_w
         in0_curr_block_start_row_id += in0_block_nrows;
     } // for in0_num_blocks_h
+
+    DPRINT << "OOOOOOOOOOOOHHHHH!!!!" << ENDL();
 } // kernel_main()

@@ -185,7 +185,7 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) {
  * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
- * | in1_cb_id      | The indentifier of the second input circular buffer (CB)                | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                | uint32_t | 0 to 31                                        | True     |
  * | in0_tile_index | The index of the tile A from the first input CB                         | uint32_t | Must be less than the size of the CB           | True     |
  * | in1_tile_index | The index of the tile B from the second input CB                        | uint32_t | Must be less than the size of the CB           | True     |
  * | dst_tile_index | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |

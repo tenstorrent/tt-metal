@@ -117,7 +117,9 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
                                        uint32_t in0_block_width_ntiles,
                                        uint32_t in1_block_width_ntiles,
                                        uint32_t out_subblock_height_ntiles,
-                                       uint32_t out_subblock_width_ntiles) {
+                                       uint32_t out_subblock_width_ntiles,
+                                       bool tilize_in0 = true,
+                                       bool untilize_out = true) {
     const auto [in0_batch, in0_channel, in0_height, in0_width] = in0.shape();
     const auto [in1_batch, in1_channel, in1_height, in1_width] = in1.shape();
 
@@ -252,55 +254,112 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
         dtype_nbytes);
 
     // Reader kernel
-    std::string reader_kernel = "tt_metal/kernels/dataflow/reader_bmm_single_core_tilize_untilize.cpp";
-    std::vector<uint32_t> reader_rt_args = {
-        // in0
-        in0_dram_addr,
-        in0_block_h,
-        in0_num_blocks_h,
-        in0_num_blocks_w,
-        in0_block_num_tiles,
-        in0_block_h * constants::TILE_HEIGHT,               // in0_block_nrows,
-        0,                                                  // start row id
-        in0_width * dtype_nbytes,                           // size of an in0 row
-        in0_block_w * constants::TILE_WIDTH * dtype_nbytes, // size of partial row to fit within a block width
-        // in1
-        in1_dram_addr,
-        in1_block_h,
-        in1_block_w,
-        in1_num_blocks_w,
-        in1_block_num_tiles,
-        in1_width_ntiles,
-        in1_width_ntiles * in1_block_h,
-        in1_block_w
-    };
+    std::string reader_kernel;
+    std::vector<uint32_t> reader_rt_args;
+    if (tilize_in0) {
+        // in0 is row major, in1 is tiled
+        reader_kernel = "tt_metal/kernels/dataflow/reader_bmm_single_core_tilize_untilize.cpp";
+        reader_rt_args = {
+            // in0
+            in0_dram_addr,
+            in0_block_h,
+            in0_num_blocks_h,
+            in0_num_blocks_w,
+            in0_block_num_tiles,
+            in0_block_h * constants::TILE_HEIGHT,               // in0_block_nrows,
+            0,                                                  // start row id
+            in0_width * dtype_nbytes,                           // size of an in0 row
+            in0_block_w * constants::TILE_WIDTH * dtype_nbytes, // size of partial row to fit within a block width
+            // in1
+            in1_dram_addr,
+            in1_block_h,
+            in1_block_w,
+            in1_num_blocks_w,
+            in1_block_num_tiles,
+            in1_width_ntiles,
+            in1_width_ntiles * in1_block_h,
+            in1_block_w
+        };
+    } else {
+        // in0 is tiled, in1 is tiled
+        reader_kernel = "tt_metal/kernels/dataflow/reader_bmm_single_core.cpp";
+        reader_rt_args = {
+            // in0
+            in0_dram_addr,
+            in0_num_blocks_h,
+            in0_num_blocks_w,
+            1,                      // in0_stride_w
+            in0_width_ntiles,       // in0_stride_h
+            in0_block_w,            // in0_next_block_stride
+            in0_block_w,            // in0_block_w
+            in0_block_h,            // in0_block_h
+            in0_block_num_tiles,    // in0_block_num_tiles
+            // in1
+            in1_dram_addr,          // in1_addr
+            in1_num_blocks_w,
+            0,                      // in1_start_tile_id
+            1,                      // in1_stride_w
+            in1_width_ntiles,       // in1_stride_h
+            in0_block_w * in1_width_ntiles, // in1_next_block_stride UNUSED
+            in1_block_w,                    // in1_block_w
+            in1_block_h,                    // in1_block_h
+            in1_block_num_tiles,            // in1_block_num_tiles
+            in0_width_ntiles * in0_block_h, // in0_next_block_stride_h,
+            in0_block_w,                    // in0_next_block_stride_w,
+            in1_width_ntiles * in1_block_h, // in1_next_block_stride_h,
+            in1_block_w,                    // in1_next_block_stride_w
+        };
+    }
     auto reader = CreateDataMovementKernel(
-        program,
-        reader_kernel,
-        core,
-        DataMovementProcessor::RISCV_1,
-        NOC::RISCV_1_default);
+        program,                            // program
+        reader_kernel,                      // file name
+        core,                               // core
+        DataMovementProcessor::RISCV_1,     // processor type
+        NOC::RISCV_1_default                // noc
+    );
 
     // number of data elements along height of an in0 block
     uint32_t in0_block_h_data = in0_height / in0_num_blocks_h;
 
     // Writer kernel
-    std::string writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp";
-    vector<uint32_t> writer_rt_args = {
-        out_dram_addr,
-        in0_block_h_data,
-        in1_block_w * constants::TILE_WIDTH * dtype_nbytes,
-        1,
-        in0_num_blocks_h,
-        in1_num_blocks_w,
-        in1_width * dtype_nbytes
-    };
+    std::string writer_kernel;
+    vector<uint32_t> writer_rt_args;
+
+    if (untilize_out) {
+        // out is row major
+        writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp";
+        writer_rt_args = {
+            out_dram_addr,
+            in0_block_h_data,
+            in1_block_w * constants::TILE_WIDTH * dtype_nbytes, // block_row_size
+            1,                                                  // batch
+            in0_num_blocks_h,
+            in1_num_blocks_w,
+            in1_width * dtype_nbytes                            // output_row_size
+        };
+    } else {
+        // out is tiled
+        writer_kernel = "tt_metal/kernels/dataflow/writer_bmm_single_core_tiled.cpp";
+        writer_rt_args = {
+            out_dram_addr,
+            0,                                              // UNUSED
+            1,                                              // out_stride_w
+            in1_width_ntiles,                               // out_stride_h
+            out_subblock_width_ntiles,                      // out_next_subblock_stride_w
+            out_subblock_height_ntiles * in1_width_ntiles,  // out_next_subblock_stride_h
+            out_subblock_width_ntiles,                      // out_subblock_w
+            out_subblock_height_ntiles,                     // out_subblock_h
+            out_subblock_ntiles,                            // out_subblock_tile_count
+            in1_width_ntiles / out_subblock_width_ntiles,   // out_num_subblocks_w
+            in0_height_ntiles / out_subblock_height_ntiles, // out_num_subblocks_h
+        };
+    }
     auto writer = CreateDataMovementKernel(
-        program,
-        writer_kernel,
-        core,
-        DataMovementProcessor::RISCV_0,
-        NOC::RISCV_0_default);
+        program,                        // program
+        writer_kernel,                  // file name
+        core,                           // core
+        DataMovementProcessor::RISCV_0, // processor type
+        NOC::RISCV_0_default);          // noc
 
     // Compute kernel
     std::string compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
@@ -318,7 +377,9 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
         in1_num_blocks_w,
         out_subblock_height_ntiles,
         out_subblock_width_ntiles,
-        out_subblock_ntiles
+        out_subblock_ntiles,
+        tilize_in0,
+        untilize_out
     };
     auto bmm_compute = CreateComputeKernel(
         program,
@@ -339,6 +400,8 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
     bool pass = CompileProgram(device, program, false);
     pass &= ConfigureDeviceWithProgram(device, program);
     pass &= LaunchKernels(device, program);
+
+    std::cout << "I THINK IM DONE!!" << std::endl;
     TT_ASSERT(pass);
 
     return output;
