@@ -11,9 +11,9 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
-    tt_metal::Program program = tt_metal::Program();
+tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type) {
 
+    tt_metal::Program program{};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to eltwise unary needs to be on device!");
@@ -38,9 +38,6 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
     for(uint32_t i = 0; i < num_tiles % num_cores; i++){
         num_tiles_per_core[i]++;
     }
-
-    // This should allocate a DRAM buffer on the device
-    tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -129,17 +126,6 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
         eltwise_unary_op_utils::add_defines(eltwise_unary_kernel, op_type);
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         tt_metal::WriteRuntimeArgsToDevice(
@@ -166,10 +152,8 @@ Tensor eltwise_unary_multi_core(const Tensor &a, UnaryOpType::Enum op_type) {
         num_tiles_written+=num_tiles_per_core[i];
     }
 
-    tt_metal::LaunchKernels(device, program);
-
     // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 }  // namespace tt_metal

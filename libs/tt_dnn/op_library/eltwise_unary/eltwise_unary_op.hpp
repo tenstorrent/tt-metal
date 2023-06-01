@@ -3,6 +3,8 @@
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
+#include "tt_dnn/op_library/operation.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -17,18 +19,28 @@ struct UnaryOpParallelizationStrategy {
     static const vector<Enum> all() { return { MULTI_CORE, SINGLE_CORE }; }
 };
 
-Tensor eltwise_unary (const Tensor &a, UnaryOpType::Enum op_type);
-Tensor eltwise_unary_single_core (const Tensor &a, UnaryOpType::Enum op_type);
-Tensor eltwise_unary_multi_core (const Tensor &a, UnaryOpType::Enum op_type);
+Program eltwise_unary_single_core (const Tensor &input_tensor, Tensor &output_tensor, UnaryOpType::Enum op_type);
+Program eltwise_unary_multi_core (const Tensor &input_tensor, Tensor &output_tensor, UnaryOpType::Enum op_type);
 
-inline Tensor exp     (const Tensor &a) { return eltwise_unary(a, UnaryOpType::EXP); }
-inline Tensor recip   (const Tensor &a) { return eltwise_unary(a, UnaryOpType::RECIP); }
-inline Tensor gelu    (const Tensor &a) { return eltwise_unary(a, UnaryOpType::GELU); }
-inline Tensor relu    (const Tensor &a) { return eltwise_unary(a, UnaryOpType::RELU); }
-inline Tensor sqrt    (const Tensor &a) { return eltwise_unary(a, UnaryOpType::SQRT); }
-inline Tensor sigmoid (const Tensor &a) { return eltwise_unary(a, UnaryOpType::SIGMOID); }
-inline Tensor log     (const Tensor &a) { return eltwise_unary(a, UnaryOpType::LOG); }
-inline Tensor tanh     (const Tensor &a) { return eltwise_unary(a, UnaryOpType::TANH); }
+struct EltwiseUnary : Operation {
+    const UnaryOpType::Enum op_type;
+
+    EltwiseUnary(UnaryOpType::Enum op_type) : op_type{op_type} {}
+
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const override;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const override;
+    Program create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+};
+
+inline Tensor sqrt(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::SQRT).run({input_tensor}).at(0); }
+inline Tensor exp(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::EXP).run({input_tensor}).at(0); }
+inline Tensor recip(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::RECIP).run({input_tensor}).at(0); }
+inline Tensor gelu(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::GELU).run({input_tensor}).at(0); }
+inline Tensor relu(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::RELU).run({input_tensor}).at(0); }
+inline Tensor sigmoid(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::SIGMOID).run({input_tensor}).at(0); }
+inline Tensor log(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::LOG).run({input_tensor}).at(0); }
+inline Tensor tanh(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::TANH).run({input_tensor}).at(0); }
+
 
 }  // namespace tt_metal
 
@@ -41,6 +53,6 @@ string get_op_name(UnaryOpType::Enum op_type);
 
 void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type);
 
-UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a);
+UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &input_tensor);
 
 } // namespace eltwise_unary_op_utils

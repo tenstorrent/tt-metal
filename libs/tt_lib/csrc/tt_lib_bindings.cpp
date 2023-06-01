@@ -91,7 +91,7 @@ void TensorModule(py::module &m_tensor) {
         .def(
             py::init<>(
                 [](bool interleaved, int bank_id, BufferType buffer_type) {
-                    return MemoryConfig{.interleaved=interleaved, bank_id=bank_id, buffer_type=buffer_type};
+                    return MemoryConfig{.interleaved=interleaved, .bank_id=bank_id, .buffer_type=buffer_type};
                 }
             ),
             py::arg("interleaved") = true,

@@ -11,6 +11,14 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
+bool nearly_equal(
+  float a, float b,
+  float epsilon = 1e-5, float abs_th = 1e-5) {
+  auto diff = std::abs(a-b);
+  auto norm = std::min((std::abs(a) + std::abs(b)), std::numeric_limits<float>::max());
+  return diff < std::max(abs_th, epsilon * norm);
+}
+
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -47,11 +55,28 @@ int main(int argc, char **argv) {
         std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
-        Tensor b = Tensor(shape, Initialize::ZEROS, DataType::BFLOAT16, Layout::TILE, device);
+        Tensor b = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
 
-        Tensor dcAdd = add(a, b).to(host);
-        Tensor dcSub = sub(a, b).to(host);
-        Tensor dcMul = mul(a, b).to(host);
+        std::vector<bfloat16> a_vec = *reinterpret_cast<std::vector<bfloat16>*>(a.to(host).data_ptr());
+        std::vector<bfloat16> b_vec = *reinterpret_cast<std::vector<bfloat16>*>(b.to(host).data_ptr());
+
+        Tensor add_output = add(a, b).to(host);
+        std::vector<bfloat16> add_output_vec = *reinterpret_cast<std::vector<bfloat16>*>(add_output.data_ptr());
+        for (int i = 0; i < a_vec.size(); i++) {
+            TT_ASSERT(nearly_equal(a_vec[i].to_float() + b_vec[i].to_float(), add_output_vec[i].to_float()), "EltwiseBinary Add: Comparison Failed");
+        }
+
+        Tensor sub_output = sub(a, b).to(host);
+        std::vector<bfloat16> sub_output_vec = *reinterpret_cast<std::vector<bfloat16>*>(sub_output.data_ptr());
+        for (int i = 0; i < a_vec.size(); i++) {
+            TT_ASSERT(nearly_equal(a_vec[i].to_float() - b_vec[i].to_float(), sub_output_vec[i].to_float()), "EltwiseBinary Sub: Comparison Failed");
+        }
+
+        Tensor mul_output = mul(a, b).to(host);
+        std::vector<bfloat16> mul_output_vec = *reinterpret_cast<std::vector<bfloat16>*>(mul_output.data_ptr());
+        for (int i = 0; i < a_vec.size(); i++) {
+            TT_ASSERT(nearly_equal(a_vec[i].to_float() * b_vec[i].to_float(), mul_output_vec[i].to_float(), 1e-2, 1e-3), "EltwiseBinary Mul: Comparison Failed");
+        }
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

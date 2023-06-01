@@ -50,39 +50,29 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor eltwise_unary_(const Tensor &a, UnaryOpType::Enum op_type) {
-    switch (eltwise_unary_op_utils::get_parallelization_strategy(a)){
-        case UnaryOpParallelizationStrategy::MULTI_CORE:
-            return eltwise_unary_multi_core(a, op_type);
-            break;
-        case UnaryOpParallelizationStrategy::SINGLE_CORE:
-        default:
-            return eltwise_unary_single_core(a, op_type);
-    }
 
+ std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    return {input_tensor.shape()};
 }
 
 
-Tensor eltwise_unary(const Tensor &a, UnaryOpType::Enum op_type) {
+std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto output_tensor = tt_metal::Tensor(input_tensor.shape(), input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device());
+    return {output_tensor};
+}
 
-    Device * device;
-
-    // Get the device
-    if (a.on_host()) {
-        device = AutoPad::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = a.device();
-    }
-
-    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape());
-    auto out_shape = a.shape();
-    if (AutoPad::check_input_tensor_format(a, a_pad_shape)) {
-        return eltwise_unary_(a, op_type);
-    } else {
-        auto output = eltwise_unary_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), op_type);
-        AutoPad::format_output_tensor(a, output, out_shape, device);
-        return output;
+Program EltwiseUnary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto& output_tensor = output_tensors.at(0);
+    switch (eltwise_unary_op_utils::get_parallelization_strategy(input_tensor)){
+        case UnaryOpParallelizationStrategy::MULTI_CORE:
+            return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_type);
+            break;
+        case UnaryOpParallelizationStrategy::SINGLE_CORE:
+        default:
+            return eltwise_unary_single_core(input_tensor, output_tensor, this->op_type);
     }
 
 }

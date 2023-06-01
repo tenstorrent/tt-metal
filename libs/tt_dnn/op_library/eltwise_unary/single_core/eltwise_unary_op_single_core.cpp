@@ -9,8 +9,9 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
-    tt_metal::Program program = tt_metal::Program();
+Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type) {
+
+    Program program{};
 
     CoreCoord core = {0, 0};
 
@@ -29,7 +30,6 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -104,18 +104,6 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
 
     eltwise_unary_op_utils::add_defines(eltwise_unary_kernel, op_type);
 
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
     tt_metal::WriteRuntimeArgsToDevice(
         device,
         unary_reader_kernel,
@@ -136,10 +124,8 @@ Tensor eltwise_unary_single_core(const Tensor &a, UnaryOpType::Enum op_type) {
         num_tiles }
     );
 
-    tt_metal::LaunchKernels(device, program);
-
     // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 }  // namespace tt_metal
