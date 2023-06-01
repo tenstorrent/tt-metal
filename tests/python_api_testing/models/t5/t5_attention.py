@@ -1,10 +1,10 @@
 import math
 import torch
 from torch import nn
-from libs import tt_lib as ttm
+import tt_lib
 
-from fused_ops.linear import Linear as TtLinear
-from python_api_testing.fused_ops.softmax import softmax as tt_softmax
+from tt_lib.fused_ops.linear import Linear as TtLinear
+from tt_lib.fused_ops.softmax import softmax as tt_softmax
 from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
 
 
@@ -18,8 +18,10 @@ def t5_shape_tt(states, batch_size, n_heads, key_value_proj_dim, device):
         states = states.transpose(1, 2)
         tt_out = torch2tt_tensor(states, device)
     else:
-        tt_out = ttm.tensor.reshape(states, batch_size, -1, n_heads, key_value_proj_dim)
-        tt_out = ttm.tensor.transpose_hc(tt_out)
+        tt_out = tt_lib.tensor.reshape(
+            states, batch_size, -1, n_heads, key_value_proj_dim
+        )
+        tt_out = tt_lib.tensor.transpose_hc(tt_out)
 
     return tt_out
 
@@ -69,8 +71,6 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
 #         self.k = hf_reference_module.k
 #         self.v = hf_reference_module.v
 #         self.o = hf_reference_module.o
-
-#         print(f"Linear layer dtype {self.q.weight.dtype}")
 
 #         if self.has_relative_attention_bias:
 #             self.relative_attention_bias = nn.Embedding(self.relative_attention_num_buckets, self.n_heads)
@@ -290,7 +290,14 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
 
 
 class TtT5Attention(nn.Module):
-    def __init__(self, config, state_dict, base_address, device, has_relative_attention_bias=False):
+    def __init__(
+        self,
+        config,
+        state_dict,
+        base_address,
+        device,
+        has_relative_attention_bias=False,
+    ):
         super().__init__()
         self.is_decoder = config["is_decoder"]
         self.has_relative_attention_bias = has_relative_attention_bias
@@ -303,20 +310,55 @@ class TtT5Attention(nn.Module):
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.device = device
 
-        self.q_weights = torch2tt_tensor(state_dict[f"{base_address}.q.weight"], ttm.device.GetHost())
-        self.k_weights = torch2tt_tensor(state_dict[f"{base_address}.k.weight"], ttm.device.GetHost())
-        self.v_weights = torch2tt_tensor(state_dict[f"{base_address}.v.weight"], ttm.device.GetHost())
-        self.o_weights = torch2tt_tensor(state_dict[f"{base_address}.o.weight"], ttm.device.GetHost())
+        self.q_weights = torch2tt_tensor(
+            state_dict[f"{base_address}.q.weight"], tt_lib.device.GetHost()
+        )
+        self.k_weights = torch2tt_tensor(
+            state_dict[f"{base_address}.k.weight"], tt_lib.device.GetHost()
+        )
+        self.v_weights = torch2tt_tensor(
+            state_dict[f"{base_address}.v.weight"], tt_lib.device.GetHost()
+        )
+        self.o_weights = torch2tt_tensor(
+            state_dict[f"{base_address}.o.weight"], tt_lib.device.GetHost()
+        )
 
-        # Mesh TensorFlow initialization to avoid scaling before softmax
-        self.q = TtLinear(self.d_model, self.inner_dim, weight=self.q_weights.data(), bias=None, device=device)
-        self.k = TtLinear(self.d_model, self.inner_dim, weight=self.k_weights.data(), bias=None, device=device)
-        self.v = TtLinear(self.d_model, self.inner_dim, weight=self.v_weights.data(), bias=None, device=device)
-        self.o = TtLinear(self.d_model, self.inner_dim, weight=self.o_weights.data(), bias=None, device=device)
+        self.q = TtLinear(
+            self.d_model,
+            self.inner_dim,
+            weight=self.q_weights.data(),
+            bias=None,
+            device=device,
+        )
+        self.k = TtLinear(
+            self.d_model,
+            self.inner_dim,
+            weight=self.k_weights.data(),
+            bias=None,
+            device=device,
+        )
+        self.v = TtLinear(
+            self.d_model,
+            self.inner_dim,
+            weight=self.v_weights.data(),
+            bias=None,
+            device=device,
+        )
+        self.o = TtLinear(
+            self.d_model,
+            self.inner_dim,
+            weight=self.o_weights.data(),
+            bias=None,
+            device=device,
+        )
 
         if self.has_relative_attention_bias:
-            self.relative_attention_bias = nn.Embedding(self.relative_attention_num_buckets, self.n_heads)
-            self.relative_attention_bias.weight = nn.Parameter(state_dict[f"{base_address}.relative_attention_bias.weight"])
+            self.relative_attention_bias = nn.Embedding(
+                self.relative_attention_num_buckets, self.n_heads
+            )
+            self.relative_attention_bias.weight = nn.Parameter(
+                state_dict[f"{base_address}.relative_attention_bias.weight"]
+            )
 
         self.cached_position_bias = None
         self.cached_real_seq_length = None
@@ -325,27 +367,10 @@ class TtT5Attention(nn.Module):
         self.pruned_heads = set()
         self.gradient_checkpointing = False
 
-    # def prune_heads(self, heads):
-    #     if len(heads) == 0:
-    #         return
-
-    #     heads, index = find_pruneable_heads_and_indices(
-    #         heads, self.n_heads, self.key_value_proj_dim, self.pruned_heads
-    #     )
-
-    #     # Prune linear layers
-    #     self.q = prune_linear_layer(self.q, index)
-    #     self.k = prune_linear_layer(self.k, index)
-    #     self.v = prune_linear_layer(self.v, index)
-    #     self.o = prune_linear_layer(self.o, index, dim=1)
-
-    #     # Update hyper params
-    #     self.n_heads = self.n_heads - len(heads)
-    #     self.inner_dim = self.key_value_proj_dim * self.n_heads
-    #     self.pruned_heads = self.pruned_heads.union(heads)
-
     @staticmethod
-    def _relative_position_bucket(relative_position, bidirectional=True, num_buckets=32, max_distance=128):
+    def _relative_position_bucket(
+        relative_position, bidirectional=True, num_buckets=32, max_distance=128
+    ):
         """
         Adapted from Mesh Tensorflow:
         https://github.com/tensorflow/mesh/blob/0cb87fe07da627bf0b7e60475d59f95ed6b5be3d/mesh_tensorflow/transformer/transformer_layers.py#L593
@@ -369,7 +394,9 @@ class TtT5Attention(nn.Module):
             relative_buckets += (relative_position > 0).to(torch.long) * num_buckets
             relative_position = torch.abs(relative_position)
         else:
-            relative_position = -torch.min(relative_position, torch.zeros_like(relative_position))
+            relative_position = -torch.min(
+                relative_position, torch.zeros_like(relative_position)
+            )
         # now relative_position is in the range [0, inf)
 
         # half of the buckets are for exact increments in positions
@@ -383,25 +410,34 @@ class TtT5Attention(nn.Module):
             * (num_buckets - max_exact)
         ).to(torch.long)
         relative_position_if_large = torch.min(
-            relative_position_if_large, torch.full_like(relative_position_if_large, num_buckets - 1)
+            relative_position_if_large,
+            torch.full_like(relative_position_if_large, num_buckets - 1),
         )
 
-        relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)
+        relative_buckets += torch.where(
+            is_small, relative_position, relative_position_if_large
+        )
         return relative_buckets
 
     def compute_bias_const(self, query_length, key_length):
         """Compute binned relative position bias"""
         context_position = torch.arange(query_length, dtype=torch.long)[:, None]
         memory_position = torch.arange(key_length, dtype=torch.long)[None, :]
-        relative_position = memory_position - context_position  # shape (query_length, key_length)
+        relative_position = (
+            memory_position - context_position
+        )  # shape (query_length, key_length)
         relative_position_bucket = self._relative_position_bucket(
             relative_position,  # shape (query_length, key_length)
             bidirectional=(not self.is_decoder),
             num_buckets=self.relative_attention_num_buckets,
             max_distance=self.relative_attention_max_distance,
         )
-        values = self.relative_attention_bias(relative_position_bucket)  # shape (query_length, key_length, num_heads)
-        values = values.permute([2, 0, 1]).unsqueeze(0)  # shape (1, num_heads, query_length, key_length)
+        values = self.relative_attention_bias(
+            relative_position_bucket
+        )  # shape (query_length, key_length, num_heads)
+        values = values.permute([2, 0, 1]).unsqueeze(
+            0
+        )  # shape (1, num_heads, query_length, key_length)
         return values
 
     def forward(
@@ -418,16 +454,13 @@ class TtT5Attention(nn.Module):
     ):
         """
         Self-attention (if key_value_states is None) or attention over source sentence (provided by key_value_states).
+
+        Input is (batch_size, seq_length, dim) in tt (1, batch_size, seq_length, dim) or (batch_size, 1, seq_length, dim)
+        Mask is (batch_size, key_length) (non-causal) or (batch_size, key_length, key_length)
+        past_key_value[0] is (batch_size, n_heads, q_len - 1, dim_per_head)
         """
-        # Input is (batch_size, seq_length, dim) in tt (1, batch_size, seq_length, dim) or (batch_size, 1, seq_length, dim) ???
-        # Mask is (batch_size, key_length) (non-causal) or (batch_size, key_length, key_length)
-        # past_key_value[0] is (batch_size, n_heads, q_len - 1, dim_per_head)
         batch_size = hidden_states.shape()[1]
         seq_length = hidden_states.shape()[2]
-
-        print(f"hidden states shape {hidden_states.shape()}")
-        print(f"batch_size {batch_size}")
-        print(f"seq_length {seq_length}")
 
         real_seq_length = seq_length
 
@@ -435,18 +468,24 @@ class TtT5Attention(nn.Module):
             assert (
                 len(past_key_value) == 2
             ), f"past_key_value should have 2 past states: keys and values. Got { len(past_key_value)} past states"
-            real_seq_length += past_key_value[0].shape[2] if query_length is None else query_length
+            real_seq_length += (
+                past_key_value[0].shape[2] if query_length is None else query_length
+            )
 
-        key_length = real_seq_length if key_value_states is None else key_value_states.shape()[2]
+        key_length = (
+            real_seq_length if key_value_states is None else key_value_states.shape()[2]
+        )
 
         def shape(states):
             """projection"""
-            #return states.view(batch_size, -1, self.n_heads, self.key_value_proj_dim).transpose(1, 2)
-            return t5_shape_tt(states, batch_size, self.n_heads, self.key_value_proj_dim, self.device)
+            # return states.view(batch_size, -1, self.n_heads, self.key_value_proj_dim).transpose(1, 2)
+            return t5_shape_tt(
+                states, batch_size, self.n_heads, self.key_value_proj_dim, self.device
+            )
 
         def unshape(states):
             """reshape"""
-            #return states.transpose(1, 2).contiguous().view(batch_size, -1, self.inner_dim)
+            # return states.transpose(1, 2).contiguous().view(batch_size, -1, self.inner_dim)
             return t5_unshape_tt(states, batch_size, self.inner_dim, self.device)
 
         def project(hidden_states, proj_layer, key_value_states, past_key_value):
@@ -479,35 +518,39 @@ class TtT5Attention(nn.Module):
             return hidden_states
 
         # get query states
-        query_states = shape(self.q(hidden_states))  # (batch_size, n_heads, seq_length, dim_per_head)
+        query_states = shape(
+            self.q(hidden_states)
+        )  # (batch_size, n_heads, seq_length, dim_per_head)
 
         # get key/value states
         key_states = project(
-            hidden_states, self.k, key_value_states, past_key_value[0] if past_key_value is not None else None
+            hidden_states,
+            self.k,
+            key_value_states,
+            past_key_value[0] if past_key_value is not None else None,
         )
         value_states = project(
-            hidden_states, self.v, key_value_states, past_key_value[1] if past_key_value is not None else None
+            hidden_states,
+            self.v,
+            key_value_states,
+            past_key_value[1] if past_key_value is not None else None,
         )
 
         # compute scores
-        #scores = torch.matmul(
-        #    query_states, key_states.transpose(3, 2)
-        #)  # equivalent of torch.einsum("bnqd,bnkd->bnqk", query_states, key_states), compatible with onnx op>9
-        transposed_key_states = ttm.tensor.transpose(key_states)
+        # scores = torch.matmul(query_states, key_states.transpose(3, 2))
+        # equivalent of torch.einsum("bnqd,bnkd->bnqk", query_states, key_states), compatible with onnx op>9
+        transposed_key_states = tt_lib.tensor.transpose(key_states)
+        scores = tt_lib.tensor.bmm(query_states, transposed_key_states)
 
-        # print(f"ttm.tensor.bmm query_states x transposed_key_states: {query_states.shape()} x {transposed_key_states.shape()}")
-        scores = ttm.tensor.bmm(query_states, transposed_key_states)
-
-        if position_bias is None and self.cached_real_seq_length == real_seq_length and self.cached_key_length == key_length:
-            # Take cached position bias
-            # print("---------------------> Taking position bias from cache <-----------------------------")
+        if (
+            position_bias is None
+            and self.cached_real_seq_length == real_seq_length
+            and self.cached_key_length == key_length
+        ):
             position_bias = self.cached_position_bias
 
         elif position_bias is None:
-            # Compute position bias
-            # print("---------------------> Making new position bias <-----------------------------")
             if not self.has_relative_attention_bias:
-
                 position_bias = torch.zeros(
                     (1, self.n_heads, real_seq_length, key_length),
                 )
@@ -526,7 +569,9 @@ class TtT5Attention(nn.Module):
             position_bias = position_bias.repeat(batch_size, 1, 1, 1)
 
             if mask is not None:
-                position_bias = position_bias + mask  # (batch_size, n_heads, seq_length, key_length)
+                position_bias = (
+                    position_bias + mask
+                )  # (batch_size, n_heads, seq_length, key_length)
 
             # Prunned heads!
             if self.pruned_heads:
@@ -543,29 +588,27 @@ class TtT5Attention(nn.Module):
             self.cached_key_length = key_length
 
         # scores += position_bias_masked
-        scores = ttm.tensor.add(scores, position_bias)
+        scores = tt_lib.tensor.add(scores, position_bias)
 
         # attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
-        attn_weights = tt_softmax(scores, stable=False) # (batch_size, n_heads, seq_length, key_length)
+        attn_weights = tt_softmax(
+            scores, stable=False
+        )  # (batch_size, n_heads, seq_length, key_length)
 
         # Dropout is not used in inference
-        # attn_weights = nn.functional.dropout(
-        #    attn_weights, p=self.dropout, training=self.training
-        #)  # (batch_size, n_heads, seq_length, key_length)
+        # attn_weights = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)  # (batch_size, n_heads, seq_length, key_length)
 
         # Mask heads if we want to
         if layer_head_mask is not None:
-            # attn_weights = attn_weights * layer_head_mask
-            attn_weights = ttm.tensor.mul(attn_weights, layer_head_mask)
+            attn_weights = tt_lib.tensor.mul(attn_weights, layer_head_mask)
 
-        # torch.matmul(attn_weights, value_states)
-        attn_output = ttm.tensor.bmm(attn_weights, value_states)
+        attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
         attn_output = self.o(attn_output)
 
-        # return (attn_output, 0)
-
-        present_key_value_state = (key_states, value_states) if (self.is_decoder and use_cache) else None
+        present_key_value_state = (
+            (key_states, value_states) if (self.is_decoder and use_cache) else None
+        )
         outputs = (attn_output,) + (present_key_value_state,) + (position_bias,)
 
         if output_attentions:
