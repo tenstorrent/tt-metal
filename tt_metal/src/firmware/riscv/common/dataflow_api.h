@@ -503,11 +503,17 @@ struct InterleavedAddrGen {
         uint32_t noc_x;
         uint32_t noc_y;
         if constexpr (DRAM) {
-            uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
-            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, this->page_size) + this->bank_base_address + offset;
-
+#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
+            uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
+            addr = mulsi3(udivsi3_const_divisor<NUM_DRAM_BANKS>(id), this->page_size) + this->bank_base_address + offset;
             noc_x = dram_bank_to_noc_x[bank_id];
             noc_y = dram_bank_to_noc_y[bank_id];
+#else
+            uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
+            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, this->page_size) + this->bank_base_address + offset;
+            noc_x = dram_bank_to_noc_x[bank_id];
+            noc_y = dram_bank_to_noc_y[bank_id];
+#endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, this->page_size) + this->bank_base_address + offset;
@@ -540,10 +546,17 @@ struct InterleavedPow2AddrGen {
         // DPRINT << this->bank_base_address << ENDL();
         #endif
         if constexpr (DRAM) {
+#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
+            uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
+            addr = (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address;
+            noc_x = dram_bank_to_noc_x[bank_id];
+            noc_y = dram_bank_to_noc_y[bank_id];
+#else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address;
             noc_x = dram_bank_to_noc_x[bank_id];
             noc_y = dram_bank_to_noc_y[bank_id];
+#endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address;
@@ -570,10 +583,17 @@ struct InterleavedAddrGenFast {
         uint32_t noc_x;
         uint32_t noc_y;
         if constexpr (DRAM) {
+#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
+            uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
+            addr = MUL_WITH_TILE_SIZE((uint) this->data_format, udivsi3_const_divisor<NUM_DRAM_BANKS>(id)) + this->bank_base_address + offset;
+            noc_x = dram_bank_to_noc_x[bank_id];
+            noc_y = dram_bank_to_noc_y[bank_id];
+#else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) + this->bank_base_address + offset;
             noc_x = dram_bank_to_noc_x[bank_id];
             noc_y = dram_bank_to_noc_y[bank_id];
+#endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) + this->bank_base_address + offset;
@@ -592,9 +612,15 @@ struct InterleavedAddrGenFast {
         uint32_t src_noc_xy;
 
         if constexpr (DRAM) {
+#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
+            uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
+            src_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, udivsi3_const_divisor<NUM_DRAM_BANKS>(id)) + this->bank_base_address + offset;
+            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+#else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             src_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) + this->bank_base_address + offset;
             src_noc_xy = dram_bank_to_noc_xy[bank_id];
+#endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             src_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) + this->bank_base_address + offset;
@@ -619,7 +645,11 @@ struct InterleavedAddrGenFast {
 
         if constexpr (DRAM) {
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
+#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
+            dest_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, udivsi3_const_divisor<NUM_DRAM_BANKS>(id)) + this->bank_base_address;
+#else
             dest_addr = MUL_WITH_TILE_SIZE((uint) this->data_format, id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) + this->bank_base_address;
+#endif
             dest_noc_xy = dram_bank_to_noc_xy[bank_id];
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);

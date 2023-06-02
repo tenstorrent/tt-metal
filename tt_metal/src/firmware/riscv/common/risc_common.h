@@ -11,6 +11,7 @@
 #include "noc_overlay_parameters.h"
 #include "stream_io_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
+#include "limits.h"
 
 #define NOC_X(x) (loading_noc == 0 ? (x) : (noc_size_x-1-(x)))
 #define NOC_Y(y) (loading_noc == 0 ? (y) : (noc_size_y-1-(y)))
@@ -186,6 +187,69 @@ inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsig
       b <<= 1;
     }
   return r;
+}
+
+inline __attribute__((always_inline)) uint32_t fast_udiv_12(uint32_t n)
+{
+    // Uses embedding style magic number
+    // * fixed point 1/12 then shifting.
+    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
+    return (((uint64_t) n * 0xAAAAAAAB) >> 32) >> 3;
+}
+
+template <uint32_t d>
+inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
+{
+    if constexpr (d == 12) {
+        // fast divide for 12 divisor
+        return fast_udiv_12(n);
+    } else {
+        // generic divide from llvm
+        const unsigned n_uword_bits = sizeof(uint32_t) * CHAR_BIT;
+        unsigned int q;
+        unsigned int r;
+        unsigned sr;
+        /* special cases */
+        if (d == 0)
+            return 0; /* ?! */
+        if (n == 0)
+            return 0;
+        sr = __builtin_clz(d) - __builtin_clz(n);
+        /* 0 <= sr <= n_uword_bits - 1 or sr large */
+        if (sr > n_uword_bits - 1)  /* d > r */
+            return 0;
+        if (sr == n_uword_bits - 1)  /* d == 1 */
+            return n;
+        ++sr;
+        /* 1 <= sr <= n_uword_bits - 1 */
+        /* Not a special case */
+        q = n << (n_uword_bits - sr);
+        r = n >> sr;
+        unsigned int  carry = 0;
+        for (; sr > 0; --sr)
+        {
+            /* r:q = ((r:q)  << 1) | carry */
+            r = (r << 1) | (q >> (n_uword_bits - 1));
+            q = (q << 1) | carry;
+            /* carry = 0;
+             * if (r.all >= d.all)
+             * {
+             *      r.all -= d.all;
+             *      carry = 1;
+             * }
+             */
+            const int s = (unsigned int)(d - r - 1) >> (n_uword_bits - 1);
+            carry = s & 1;
+            r -= d & s;
+        }
+        q = (q << 1) | carry;
+        return q;
+    }
+}
+template <uint32_t d>
+inline __attribute__((always_inline)) uint32_t umodsi3_const_divisor(uint32_t a)
+{
+    return a - udivsi3_const_divisor<d>(a) * b;
 }
 
 void risc_init();
