@@ -1208,7 +1208,7 @@ inline void cast_fp32_to_fp16a()
     {
         vFloat in = dst_reg[0];
         float_to_fp16a(in);
-        dst_reg[0] = out;
+        dst_reg[0] = in;
 
         dst_reg++;
     }
