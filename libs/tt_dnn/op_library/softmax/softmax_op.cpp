@@ -33,6 +33,8 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
     u32 HW = H*W;
     TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
+    TT_ASSERT(a.dtype() == DataType::BFLOAT16);
+    TT_ASSERT(mask == nullptr || mask->dtype() == DataType::BFLOAT16);
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 

@@ -30,6 +30,10 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
     u32 HW = H*W;
     TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
+    TT_ASSERT(a.dtype() == DataType::BFLOAT16);
+    TT_ASSERT(b == nullptr || b->dtype() == DataType::BFLOAT16);
+    TT_ASSERT(gamma == nullptr || gamma->dtype() == DataType::BFLOAT16);
+    TT_ASSERT(beta == nullptr || beta->dtype() == DataType::BFLOAT16);
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
