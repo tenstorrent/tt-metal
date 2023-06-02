@@ -122,8 +122,6 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
-
         // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
         auto kernel_group = program.kernels_on_core(core);
 
@@ -146,15 +144,15 @@ int main(int argc, char **argv) {
                 TT_ASSERT(kernel_group.riscv_0->binaries() == brisc_binaries);
                 TT_ASSERT(kernel_group.riscv_1->binaries() == ncrisc_binaries);
             }
-            std::string brisc_hex_path = kernel_group.riscv_0->binary_path(core) + "/brisc/brisc.hex";
+            std::string brisc_hex_path = kernel_group.riscv_0->binary_path() + "/brisc/brisc.hex";
             ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path);
             TT_ASSERT(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
-            std::string ncrisc_hex_path = kernel_group.riscv_1->binary_path(core) + "/ncrisc/ncrisc.hex";
+            std::string ncrisc_hex_path = kernel_group.riscv_1->binary_path() + "/ncrisc/ncrisc.hex";
             ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path);
             TT_ASSERT(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
-                std::string trisc_hex_path = kernel_group.compute->binary_path(core) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
+                std::string trisc_hex_path = kernel_group.compute->binary_path() + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
                 ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path);
                 TT_ASSERT(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
             }

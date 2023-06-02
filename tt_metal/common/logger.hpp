@@ -35,7 +35,8 @@ namespace tt {
     X(HLKC)            \
     X(Reportify)       \
     X(GraphCompiler)   \
-    X(Dispatch)
+    X(Dispatch)        \
+    X(Metal)
 
 enum LogType : uint32_t {
 // clang-format off

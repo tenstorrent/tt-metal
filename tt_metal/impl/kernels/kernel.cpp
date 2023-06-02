@@ -36,20 +36,13 @@ bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.core_coord_in_core_ranges(logical_core);
 }
 
-std::string Kernel::binary_path(const CoreCoord &logical_core) const {
-    if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot access binary for " + name() + " because it is not on core " + logical_core.str());
-    }
-    return binary_path_.at(logical_core);
-}
-
 std::vector<ll_api::memory> const &Kernel::binaries() const {
     const static std::map<KernelType, int> kernel_type_to_expected_num_binaries = {
         {KernelType::Compute, 3},
         {KernelType::DataMovement, 1}
     };
     int expected_num_binaries = kernel_type_to_expected_num_binaries.at(this->kernel_type_);
-    if (this->binaries_.size() != expected_num_binaries) {
+    if (not this->binaries_.empty() and this->binaries_.size() != expected_num_binaries) {
         std::stringstream identifier;
         identifier << this->kernel_type_;
         TT_THROW("Expected " + std::to_string(expected_num_binaries) + " binaries but have "
@@ -73,11 +66,8 @@ size_t Kernel::compile_time_args_hash() const {
     return tt::utils::vector_hash<uint32_t>{}(this->compile_time_args_);
 }
 
-size_t Kernel::define_args_hash(const CoreCoord& logical_core) const {
-    if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot hash compile time args for " + name() + " because it is not on core " + logical_core.str());
-    }
-    return KernelDefinesHash{logical_core}(defines_);
+size_t Kernel::define_args_hash() const {
+    return KernelDefinesHash{}(defines_);
 }
 
 void Kernel::set_binaries(const std::string &binary_path) {
@@ -121,7 +111,7 @@ void Kernel::set_binaries(const std::string &binary_path) {
     if (not this->binaries_.empty()) {
         TT_ASSERT(this->binaries_ == binaries);
     } else {
-        this->binaries_ = std::move(binaries);
+    this->binaries_ = std::move(binaries);
     }
 }
 
@@ -181,7 +171,6 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    auto binary_path = binary_path_.at(logical_core);
 
     int riscv_id;
     std::string binary_path_suffix;
@@ -204,7 +193,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     }
 
     pass &= tt::llrt::test_load_write_read_risc_binary(
-        cluster, binary_path + binary_path_suffix, pcie_slot, worker_core, riscv_id);
+        cluster, this->binary_path_ + binary_path_suffix, pcie_slot, worker_core, riscv_id);
     init_test_mailbox(device, worker_core, test_mailbox_addr);
     if (processor_ == DataMovementProcessor::RISCV_1) {
         tt::llrt::enable_ncrisc(cluster, pcie_slot, worker_core);
@@ -220,13 +209,12 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    auto binary_path = binary_path_.at(logical_core);
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         std::string trisc_id_str = std::to_string(trisc_id);
         pass &= tt::llrt::test_load_write_read_trisc_binary(
             cluster,
-            binary_path + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex",
+            this->binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex",
             pcie_slot,
             worker_core,
             trisc_id);
