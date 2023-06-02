@@ -55,7 +55,6 @@ Host *GetHost() {
 }
 
 Device *CreateDevice(tt::ARCH arch, int pcie_slot) {
-    TT_ASSERT(arch == tt::ARCH::GRAYSKULL, "Only Grayskull is supported!");
     return new Device(arch, pcie_slot);
 }
 bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {

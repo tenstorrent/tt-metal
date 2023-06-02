@@ -170,20 +170,30 @@ void tt_cluster::open_device(
     if (target_type == TargetDevice::Silicon) {
         // For silicon driver, filter mmio devices to use only mmio chips required by netlist workload, to allow sharing
         // of resource (reservation/virtualization) like GS where cluster desc only contains netlist workload devices.
-        std::unordered_set<chip_id_t> netlist_mmio_chips;
+        std::unordered_set<chip_id_t> mmio_chips;
         for (auto &d: target_devices){
             if (ndesc->is_chip_mmio_capable(d)){
-                netlist_mmio_chips.insert(d);
+                mmio_chips.insert(d);
             }
         }
 
-        device = std::make_unique<tt_SiliconDevice>(this->sdesc_per_chip, netlist_mmio_chips, skip_driver_allocs);
-
-        if(arch == tt::ARCH::GRAYSKULL and !std::filesystem::is_directory(sdesc_path)){
-            // Only generate harvesting info if this is the first time the cluster is opened (in boot mode)
-            for(auto chip_id = target_devices.begin(); chip_id != target_devices.end(); chip_id++){
-                harvested_rows_per_target[*chip_id] =  device->get_harvested_noc_rows(*chip_id);
-                if(harvested_rows_per_target[*chip_id]) performed_harvesting = true;
+        device = std::make_unique<tt_SiliconDevice>(this->sdesc_per_chip, mmio_chips, skip_driver_allocs);
+        if(!std::filesystem::is_directory(sdesc_path)) {
+            if (arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::WORMHOLE) {
+                for(auto chip_id = target_devices.begin(); chip_id != target_devices.end(); chip_id++){
+                    harvested_rows_per_target[*chip_id] =  device->get_harvested_noc_rows(*mmio_chips.begin()); // The harvesting mask is shared across all devices in the cluster for WH.
+                    if(harvested_rows_per_target[*chip_id]) {
+                        performed_harvesting = true;
+                    }
+                }
+            } else if (arch == tt::ARCH::GRAYSKULL) {
+                // Multichip harvesting is supported for GS.
+                for(auto chip_id = target_devices.begin(); chip_id != target_devices.end(); chip_id++){
+                    harvested_rows_per_target[*chip_id] =  device->get_harvested_noc_rows(*chip_id);
+                    if(harvested_rows_per_target[*chip_id]) {
+                        performed_harvesting = true;
+                    }
+                }
             }
         }
     }
