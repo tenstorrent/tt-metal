@@ -324,16 +324,16 @@ void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* d
     }
 }
 
-bool test_matmul_large_block(bool activations_rm, bool output_rm) {
+bool test_matmul_large_block(const tt::ARCH& arch, bool activations_rm, bool output_rm) {
     bool pass = true;
 
     try {
         ////////////////////////////////////////////////////////////////////////////
-        //                      Grayskull Device Setup
+        //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+            tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);;
 
@@ -575,17 +575,30 @@ bool test_matmul_large_block(bool activations_rm, bool output_rm) {
 int main(int argc, char **argv) {
     bool pass = true;
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Initial Runtime Args Parse
+    ////////////////////////////////////////////////////////////////////////////
+    std::vector<std::string> input_args(argv, argv + argc);
+    string arch_name = "";
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+    }
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
     // Row major input, tilized output
-    pass &= test_matmul_large_block(true, false);
+    pass &= test_matmul_large_block(arch, true, false);
 
     // Row major input, untilized output
-    pass &= test_matmul_large_block(true, true);
+    pass &= test_matmul_large_block(arch, true, true);
 
     // Tilized input, tilized output
-    pass &= test_matmul_large_block(false, false);
+    pass &= test_matmul_large_block(arch, false, false);
 
     // Tilized input, untilized output
-    pass &= test_matmul_large_block(false, true);
+    pass &= test_matmul_large_block(arch, false, true);
 
     TT_ASSERT(pass);
 }

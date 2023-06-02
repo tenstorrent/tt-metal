@@ -15,8 +15,8 @@ void zero_out_sysmem(Device *device) {
     device->cluster()->write_sysmem_vec(zeros, 0, 0);
 }
 
-bool test_enqueue_write_buffer(BufferType buftype) {
-    tt_metal::Device *device = tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, 0);
+bool test_enqueue_write_buffer(const ARCH& arch, BufferType buftype) {
+    tt_metal::Device *device = tt_metal::CreateDevice(arch, 0);
 
     tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
 
@@ -52,8 +52,8 @@ bool test_enqueue_write_buffer(BufferType buftype) {
     return pass;
 }
 
-bool test_enqueue_read_buffer(BufferType buftype) {
-    tt_metal::Device *device = tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, 0);
+bool test_enqueue_read_buffer(const ARCH& arch, BufferType buftype) {
+    tt_metal::Device *device = tt_metal::CreateDevice(arch , 0);
 
     tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
     bool pass = true;
@@ -89,8 +89,8 @@ bool test_enqueue_read_buffer(BufferType buftype) {
     return pass;
 }
 
-bool test_enqueue_blocking_read_stress(BufferType buftype) {
-    tt_metal::Device *device = tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, 0);
+bool test_enqueue_blocking_read_stress(const ARCH& arch, BufferType buftype) {
+    tt_metal::Device *device = tt_metal::CreateDevice(arch, 0);
 
     tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
     zero_out_sysmem(device);
@@ -121,8 +121,8 @@ bool test_enqueue_blocking_read_stress(BufferType buftype) {
     return pass;
 }
 
-bool test_enqueue_write_stress(BufferType buftype) {
-    tt_metal::Device *device = tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, 0);
+bool test_enqueue_write_stress(const ARCH& arch, BufferType buftype) {
+    tt_metal::Device *device = tt_metal::CreateDevice(arch, 0);
 
     tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
     zero_out_sysmem(device);
@@ -163,14 +163,14 @@ bool test_enqueue_write_stress(BufferType buftype) {
     return pass;
 }
 
-bool test_enqueue_write_and_read_pair_stress(BufferType buftype) {
+bool test_enqueue_write_and_read_pair_stress(const ARCH& arch, BufferType buftype) {
     /*
         This test performs back to back writes and reads (hence pair)
     */
 
     bool pass = true;
 
-    tt_metal::Device *device = tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, 0);
+    tt_metal::Device *device = tt_metal::CreateDevice(arch, 0);
 
     tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
     zero_out_sysmem(device);
@@ -202,7 +202,7 @@ bool test_enqueue_write_and_read_pair_stress(BufferType buftype) {
     return pass;
 }
 
-bool test_chained_enqueue_writes_then_reads_stress() {
+bool test_chained_enqueue_writes_then_reads_stress(const ARCH& arch) {
     /*
         This test performs back to back writes and reads (hence pair)
     */
@@ -211,7 +211,7 @@ bool test_chained_enqueue_writes_then_reads_stress() {
 
     bool pass = true;
 
-    tt_metal::Device *device = tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, 0);
+    tt_metal::Device *device = tt_metal::CreateDevice(arch, 0);
 
     tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
 
@@ -261,21 +261,33 @@ bool test_chained_enqueue_writes_then_reads_stress() {
 int main(int argc, char **argv) {
     int pci_express_slot = 0;
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Initial Runtime Args Parse
+    ////////////////////////////////////////////////////////////////////////////
+    std::vector<std::string> input_args(argv, argv + argc);
+    string arch_name = "";
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+    }
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     // Most basic unit tests
-    test_enqueue_write_buffer(BufferType::DRAM);
-    test_enqueue_read_buffer(BufferType::DRAM);
-    test_enqueue_write_buffer(BufferType::L1);
-    test_enqueue_read_buffer(BufferType::L1);
+    test_enqueue_write_buffer(arch, BufferType::DRAM);
+    test_enqueue_read_buffer(arch, BufferType::DRAM);
+    test_enqueue_write_buffer(arch, BufferType::L1);
+    test_enqueue_read_buffer(arch, BufferType::L1);
 
     // Stress testing (just up to 1GB of system memory, no wrapping)
-    test_enqueue_blocking_read_stress(BufferType::DRAM);
-    test_enqueue_blocking_read_stress(BufferType::L1);
+    test_enqueue_blocking_read_stress(arch, BufferType::DRAM);
+    test_enqueue_blocking_read_stress(arch, BufferType::L1);
 
-    test_enqueue_write_stress(BufferType::DRAM);
-    test_enqueue_write_stress(BufferType::L1);
+    test_enqueue_write_stress(arch, BufferType::DRAM);
+    test_enqueue_write_stress(arch, BufferType::L1);
 
-    test_enqueue_write_and_read_pair_stress(BufferType::DRAM);
-    test_enqueue_write_and_read_pair_stress(BufferType::L1);
+    test_enqueue_write_and_read_pair_stress(arch, BufferType::DRAM);
+    test_enqueue_write_and_read_pair_stress(arch, BufferType::L1);
 
-    test_chained_enqueue_writes_then_reads_stress();
+    test_chained_enqueue_writes_then_reads_stress(arch);
 }

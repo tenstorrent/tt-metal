@@ -101,7 +101,7 @@ const map<string, std::function<float(float, float)>> binary_op_to_function = {
 
 // This test just runs a chain of eltwise unary sfpu ops, and it's a good baseline test for the
 // graph interpreter since there is no branching
-bool run_chained_sfpu_test(int chain_length) {
+bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
 
     TT_ASSERT(chain_length > 0 && chain_length <= 10, "Cannot have a graph of more than 10 ops in L1");
 
@@ -119,11 +119,11 @@ bool run_chained_sfpu_test(int chain_length) {
 
     try {
         ////////////////////////////////////////////////////////////////////////////
-        //                      Grayskull Device Setup
+        //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+            tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -343,18 +343,18 @@ bool run_chained_sfpu_test(int chain_length) {
 }
 
 // This test just runs an add followed by gelu
-bool run_binary_add_and_then_eltwise_gelu_test() {
+bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
 
     uint32_t chain_length = 2;
     bool pass = true;
 
     try {
         ////////////////////////////////////////////////////////////////////////////
-        //                      Grayskull Device Setup
+        //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+            tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -619,7 +619,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
 // This test just runs a chain of eltwise binary ops, with branching
 // This runs a specific hardcoded graph
-bool run_forked_binary_test() {
+bool run_forked_binary_test(const tt::ARCH& arch) {
 
     int chain_length = 10;
 
@@ -637,11 +637,11 @@ bool run_forked_binary_test() {
 
     try {
         ////////////////////////////////////////////////////////////////////////////
-        //                      Grayskull Device Setup
+        //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+            tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -1130,6 +1130,19 @@ bool run_forked_binary_test() {
 
 int main(int argc, char **argv) {
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Initial Runtime Args Parse
+    ////////////////////////////////////////////////////////////////////////////
+    std::vector<std::string> input_args(argv, argv + argc);
+    string arch_name = "";
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+    }
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
     // Run compile blank kernel here so that HACK_FOR_GRAPH_INTERPRETER doesn't
     // meddle with the compilation
     run_compile_blank();
@@ -1141,13 +1154,13 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     // Simple eltwise unary chain test
-    pass &= run_chained_sfpu_test(10);
+    pass &= run_chained_sfpu_test(arch, 10);
 
     // Binary add and then gelu on output
-    pass &= run_binary_add_and_then_eltwise_gelu_test();
+    pass &= run_binary_add_and_then_eltwise_gelu_test(arch);
 
     // Binary forked graph
-    pass &= run_forked_binary_test();
+    pass &= run_forked_binary_test(arch);
 
     TT_ASSERT(pass, "Graph interpreter test failed");
     return 0;

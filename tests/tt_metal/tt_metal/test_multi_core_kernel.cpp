@@ -13,17 +13,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-tt_metal::Device *initialize_device() {
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    int pci_express_slot = 0;
-    tt_metal::Device *device =
-        tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
-    tt_metal::InitializeDevice(device);;
-    return device;
-}
-
 tt_metal::Program create_program(
     tt_metal::Device *device,
     uint32_t single_tile_size,
@@ -332,7 +321,25 @@ int main(int argc, char **argv) {
 
     try {
 
-        tt_metal::Device *device = initialize_device();
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Initial Runtime Args Parse
+        ////////////////////////////////////////////////////////////////////////////
+        std::vector<std::string> input_args(argv, argv + argc);
+        string arch_name = "";
+        try {
+            std::tie(arch_name, input_args) =
+                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+        } catch (const std::exception& e) {
+            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+        }
+        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Device Setup
+        ////////////////////////////////////////////////////////////////////////////
+        int pci_express_slot = 0;
+        tt_metal::Device *device =
+            tt_metal::CreateDevice(arch, pci_express_slot);
+        tt_metal::InitializeDevice(device);
 
         pass &= test_multi_core_kernel_same_runtime_args(device);
 

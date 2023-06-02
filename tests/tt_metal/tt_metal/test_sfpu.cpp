@@ -14,16 +14,16 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool run_sfpu_test(string sfpu_name) {
+bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
     bool multibank = true;
     bool pass = true;
     try {
         ////////////////////////////////////////////////////////////////////////////
-        //                      Grayskull Device Setup
+        //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+            tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);;
 
@@ -207,9 +207,21 @@ bool run_sfpu_test(string sfpu_name) {
 int main(int argc, char **argv) {
 
     bool pass = true;
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Initial Runtime Args Parse
+    ////////////////////////////////////////////////////////////////////////////
+    std::vector<std::string> input_args(argv, argv + argc);
+    string arch_name = "";
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+    }
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
         log_info(LogTest, "Running {}", op_name);
-        bool pass_ = run_sfpu_test(op_name);
+        bool pass_ = run_sfpu_test(arch, op_name);
 
         if (pass_) {
             log_info(LogTest, "{} test passed", op_name);

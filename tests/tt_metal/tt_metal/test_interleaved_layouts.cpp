@@ -17,7 +17,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool test_write_interleaved_sticks_and_then_read_interleaved_sticks() {
+bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::ARCH& arch) {
     /*
         This test just writes sticks in a interleaved fashion to DRAM and then reads back to ensure
         they were written correctly
@@ -25,9 +25,12 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks() {
     bool pass = true;
 
     try {
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Device Setup
+        ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+            tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -61,16 +64,16 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks() {
     return pass;
 }
 
-bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test() {
+bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt::ARCH& arch) {
     bool pass = true;
 
     try {
         ////////////////////////////////////////////////////////////////////////////
-        //                      Grayskull Device Setup
+        //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+            tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -252,16 +255,16 @@ bool interleaved_tilized_reader_single_bank_stick_writer_datacopy_test() {
 }
 
 
-bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
+bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt::ARCH& arch) {
     bool pass = true;
 
     try {
         ////////////////////////////////////////////////////////////////////////////
-        //                      Grayskull Device Setup
+        //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+            tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -426,7 +429,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test() {
 
 
 template <bool src_is_in_l1, bool dst_is_in_l1>
-bool test_interleaved_l1_datacopy() {
+bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     uint num_pages = 256;
     uint num_bytes_per_page = 2048;
@@ -441,7 +444,7 @@ bool test_interleaved_l1_datacopy() {
 
     int pci_express_slot = 0;
     tt_metal::Device *device =
-        tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+        tt_metal::CreateDevice(arch, pci_express_slot);
 
     pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
 
@@ -576,17 +579,29 @@ bool test_interleaved_l1_datacopy() {
 
 int main(int argc, char **argv) {
     bool pass = true;
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Initial Runtime Args Parse
+    ////////////////////////////////////////////////////////////////////////////
+    std::vector<std::string> input_args(argv, argv + argc);
+    string arch_name = "";
+    try {
+        std::tie(arch_name, input_args) =
+            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+    }
+    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
 
     // DRAM row/tile interleaved layout tests
-    pass &= test_write_interleaved_sticks_and_then_read_interleaved_sticks();
-    pass &= interleaved_stick_reader_single_bank_tilized_writer_datacopy_test();
-    pass &= interleaved_tilized_reader_interleaved_stick_writer_datacopy_test();
+    pass &= test_write_interleaved_sticks_and_then_read_interleaved_sticks(arch);
+    pass &= interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(arch);
+    pass &= interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(arch);
 
     // L1 tile-interleaved tests
-    pass &= test_interleaved_l1_datacopy<true, true>();
-    pass &= test_interleaved_l1_datacopy<false, true>();
-    pass &= test_interleaved_l1_datacopy<true, false>();
-    pass &= test_interleaved_l1_datacopy<false, false>();
+    pass &= test_interleaved_l1_datacopy<true, true>(arch);
+    pass &= test_interleaved_l1_datacopy<false, true>(arch);
+    pass &= test_interleaved_l1_datacopy<true, false>(arch);
+    pass &= test_interleaved_l1_datacopy<false, false>(arch);
 
     if (pass) {
         log_info(LogTest, "Test Passed");
