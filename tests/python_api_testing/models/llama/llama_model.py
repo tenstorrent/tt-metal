@@ -68,24 +68,9 @@ class TtLlamaShared(torch.nn.Module):
     @abstractmethod
     def forward(self, x):
         embeddings = self.embeddings(x)
-        # Convert to ll buda tensor
-        # pad_embeddings = pad_activation(embeddings)
-        # tt_embeddings = ttl.tensor.Tensor(
-        #     pad_embeddings.reshape(-1).tolist(),
-        #     (
-        #         pad_embeddings.shape[0],
-        #         1,
-        #         pad_embeddings.shape[-2],
-        #         pad_embeddings.shape[-1],
-        #     ),
-        #     ttl.tensor.DataType.BFLOAT16,
-        #     ttl.tensor.Layout.ROW_MAJOR,
-        # ).to(ttl.tensor.Layout.TILE)
-        # tt_embeddings = tt_embeddings.to(self.device)
         tt_embeddings = torch2tt_tensor(embeddings, self.device)
 
         # apply decoders
-        # encoder_output = self.decoders(tt_embeddings)
         encoder_output = tt_embeddings
         for idx, decoder_layer in enumerate(self.decoders):
             encoder_output = decoder_layer(hidden_states=encoder_output)[0]
