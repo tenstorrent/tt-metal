@@ -496,16 +496,11 @@ void GenerateBankToNocCoordHeaders(
     const std::string &op_path)
 {
     // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
-    // FIXME: Need to change and support for 12 banks dram in WH
     const size_t num_dram_banks = device->num_banks(BufferType::DRAM);
     const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
-    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks_pow2);
-    for (unsigned bank_id = 0; bank_id < num_dram_banks_pow2; bank_id++) {
-        if (bank_id < num_dram_banks) {
-            dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
-        } else {
-            dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(0); // Alias to another channel for now FIXME:
-        }
+    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
+    for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+        dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
     }
     const size_t num_l1_banks = device->num_banks(BufferType::L1);
     const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
