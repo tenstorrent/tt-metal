@@ -2,6 +2,7 @@ import pytest
 from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from tests.python_api_testing.models.conftest import model_location_generator_
 import sys
 from pathlib import Path
 
@@ -392,4 +393,14 @@ def test_bert_batch_dram(
 
 
 if __name__ == "__main__":
-    test_bert_batch_dram()
+    test_bert_batch_dram(
+        "phiyodr/bert-large-finetuned-squad2",
+        9,
+        384,
+        True,
+        True,
+        True,
+        True,
+        0.98,
+        model_location_generator_,
+    )

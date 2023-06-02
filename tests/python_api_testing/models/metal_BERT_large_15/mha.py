@@ -185,17 +185,21 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
         N, C, H, W = qkt.shape()
 
-        #ref = op8_scale_mask_softmax_ref(qkt, attention_mask)
+        # ref = op8_scale_mask_softmax_ref(qkt, attention_mask)
 
-        new_shape = [N, 1, C*H, W]
+        new_shape = [N, 1, C * H, W]
         ttl.tensor.reshape(qkt, *new_shape)
 
-        if (attention_mask is not None):
-            attention_scores = ttl.tensor.scale_mask_softmax_in_place(freciprocal_of_sqrt_hidden_dim, attention_mask, qkt)
+        if attention_mask is not None:
+            attention_scores = ttl.tensor.scale_mask_softmax_in_place(
+                freciprocal_of_sqrt_hidden_dim, attention_mask, qkt
+            )
         else:
             attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
             attention_scores = ttl.tensor.softmax_in_place(attention_score_input)
-        ttl.tensor.reshape(attention_scores, N, C, H, W) # Reshape back to original shape
+        ttl.tensor.reshape(
+            attention_scores, N, C, H, W
+        )  # Reshape back to original shape
         # profiler.end("___op8_scale_mask_softmax")
 
         return attention_scores
@@ -403,12 +407,8 @@ def run_mha_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka,  pcc",
-    (
-        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99),
-        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, 0.99),
-    ),
+    "model_version, batch, seq_len, on_weka, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, 0.99),),
 )
 def test_mha_inference(
     model_version, batch, seq_len, on_weka, pcc, model_location_generator
