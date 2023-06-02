@@ -15,9 +15,11 @@ inline void tilize_in(
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
-            cb_reserve_back(out_cb_id, in_block_w);
+            // MATH(( DPRINT << " ==== RESERVING " << in_block_w << " tiles in out_cb_id" << ENDL() ));
+            cb_reserve_back(out_cb_id, in_block_w);;
             tilize_block(in_cb_id, in_block_w, out_cb_id);
             cb_push_back(out_cb_id, in_block_w);
+            // MATH(( DPRINT << " ==== PUSHING " << in_block_w << " tiles in out_cb_id" << ENDL() ));
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
@@ -59,10 +61,12 @@ inline void reblock_and_untilize(
         // Untilize
         untilize_init_short(reblock_cb_id);
         cb_wait_front(reblock_cb_id, out_block_w);
+        // MATH(( DPRINT << " ==== RESERVING " << out_block_w << " tiles in out_cb_id" << ENDL() ));
         cb_reserve_back(out_cb_id, out_block_w);
         untilize_block(reblock_cb_id, out_block_w, out_cb_id);
         cb_pop_front(reblock_cb_id, out_block_w);
         cb_push_back(out_cb_id, out_block_w);
+        // MATH(( DPRINT << " ==== PUSHING" << out_block_w << " tiles in out_cb_id" << ENDL() ));
         untilize_uninit(reblock_cb_id);
 
         within_block_index += out_subblock_w;
@@ -71,11 +75,13 @@ inline void reblock_and_untilize(
 } // reblock_and_untilize()
 
 inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles) {
+    // MATH(( DPRINT << " ==== RESERVING " << out_subblock_num_tiles << " tiles in out_cb_id" << ENDL() ));
     cb_reserve_back(cb_id, out_subblock_num_tiles);
     for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
         pack_tile(i, cb_id);
     }
     cb_push_back(cb_id, out_subblock_num_tiles);
+    // MATH(( DPRINT << " ==== PUSHING " << out_subblock_num_tiles << " tiles in out_cb_id" << ENDL() ));
 }
 
 namespace NAMESPACE {
@@ -109,7 +115,7 @@ void MAIN {
     uint32_t matmul_partials_cb                       = CB::c_intermed1;
     uint32_t untilize_mode_final_matmul_partials_cb   = CB::c_intermed2;
     uint32_t untilize_mode_reblock_cb                 = CB::c_intermed3;
-    uint32_t out_cb                                   = CB::c_out0;
+    uint32_t out_cb_id                                = CB::c_out0;
 
     // MATH((DPRINT << "C: START" << ENDL()));
 
@@ -118,7 +124,7 @@ void MAIN {
         for(uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
             bool enable_reload = false;
             for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
-                MATH(( DPRINT << in0_block_h_i << " :: " << in1_block_w_i << " :: " << in0_block_w_i << ENDL() ));
+                // MATH(( DPRINT << in0_block_h_i << " :: " << in1_block_w_i << " :: " << in0_block_w_i << ENDL() ));
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
@@ -164,7 +170,7 @@ void MAIN {
                         pack_matmul_subblock(last_out
                                                 ? (untilize_out
                                                     ? untilize_mode_final_matmul_partials_cb
-                                                    : out_cb)
+                                                    : out_cb_id)
                                                 : matmul_partials_cb,
                                              out_subblock_num_tiles);
                         release_dst(DstMode::Half);
@@ -179,7 +185,7 @@ void MAIN {
                             out_block_w,
                             untilize_mode_final_matmul_partials_cb,
                             untilize_mode_reblock_cb,
-                            out_cb);
+                            out_cb_id);
                         mm_init_short();
                     } // last_out
                     in0_index_subblock_offset += in0_subblock_num_tiles;
@@ -190,12 +196,12 @@ void MAIN {
                 cb_pop_front(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
 
-                MATH(( DPRINT << "DONE :: " << in0_block_h_i << " :: " << in1_block_w_i << " :: " << in0_block_w_i << ENDL() ));
+                // MATH(( DPRINT << "DONE :: " << in0_block_h_i << " :: " << in1_block_w_i << " :: " << in0_block_w_i << ENDL() ));
             } // for in0_num_blocks_w
         } // for in1_num_blocks_w
     } // for in0_num_blocks_h
 
-    MATH(( DPRINT << "AAAAAAAAAAH!!!!!!!" << ENDL() ));
+    // MATH(( DPRINT << "AAAAAAAAAAH!!!!!!!" << ENDL() ));
 
 } // MAIN
 } // NAMESPACE

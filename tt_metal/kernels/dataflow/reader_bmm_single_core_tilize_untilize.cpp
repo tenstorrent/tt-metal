@@ -120,5 +120,5 @@ void kernel_main() {
         in0_curr_block_start_row_id += in0_block_nrows;
     } // for in0_num_blocks_h
 
-    DPRINT << "OOOOOOOOOOOOHHHHH!!!!" << ENDL();
+    // DPRINT << "OOOOOOOOOOOOHHHHH!!!!" << ENDL();
 } // kernel_main()

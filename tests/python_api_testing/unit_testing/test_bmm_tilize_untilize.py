@@ -22,8 +22,8 @@ TILE_HEIGHT = TILE_WIDTH = 32
 
 ## parameters
 # matrix sizes as number of blocks along h and w:
-a_height_nblocks = [1, 5, 8]  ## various
-a_width_nblocks = [1, 8]   ## various
+a_height_nblocks = [1, 2, 3, 4, 5, 6, 7, 8]  ## various
+a_width_nblocks = [1, 2, 3, 8] ## [1, 8]   ## various
 b_width_nblocks = [1, 8]   ## various
 # block sizes as number of tiles along h and w:
 a_block_height_ntiles = [1] #[4] ## various
@@ -134,7 +134,7 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
 
     print("golden out slice:\n", golden_pytorch)
 
-    print(torch.isclose(out_pytorch, golden_pytorch, rtol=1e-02, atol=1e-05))
+    print(torch.isclose(out_pytorch, golden_pytorch, rtol=1e-01, atol=1e-02))
 
     ## test for equivalance
     assert(out_pytorch.shape == golden_pytorch.shape)

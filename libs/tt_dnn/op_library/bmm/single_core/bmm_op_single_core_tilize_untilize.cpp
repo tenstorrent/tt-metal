@@ -24,7 +24,7 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
     uint32_t matmul_partials_cb                     = CB::c_intermed1;
     uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
     uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
-    uint32_t out0_cb                                = CB::c_out0;
+    uint32_t out_cb                                = CB::c_out0;
 
     const uint32_t tile_size_bytes = dtype_nbytes * constants::TILE_HW;
     const uint32_t cb0_ntiles = in0_block_h * in0_block_w * 2;  // double buffer
@@ -103,7 +103,7 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
         auto cb_output = CreateCircularBuffer(
             program,
             device,
-            out0_cb,
+            out_cb,
             core,
             out_ntiles,
             out_ntiles * tile_size_bytes,
@@ -114,7 +114,7 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
         auto cb_output = CreateCircularBuffer(
             program,
             device,
-            out0_cb,
+            out_cb,
             core,
             out_ntiles,
             out_ntiles * tile_size_bytes,
@@ -122,6 +122,8 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
             DataFormat::Float16_b
         );
     }
+
+    std::cout << "NUMBER OF TILES IN OUT_CB = " << out_ntiles << " (" << out_ntiles * tile_size_bytes << " bytes)" << std::endl;
 }
 
 Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
@@ -139,7 +141,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
     const auto [in0_batch, in0_channel, in0_height, in0_width] = in0.shape();
     const auto [in1_batch, in1_channel, in1_height, in1_width] = in1.shape();
 
-    const uint32_t dtype_nbytes = 2;
+    constexpr uint32_t dtype_nbytes = 2;    // TODO (AS); Obtain from the datatype
 
     // input matrix shape checks
     TT_ASSERT(in0_batch == 1, "Supports only batch = 1");
@@ -217,10 +219,11 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
     // in1
     uint32_t in1_dram_addr = src1_dram_buffer->address();
     // in1 block info
+    uint32_t in1_subblock_w = out_subblock_width_ntiles;
     uint32_t in1_num_blocks_w = in1_width_nblocks;
     uint32_t in1_num_blocks_h = in0_width_nblocks;
     uint32_t in1_block_w = in1_block_width_ntiles;
-    uint32_t in1_num_subblocks = in1_block_w / out_subblock_width_ntiles;
+    uint32_t in1_num_subblocks = in1_block_w / in1_subblock_w;
     uint32_t in1_block_h = in0_block_w;
     uint32_t in1_block_num_tiles = in1_block_w * in1_block_h;
     TT_ASSERT(in1_block_w % out_subblock_width_ntiles == 0);
@@ -247,6 +250,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
         log_debug("in0_subblock_num_tiles: {}", in0_subblock_num_tiles);
         // in1
         log_debug("in1_dram_addr: {}", in1_dram_addr);
+        log_debug("in1_subblock_w: {}", in1_subblock_w);
         log_debug("in1_num_subblocks: {}", in1_num_subblocks);
         log_debug("in1_block_num_tiles: {}", in1_block_num_tiles);
         log_debug("in1_block_w: {}", in1_block_w);
@@ -371,6 +375,9 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
             in1_width_ntiles / out_subblock_width_ntiles,   // out_num_subblocks_w
             in0_height_ntiles / out_subblock_height_ntiles, // out_num_subblocks_h
         };
+    }
+    for (auto param_val : writer_rt_args) {
+        log_debug("==> {}", param_val);
     }
     auto writer = CreateDataMovementKernel(
         program,                        // program
