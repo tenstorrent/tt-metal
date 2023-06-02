@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 class BasicConv2d(nn.Module):

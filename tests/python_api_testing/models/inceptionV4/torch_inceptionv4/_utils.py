@@ -100,9 +100,6 @@ def create_classifier(
     return global_pool, fc
 
 
-
-
-
 def assign_weight_conv(conv: nn.Conv2d, state_dict, key_w:str):
     conv.weight = nn.Parameter(state_dict[f"{key_w}.weight"])
     if conv.bias is not None:

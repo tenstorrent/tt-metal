@@ -3,13 +3,6 @@ Sourced from https://github.com/Cadene/tensorflow-model-zoo.torch (MIT License) 
 based upon Google's Tensorflow implementation and pretrained weights (Apache 2.0 License)
 """
 
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
