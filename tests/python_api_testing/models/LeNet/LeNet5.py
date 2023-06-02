@@ -1,22 +1,14 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
+import tt_lib
 import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
+from loguru import logger
 
-from libs import tt_lib as ttl
-from python_api_testing.fused_ops.linear import Linear as TtLinear
-from python_api_testing.fused_ops.conv import conv as TtConv
-from libs.tt_lib.utils import pad_weight
-from python_api_testing.models.conv_on_device_utils import can_run_conv_on_device, run_conv_on_tt_device
-
+from tt_lib.fused_ops.linear import Linear as TtLinear
+from tt_lib.fused_ops.conv import conv as TtConv
+from tt_lib.utils import pad_weight
+from python_api_testing.models.conv_on_device_utils_new import can_run_conv_on_device, run_conv_on_tt_device
 
 batch_size = 64
 num_classes = 10
@@ -103,7 +95,7 @@ class TtLeNet5(nn.Module):
         self.conv1_on_tt = TtConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias)
 
         self.batch_norm1 = nn.BatchNorm2d(6)
-        self.relu1 = ttl.tensor.relu
+        self.relu1 = tt_lib.tensor.relu
         self.maxp1 = nn.MaxPool2d(kernel_size = 2, stride = 2)
 
         self.conv2 = nn.Conv2d(6, 16, kernel_size=5, stride=1, padding=0)
@@ -113,7 +105,7 @@ class TtLeNet5(nn.Module):
         self.conv2_on_tt = TtConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, conv2_bias)
 
         self.batch_norm2 = nn.BatchNorm2d(16)
-        self.relu2 = ttl.tensor.relu
+        self.relu2 = tt_lib.tensor.relu
         self.maxp2 = nn.MaxPool2d(kernel_size = 2, stride = 2)
 
         self.conv1.weight = nn.Parameter(state_dict["layer1.0.weight"])
@@ -135,28 +127,28 @@ class TtLeNet5(nn.Module):
         self.batch_norm2.num_batches_tracked = nn.Parameter(state_dict["layer2.1.num_batches_tracked"], requires_grad=False)
 
         fc_weights = pad_weight(state_dict[f"fc.weight"])
-        fc_weights = ttl.tensor.Tensor(fc_weights.reshape(-1).tolist(), fc_weights.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        fc_weights = tt_lib.tensor.Tensor(fc_weights.reshape(-1).tolist(), fc_weights.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE).data()
 
         fc_bias = pad_weight(state_dict[f"fc.bias"])
-        fc_bias = ttl.tensor.Tensor(fc_bias.reshape(-1).tolist(), fc_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        fc_bias = tt_lib.tensor.Tensor(fc_bias.reshape(-1).tolist(), fc_bias.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE).data()
 
         self.fc = TtLinear(416, 128, fc_weights, fc_bias, self.device) # 400, 120
-        self.final_relu = ttl.tensor.relu
+        self.final_relu = tt_lib.tensor.relu
 
         fc1_weights = pad_weight(state_dict[f"fc1.weight"])
-        fc1_weights = ttl.tensor.Tensor(fc1_weights.reshape(-1).tolist(), fc1_weights.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        fc1_weights = tt_lib.tensor.Tensor(fc1_weights.reshape(-1).tolist(), fc1_weights.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE).data()
 
         fc1_bias = pad_weight(state_dict[f"fc1.bias"])
-        fc1_bias = ttl.tensor.Tensor(fc1_bias.reshape(-1).tolist(), fc1_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        fc1_bias = tt_lib.tensor.Tensor(fc1_bias.reshape(-1).tolist(), fc1_bias.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE).data()
         self.fc1 = TtLinear(128, 96, fc1_weights, fc1_bias, self.device) # 120, 84
 
-        self.final_relu1 = ttl.tensor.relu
+        self.final_relu1 = tt_lib.tensor.relu
 
         fc2_weights = pad_weight(state_dict[f"fc2.weight"])
-        fc2_weights = ttl.tensor.Tensor(fc2_weights.reshape(-1).tolist(), fc2_weights.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        fc2_weights = tt_lib.tensor.Tensor(fc2_weights.reshape(-1).tolist(), fc2_weights.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE).data()
 
         fc2_bias = pad_weight(state_dict[f"fc2.bias"])
-        fc2_bias = ttl.tensor.Tensor(fc2_bias.reshape(-1).tolist(), fc2_bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).data()
+        fc2_bias = tt_lib.tensor.Tensor(fc2_bias.reshape(-1).tolist(), fc2_bias.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE).data()
 
         self.fc2 = TtLinear(96, 32, fc2_weights, fc2_bias, self.device) # 84, num_classes
 
@@ -164,53 +156,58 @@ class TtLeNet5(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.shape[0]
+
         #assert batch_size == 1
         # Layer1
-        if(False and can_run_conv_on_device(list(x.size()), self.conv1_params)):
-            print("Conv on tt device.")
+        if (False and can_run_conv_on_device(list(x.size()), self.conv1_params)):
+            logger.debug("Conv on tt device.")
             out = run_conv_on_tt_device(x, self.conv1_on_tt, self.conv1_params, self.device, self.host)
         else:
-            print("Conv on CPU.")
+            logger.debug("Conv on CPU.")
             out = self.conv1(x) # HOST
+
         out = self.batch_norm1(out) # HOST
         # PAD
-        tt_tensor = ttl.tensor.Tensor(
+        tt_tensor = tt_lib.tensor.Tensor(
         out.reshape(-1).tolist(),
         out.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        tt_lib.tensor.DataType.BFLOAT16,
+        tt_lib.tensor.Layout.ROW_MAJOR,
         )
         tt_tensor = tt_tensor.pad((batch_size, 6, 32, 32), (0, 0, 0, 0), 0)
-        out = tt_tensor.to(ttl.tensor.Layout.TILE).to(self.device)
+        out = tt_tensor.to(tt_lib.tensor.Layout.TILE).to(self.device)
 
         out = self.relu1(out)
         # UNPAD
-        out = out.to(self.host).to(ttl.tensor.Layout.ROW_MAJOR)
+        out = out.to(self.host).to(tt_lib.tensor.Layout.ROW_MAJOR)
         out = out.unpad((0, 0, 0, 0), (batch_size - 1, 5, 27, 27))
         out  = torch.Tensor(out.data()).reshape(out.shape())
 
         out = self.maxp1(out) # HOST
+
         # Layer2
-        if(False and can_run_conv_on_device(list(out.size()), self.conv2_params)):
-            print("Conv on tt device.")
+        if (False and can_run_conv_on_device(list(out.size()), self.conv2_params)):
+            logger.debug("Conv on tt device.")
             out = run_conv_on_tt_device(out, self.conv2_on_tt, self.conv2_params, self.device, self.host)
         else:
-            print("Conv on CPU.")
+            logger.debug("Conv on CPU.")
             out = self.conv2(out) # HOST
+
         out = self.batch_norm2(out) # HOST
+
         #PAD
-        tt_tensor = ttl.tensor.Tensor(
+        tt_tensor = tt_lib.tensor.Tensor(
         out.reshape(-1).tolist(),
         out.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        tt_lib.tensor.DataType.BFLOAT16,
+        tt_lib.tensor.Layout.ROW_MAJOR,
         )
         out = tt_tensor.pad((batch_size, 16, 32, 32), (0, 0, 0, 0), 0)
-        out = out.to(ttl.tensor.Layout.TILE).to(self.device)
+        out = out.to(tt_lib.tensor.Layout.TILE).to(self.device)
 
         out = self.relu2(out)
 
-        out = out.to(self.host).to(ttl.tensor.Layout.ROW_MAJOR)
+        out = out.to(self.host).to(tt_lib.tensor.Layout.ROW_MAJOR)
         out = out.unpad((0, 0, 0, 0), (batch_size - 1, 15, 9, 9))
         out  = torch.Tensor(out.data()).reshape(out.shape())
 
@@ -218,14 +215,14 @@ class TtLeNet5(nn.Module):
         # end of Layer 2
         out = out.reshape(out.size(0), 1, 1, -1) # madofied to have 4 dims
         # PAD
-        tt_tensor = ttl.tensor.Tensor(
+        tt_tensor = tt_lib.tensor.Tensor(
         out.reshape(-1).tolist(),
         out.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        tt_lib.tensor.DataType.BFLOAT16,
+        tt_lib.tensor.Layout.ROW_MAJOR,
         )
         out = tt_tensor.pad((batch_size, 1, 32, 416), (0, 0, 0, 0), 0)
-        out = out.to(ttl.tensor.Layout.TILE).to(self.device)
+        out = out.to(tt_lib.tensor.Layout.TILE).to(self.device)
 
         out = self.fc(out)
         out = self.relu2(out)
@@ -233,7 +230,7 @@ class TtLeNet5(nn.Module):
         out = self.relu2(out)
         out = self.fc2(out)
         # UNPAD
-        out = out.to(self.host).to(ttl.tensor.Layout.ROW_MAJOR)
+        out = out.to(self.host).to(tt_lib.tensor.Layout.ROW_MAJOR)
         out = out.unpad((0, 0, 0, 0), (batch_size - 1, 0, 0, 9))
         out  = torch.Tensor(out.data()).reshape(out.shape())
         return out
