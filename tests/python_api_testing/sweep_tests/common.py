@@ -382,6 +382,7 @@ def shapes_and_datagen(shape_dict, datagen_dict):
             # start-shape and end-shape are lists of two shapes
             # Only supports dim = 4; for the second shape, only the last dim is used
             assert len(start_shape) == len(end_shape) == 2
+            assert num_shapes == 2
             shape1_start, shape2_start = start_shape
             shape1_end, shape2_end = end_shape
 
@@ -438,6 +439,71 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                 if bcast_batch:
                     shape2[:-2] = [1] * len(shape2[:-2])
                 yield [shape1, shape2], datagen_funcs
+        elif method == "linear":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert len(start_shape) == len(end_shape) == 2
+            assert num_shapes == 2 or num_shapes == 3
+            shape1_start, shape2_start = start_shape
+            shape1_end, shape2_end = end_shape
+
+            num_dims = 4
+            assert (
+                len(shape1_start)
+                == len(shape1_end)
+                == len(shape2_start)
+                == len(shape2_end)
+                == num_dims
+            )
+
+            if not isinstance(interval, list):
+                interval = [interval] * (num_dims + 1)
+
+            assert len(interval) == (num_dims + 1)
+
+            dim_ranges = [
+                range(shape1_start[i], shape1_end[i] + interval[i], interval[i])
+                for i in range(num_dims)
+            ]
+            # Add outer dim from last dim of second shape
+            dim_ranges.append(
+                range(shape2_start[-1], shape2_end[-1] + interval[-1], interval[-1])
+            )
+
+            sweeps_generator = product(*dim_ranges)
+            total_shapes = functools.reduce(operator.mul, map(len, dim_ranges), 1)
+            idx_list = _get_sample_indices(total_shapes, num_shapes)
+
+            if "split" in shape_dict:
+                split_params = shape_dict["split"]
+                assert len(split_params) == 2
+
+                split_id, num_splits = split_params
+                assert len(idx_list) % num_splits == 0
+                samples_per_split = len(idx_list) // num_splits
+                idx_list = idx_list[
+                    (split_id - 1) * samples_per_split : split_id * samples_per_split
+                ]
+
+            idx_list = deque(idx_list)
+            for i, shape in enumerate(sweeps_generator):
+                if i == idx_list[0]:
+                    idx_list.popleft()
+                    if len(idx_list) == 0:
+                        break
+                else:
+                    continue
+                shape = list(shape)
+                b, c, h, w, outer_dim = shape
+                shape1 = [b, c, h, w]
+                shape2 = [1, 1, outer_dim, w]
+
+                shapes = [shape1, shape2]
+                if num_shapes == 3:
+                    shape3 = [1, 1, 1, outer_dim]
+                    shapes.append(shape3)
+
+                yield shapes, datagen_funcs
 
         else:
             raise NotImplementedError("Method {method} is not a valid choice")
