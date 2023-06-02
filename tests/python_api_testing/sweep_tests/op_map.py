@@ -414,6 +414,34 @@ op_map = {
         "tt_lib_op": tt_lib_ops.transpose_cn,
         "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=1),
     },
+    "transpose-nh": {
+        "tt_lib_op": tt_lib_ops.transpose_nh,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=-2),
+    },
+    "transpose-nw": {
+        "tt_lib_op": tt_lib_ops.transpose_nw,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=-1),
+    },
+    "transpose-cw": {
+        "tt_lib_op": tt_lib_ops.transpose_cw,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=1, dim1=-1),
+    },
+    "sum-0": {
+        "tt_lib_op": partial(tt_lib_ops.sum,dim=0),
+        "pytorch_op": partial(pytorch_ops.sum, dim=0),
+    },
+    "sum-1": {
+        "tt_lib_op": partial(tt_lib_ops.sum,dim=1),
+        "pytorch_op": partial(pytorch_ops.sum, dim=1),
+    },
+    "sum-2": {
+        "tt_lib_op": partial(tt_lib_ops.sum,dim=2),
+        "pytorch_op": partial(pytorch_ops.sum, dim=2),
+    },
+    "sum-3": {
+        "tt_lib_op": partial(tt_lib_ops.sum,dim=3),
+        "pytorch_op": partial(pytorch_ops.sum, dim=3),
+    },
     "permute": {
         "tt_lib_op": tt_lib_ops.permute,
         "pytorch_op": pytorch_ops.permute,

@@ -2151,7 +2151,41 @@ void TensorModule(py::module &m_tensor) {
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
     )doc");
 
-    m_tensor.def("transpose", &transpose, R"doc(
+    m_tensor.def("sum", py::overload_cast<const Tensor&,uint>(&sum), R"doc(
+        Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``arg1``.
+
+        Input tensor must have BFLOAT16 data type. Second and third input specify the dimensions of tensor to be transposed.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------------+------------+-------------------------------+----------+
+        | Argument | Description                    | Data type  | Valid range                   | Required |
+        +==========+================================+============+===============================+==========+
+        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
+        +----------+--------------------------------+------------+-------------------------------+----------+
+        | arg1     | dimension to sum along         | uint       | 0, 1, 2, or 3                 | Yes      |
+        +----------+--------------------------------+------------+-------------------------------+----------+
+    )doc");
+
+    m_tensor.def("transpose", py::overload_cast<const Tensor&,uint,uint>(&transpose), R"doc(
+        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``arg1`` and ``arg2`` are swapped.
+
+        Input tensor must have BFLOAT16 data type. Second and third input specify the dimensions of tensor to be transposed.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------------+------------+-------------------------------+----------+
+        | Argument | Description                    | Data type  | Valid range                   | Required |
+        +==========+================================+============+===============================+==========+
+        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
+        +----------+--------------------------------+------------+-------------------------------+----------+
+        | arg1     | dimension to transpose         | uint       | 0, 1, 2, or 3                 | Yes      |
+        +----------+--------------------------------+------------+-------------------------------+----------+
+        | arg2     | dimension to transpose         | uint       | 0, 1, 2, or 3                 | Yes      |
+        +----------+--------------------------------+------------+-------------------------------+----------+
+    )doc");
+
+    m_tensor.def("transpose", py::overload_cast<const Tensor&>(&transpose), R"doc(
         Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``X`` and ``Y`` are swapped.
 
         Input tensor must have BFLOAT16 data type.

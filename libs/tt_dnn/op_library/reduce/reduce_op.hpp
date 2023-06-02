@@ -43,6 +43,7 @@ struct Reduce {
 };
 
 Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
+Tensor sum(const Tensor &input_tensor, uint dim);
 
 }  // namespace tt_metal
 

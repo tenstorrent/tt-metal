@@ -2,14 +2,15 @@
 
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
+#include<string>
 
 namespace tt {
 
 namespace tt_metal {
 
 struct TransposeOpDim {
-    enum Enum { WH = 0, HC = 1, CN = 2 };
-    static const vector<Enum> all() { return { WH, HC, CN }; }
+    enum Enum { WH = 0, HC = 1, CN = 2, NH = 3, NW = 4, CW = 5 };
+    static const vector<Enum> all() { return { WH, HC, CN, NH, NW, CW }; }
 };
 
 struct TransposeOpParallelizationStrategy {
@@ -32,10 +33,22 @@ struct Transpose {
 Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim=TransposeOpDim::WH);
 // TODO: Don't bind transpose as transpose_wh, should explicitly bind like the others
 // Alternatively, bind only 1 transpose function and take 2 dims to transpose
-inline Tensor transpose(const Tensor &a) { return transpose_(a, TransposeOpDim::WH); }
-inline Tensor transpose_wh(const Tensor &a) { return transpose_(a, TransposeOpDim::WH); }
-inline Tensor transpose_hc(const Tensor &a) { return transpose_(a, TransposeOpDim::HC); }
-inline Tensor transpose_cn(const Tensor &a) { return transpose_(a, TransposeOpDim::CN); }
+Tensor transpose(const Tensor &a);
+Tensor transpose(const Tensor &a,uint dim_a, uint dim_b);
+// 4 choose 2 = 6 transposes on NCHW rank-4 tensors without order.
+// Unique transposes : ('n', 'c'), ('n', 'h'), ('n', 'w'), ('c', 'h'), ('c', 'w'), ('h', 'w')
+Tensor transpose_wh(const Tensor &a);
+Tensor transpose_hc(const Tensor &a);
+Tensor transpose_cn(const Tensor &a);
+Tensor transpose_nh(const Tensor &a);
+Tensor transpose_nw(const Tensor &a);
+Tensor transpose_cw(const Tensor &a);
+// transpose with tensor and dimensions
+Tensor transpose(const Tensor &a, uint dim1, uint dim2);
+
+// provide access to transposes on a [n,c,h,w] ranked tensor @a
+Tensor transpose_(const Tensor &a,char dim_a, char dim_b);
+Tensor transpose_(const Tensor &a,std::array<uint32_t,2> dim_a_b);
 
 operation::ProgramWithCallbacks transpose_single_core(const Tensor &a, Tensor &output, TransposeOpDim::Enum transpose_dim);
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor &output);

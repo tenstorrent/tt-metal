@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
@@ -142,6 +143,26 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
         return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, {output_tensor}).at(0);
     } else {
         return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler}, {input_tensor}, {}, pad_value).at(0);
+    }
+}
+
+Tensor sum(const Tensor &input_tensor, uint dim) {
+    TT_ASSERT( dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+    constexpr float scaler1 = 1.0;
+
+    if ( dim == 3 ) {
+        return reduce(input_tensor,ReduceOpMath::SUM,ReduceOpDim::W,scaler1);
+    } else if ( dim == 2 ) {
+        return reduce(input_tensor,ReduceOpMath::SUM,ReduceOpDim::H,scaler1);
+    } else if ( dim == 1 ) {
+        Tensor fw_transpose = transpose_cw(input_tensor);
+        Tensor result = sum(fw_transpose,3);
+        return transpose_cw(result);
+    } else {
+        TT_ASSERT( dim == 0 , "first dimension sum");
+        Tensor fw_transpose = transpose_nw(input_tensor);
+        Tensor result = sum(fw_transpose,3);
+        return transpose_nw(result);
     }
 }
 

@@ -25,6 +25,12 @@ def linear(x, weight, bias=None, *args, **kwargs):
 
 
 # Ternary Ops
+def sum(x,*args,**kwargs):
+    dim = kwargs['dim']
+    return torch.sum(x,dim=dim)
+
+
+
 def where(x, y, z, *args, **kwargs):
     return torch.where(x > 0, y, z)
 

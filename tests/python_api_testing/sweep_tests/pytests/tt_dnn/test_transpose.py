@@ -82,3 +82,70 @@ def test_run_transpose_cn_test(input_shapes, pcie_slot, function_level_defaults)
         comparison_func,
         pcie_slot,
     )
+
+
+@pytest.mark.parametrize(
+    "input_shapes, pcie_slot",
+    (
+        ([[32, 64, 32, 32]], 0),  # Single core
+        ([[32, 64, 384, 96]], 0),  # Single core
+    ),
+)
+def test_run_transpose_nh_test(input_shapes, pcie_slot, function_level_defaults):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+        )
+    ]
+    comparison_func = partial(comparison_funcs.comp_equal)
+    run_single_pytorch_test(
+        "transpose-nh",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
+
+@pytest.mark.parametrize(
+    "input_shapes, pcie_slot",
+    (
+        ([[32, 64, 32, 32]], 0),  # Single core
+        ([[32, 64, 384, 96]], 0),  # Single core
+    ),
+)
+def test_run_transpose_nw_test(input_shapes, pcie_slot, function_level_defaults):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+        )
+    ]
+    comparison_func = partial(comparison_funcs.comp_equal)
+    run_single_pytorch_test(
+        "transpose-nw",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
+
+@pytest.mark.parametrize(
+    "input_shapes, pcie_slot",
+    (
+        ([[32, 64, 32, 32]], 0),  # Single core
+        ([[32, 64, 384, 96]], 0),  # Single core
+    ),
+)
+def test_run_transpose_cw_test(input_shapes, pcie_slot, function_level_defaults):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+        )
+    ]
+    comparison_func = partial(comparison_funcs.comp_equal)
+    run_single_pytorch_test(
+        "transpose-cw",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
