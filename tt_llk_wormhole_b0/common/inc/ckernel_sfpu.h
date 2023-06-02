@@ -215,12 +215,22 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
         TTI_SFPLOADI(2, 2, imm2);
         break;
     case SfpuType::sigmoid:
-        imm0 = 0x3DFF;
-        imm1 = 0x21D8;
-        imm2 = 0xFF10;
-        TTI_SFPLOADI(0, 2, imm0);
-        TTI_SFPLOADI(1, 2, imm1);
-        TTI_SFPLOADI(2, 2, imm2);
+        // imm0 = 0x3DFF;
+        // imm1 = 0x21D8;
+        // imm2 = 0xFF10;
+        // TTI_SFPLOADI(0, 2, imm0);
+        // TTI_SFPLOADI(1, 2, imm1);
+        // TTI_SFPLOADI(2, 2, imm2);
+        sfpu_load_imm32(0,0x32F433D9);
+        sfpu_load_imm32(4,0x23C89018);
+
+
+        sfpu_load_imm32(1,0x300A318A);
+        sfpu_load_imm32(5,0x30272BAA);
+
+        sfpu_load_imm32(2,0x00002A35);
+        sfpu_load_imm32(6,0x37ff34CC);
+
         break;
     case SfpuType::gelu_derivative:
         if constexpr (APPROXIMATION_MODE) {
@@ -499,16 +509,21 @@ inline void calculate_gelu(const int iterations)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sigmoid(const int iterations)
 {
+    constexpr int lut_mode = 0; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
     vUInt l2 = l_reg[LRegs::LReg2];
+    vUInt l4 = l_reg[LRegs::LReg4];
+    vUInt l5 = l_reg[LRegs::LReg5];
+    vUInt l6 = l_reg[LRegs::LReg6];
+
 
     #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
         vFloat val = dst_reg[0];
 
-        dst_reg[0] = lut(val, l0, l1, l2) + 0.5f;
+        dst_reg[0] = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode) + 0.5f;
 
         dst_reg++;
     }
@@ -516,6 +531,10 @@ inline void calculate_sigmoid(const int iterations)
     l_reg[LRegs::LReg0] = l0;
     l_reg[LRegs::LReg1] = l1;
     l_reg[LRegs::LReg2] = l2;
+    l_reg[LRegs::LReg4] = l4;
+    l_reg[LRegs::LReg5] = l5;
+    l_reg[LRegs::LReg6] = l6;
+
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
