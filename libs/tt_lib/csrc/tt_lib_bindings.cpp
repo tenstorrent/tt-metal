@@ -5,6 +5,7 @@
 #include "tt_dnn/op_library/conv/conv_op.hpp"
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_dnn/op_library/concat/concat_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
@@ -2025,6 +2026,40 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** tensor manipulation ***
+    m_tensor.def("concat", py::overload_cast<Tensor&,Tensor&,uint32_t>(&concat), R"doc(
+        Concatennates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg2``.
+
+        Input tensors must be on device, in ROW MAJOR layout, and have BFLOAT16 data type.
+
+        Output tensor will be on device, in same layout, and have BFLOAT16 data type.
+
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+        | Argument | Description                    | Data type  | Valid range                                            | Required |
+        +==========+================================+============+========================================================+==========+
+        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0  | Yes      |
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+        | arg1     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0  | Yes      |
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+        | arg2     | dimension of concat            | int        |                                                        | Yes      |
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+    )doc");
+
+    m_tensor.def("concat", py::overload_cast<std::vector<Tensor>&,uint32_t>(&concat), R"doc(
+        Concatennates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg2``.
+
+        Input tensors must be on device, in ROW MAJOR layout, and have BFLOAT16 data type.
+
+        Output tensor will be on device, in same layout, and have BFLOAT16 data type.
+
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+        | Argument | Description                    | Data type  | Valid range                                            | Required |
+        +==========+================================+============+========================================================+==========+
+        | arg0     | List of Input tensors          | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0  | Yes      |
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+        | arg2     | dimension of concat            | int        |                                                        | Yes      |
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+    )doc");
+
     m_tensor.def("reshape", &reshape, R"doc(
         Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
 
