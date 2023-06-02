@@ -123,7 +123,7 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
         );
     }
 
-    std::cout << "NUMBER OF TILES IN OUT_CB = " << out_ntiles << " (" << out_ntiles * tile_size_bytes << " bytes)" << std::endl;
+    // std::cout << "NUMBER OF TILES IN OUT_CB = " << out_ntiles << " (" << out_ntiles * tile_size_bytes << " bytes)" << std::endl;
 }
 
 Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
@@ -360,7 +360,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
         };
     } else {
         // out is tiled
-        std::cout << "CALLING the TILED writer" << std::endl;
+        // std::cout << "CALLING the TILED writer" << std::endl;
         writer_kernel = "tt_metal/kernels/dataflow/writer_bmm_single_core_tiled.cpp";
         writer_rt_args = {
             out_dram_addr,
@@ -426,7 +426,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
     pass &= ConfigureDeviceWithProgram(device, program);
     pass &= LaunchKernels(device, program);
 
-    std::cout << "I THINK IM DONE!!" << std::endl;
+    // std::cout << "I THINK IM DONE!!" << std::endl;
     TT_ASSERT(pass);
 
     return output;

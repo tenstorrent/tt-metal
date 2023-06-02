@@ -26,14 +26,14 @@ a_height_nblocks = [1, 2, 3, 4, 5, 6, 7, 8]  ## various
 a_width_nblocks = [1, 2, 3, 8] ## [1, 8]   ## various
 b_width_nblocks = [1, 8]   ## various
 # block sizes as number of tiles along h and w:
-a_block_height_ntiles = [1] #[4] ## various
-a_block_width_ntiles = [1]  #[4]  ## various
-b_block_width_ntiles = [1]  #[16]  ## various
+a_block_height_ntiles = [4] #[4] ## various
+a_block_width_ntiles = [4]  #[4]  ## various
+b_block_width_ntiles = [16]  #[16]  ## various
 # output sublobcking per block:
-out_subblock_height_ntiles = [1]    #[4]    ## == a_block_height_ntiles, <= 8 (various)
-out_subblock_width_ntiles = [1]    #[2]     ## == b_block_width_ntiles, <= 8 (various)
-tilize_a = [True]      ## True, False
-untilize_out = [True, False]   ## True
+out_subblock_height_ntiles = [4]    #[4]    ## == a_block_height_ntiles, <= 8 (various)
+out_subblock_width_ntiles = [2]    #[2]     ## == b_block_width_ntiles, <= 8 (various)
+tilize_a = [True, False]      ## True, False
+untilize_out = [True, False]   ## True, False
 
 
 @pytest.mark.parametrize(
@@ -124,17 +124,16 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     else:
         out_pytorch = torch.tensor(out.data()).reshape(out_shape)
 
-    # print("out slice:\n", out_pytorch[0, 0, 0:32*a_block_height_ntiles*a_height_nblocks:32*a_block_height_ntiles, 0:32*a_width_nblocks*a_block_width_ntiles:1])
-    print("out slice:\n", out_pytorch)
+    # # print("out slice:\n", out_pytorch[0, 0, 0:32*a_block_height_ntiles*a_height_nblocks:32*a_block_height_ntiles, 0:32*a_width_nblocks*a_block_width_ntiles:1])
+    # print("out slice:\n", out_pytorch)
 
     ttl.device.CloseDevice(device)
 
     ## reference
     golden_pytorch = torch.matmul(a, b)
 
-    print("golden out slice:\n", golden_pytorch)
-
-    print(torch.isclose(out_pytorch, golden_pytorch, rtol=1e-01, atol=1e-02))
+    # print("golden out slice:\n", golden_pytorch)
+    # print(torch.isclose(out_pytorch, golden_pytorch, rtol=1e-01, atol=1e-02))
 
     ## test for equivalance
     assert(out_pytorch.shape == golden_pytorch.shape)

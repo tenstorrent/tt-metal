@@ -54,9 +54,9 @@ void kernel_main() {
                 for(uint32_t w = 0; w < out_subblock_w; ++w) {
                     uint64_t out_tile_noc_addr = get_noc_addr(out_tile_id, s);
                     ///////// for debug
-                    uint32_t addr = ((out_tile_id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << tile_size_pow2_exponent) + out_addr;
-                    uint32_t noc_x = dram_bank_to_noc_x[out_tile_id];
-                    uint32_t noc_y = dram_bank_to_noc_y[out_tile_id];
+                    // uint32_t addr = ((out_tile_id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << tile_size_pow2_exponent) + out_addr;
+                    // uint32_t noc_x = dram_bank_to_noc_x[out_tile_id];
+                    // uint32_t noc_y = dram_bank_to_noc_y[out_tile_id];
                     // DPRINT << "SUBBLOCK: " << sbh << "," << sbw << " :: TILE: " << h << "," << w << " :: out_tile_id: " << out_tile_id << " :: addr: " << addr << " on: " << noc_x << "," << noc_y << " :: from " << l1_read_addr << ENDL();
                     ////////////////////
                     // DPRINT << "WRITING: " << tile_size_bytes << ENDL();
@@ -76,5 +76,5 @@ void kernel_main() {
         out_sbh_start_tile_id += out_next_subblock_stride_h;
     }
 
-    DPRINT << "OOOOOUUUUUCCCCHHH!!! " << ENDL();
+    // DPRINT << "OOOOOUUUUUCCCCHHH!!! " << ENDL();
 }

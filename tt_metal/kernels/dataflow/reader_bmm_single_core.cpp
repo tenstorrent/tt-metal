@@ -57,7 +57,7 @@ void kernel_main() {
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
-    DPRINT << FIXP() << SETW(32) << SETP(2);
+    // DPRINT << FIXP() << SETW(32) << SETP(2);
 
     uint32_t in0_start_tile_id = 0;
     // loop over in0 blocks along h
