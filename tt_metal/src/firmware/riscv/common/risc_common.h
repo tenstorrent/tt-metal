@@ -249,7 +249,7 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
 template <uint32_t d>
 inline __attribute__((always_inline)) uint32_t umodsi3_const_divisor(uint32_t a)
 {
-    return a - udivsi3_const_divisor<d>(a) * b;
+    return a - udivsi3_const_divisor<d>(a) * d;
 }
 
 void risc_init();
