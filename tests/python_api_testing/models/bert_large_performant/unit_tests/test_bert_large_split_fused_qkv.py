@@ -97,6 +97,7 @@ import pytest
 @pytest.mark.parametrize(
     "dtype",
     (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    ids=["BFLOAT8_B", "BFLOAT16"],
 )
 def test_bert_large_split_fused_qkv_test(dtype, in0_mem_config, out_mem_config):
     run_bert_large_split_fused_qkv_test(dtype, in0_mem_config, out_mem_config)

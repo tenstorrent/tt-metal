@@ -100,6 +100,7 @@ import pytest
 @pytest.mark.parametrize(
     "dtype",
     (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    ids=["BFLOAT8_B", "BFLOAT16"],
 )
 def test_bert_large_selfout_matmul_test(
     dtype, in0_mem_config, in1_mem_config, out_mem_config
