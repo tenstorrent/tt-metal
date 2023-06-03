@@ -126,6 +126,9 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def op2_split(qkv):
         # profiler.start("___op2_split")
+        Q, K, V = ttl.tensor.bert_large_split_fused_qkv(qkv)
+        """
+        # Old TM on host with split
         qkv = tt2torch_tensor(qkv)
         hidden_dim = qkv.shape[-1] // 3
 
@@ -134,27 +137,41 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         Q = torch2tt_tensor(Q, device)
         K = torch2tt_tensor(K, device)
         V = torch2tt_tensor(V, device)
+        """
         # profiler.end("___op2_split")
 
         return Q, K, V
 
     def op3_create_heads(Q):
         # profiler.start("___op3_make_attention_heads")
+        q_heads = ttl.tensor.bert_large_create_q_head(Q)
+        """
+        # Old TM with reshape and transpose
         q_heads = make_attention_heads(Q)
+        """
         # profiler.end("___op3_make_attention_heads")
 
         return q_heads
 
     def op4_create_heads(K):
         # profiler.start("___op4_make_attention_heads")
+        # NOTE: This merges in transpose_hw (op6)
+        k_heads = ttl.tensor.bert_large_create_k_head(K)
+        """
+        # Old TM with reshape and transpose
         k_heads = make_attention_heads(K)
+        """
         # profiler.end("___op4_make_attention_heads")
 
         return k_heads
 
     def op5_create_heads(V):
         # profiler.start("___op5_make_attention_heads")
+        v_heads = ttl.tensor.bert_large_create_v_head(V)
+        """
+        # Old TM with reshape and transpose
         v_heads = make_attention_heads(V)
+        """
         # profiler.end("___op5_make_attention_heads")
 
         return v_heads
@@ -274,10 +291,13 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         Q, K, V = op2_split(qkv)
 
         Q_heads = op3_create_heads(Q)
-        K_heads = op4_create_heads(K)
+        K_T_heads = op4_create_heads(K)
         V_heads = op5_create_heads(V)
 
+        """
+        # No longer needed as op4 already returns K_head transposed
         K_T_heads = op6_transpose_hw(K_heads)
+        """
         qkt = op7_bmm(Q_heads, K_T_heads)
 
         attention_scores = op8_scale_mask_softmax(qkt, attention_mask)
