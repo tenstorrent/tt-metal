@@ -22,9 +22,9 @@ TILE_HEIGHT = TILE_WIDTH = 32
 
 ## parameters
 # matrix sizes as number of blocks along h and w:
-a_height_nblocks = [1, 2, 3, 4, 5, 6, 7, 8]  ## various
-a_width_nblocks = [1, 2, 3, 8] ## [1, 8]   ## various
-b_width_nblocks = [1, 8]   ## various
+a_height_nblocks = [1, 7]  ## various
+a_width_nblocks = [1, 7] ## [1, 8]   ## various
+b_width_nblocks = [1, 7]   ## various
 # block sizes as number of tiles along h and w:
 a_block_height_ntiles = [4] #[4] ## various
 a_block_width_ntiles = [4]  #[4]  ## various
