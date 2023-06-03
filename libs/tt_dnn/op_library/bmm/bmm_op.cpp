@@ -394,9 +394,6 @@ Tensor bmm(const Tensor& a, const Tensor& b) {
 }
 
 Tensor large_bmm(const Tensor& a, const Tensor& b, bool tilize_act, bool untilize_out) {
-    // TT_ASSERT(
-    //     bmm_op_utils::get_parallelization_strategy(a, b) == BmmOpParallelizationStrategy::SINGLE_CORE,
-    //     "Only single core large_bmm supported so far");
     if (bmm_op_utils::get_parallelization_strategy(a, b) != BmmOpParallelizationStrategy::SINGLE_CORE) {
         log_warning("WARNING: Only single core mode supported for large_bmm. Falling back to single core.");
     }

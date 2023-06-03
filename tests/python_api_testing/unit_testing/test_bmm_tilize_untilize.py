@@ -22,18 +22,18 @@ TILE_HEIGHT = TILE_WIDTH = 32
 
 ## parameters
 # matrix sizes as number of blocks along h and w:
-a_height_nblocks = [1, 7]  ## various
-a_width_nblocks = [1, 7] ## [1, 8]   ## various
-b_width_nblocks = [1, 7]   ## various
+a_height_nblocks = [1, 7]
+a_width_nblocks = [1, 7]
+b_width_nblocks = [1, 7]
 # block sizes as number of tiles along h and w:
-a_block_height_ntiles = [4] #[4] ## various
-a_block_width_ntiles = [4]  #[4]  ## various
-b_block_width_ntiles = [16]  #[16]  ## various
+a_block_height_ntiles = [4]
+a_block_width_ntiles = [4]
+b_block_width_ntiles = [16]
 # output sublobcking per block:
-out_subblock_height_ntiles = [4]    #[4]    ## == a_block_height_ntiles, <= 8 (various)
-out_subblock_width_ntiles = [2]    #[2]     ## == b_block_width_ntiles, <= 8 (various)
-tilize_a = [True, False]      ## True, False
-untilize_out = [True, False]   ## True, False
+out_subblock_height_ntiles = [4] ## == a_block_height_ntiles, <= 8
+out_subblock_width_ntiles = [2]  ## == b_block_width_ntiles, <= 8
+tilize_a = [True, False]
+untilize_out = [True, False]
 
 
 @pytest.mark.parametrize(
@@ -69,11 +69,9 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     b_shape = [b_batch, b_channel, a_width, b_width]
     out_shape = [a_batch, a_channel, a_height, b_width]
 
-    # torch.manual_seed(0)
+    torch.manual_seed(0)
     a = torch.randn(a_shape, dtype=torch.bfloat16).float()
-    # a = torch.zeros(a_shape, dtype=torch.bfloat16).float()
     b = torch.randn(b_shape, dtype=torch.bfloat16).float()
-    # b = torch.zeros(b_shape, dtype=torch.bfloat16).float()
 
     if tilize_a:
         ## a in row-major
@@ -106,7 +104,6 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     # print("a slice:\n", tta_pytorch[0, 0, 0:32*a_block_height_ntiles*a_height_nblocks:32*a_block_height_ntiles, 0:32*a_width_nblocks*a_block_width_ntiles:1])
 
     # ttb_pytorch = untilize(torch.tensor(ttb.to(host).data()).reshape(b_shape))
-    # # print("b slice:\n", ttb_pytorch[0, 0, 0:32*a_block_width_ntiles*a_width_nblocks:32*a_block_width_ntiles, 0:32*b_width_nblocks*b_block_width_ntiles:1])
     # print("b slice:\n", ttb_pytorch[0, 0, 0:32*a_block_width_ntiles*a_width_nblocks:32, 0:32*b_width_nblocks*b_block_width_ntiles:1])
 
     ## compute out
@@ -118,13 +115,10 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     out = out.to(host)
     if not untilize_out:
         ## output is in tiled format
-        # out = out.to(ttl.tensor.Layout.TILE)
         out_pytorch = untilize(torch.tensor(out.data()).reshape(out_shape))
-        # out_pytorch = torch.tensor(out.data()).reshape(out_shape)
     else:
         out_pytorch = torch.tensor(out.data()).reshape(out_shape)
 
-    # # print("out slice:\n", out_pytorch[0, 0, 0:32*a_block_height_ntiles*a_height_nblocks:32*a_block_height_ntiles, 0:32*a_width_nblocks*a_block_width_ntiles:1])
     # print("out slice:\n", out_pytorch)
 
     ttl.device.CloseDevice(device)
@@ -133,7 +127,6 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     golden_pytorch = torch.matmul(a, b)
 
     # print("golden out slice:\n", golden_pytorch)
-    # print(torch.isclose(out_pytorch, golden_pytorch, rtol=1e-01, atol=1e-02))
 
     ## test for equivalance
     assert(out_pytorch.shape == golden_pytorch.shape)
