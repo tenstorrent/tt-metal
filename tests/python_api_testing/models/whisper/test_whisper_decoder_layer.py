@@ -16,8 +16,6 @@ from transformers import WhisperModel, WhisperConfig
 from python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
-    create_padded_tensor,
-    create_unpadded_tensor,
 )
 from python_api_testing.models.whisper.whisper_decoder_layer import (
     TtWhisperDecoderLayer,
@@ -42,13 +40,7 @@ def run_whisper_decoder_layer(layer, device):
 
     base_address = f"decoder.layers.{DECODER_IND}"
 
-    padding = True
-    if padding:
-        enc_seq_len = 1500
-        pad = 4
-    else:
-        enc_seq_len = 32
-
+    enc_seq_len = 1500
     batch = 1
     tgt_len = 32
     seq_len = 32
@@ -60,15 +52,17 @@ def run_whisper_decoder_layer(layer, device):
 
     hidden_state_input_tensor = torch.rand(batch, seq_len, embed_dim)
     encoder_hidden_states = torch.rand(batch, enc_seq_len, embed_dim)
-    encoder_attention_mask = None  # torch.ones(batch, 1, tgt_len, enc_seq_len)
+    encoder_attention_mask = None
 
     layer_head_mask_input_tensor = torch.rand(
         num_heads,
     )
-    cross_attn_layer_head_mask = torch.rand(num_heads)
+    cross_attn_layer_head_mask = torch.rand(
+        num_heads,
+    )
     past_key_value = None
 
-    test_with_all_inputs = False
+    test_with_all_inputs = True
 
     with torch.no_grad():
         if test_with_all_inputs:
@@ -93,43 +87,12 @@ def run_whisper_decoder_layer(layer, device):
             )
 
     """ TTM Whisper Decoder Layer """
+    ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device)
 
-    # Make inputs ready convert to tt/pad
-    if padding:
-        output_tensor_shape = list(encoder_hidden_states.size())
-        while len(output_tensor_shape) < 4:
-            output_tensor_shape.insert(0, 1)
-        output_tensor_shape[-2] = enc_seq_len + pad
-        ttm_encoder_hidden_states = create_padded_tensor(
-            list(encoder_hidden_states.size()),
-            encoder_hidden_states,
-            output_tensor_shape,
-            pad_value=0.0,
-            device=device,
-        )
-
-        if encoder_attention_mask:
-            output_tensor_shape = list(encoder_attention_mask.size())
-            while len(output_tensor_shape) < 4:
-                output_tensor_shape.insert(0, 1)
-            output_tensor_shape[-1] = enc_seq_len + pad
-
-            ttm_encoder_attention_mask = create_padded_tensor(
-                list(encoder_attention_mask.size()),
-                encoder_hidden_states,
-                output_tensor_shape,
-                pad_value=0.0,
-                device=device,
-            )
-        else:
-            ttm_encoder_attention_mask = None
-
+    if encoder_attention_mask:
+        ttm_encoder_attention_mask = torch2tt_tensor(encoder_attention_mask, device)
     else:
-        ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device)
-        if encoder_attention_mask:
-            ttm_encoder_attention_mask = torch2tt_tensor(encoder_attention_mask, device)
-        else:
-            ttm_encoder_attention_mask = None
+        ttm_encoder_attention_mask = None
 
     ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device)
     ttm_tensor_attention_mask = torch2tt_tensor(attention_mask_input_tensor, device)
@@ -139,6 +102,11 @@ def run_whisper_decoder_layer(layer, device):
     # Stays torch tensor and then is used in attention mechanism approprietly for now
     # Because can't convert 1d tensor of size [6] to tt_lib
     # same for cross_attn_layer_head_mask
+
+    layer_head_mask_input_tensor = layer_head_mask_input_tensor.view(1, 1, 1, num_heads)
+    layer_head_mask_input_tensor = torch2tt_tensor(layer_head_mask_input_tensor, device)
+    cross_attn_layer_head_mask = cross_attn_layer_head_mask.view(1, 1, 1, num_heads)
+    cross_attn_layer_head_mask = torch2tt_tensor(cross_attn_layer_head_mask, device)
 
     tt_whisper_decoder_layer = TtWhisperDecoderLayer(
         base_address=base_address,

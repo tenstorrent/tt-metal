@@ -11,14 +11,14 @@ from transformers import WhisperConfig
 from python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
-    create_padded_tensor,
-    create_unpadded_tensor,
 )
 from python_api_testing.models.whisper.whisper_encoder import (
     TtWhisperEncoder,
     TtWhisperEncoderOutput,
 )
 from python_api_testing.models.whisper.whisper_decoder import TtWhisperDecoder
+
+from tt_lib.fallback_ops import fallback_ops
 
 
 @dataclass
@@ -37,8 +37,6 @@ class TtWhisperModel(nn.Module):
     """
     The bare Whisper Model outputting raw hidden-states without any specific head on top."
     """
-
-    _keys_to_ignore_on_load_missing = [r"proj_out.weight"]
 
     def __init__(
         self, state_dict, device, base_address: str = "", config: WhisperConfig = None
@@ -142,7 +140,7 @@ class TtWhisperModel(nn.Module):
 
     def forward(
         self,
-        input_features: Optional[torch.FloatTensor] = None,
+        input_features: Optional[tt_lib.tensor.Tensor] = None,
         attention_mask: Optional[torch.LongTensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
@@ -193,7 +191,6 @@ class TtWhisperModel(nn.Module):
         )
 
         if encoder_outputs is None:
-            logger.info("Running whisper encoder")
             input_features = self._mask_input_features(
                 input_features, attention_mask=attention_mask
             )
@@ -214,7 +211,7 @@ class TtWhisperModel(nn.Module):
             )
 
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
-        logger.info("Running whisper decoder")
+
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
             attention_mask=decoder_attention_mask,

@@ -8,12 +8,11 @@ from transformers import WhisperConfig
 from python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
-    create_padded_tensor,
+    linear,
 )
-from python_api_testing.models.whisper.whisper_attention import TtWhisperAttention
 
-from tt_lib.fused_ops.layernorm import Layernorm as TtLayernorm
-from tt_lib.fused_ops.linear import Linear as TtLinear
+from tt_lib.fallback_ops import fallback_ops
+from python_api_testing.models.whisper.whisper_attention import TtWhisperAttention
 
 
 class TtWhisperDecoderLayer(nn.Module):
@@ -26,17 +25,19 @@ class TtWhisperDecoderLayer(nn.Module):
         num_heads,
         decoder_ffn_dim,
         config: WhisperConfig = None,
+        use_torch_gelu=True,
     ):
         super().__init__()
 
         self.device = device
         self.config = config
         self.state_dict = state_dict
+        self.use_torch_gelu = use_torch_gelu
 
         self.embed_dim = embed_dim
         self.decoder_ffn_dim = decoder_ffn_dim
         # Do not use dropout for now
-        self.dropout = config.dropout
+        # self.dropout = config.dropout
 
         self.self_attn = TtWhisperAttention(
             config=config,
@@ -48,27 +49,14 @@ class TtWhisperDecoderLayer(nn.Module):
             is_decoder=True,
         )
 
-        gamma = self.state_dict[f"{base_address}.self_attn_layer_norm.weight"]
-        gamma = create_padded_tensor(
-            list(gamma.shape),
-            gamma,
-            [1, 1, 32, gamma.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        gamma = torch2tt_tensor(
+            self.state_dict[f"{base_address}.self_attn_layer_norm.weight"], self.device
         )
-        beta = self.state_dict[f"{base_address}.self_attn_layer_norm.bias"]
-        beta = create_padded_tensor(
-            list(beta.shape),
-            beta,
-            [1, 1, 32, beta.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        beta = torch2tt_tensor(
+            self.state_dict[f"{base_address}.self_attn_layer_norm.bias"], self.device
         )
-        tt_gamma = gamma.data()
-        tt_beta = beta.data()
-
-        self.self_attn_layer_norm = TtLayernorm(
-            tt_gamma, tt_beta, 1e-05, self.embed_dim, self.embed_dim, device, 1
+        self.self_attn_layer_norm = fallback_ops.LayerNorm(
+            gamma, beta, eps=1e-05, normalized_shape=self.embed_dim
         )
 
         self.encoder_attn = TtWhisperAttention(
@@ -81,86 +69,38 @@ class TtWhisperDecoderLayer(nn.Module):
             is_decoder=True,
         )
 
-        gamma1 = self.state_dict[f"{base_address}.encoder_attn_layer_norm.weight"]
-        gamma1 = create_padded_tensor(
-            list(gamma1.shape),
-            gamma1,
-            [1, 1, 32, gamma1.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        gamma1 = torch2tt_tensor(
+            self.state_dict[f"{base_address}.encoder_attn_layer_norm.weight"],
+            self.device,
         )
-        beta1 = self.state_dict[f"{base_address}.encoder_attn_layer_norm.bias"]
-        beta1 = create_padded_tensor(
-            list(beta1.shape),
-            beta1,
-            [1, 1, 32, beta1.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        beta1 = torch2tt_tensor(
+            self.state_dict[f"{base_address}.encoder_attn_layer_norm.bias"], self.device
         )
-        tt_gamma1 = gamma1.data()
-        tt_beta1 = beta1.data()
-        self.encoder_attn_layer_norm = TtLayernorm(
-            tt_gamma1, tt_beta1, 1e-05, 1, self.embed_dim, device, 1
+        self.encoder_attn_layer_norm = fallback_ops.LayerNorm(
+            gamma1, beta1, eps=1e-05, normalized_shape=self.embed_dim
         )
 
-        fc1_weight = torch2tt_tensor(
-            self.state_dict[f"{base_address}.fc1.weight"], tt_lib.device.GetHost()
+        self.fc1_weight = torch2tt_tensor(
+            self.state_dict[f"{base_address}.fc1.weight"], self.device
         )
-        fc1_bias = state_dict[f"{base_address}.fc1.bias"]
-        fc1_bias = create_padded_tensor(
-            list(fc1_bias.shape),
-            fc1_bias,
-            [1, 1, 32, fc1_bias.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        self.fc1_bias = torch2tt_tensor(
+            state_dict[f"{base_address}.fc1.bias"], self.device
         )
-        fc2_weight = torch2tt_tensor(
-            self.state_dict[f"{base_address}.fc2.weight"], tt_lib.device.GetHost()
+        self.fc2_weight = torch2tt_tensor(
+            self.state_dict[f"{base_address}.fc2.weight"], self.device
         )
-        fc2_bias = state_dict[f"{base_address}.fc2.bias"]
-        fc2_bias = create_padded_tensor(
-            list(fc2_bias.shape),
-            fc2_bias,
-            [1, 1, 32, fc2_bias.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        self.fc2_bias = torch2tt_tensor(
+            state_dict[f"{base_address}.fc2.bias"], self.device
         )
 
-        self.fc1 = TtLinear(
-            in_features=self.embed_dim,
-            out_features=self.decoder_ffn_dim,
-            weight=fc1_weight.data(),
-            bias=fc1_bias.data(),
-            device=device,
+        gamma2 = torch2tt_tensor(
+            self.state_dict[f"{base_address}.final_layer_norm.weight"], self.device
         )
-        self.fc2 = TtLinear(
-            in_features=self.decoder_ffn_dim,
-            out_features=self.embed_dim,
-            weight=fc2_weight.data(),
-            bias=fc2_bias.data(),
-            device=device,
+        beta2 = torch2tt_tensor(
+            self.state_dict[f"{base_address}.final_layer_norm.bias"], self.device
         )
-
-        gamma2 = self.state_dict[f"{base_address}.final_layer_norm.weight"]
-        gamma2 = create_padded_tensor(
-            list(gamma2.shape),
-            gamma2,
-            [1, 1, 32, gamma2.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
-        )
-        beta2 = self.state_dict[f"{base_address}.final_layer_norm.bias"]
-        beta2 = create_padded_tensor(
-            list(beta2.shape),
-            beta2,
-            [1, 1, 32, beta2.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
-        )
-        tt_gamma2 = gamma2.data()
-        tt_beta2 = beta2.data()
-        self.final_layer_norm = TtLayernorm(
-            tt_gamma2, tt_beta2, 1e-05, 1, self.embed_dim, device, 1
+        self.final_layer_norm = fallback_ops.LayerNorm(
+            gamma2, beta2, eps=1e-05, normalized_shape=self.embed_dim
         )
 
     def forward(
@@ -175,7 +115,6 @@ class TtWhisperDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = True,
     ):
-        # returns tt_lib.tensor.Tensor or tuple of tensors and tuples
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -196,11 +135,7 @@ class TtWhisperDecoderLayer(nn.Module):
         """
         residual = hidden_states
 
-        H_hidden_states = hidden_states.shape()[-2]
-
-        hidden_states = self.self_attn_layer_norm(
-            hidden_states, overrideH=H_hidden_states
-        )
+        hidden_states = self.self_attn_layer_norm(hidden_states)
 
         # Self Attention
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
@@ -227,10 +162,7 @@ class TtWhisperDecoderLayer(nn.Module):
 
         if encoder_hidden_states is not None:
             residual = hidden_states
-            H_hidden_states = hidden_states.shape()[-2]
-            hidden_states = self.encoder_attn_layer_norm(
-                hidden_states, overrideH=H_hidden_states
-            )
+            hidden_states = self.encoder_attn_layer_norm(hidden_states)
 
             # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple
             cross_attn_past_key_value = (
@@ -259,18 +191,25 @@ class TtWhisperDecoderLayer(nn.Module):
 
         # Fully Connected
         residual = hidden_states
-        H_hidden_states = hidden_states.shape()[-2]
-        hidden_states = self.final_layer_norm(hidden_states, overrideH=H_hidden_states)
+        hidden_states = self.final_layer_norm(hidden_states)
 
-        hidden_states = self.fc1(hidden_states)
-        hidden_states = tt_lib.tensor.gelu(hidden_states)
+        hidden_states = linear(hidden_states, self.fc1_weight, self.fc1_bias)
+
+        # Use torch gelu bc ttlib gelu drops pcc:
+        if self.use_torch_gelu:
+            torch_hidden_states = tt2torch_tensor(hidden_states)
+            torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
+            hidden_states = torch2tt_tensor(torch_hidden_states, self.device)
+        else:
+            hidden_states = tt_lib.tensor.gelu(hidden_states)
 
         # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
-        hidden_states = self.fc2(hidden_states)
+        hidden_states = linear(hidden_states, self.fc2_weight, self.fc2_bias)
 
         # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+
         hidden_states = tt_lib.tensor.add(residual, hidden_states)
         outputs = (hidden_states,)
 

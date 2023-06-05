@@ -92,6 +92,7 @@ def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1
         )
         tt_whisper_encoder.eval()
 
+        input_features = torch2tt_tensor(input_features, device)
         ttm_output = tt_whisper_encoder(
             input_features=input_features,
             head_mask=head_mask,
@@ -102,20 +103,10 @@ def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1
         logger.debug(f"Encoder returned {ttm_output.last_hidden_state.shape()}")
 
         # TT Output To Torch
-        input_tensor_shape = [
-            1,
-            1,
-            configuration.max_source_positions,
-            configuration.d_model,
-        ]
-        ttm_output_pt = torch.Tensor(ttm_output.last_hidden_state.data()).reshape(
-            *input_tensor_shape
-        )
+        ttm_output_pt = tt2torch_tensor(ttm_output.last_hidden_state)
         ttm_output_pt = torch.squeeze(ttm_output_pt, 0)
 
         logger.debug(f"Encoder output to torch {ttm_output_pt.size()}")
-        # else:
-        #     ttm_output_pt = tt2torch_tensor(ttm_output.last_hidden_state)
 
         does_pass, pcc_message = comp_pcc(
             pytorch_output.last_hidden_state, ttm_output_pt, 0.98

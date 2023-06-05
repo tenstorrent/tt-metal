@@ -11,13 +11,11 @@ from dataclasses import dataclass
 from python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
-    create_padded_tensor,
-    create_unpadded_tensor,
 )
 from python_api_testing.models.whisper.whisper_encoder_layer import (
     TtWhisperEncoderLayer,
 )
-from tt_lib.fused_ops.layernorm import Layernorm as TtLayernorm
+from tt_lib.fallback_ops import fallback_ops
 
 
 @dataclass
@@ -82,26 +80,14 @@ class TtWhisperEncoder(nn.Module):
             ]
         )
 
-        gamma = self.state_dict[f"{base_address}.layer_norm.weight"]
-        gamma = create_padded_tensor(
-            list(gamma.shape),
-            gamma,
-            [1, 1, 32, gamma.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        gamma = torch2tt_tensor(
+            self.state_dict[f"{base_address}.layer_norm.weight"], self.device
         )
-        beta = self.state_dict[f"{base_address}.layer_norm.bias"]
-        beta = create_padded_tensor(
-            list(beta.shape),
-            beta,
-            [1, 1, 32, beta.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        beta = torch2tt_tensor(
+            self.state_dict[f"{base_address}.layer_norm.bias"], self.device
         )
-        tt_gamma = gamma.data()
-        tt_beta = beta.data()
-        self.layer_norm = TtLayernorm(
-            tt_gamma, tt_beta, 1e-05, 1, config.d_model, self.device, 1
+        self.layer_norm = fallback_ops.LayerNorm(
+            gamma, beta, eps=1e-05, normalized_shape=config.d_model
         )
 
         self.gradient_checkpointing = False
@@ -119,7 +105,7 @@ class TtWhisperEncoder(nn.Module):
 
     def forward(
         self,
-        input_features: torch.Tensor,  # bc of shape
+        input_features: tt_lib.tensor.Tensor,  # bc of shape
         attention_mask: Optional[tt_lib.tensor.Tensor] = None,  #  NOT used in whisper
         head_mask: Optional[torch.Tensor] = None,  # bc of shape []
         output_attentions: Optional[bool] = None,
@@ -165,6 +151,8 @@ class TtWhisperEncoder(nn.Module):
             return_dict if return_dict is not None else self.config.use_return_dict
         )
 
+        input_features = tt2torch_tensor(input_features)
+        input_features = torch.squeeze(input_features, 0)
         """PyTorch implementation start"""
         inputs_embeds = nn.functional.gelu(self.conv1(input_features))
         inputs_embeds = nn.functional.gelu(self.conv2(inputs_embeds))
@@ -175,22 +163,10 @@ class TtWhisperEncoder(nn.Module):
         hidden_states = inputs_embeds + embed_pos
         """PyTorch implementation end"""
 
-        """TTM implementation"""
+        """TT implementation"""
+        hidden_states = torch2tt_tensor(hidden_states, self.device)
 
-        # Add padding to 1504 to be divisible by 32
-        output_tensor_shape = list(hidden_states.size())
-        while len(output_tensor_shape) < 4:
-            output_tensor_shape.insert(0, 1)
-        output_tensor_shape[-2] = 1504
-        hidden_states = create_padded_tensor(
-            list(hidden_states.size()),
-            hidden_states,
-            output_tensor_shape,
-            pad_value=0.0,
-            device=self.device,
-        )
-
-        # Not suppporting dropout at moment
+        # TODO: Not suppporting dropout at moment
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         encoder_states = () if output_hidden_states else None
@@ -209,13 +185,13 @@ class TtWhisperEncoder(nn.Module):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
             dropout_probability = random.uniform(0, 1)
 
-            """Not supporting training at moment:"""
+            # TODO: Not supporting training at moment
             if self.training and (
                 dropout_probability < self.layerdrop
             ):  # skip the layer
                 layer_outputs = (None, None)
             else:
-                """Not supporting training at moment:"""
+                # TODO: Not supporting training at moment
                 if self.gradient_checkpointing and self.training:
 
                     def create_custom_forward(module):
@@ -235,7 +211,9 @@ class TtWhisperEncoder(nn.Module):
                         hidden_states,
                         None,
                         layer_head_mask=(
-                            head_mask[idx] if head_mask is not None else None
+                            torch2tt_tensor(head_mask[idx], self.device)
+                            if head_mask is not None
+                            else None
                         ),
                         output_attentions=output_attentions,
                     )
@@ -245,14 +223,7 @@ class TtWhisperEncoder(nn.Module):
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
 
-        H_hidden_states = 1500
-        hidden_states = self.layer_norm(hidden_states, overrideH=H_hidden_states)
-
-        # Unpad outputs back to original shape of 1500
-        input_tensors_shape = hidden_states.shape()
-        input_tensors_shape[-2] = 1500
-
-        hidden_states = create_unpadded_tensor(hidden_states, input_tensors_shape)
+        hidden_states = self.layer_norm(hidden_states)
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)

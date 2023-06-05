@@ -373,23 +373,7 @@ def run_generate(sample, device):
     )
     tt_model.eval()
 
-    # Use commonvoice dataset
-    # from datasets import load_dataset, DatasetDict
-
-    # common_voice = DatasetDict()
-
-    # common_voice_test= load_dataset("mozilla-foundation/common_voice_11_0", "en", split="validation")
-    # common_voice_test = common_voice_test.remove_columns(["accent", "age", "client_id", "down_votes", "gender", "locale", "path", "segment", "up_votes"])
-    # logger.debug(common_voice_test)
-    # input_str = common_voice_test[0]["sentence"]
-    # logger.debug(input_str)
-
-    # common_voice_test = common_voice_test.cast_column("audio", Audio(sampling_rate=16000))
-    # logger.debug(common_voice_test[0])
-    # input_features = processor(common_voice_test["audio"]["array"][0], sampling_rate=16000, return_tensors="pt").input_features
-    # logger.debug(input_features)
-
-    # Use librispeech dataset
+    # Librispeech dataset
     ds = load_dataset(
         "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
     )
@@ -438,9 +422,10 @@ def run_generate(sample, device):
         tt_model_kwargs["output_hidden_states"] = generation_config.output_hidden_states
         tt_model_kwargs["use_cache"] = generation_config.use_cache
 
+        tt_input_features = torch2tt_tensor(input_features, device)
         # Prepare model args for tt model
         tt_model_kwargs = _prepare_encoder_decoder_kwargs_for_generation(
-            tt_model, input_features, tt_model_kwargs, "input_features"
+            tt_model, tt_input_features, tt_model_kwargs, "input_features"
         )
         tt_encoder_outputs_last_hidden_state = tt_model_kwargs[
             "encoder_outputs"
@@ -463,7 +448,6 @@ def run_generate(sample, device):
     for i in range(32):
         if torch_model:
             # generation loop - greedy search implementation
-
             logger.info(f"Running Torch model forward...")
 
             decoder_attention_mask = None
@@ -478,10 +462,8 @@ def run_generate(sample, device):
             )
 
             torch_next_token_logits = pt_out.logits
-            logger.info(f"Torch model predictions....")
 
             torch_next_token_logits = pt_out.logits[:, i, :]
-            logger.debug(torch_next_token_logits.shape)
 
             # pre-process distribution
             torch_next_tokens_scores = torch_logits_processor(
@@ -490,19 +472,16 @@ def run_generate(sample, device):
 
             # argmax
             torch_next_tokens = torch.argmax(torch_next_tokens_scores, dim=-1)
-            logger.debug(f"torch_next_tokens {torch_next_tokens}")
 
             # We need to expand decoder_input_ids
             if (i + 1) % 32 == 0:
                 input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
 
             input_ids[:, i + 1] = torch_next_tokens[:, None]
-            logger.debug(input_ids)
 
             transcription = processor.batch_decode(input_ids, skip_special_tokens=True)[
                 0
             ]
-            logger.debug(transcription)
 
             if not run_tt_model and (
                 torch_next_tokens == generation_config.eos_token_id
@@ -521,11 +500,11 @@ def run_generate(sample, device):
                 output_hidden_states=generation_config.output_hidden_states,
             )
 
-            logger.info(f"TT model predictions....")
+            # Convert to Torch
+            logits_to_torch = tt2torch_tensor(tt_out.logits)
+            logits_to_torch = torch.squeeze(logits_to_torch, 0)
 
-            next_token_logits = tt_out.logits
-            next_token_logits = tt_out.logits[:, i, :]
-            logger.debug(next_token_logits.shape)
+            next_token_logits = logits_to_torch[:, i, :]
 
             if torch_model:
                 # Compare PCC:
@@ -540,7 +519,6 @@ def run_generate(sample, device):
 
             # argmax
             next_tokens = torch.argmax(next_tokens_scores, dim=-1)
-            logger.debug(f"next_tokens {next_tokens}")
 
             # We need to expand decoder_input_ids
             if (i + 1) % 32 == 0:
@@ -554,7 +532,6 @@ def run_generate(sample, device):
             tt_transcription = processor.batch_decode(
                 tt_input_ids, skip_special_tokens=True
             )[0]
-            logger.info(tt_transcription)
 
     logger.info(f"Final transcriptions")
 
@@ -582,7 +559,7 @@ def test_WhipserForConditionalGeneration_inference():
     correct_transcription = " Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel."
 
     # sample = 3
-    # correct_transcription = " He has grave doubts whether Sir Frederick Leighton's work is really Greek after all and can discover in it but little of rocky Ithaca."
+    # correct_transcription = " He has grave doubts whether Sir Frederick Leighton's work is really Greek after all, and can discover in it but little of rocky Ithaca."
 
     tt_transcription = run_generate(sample=sample, device=device)
     tt_lib.device.CloseDevice(device)

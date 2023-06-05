@@ -1,8 +1,3 @@
-# Had to upgrade transformers version to be able to use Whisper
-# installed transformers-4.27.4
-# import transformers
-# print(transformers.__version__)
-
 import torch
 from transformers import (
     WhisperProcessor,
@@ -15,13 +10,12 @@ from transformers import (
 )
 from datasets import load_dataset
 from loguru import logger
+import torch
+from transformers import AutoProcessor, WhisperForConditionalGeneration
+from datasets import load_dataset
 
 
 def run_for_conditional_generation():
-    import torch
-    from transformers import AutoProcessor, WhisperForConditionalGeneration
-    from datasets import load_dataset
-
     processor = AutoProcessor.from_pretrained("openai/whisper-tiny.en")
     model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en")
 
@@ -112,16 +106,10 @@ def run_HF_whisper_for_audio_classification():
     generated_ids = model.generate(inputs=input_features)
     logger.debug(generated_ids)
 
-    # Example output
-    # tensor([[50257, 50362,  1770,    13,  2264,   346,   353,   318,   262, 46329,
-    #         286,   262,  3504,  6097,    11,   290,   356,   389,  9675,   284,
-    #         7062,   465, 21443,    13, 50256]])
-
     transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
     logger.debug(transcription)
 
 
 if __name__ == "__main__":
     torch.manual_seed(1234)
-    # run_HF_whisper()
     run_for_conditional_generation()

@@ -17,10 +17,11 @@ from datasets import load_dataset
 from python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
-    create_unpadded_tensor,
+    linear,
 )
 from python_api_testing.models.whisper.whisper_model import TtWhisperModel
-from python_api_testing.models.whisper.whisper_linear_layer import WhisperPaddedLinear
+
+from tt_lib.fallback_ops import fallback_ops
 
 
 def shift_tokens_right(
@@ -55,16 +56,6 @@ class TtWhisperLMOutput:
 
 
 class TtWhisperForConditionalGeneration(nn.Module):
-    base_model_prefix = "model"
-    _keys_to_ignore_on_load_missing = [
-        r"encoder.version",
-        r"decoder.version",
-        r"proj_out.weight",
-    ]
-    _keys_to_ignore_on_save = [
-        r"proj_out.weight",
-    ]
-
     def __init__(self, state_dict, device, config: WhisperConfig):
         super().__init__()
 
@@ -79,12 +70,8 @@ class TtWhisperForConditionalGeneration(nn.Module):
             config=self.config,
         )
 
-        self.proj_out = WhisperPaddedLinear(
-            config.d_model,
-            config.vocab_size,
-            state_dict[f"proj_out.weight"],
-            None,
-            self.device,
+        self.proj_out_weight = torch2tt_tensor(
+            state_dict[f"proj_out.weight"], self.device
         )
 
     def get_encoder(self):
@@ -118,7 +105,7 @@ class TtWhisperForConditionalGeneration(nn.Module):
 
     def forward(
         self,
-        input_features: Optional[torch.FloatTensor] = None,
+        input_features: Optional[tt_lib.tensor.Tensor] = None,
         attention_mask: Optional[torch.LongTensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
@@ -190,24 +177,12 @@ class TtWhisperForConditionalGeneration(nn.Module):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        logger.info(
-            f"Tt Whisper Model output shape {outputs.last_hidden_state.shape()}"
-        )
 
-        lm_logits = self.proj_out(outputs.last_hidden_state)
+        lm_logits = linear(outputs.last_hidden_state, self.proj_out_weight, None)
 
-        # Unpad
-        lm_logits = create_unpadded_tensor(
-            lm_logits, [1, 1, lm_logits.shape()[-2], self.config.vocab_size]
-        )
-
-        # Convert to Torch
-        logits_to_torch = torch.Tensor(lm_logits.data()).reshape(lm_logits.shape())
-        logits_to_torch = torch.squeeze(logits_to_torch, 0)
-
-        """TODO: Not supporting Training in TTM for the moment"""
         loss = None
         if labels is not None:
+            # TODO: Not supporting Training in TTM for the moment
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(
                 logits_to_torch.view(-1, self.config.vocab_size), labels.reshape(-1)
@@ -219,7 +194,7 @@ class TtWhisperForConditionalGeneration(nn.Module):
 
         return TtWhisperLMOutput(
             loss=loss,
-            logits=logits_to_torch,
+            logits=lm_logits,
             past_key_values=outputs.past_key_values,
             decoder_hidden_states=outputs.decoder_hidden_states,
             decoder_attentions=outputs.decoder_attentions,

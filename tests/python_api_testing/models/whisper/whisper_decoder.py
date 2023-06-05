@@ -13,15 +13,12 @@ from transformers import WhisperConfig
 from python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
-    create_padded_tensor,
-    create_unpadded_tensor,
+    linear,
 )
 from python_api_testing.models.whisper.whisper_decoder_layer import (
     TtWhisperDecoderLayer,
 )
-
-from tt_lib.fused_ops.linear import Linear as TtLinear
-from tt_lib.fused_ops.layernorm import Layernorm as TtLayernorm
+from tt_lib.fallback_ops import fallback_ops
 
 
 class WhisperPositionalEmbedding(nn.Embedding):
@@ -71,15 +68,12 @@ class TtWhisperDecoder(nn.Module):
         base_address,
         device,
         config: WhisperConfig,
-        already_padded_inputs: bool = False,
     ):
         super().__init__()
 
         self.config = config
         self.device = device
         self.state_dict = state_dict
-
-        self.already_padded_inputs = already_padded_inputs
 
         self.dropout = config.dropout
         self.layerdrop = config.decoder_layerdrop
@@ -120,27 +114,14 @@ class TtWhisperDecoder(nn.Module):
             ]
         )
 
-        gamma = self.state_dict[f"{base_address}.layer_norm.weight"]
-        gamma = create_padded_tensor(
-            list(gamma.shape),
-            gamma,
-            [1, 1, 32, gamma.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        gamma = torch2tt_tensor(
+            self.state_dict[f"{base_address}.layer_norm.weight"], self.device
         )
-        beta = self.state_dict[f"{base_address}.layer_norm.bias"]
-        beta = create_padded_tensor(
-            list(beta.shape),
-            beta,
-            [1, 1, 32, beta.shape[-1]],
-            0,
-            tt_lib.device.GetHost(),
+        beta = torch2tt_tensor(
+            self.state_dict[f"{base_address}.layer_norm.bias"], self.device
         )
-        tt_gamma = gamma.data()
-        tt_beta = beta.data()
-
-        self.layer_norm = TtLayernorm(
-            tt_gamma, tt_beta, 1e-05, 1, config.d_model, self.device, 1
+        self.layer_norm = fallback_ops.LayerNorm(
+            gamma, beta, eps=1e-05, normalized_shape=config.d_model
         )
 
         self.gradient_checkpointing = False
@@ -393,66 +374,15 @@ class TtWhisperDecoder(nn.Module):
 
         """PyTorch implementation end"""
 
-        """TTM implementation"""
-        if not self.already_padded_inputs:
-            # Add padding
-            output_tensor_shape = encoder_hidden_states.shape()
-            while len(output_tensor_shape) < 4:
-                output_tensor_shape.insert(0, 1)
-            output_tensor_shape[-2] = 1504
-            encoder_hidden_states = create_padded_tensor(
-                encoder_hidden_states.shape(),
-                encoder_hidden_states,
-                output_tensor_shape,
-                pad_value=0.0,
-                device=self.device,
-            )
+        """TT implementation"""
 
-        padded_hidden_states = False
-        if hidden_states.size(-2) % 32 != 0:
-            padded_hidden_states = True
-
-            output_tensor_shape = list(hidden_states.size())
-            logger.info(f"Padding Decoder hidden states tensor")
-
-            shape_before_pad = list(hidden_states.size())
-            while len(output_tensor_shape) < 4:
-                output_tensor_shape.insert(0, 1)
-            output_tensor_shape[-2] = 32
-            hidden_states = create_padded_tensor(
-                list(hidden_states.size()),
-                hidden_states,
-                output_tensor_shape,
-                pad_value=0.0,
-                device=self.device,
-            )
-        else:
-            hidden_states = torch2tt_tensor(hidden_states, self.device)
-
-        if attention_mask is not None:
-            if attention_mask.size(-2) % 32 != 0 and attention_mask.size(-1) % 32 != 0:
-                logger.info(f"Padding Decoder attention mask tensor")
-                output_tensor_shape = list(attention_mask.size())
-
-                while len(output_tensor_shape) < 4:
-                    output_tensor_shape.insert(0, 1)
-                output_tensor_shape[-2] = 32
-                output_tensor_shape[-1] = 32
-                attention_mask = create_padded_tensor(
-                    list(attention_mask.size()),
-                    attention_mask,
-                    output_tensor_shape,
-                    pad_value=0,
-                    device=self.device,
-                )
-
-            else:
-                attention_mask = torch2tt_tensor(attention_mask, self.device)
+        hidden_states = torch2tt_tensor(hidden_states, self.device)
+        attention_mask = torch2tt_tensor(attention_mask, self.device)
 
         # TODO: Dropout not supported for not
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        """TODO: Training not supported for now"""
+        # TODO: Training not supported for now
         if self.gradient_checkpointing and self.training:
             if use_cache:
                 logger.warning_once(
@@ -482,7 +412,8 @@ class TtWhisperDecoder(nn.Module):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            """TODO: Training not supported for now"""
+            # TODO: Training not supported for now
+
             dropout_probability = random.uniform(0, 1)
             if self.training and (dropout_probability < self.layerdrop):
                 continue
@@ -491,7 +422,8 @@ class TtWhisperDecoder(nn.Module):
                 past_key_values[idx] if past_key_values is not None else None
             )
 
-            """TODO: Training not supported for now"""
+            # TODO: Training not supported for now
+
             if self.gradient_checkpointing and self.training:
 
                 def create_custom_forward(module):
@@ -540,13 +472,7 @@ class TtWhisperDecoder(nn.Module):
                 if encoder_hidden_states is not None:
                     all_cross_attentions += (layer_outputs[2],)
 
-        H_hidden_states = hidden_states.shape()[-2]
-        hidden_states = self.layer_norm(hidden_states, overrideH=H_hidden_states)
-
-        if padded_hidden_states:
-            # Unpad hidden states tensor to original size
-            input_tensors_shape = [1, *shape_before_pad]
-            hidden_states = create_unpadded_tensor(hidden_states, input_tensors_shape)
+        hidden_states = self.layer_norm(hidden_states)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:

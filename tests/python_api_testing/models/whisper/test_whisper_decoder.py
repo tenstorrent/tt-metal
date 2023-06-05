@@ -15,8 +15,6 @@ from transformers import WhisperModel, WhisperConfig
 from python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
-    create_padded_tensor,
-    create_unpadded_tensor,
 )
 from python_api_testing.models.whisper.whisper_decoder import TtWhisperDecoder
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
@@ -32,13 +30,7 @@ def run_whisper_decoder(device):
     pytorch_model.eval()
     state_dict = model.state_dict()
 
-    padding = True
-    if padding:
-        enc_seq_len = 1500
-        pad = 4
-    else:
-        enc_seq_len = 32
-
+    enc_seq_len = 1500
     batch = 1
     embed_dim = configuration.d_model
     dec_seq_len = 32
@@ -58,17 +50,6 @@ def run_whisper_decoder(device):
     )
 
     encoder_hidden_states = torch.rand(batch, enc_seq_len, embed_dim)
-    output_tensor_shape = list(encoder_hidden_states.size())
-    while len(output_tensor_shape) < 4:
-        output_tensor_shape.insert(0, 1)
-    output_tensor_shape[-2] = enc_seq_len + pad
-    ttm_encoder_hidden_states = create_padded_tensor(
-        list(encoder_hidden_states.size()),
-        encoder_hidden_states,
-        output_tensor_shape,
-        pad_value=0.0,
-        device=device,
-    )
 
     with torch.no_grad():
         pytorch_output = pytorch_model(
@@ -85,10 +66,10 @@ def run_whisper_decoder(device):
         state_dict=state_dict,
         device=device,
         config=model.config,
-        already_padded_inputs=True,
     )
     tt_whisper_decoder.eval()
 
+    ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device)
     with torch.no_grad():
         ttm_output = tt_whisper_decoder(
             input_ids=decoder_input_ids,
@@ -102,7 +83,7 @@ def run_whisper_decoder(device):
     ttm_output_to_torch = torch.squeeze(ttm_output_to_torch, 0)
 
     does_pass, pcc_message = comp_pcc(
-        pytorch_output.last_hidden_state, ttm_output_to_torch, 0.97
+        pytorch_output.last_hidden_state, ttm_output_to_torch, 0.98
     )
     logger.info(pcc_message)
 

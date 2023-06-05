@@ -49,20 +49,9 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
 
     hidden_state_input_tensor = torch.rand(1, 1500, embed_dim)
     attention_mask_input_tensor = None
+    ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device)
     ttm_tensor_attention_mask = None
     layer_head_mask_input_tensor = None
-
-    # Pad input tensor for tt
-    output_tensor_shape = list(hidden_state_input_tensor.size())
-    output_tensor_shape.insert(0, 1)
-    output_tensor_shape[-2] = 1504
-    ttm_tensor_hidden_state = create_padded_tensor(
-        list(hidden_state_input_tensor.size()),
-        hidden_state_input_tensor,
-        output_tensor_shape,
-        pad_value=0.0,
-        device=device,
-    )
 
     with torch.no_grad():
         pytorch_output = pytorch_model(
@@ -102,13 +91,9 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
 
     # Unpad output tensor
     input_tensors_shape = ttm_output[0].shape()
-    logger.debug(input_tensors_shape)
+    logger.info(input_tensors_shape)
 
-    input_tensors_shape[-2] = 1500
-    ttm_output_to_torch_0 = create_unpadded_tensor(ttm_output[0], input_tensors_shape)
-    ttm_output_to_torch_0 = torch.Tensor(ttm_output_to_torch_0.data()).reshape(
-        *ttm_output_to_torch_0.shape()
-    )
+    ttm_output_to_torch_0 = tt2torch_tensor(ttm_output[0])
     ttm_output_to_torch_0 = ttm_output_to_torch_0.squeeze(0)
 
     does_pass, pcc_message = comp_pcc(pytorch_output[0], ttm_output_to_torch_0, 0.98)

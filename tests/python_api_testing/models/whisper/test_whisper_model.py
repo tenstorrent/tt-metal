@@ -84,6 +84,8 @@ def run_whisper_model(device):
     tt_whisper.eval()
 
     with torch.no_grad():
+        input_features = torch2tt_tensor(input_features, device)
+
         ttm_output = tt_whisper(
             input_features=input_features, decoder_input_ids=decoder_input_ids
         )
@@ -93,7 +95,7 @@ def run_whisper_model(device):
     tt_out_to_torch = torch.squeeze(tt_out_to_torch, 0)
 
     does_pass, pcc_message = comp_pcc(
-        pytorch_output.last_hidden_state, tt_out_to_torch, 0.96
+        pytorch_output.last_hidden_state, tt_out_to_torch, 0.98
     )
     logger.info(pcc_message)
 

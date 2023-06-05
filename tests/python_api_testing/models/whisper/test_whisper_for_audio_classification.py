@@ -67,14 +67,13 @@ def run_whisper_for_audio_classification(device):
     tt_whisper_model.eval()
 
     with torch.no_grad():
+        input_features = torch2tt_tensor(input_features, device)
         ttm_logits = tt_whisper_model(
             input_features=input_features,
         ).logits
 
-        logger.debug(ttm_logits)
-
         # Convert to Torch
-        ttm_logits = torch.Tensor(ttm_logits.data()).reshape(ttm_logits.shape())
+        ttm_logits = tt2torch_tensor(ttm_logits)
         tt_predicted_class_ids = torch.argmax(ttm_logits).item()
         tt_predicted_label = model.config.id2label[tt_predicted_class_ids]
 
