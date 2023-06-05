@@ -273,6 +273,7 @@ def run_llama_split_inference(
     num_decoders_start,
     num_decoders,
     x_inputs=None,
+    position_ids=None,
     half=1,
 ):
     if half == 1:
@@ -286,7 +287,7 @@ def run_llama_split_inference(
             num_decoders_start,
             num_decoders,
         )
-        tt_out = tt_llama_model(x_inputs)
+        tt_out = tt_llama_model(input_ids=x_inputs, position_ids=position_ids)
     else:
         logger.info("Second pass throught TT model")
         tt_llama_model = TtLlamaModelSecondHFModel(
@@ -298,7 +299,7 @@ def run_llama_split_inference(
             num_decoders_start,
             num_decoders,
         )
-        tt_out = tt_llama_model(x_inputs)
+        tt_out = tt_llama_model(input_ids=x_inputs, position_ids=position_ids)
 
     # returned type from the model is tuple
     tt_output = tt2torch_tensor(tt_out[0])
@@ -340,15 +341,28 @@ if __name__ == "__main__":
     )[0]
     logger.info(f"PyTorch response: {output}")
 
+    # get positions_ids values
+    past_key_values_length = 0
+    seq_length = inputs.input_ids.shape[1]
+
+    position_ids = torch.arange(
+        past_key_values_length,
+        seq_length + past_key_values_length,
+        dtype=torch.long,
+        device=None,
+    )
+    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+
     # ================================================================================
     device = None
 
-    for i in range(2):
+    for i in range(10):
         text_input_ids = inputs.input_ids
 
         # add padding
         input_ids = pad_input_32(text_input_ids, configuration.pad_token_id)
         attention_mask = pad_input_32(inputs.attention_mask, 0)
+        position_ids = pad_input_32(position_ids, 0)
 
         logits_processor = get_logits_processor(
             input_ids, hugging_face_reference_model.config
@@ -368,6 +382,7 @@ if __name__ == "__main__":
             num_decoders_start=first_decoder_start,
             num_decoders=num_consecutive_decoders,
             x_inputs=input_ids,
+            position_ids=position_ids,
             half=1,
         )
         tt_lib.device.CloseDevice(device)
@@ -378,8 +393,10 @@ if __name__ == "__main__":
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
+
         # send input tensor from host to tt device
-        tt_input = torch2tt_tensor(first_out, device)
+        # tt_input = torch2tt_tensor(first_out, device)
+        tt_input = first_out
 
         tt_out = run_llama_split_inference(
             state_dict,
@@ -389,6 +406,7 @@ if __name__ == "__main__":
             num_decoders_start=second_decoder_start,
             num_decoders=num_consecutive_decoders,
             x_inputs=tt_input,
+            position_ids=position_ids,
             half=2,
         )
         logger.info(f"The second call ended: loop {i+1}")
@@ -411,7 +429,7 @@ if __name__ == "__main__":
         s = tokenizer.decode(next_tokens[0][i], skip_special_tokens=True)
         logger.info(f"New word: {s}")
 
-        prompt = prompt + s
+        prompt = prompt + " " + s
         inputs = tokenizer(prompt, return_tensors="pt")
 
         tt_lib.device.CloseDevice(device)
