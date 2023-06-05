@@ -10,11 +10,6 @@ from setuptools import setup, Extension, find_namespace_packages
 from setuptools.command.build_ext import build_ext
 
 
-class TTExtension(Extension):
-    def __init__(self, name):
-        Extension.__init__(self, name, sources=[])
-
-
 class MyBuild(build_ext):
     def run(self):
         for ext in self.extensions:
@@ -32,7 +27,8 @@ short_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).de
 date = subprocess.check_output(['git', 'show', '-s', '--format=%cd', "--date=format:%y%m%d", 'HEAD']).decode('ascii').strip()
 version = "0.1." + date + "+dev.gs." + short_hash
 
-tt_lib_C = TTExtension("tt_lib._C")
+# Empty sources in order to force a MyBuild execution
+tt_lib_C = Extension("tt_lib._C", sources=[])
 
 ext_modules = [tt_lib_C]
 
