@@ -48,7 +48,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/permute/permute_op.cpp \
 	libs/tt_dnn/op_library/bert_large_tms/bert_large_tms.cpp \
 	libs/tt_dnn/op_library/bert_large_tms/multi_core_split_fused_qkv/multi_core_split_fused_qkv.cpp \
-	libs/tt_dnn/op_library/bert_large_tms/multi_core_split_fused_qkv/multi_core_create_qkv_heads.cpp \
+	libs/tt_dnn/op_library/bert_large_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
