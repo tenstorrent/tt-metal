@@ -9,3 +9,6 @@
 [submodule "third_party/lfs"]
 	path = tt_metal/third_party/lfs
 	url = git@github.com:tenstorrent-metal/lfs.git
+[submodule "tt_metal/third_party/taskflow"]
+	path = tt_metal/third_party/taskflow
+	url = https://github.com/taskflow/taskflow
