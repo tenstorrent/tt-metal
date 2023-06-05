@@ -56,9 +56,8 @@ int main(int argc, char **argv) {
         auto dram_noc_xy = dram_buffer.noc_coordinates();
 
         CoreCoord core_start = {0, 0};
-        std::size_t num_cores_x = 12;
-        std::size_t num_cores_y = 10;
-        CoreCoord core_end = {core_start.x + (num_cores_x - 1), core_start.y + (num_cores_y - 1)};
+        CoreCoord grid_size = device->logical_grid_size();
+        CoreCoord core_end = {core_start.x + (grid_size.x - 1), core_start.y + (grid_size.y - 1)};
         auto core_start_physical = device->worker_core_from_logical_core(core_start);
         auto core_end_physical = device->worker_core_from_logical_core(core_end);
         std::vector<uint32_t> mcast_reader_args = {
@@ -72,7 +71,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)core_end_physical.y,
             (std::uint32_t)core_start_physical.x,
             (std::uint32_t)core_start_physical.y,
-            (std::uint32_t)(num_cores_x * num_cores_y)
+            (std::uint32_t)(grid_size.x * grid_size.y)
         };
         log_info(LogTest, "Start = {}, {}", core_start_physical.x, core_start_physical.y);
         log_info(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
@@ -103,8 +102,8 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
         log_info(LogTest, "Kernels done");
 
-        for(int i = 0 ; i < num_cores_y; i++) {
-            for(int j = 0 ; j < num_cores_x; j++) {
+        for(int i = 0 ; i < grid_size.y; i++) {
+            for(int j = 0 ; j < grid_size.x; j++) {
                 CoreCoord dest_core = {(std::size_t) core_start.x + j, (std::size_t) core_start.y + i};
                 std::vector<uint32_t> dest_core_data;
                 tt_metal::ReadFromDeviceL1(device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
