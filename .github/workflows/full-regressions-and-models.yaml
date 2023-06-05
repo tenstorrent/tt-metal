@@ -8,6 +8,9 @@ on:
 jobs:
   build-and-test-all:
     strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
       matrix:
         arch: [grayskull]
     env:
