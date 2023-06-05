@@ -92,6 +92,7 @@ constexpr static std::int32_t MUL_TILE_SIZE_AND_INDEX(uint format, uint index) {
         case ((uint8_t)DataFormat::Bfp4_b): return ((index<<5)+(index<<2)+(index<<1));
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((index<<4)+(index<<2)+(index<<1));
+        case ((uint8_t)DataFormat::Lf8): return ((index<<6)+(index<<1));
         //Keep default as Bfp8?
         default: return ((index<<6)+(index<<2)+(index<<1));
     };
@@ -108,6 +109,7 @@ constexpr static std::int32_t MUL_DEST_TILE_SIZE_AND_INDEX(uint format, uint ind
         case ((uint8_t)DataFormat::Bfp4_b): return (index<<9);
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return (index<<8);
+        case ((uint8_t)DataFormat::Lf8): return (index<<10);
         default: return (index<<10);
     };
 }
@@ -123,6 +125,7 @@ constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
         case ((uint8_t)DataFormat::Bfp4_b): return ((512>>4)+(64>>4)+(32>>4));
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((256>>4)+(64>>4)+(32>>4));
+        case ((uint8_t)DataFormat::Lf8): return ((1024>>4)+(32>>4));
         default: return ((1024>>4)+(64>>4)+(32>>4));
     };
 }
@@ -139,6 +142,7 @@ constexpr static std::int32_t GET_DEST_TILE_BYTE_SIZE(uint format) {
         case ((uint8_t)DataFormat::Bfp4_b): return 512;
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return 256;
+        case ((uint8_t)DataFormat::Lf8): return 1024;
         default: return 1024;
     };
 }
@@ -154,7 +158,20 @@ constexpr static std::int32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
         case ((uint8_t)DataFormat::Bfp4_b): return ((512>>4)+(64>>4));
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((256>>4)+(64>>4));
+        case ((uint8_t)DataFormat::Lf8): return (1024>>4);
         default: return ((1024>>4)+(64>>4));
+    };
+}
+
+constexpr static bool IS_BFP_FORMAT(uint format) {
+    switch (format&0x1F) {
+        case ((uint8_t)DataFormat::Bfp8):
+        case ((uint8_t)DataFormat::Bfp8_b):
+        case ((uint8_t)DataFormat::Bfp4):
+        case ((uint8_t)DataFormat::Bfp4_b):
+        case ((uint8_t)DataFormat::Bfp2):
+        case ((uint8_t)DataFormat::Bfp2_b): return true;
+        default: return false;
     };
 }
 

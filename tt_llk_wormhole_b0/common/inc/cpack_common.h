@@ -113,7 +113,7 @@ namespace ckernel::packer
          config.val[i] = 0;
       }
 
-      config.f.exp_section_size = 4 ; // always set to 4 as exp section size is not used for non-bfp formats
+      config.f.exp_section_size = (uint)pack_dst_format[operand_id] == (uint)DataFormat::Lf8 ? 0 : 4; // set to 4 as exp section size is not used for non-bfp formats except for lf8
 
       config.f.uncompress   = 1;
       config.f.out_data_format   = (uint)pack_dst_format[operand_id];
@@ -157,7 +157,7 @@ namespace ckernel::packer
       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+3]=config.val[3];
       cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+3]=config.val[3];
 
-      if ((uint)(pack_dst_format[operand_id]&0x2) != 0) {
+      if (IS_BFP_FORMAT(pack_dst_format[operand_id])) {
          // Override exp section size for packers 1,2,3
          // Tile header + exp size + datum size 
          if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8_b) {
@@ -202,7 +202,8 @@ namespace ckernel::packer
 
    inline void set_packer_l1_offset(const uint operand_id){
 
-      uint32_t l1_offset_1 = (uint8_t)(pack_dst_format[operand_id]&0x3) == (uint8_t)DataFormat::Float32  ? 0x40 : (uint8_t)(pack_dst_format[operand_id]&0x3) == (uint8_t)DataFormat::Float16  ? 0x20 : 0x1;
+      uint32_t l1_offset_1 = IS_BFP_FORMAT(pack_dst_format[operand_id]) ? 1 : (((uint8_t)(pack_dst_format[operand_id]&0x3) == (uint8_t)DataFormat::Float32)  ? 0x40 : 
+                                                                               ((uint8_t)(pack_dst_format[operand_id]&0x3) == (uint8_t)DataFormat::Float16)  ? 0x20 : 0x10);
       uint32_t l1_offset_2 = 2 * l1_offset_1;
       uint32_t l1_offset_3 = 3 * l1_offset_1;
 
@@ -241,7 +242,7 @@ namespace ckernel::packer
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
 
-      if ((uint)(pack_dst_format[operand_id]&0x2) != 0) {
+      if (IS_BFP_FORMAT(pack_dst_format[operand_id])) {
          // Override exp section size for packers 1,2,3
          // Tile header + exp size + datum size 
          if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8_b) {
