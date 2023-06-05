@@ -20,6 +20,8 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
     (
         ([[1, 1, 32, 32], [1, 1, 1, 32]], 0),  # Single core
         ([[1, 1, 3840, 32], [1, 1, 1, 32]], 0),  # Multi core h
+        ([[1, 3, 3840, 32], [1, 1, 1, 32]], 0),  # Multi core h
+        ([[1, 3, 3840, 32], [1, 3, 1, 32]], 0),  # Multi core h
     ),
 )
 def test_run_bcast_add_h_test(input_shapes, pcie_slot, function_level_defaults):
@@ -43,6 +45,8 @@ def test_run_bcast_add_h_test(input_shapes, pcie_slot, function_level_defaults):
     (
         ([[1, 1, 32, 32], [1, 1, 32, 1]], 0),  # Single core
         ([[1, 1, 32, 3840], [1, 1, 32, 1]], 0),  # Multi core w
+        ([[1, 3, 32, 3840], [1, 1, 32, 1]], 0),  # Multi core w
+        ([[1, 3, 32, 3840], [1, 3, 32, 1]], 0),  # Multi core w
     ),
 )
 def test_run_bcast_add_w_test(input_shapes, pcie_slot, function_level_defaults):
@@ -66,6 +70,8 @@ def test_run_bcast_add_w_test(input_shapes, pcie_slot, function_level_defaults):
     (
         ([[1, 1, 32, 32], [1, 1, 1, 1]], 0),  # Single core
         ([[1, 1, 320, 384], [1, 1, 1, 1]], 0),  # Multi core hw
+        ([[1, 3, 320, 384], [1, 1, 1, 1]], 0),  # Multi core hw
+        ([[1, 3, 320, 384], [1, 3, 1, 1]], 0),  # Multi core hw
     ),
 )
 def test_run_bcast_add_hw_test(input_shapes, pcie_slot, function_level_defaults):
@@ -89,6 +95,8 @@ def test_run_bcast_add_hw_test(input_shapes, pcie_slot, function_level_defaults)
     (
         ([[1, 1, 32, 32], [1, 1, 1, 32]], 0),  # Single core
         ([[1, 1, 3840, 32], [1, 1, 1, 32]], 0),  # Multi core h
+        ([[1, 3, 3840, 32], [1, 1, 1, 32]], 0),  # Multi core h
+        ([[1, 3, 3840, 32], [1, 3, 1, 32]], 0),  # Multi core h
     ),
 )
 def test_run_bcast_sub_h_test(input_shapes, pcie_slot, function_level_defaults):
@@ -112,6 +120,8 @@ def test_run_bcast_sub_h_test(input_shapes, pcie_slot, function_level_defaults):
     (
         ([[1, 1, 32, 32], [1, 1, 32, 1]], 0),  # Single core
         ([[1, 1, 32, 3840], [1, 1, 32, 1]], 0),  # Multi core w
+        ([[1, 3, 32, 3840], [1, 1, 32, 1]], 0),  # Multi core w
+        ([[1, 3, 32, 3840], [1, 3, 32, 1]], 0),  # Multi core w
     ),
 )
 def test_run_bcast_sub_w_test(input_shapes, pcie_slot, function_level_defaults):
@@ -135,6 +145,8 @@ def test_run_bcast_sub_w_test(input_shapes, pcie_slot, function_level_defaults):
     (
         ([[1, 1, 32, 32], [1, 1, 1, 1]], 0),  # Single core
         ([[1, 1, 320, 384], [1, 1, 1, 1]], 0),  # Multi core hw
+        ([[1, 3, 320, 384], [1, 1, 1, 1]], 0),  # Multi core hw
+        ([[1, 3, 320, 384], [1, 3, 1, 1]], 0),  # Multi core hw
     ),
 )
 def test_run_bcast_sub_hw_test(input_shapes, pcie_slot, function_level_defaults):
@@ -158,6 +170,8 @@ def test_run_bcast_sub_hw_test(input_shapes, pcie_slot, function_level_defaults)
     (
         ([[1, 1, 32, 32], [1, 1, 1, 32]], 0),  # Single core
         ([[1, 1, 3840, 32], [1, 1, 1, 32]], 0),  # Multi core h
+        ([[1, 3, 3840, 32], [1, 1, 1, 32]], 0),  # Multi core h
+        ([[1, 3, 3840, 32], [1, 3, 1, 32]], 0),  # Multi core h
     ),
 )
 def test_run_bcast_mul_h_test(input_shapes, pcie_slot, function_level_defaults):
@@ -181,6 +195,8 @@ def test_run_bcast_mul_h_test(input_shapes, pcie_slot, function_level_defaults):
     (
         ([[1, 1, 32, 32], [1, 1, 32, 1]], 0),  # Single core
         ([[1, 1, 32, 3840], [1, 1, 32, 1]], 0),  # Multi core w
+        ([[1, 3, 32, 3840], [1, 1, 32, 1]], 0),  # Multi core w
+        ([[1, 3, 32, 3840], [1, 3, 32, 1]], 0),  # Multi core w
     ),
 )
 def test_run_bcast_mul_w_test(input_shapes, pcie_slot, function_level_defaults):
@@ -204,6 +220,8 @@ def test_run_bcast_mul_w_test(input_shapes, pcie_slot, function_level_defaults):
     (
         ([[1, 1, 32, 32], [1, 1, 1, 1]], 0),  # Single core
         ([[1, 1, 320, 384], [1, 1, 1, 1]], 0),  # Multi core hw
+        ([[1, 3, 320, 384], [1, 1, 1, 1]], 0),  # Multi core hw
+        ([[1, 3, 320, 384], [1, 3, 1, 1]], 0),  # Multi core hw
     ),
 )
 def test_run_bcast_mul_hw_test(input_shapes, pcie_slot, function_level_defaults):

@@ -20,6 +20,7 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
     (
         ([[1, 1, 32, 32], [1, 1, 32, 32]], 0),  # Single core
         ([[1, 1, 320, 384], [1, 1, 320, 384]], 0),  # Multi core
+        ([[1, 3, 320, 384], [1, 3, 320, 384]], 0),  # Multi core
     ),
 )
 def test_run_eltwise_add_test(input_shapes, pcie_slot, function_level_defaults):
@@ -43,6 +44,7 @@ def test_run_eltwise_add_test(input_shapes, pcie_slot, function_level_defaults):
     (
         ([[1, 1, 32, 32], [1, 1, 32, 32]], 0),  # Single core
         ([[1, 1, 320, 384], [1, 1, 320, 384]], 0),  # Multi core
+        ([[1, 3, 320, 384], [1, 3, 320, 384]], 0),  # Multi core
     ),
 )
 def test_run_eltwise_sub_test(input_shapes, pcie_slot, function_level_defaults):
@@ -66,6 +68,7 @@ def test_run_eltwise_sub_test(input_shapes, pcie_slot, function_level_defaults):
     (
         ([[1, 1, 32, 32], [1, 1, 32, 32]], 0),  # Single core
         ([[1, 1, 320, 384], [1, 1, 320, 384]], 0),  # Multi core
+        ([[1, 3, 320, 384], [1, 3, 320, 384]], 0),  # Multi core
     ),
 )
 def test_run_eltwise_mul_test(input_shapes, pcie_slot, function_level_defaults):

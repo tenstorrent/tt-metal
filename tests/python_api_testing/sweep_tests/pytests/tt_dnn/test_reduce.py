@@ -20,6 +20,7 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
     (
         ([[1, 1, 32, 32]], 0),  # Single core
         ([[1, 1, 32, 3840]], 0),  # Multi core h
+        ([[1, 3, 32, 3840]], 0),  # Multi core h
     ),
 )
 def test_run_reduce_max_h_test(input_shapes, pcie_slot, function_level_defaults):
@@ -44,6 +45,7 @@ def test_run_reduce_max_h_test(input_shapes, pcie_slot, function_level_defaults)
     (
         ([[1, 1, 32, 32]], 0),  # Single core
         ([[1, 1, 3840, 32]], 0),  # Multi core w
+        ([[1, 3, 3840, 32]], 0),  # Multi core w
     ),
 )
 def test_run_reduce_max_w_test(input_shapes, pcie_slot, function_level_defaults):
@@ -68,6 +70,7 @@ def test_run_reduce_max_w_test(input_shapes, pcie_slot, function_level_defaults)
     (
         ([[1, 1, 32, 32]], 0),  # Single core
         ([[1, 1, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
+        ([[1, 3, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
     ),
 )
 def test_run_reduce_max_hw_test(input_shapes, pcie_slot, function_level_defaults):
@@ -90,6 +93,7 @@ def test_run_reduce_max_hw_test(input_shapes, pcie_slot, function_level_defaults
     "input_shapes, pcie_slot",
     (
         ([[1, 1, 32, 32]], 0),  # Single core
+        ([[1, 1, 32, 3840]], 0),  # Multi core h
         ([[1, 1, 32, 3840]], 0),  # Multi core h
     ),
 )
@@ -114,6 +118,7 @@ def test_run_reduce_sum_h_test(input_shapes, pcie_slot, function_level_defaults)
     (
         ([[1, 1, 32, 32]], 0),  # Single core
         ([[1, 1, 3840, 32]], 0),  # Multi core w
+        ([[1, 3, 3840, 32]], 0),  # Multi core w
     ),
 )
 def test_run_reduce_sum_w_test(input_shapes, pcie_slot, function_level_defaults):
@@ -136,6 +141,7 @@ def test_run_reduce_sum_w_test(input_shapes, pcie_slot, function_level_defaults)
     "input_shapes, pcie_slot",
     (
         ([[1, 1, 32, 32]], 0),  # Single core
+        ([[1, 1, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
         ([[1, 1, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
     ),
 )
