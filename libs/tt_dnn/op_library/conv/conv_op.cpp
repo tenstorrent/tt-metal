@@ -301,8 +301,58 @@ vector<uint32_t> compute_conv_as_mm_shape(vector<int> shape, vector<int> conv_pa
     return {1,num_rows_padded, num_cols_padded};
 }
 
+std::pair<vector<uint32_t>, vector<uint32_t>> populate_address_map_vectors_for_reader_kernel(vector<uint32_t> address_map_raw) {
+    // This function is called twice i.e., for activation and weight address maps
+    // "address_map_raw" is the DTX address map vector returned from DTX "conv_transform" function.
+    // "address_map_raw" contains metadata along with the address map data for all groups
+    // To keep the reader kernel simple, the metadata is separated into a different buffer
+    // So two buffers are created -
+    // First buffer is in DRAM containing the address map for all groups
+    //      This DRAM buffer is big and is streamed into L1 scratchpad
+    // Second buffer contains the metadata and is copied to L1 from host
+    // It contains number of groups in its first index, followed by group info for each group -
+    //      1. dram read address offset of address map group in dram buffer (in bytes)
+    //      2. size of address map group in dram buffer (in datums, not bytes)
+    // TODO (nshanker), support for streaming the second buffer from dram if it does not fit in L1
+    vector<uint32_t> address_map; // will be in dram
+    vector<uint32_t> address_map_metadata; // will be in l1
+
+    uint32_t num_address_map_fields_per_transfer = 4; // TODO (nshanker): remove hardcoded 4 and get this value from output of DTX
+    uint32_t num_dtx_groups = address_map_raw[0];
+    address_map_metadata.push_back(address_map_raw[0]);
+    uint32_t address_map_raw_index = 1;
+    uint32_t current_group_dram_address_offset = 0;
+    for(uint32_t g = 0; g < num_dtx_groups; g++) {
+        // insert group's dram read address (in bytes) in metadata buffer
+        // Separate reads are issued for each "address map group"
+        // DRAM reads should be 32B aligned
+        assert(current_group_dram_address_offset%32 == 0);
+        address_map_metadata.push_back(current_group_dram_address_offset);
+        // insert group size (datums, not in bytes) into metadata buffer
+        uint32_t current_group_size = address_map_raw[address_map_raw_index];
+        address_map_metadata.push_back(current_group_size);
+        address_map_raw_index += 1;
+        // insert address map for this group into the address map buffer
+        auto address_map_raw_current_group_start = address_map_raw.begin() + address_map_raw_index;
+        address_map.insert(address_map.end(),
+                                address_map_raw_current_group_start,
+                                address_map_raw_current_group_start + current_group_size);
+        address_map_raw_index += current_group_size;
+        // Pad 0s in address map buffer to ensure each read address is 32B aligned (32/sizeof(uint32_t) == 8 elements)
+        uint32_t current_group_size_padded = (uint32_t) (ceil((double) current_group_size / (double) 8) * 8);
+        if(current_group_size_padded != current_group_size) {
+            assert(current_group_size_padded > current_group_size);
+            address_map.insert(address_map.end(), current_group_size_padded - current_group_size, 0);
+        }
+        // update next group's dram read address offset (in bytes)
+        current_group_dram_address_offset += (current_group_size_padded*sizeof(uint32_t));
+    }
+    return make_pair(std::move(address_map), std::move(address_map_metadata));
+}
+
 Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params, bool untilize_out=true) {
     bool pass = true;
+    tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::CHANNELS_LAST, "Conv activation should be in channels last layout");
     TT_ASSERT(a.shape()[0] == 1, "Only batch size 1 supported.");
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
@@ -371,48 +421,124 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     uint32_t in1_block_num_tiles = in1_block_w * in1_block_h;
 
     // DTX conv activation transform
-    auto address_map_act_weight = conv_transform(activation_shape, {(int) Wb, (int) activation_shape[0], (int) conv_params[0], (int) conv_params[1]}, conv_params,
+    auto [act_address_map_raw, weight_address_map_raw]  = conv_transform(activation_shape, {(int) Wb, (int) activation_shape[0], (int) conv_params[0], (int) conv_params[1]}, conv_params,
                             in0_block_h_datums, in0_block_w_datums, in1_block_w_datums,
                             num_blocks_in0_h, num_blocks_in1_w, num_bytes_of_df);
-    auto act_address_map =address_map_act_weight.first;
-    auto weight_address_map =address_map_act_weight.second;
+
     // sanity check
-    uint32_t num_dtx_groups = act_address_map[0];
-    assert(weight_address_map[0] == num_dtx_groups);
+    uint32_t num_dtx_groups = act_address_map_raw[0];
+    assert(weight_address_map_raw[0] == num_dtx_groups);
+
+    auto [act_address_map, act_address_map_metadata] = populate_address_map_vectors_for_reader_kernel(act_address_map_raw);
+    auto [weight_address_map, weight_address_map_metadata] = populate_address_map_vectors_for_reader_kernel(weight_address_map_raw);
+
+    // debug prints
+    int detailed_debug = 1;
+    if(detailed_debug > 0) {
+        log_debug(tt::LogOp, "Printing activation and weight address maps.");
+        log_debug(tt::LogOp, "DTX groups: {}", num_dtx_groups);
+        uint32_t act_metadata_index = 1;
+        uint32_t weight_metadata_index = 1;
+        uint32_t act_addr_map_index = 0;
+        uint32_t weight_addr_map_index = 0;
+        for(uint32_t g = 0; g < num_dtx_groups; g++) {
+            log_debug(tt::LogOp, "  DTX group: {}", g);
+            uint32_t act_current_group_address = act_address_map_metadata[act_metadata_index];
+            act_metadata_index += 1;
+            uint32_t act_current_group_size = act_address_map_metadata[act_metadata_index];
+            act_metadata_index += 1;
+            log_debug(tt::LogOp, "      act_current_group_address: {}", act_current_group_address);
+            log_debug(tt::LogOp, "      act_current_group_size: {}", act_current_group_size);
+            if(detailed_debug > 1) {
+                uint32_t act_current_group_index = act_current_group_address/sizeof(uint32_t);
+                for(uint32_t i = act_current_group_index; i < act_current_group_index + act_current_group_size; i+=4) {
+                    log_debug(tt::LogOp, "          act_addr_map[0]: {}", act_address_map[i]);
+                    log_debug(tt::LogOp, "          act_addr_map[1]: {}", act_address_map[i+1]);
+                    log_debug(tt::LogOp, "          act_addr_map[2]: {}", act_address_map[i+2]);
+                    log_debug(tt::LogOp, "          act_addr_map[3]: {}", act_address_map[i+3]);
+                }
+            }
+            uint32_t weight_current_group_address = weight_address_map_metadata[weight_metadata_index];
+            weight_metadata_index += 1;
+            uint32_t weight_current_group_size = weight_address_map_metadata[weight_metadata_index];
+            weight_metadata_index += 1;
+            log_debug(tt::LogOp, "      weight_current_group_address: {}", weight_current_group_address);
+            log_debug(tt::LogOp, "      weight_current_group_size: {}", weight_current_group_size);
+            if(detailed_debug > 1) {
+                uint32_t weight_current_group_index = weight_current_group_address/sizeof(uint32_t);
+                for(uint32_t i = weight_current_group_index; i < weight_current_group_index + weight_current_group_size; i+=4) {
+                    log_debug(tt::LogOp, "          weight_addr_map[0]: {}", weight_address_map[i]);
+                    log_debug(tt::LogOp, "          weight_addr_map[1]: {}", weight_address_map[i+1]);
+                    log_debug(tt::LogOp, "          weight_addr_map[2]: {}", weight_address_map[i+2]);
+                    log_debug(tt::LogOp, "          weight_addr_map[3]: {}", weight_address_map[i+3]);
+                }
+            }
+        }
+    }
+
+    uint32_t dram_bank_id = 0;
+    auto act_address_map_buffer_size_in_dram = act_address_map.size() * sizeof(uint32_t);
+    auto act_address_map_dram_buffer = tt_metal::Buffer(device, act_address_map_buffer_size_in_dram, dram_bank_id, act_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
+    auto weight_address_map_buffer_size_in_dram = weight_address_map.size() * sizeof(uint32_t);
+    auto weight_address_map_dram_buffer = tt_metal::Buffer(device, weight_address_map_buffer_size_in_dram, dram_bank_id, weight_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
+    uint32_t act_address_map_dram_addr = act_address_map_dram_buffer.address();
+    // DRAM to L1 writes should 32B aligned
+    assert(act_address_map_dram_addr%32 == 0);
+    auto act_dram_noc_xy = act_address_map_dram_buffer.noc_coordinates();
+    uint32_t act_address_map_dram_noc_x = act_dram_noc_xy.x;
+    uint32_t act_address_map_dram_noc_y = act_dram_noc_xy.y;
+    uint32_t weight_address_map_dram_addr = weight_address_map_dram_buffer.address();
+    // DRAM to L1 writes should 32B aligned
+    assert(weight_address_map_dram_addr%32 == 0);
+    auto weight_dram_noc_xy = weight_address_map_dram_buffer.noc_coordinates();
+    uint32_t weight_address_map_dram_noc_x = weight_dram_noc_xy.x;
+    uint32_t weight_address_map_dram_noc_y = weight_dram_noc_xy.y;
+
+    // Write address maps to DRAM
+    WriteToDeviceDRAMChannel(device, dram_bank_id, act_address_map_dram_addr, act_address_map);
+    WriteToDeviceDRAMChannel(device, dram_bank_id, weight_address_map_dram_addr, weight_address_map);
+
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core = {0, 0};
-    //tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
-
+    tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
 
     uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0, "Buffer size of tensor b must be divisible by single_tile_size (aka divisible by sizeof(df) * 1024)");
 
-    tt_metal::Device *device = a.device();
     std::array<uint32_t, 4> cshape{Ba, Ca, Ha, Wb};
 
     Tensor output = create_output_dram_buffer_(a.device(), a.dtype(), cshape, untilize_out);
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    // L1 buffers
     auto l1_bank_ids = device->bank_ids_from_logical_core(core);
     TT_ASSERT(not l1_bank_ids.empty());
     auto l1_bank_id = l1_bank_ids.at(0);
-    auto act_l1_b0_size = act_address_map.size() * sizeof(uint32_t);
-    auto act_l1_b0 = tt_metal::Buffer(device, act_l1_b0_size, l1_bank_id, act_l1_b0_size, tt_metal::BufferType::L1);
-    uint32_t act_address_map_l1_addr = act_l1_b0.address();
-    auto weight_l1_b0_size = weight_address_map.size() * sizeof(uint32_t);
-    auto weight_l1_b0 = tt_metal::Buffer(device, weight_l1_b0_size, l1_bank_id, weight_l1_b0_size, tt_metal::BufferType::L1);
-    uint32_t weight_address_map_l1_addr = weight_l1_b0.address();
-
-    // Keep for now, but need to fix when you get to multibank
-    uint32_t out_dram_addr = dst_dram_buffer->address();
-    auto out_dram_noc_xy = dst_dram_buffer->noc_coordinates();
-
-    uint32_t out_dram_noc_x = out_dram_noc_xy.x;
-    uint32_t out_dram_noc_y = out_dram_noc_xy.y;
+    // Create scratchpad buffer in L1 to stream in dtx address map from dram
+    // One scratchpad buffer is used for both activation and weight address maps
+    uint32_t num_address_map_fields_per_transfer = 4; // TODO: (nshanker): remove hardcoded 4 and get this value from output of DTX
+    // Scratchpad buffer size must be a multiple of 32B to ensure DRAM->L1 addresses align 32B
+    auto scratch_pad_for_address_map_in_l1_b0_size_bytes = 32;
+    // Scratchpad buffer size must also be a multiple of address map fields per transfer. We need all address map fields for a transfer in scratchpad.
+    assert(scratch_pad_for_address_map_in_l1_b0_size_bytes % (num_address_map_fields_per_transfer*sizeof(uint32_t)) == 0);
+    auto scratch_pad_for_address_map_l1_buffer = tt_metal::Buffer(device, scratch_pad_for_address_map_in_l1_b0_size_bytes, l1_bank_id, scratch_pad_for_address_map_in_l1_b0_size_bytes, tt_metal::BufferType::L1);
+    uint32_t scratch_pad_for_address_map_l1_address = scratch_pad_for_address_map_l1_buffer.address();
+    // DRAM to L1 writes should 32B aligned
+    assert(scratch_pad_for_address_map_l1_address%32 == 0);
+    // Create address map metadata buffers in L1
+    // Metadata vectors are copied to L1 buffers from host before calling LaunchKernels
+    auto act_address_map_metadata_l1_b0_size = act_address_map_metadata.size() * sizeof(uint32_t);
+    auto act_address_map_metadata_l1_buffer = tt_metal::Buffer(device, act_address_map_metadata_l1_b0_size, l1_bank_id, act_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
+    uint32_t act_address_map_metadata_l1_address = act_address_map_metadata_l1_buffer.address();
+    auto weight_address_map_metadata_l1_b0_size = weight_address_map_metadata.size() * sizeof(uint32_t);
+    auto weight_address_map_metadata_l1_buffer = tt_metal::Buffer(device, weight_address_map_metadata_l1_b0_size, l1_bank_id, weight_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
+    uint32_t weight_address_map_metadata_l1_address = weight_address_map_metadata_l1_buffer.address();
 
     // out
+    uint32_t out_dram_addr = dst_dram_buffer->address();
     uint32_t out_row_size = Wb * num_bytes_of_df;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
@@ -437,9 +563,6 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
     uint32_t in1_noc_x = in1_dram_noc_xy.x;
     uint32_t in1_noc_y = in1_dram_noc_xy.y;
 
-
-
-
     // For debug
     {
         log_debug(tt::LogOp, "Hat (activation height in tiles): {}", Hat);
@@ -455,11 +578,15 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
         log_debug(tt::LogOp, "in0_block_w_datums: {}", in0_block_w_datums);
         log_debug(tt::LogOp, "in0_num_subblocks: {}", in0_num_subblocks);
         log_debug(tt::LogOp, "in0_block_num_tiles: {}", in0_block_num_tiles);
+        log_debug(tt::LogOp, "act_address_map_dram_addr: {}", act_address_map_dram_addr);
+        log_debug(tt::LogOp, "act_address_map_metadata_l1_address: {}", act_address_map_metadata_l1_address);
         log_debug(tt::LogOp, "in0_subblock_h: {}", in0_subblock_h);
         log_debug(tt::LogOp, "in0_subblock_num_tiles: {}", in0_subblock_num_tiles);
         log_debug(tt::LogOp, "in1_dram_addr: {}", in1_dram_addr);
         log_debug(tt::LogOp, "in1_num_subblocks: {}", in1_num_subblocks);
         log_debug(tt::LogOp, "in1_block_num_tiles: {}", in1_block_num_tiles);
+        log_debug(tt::LogOp, "weight_address_map_dram_addr: {}", weight_address_map_dram_addr);
+        log_debug(tt::LogOp, "weight_address_map_metadata_l1_address: {}", weight_address_map_metadata_l1_address);
         log_debug(tt::LogOp, "in1_block_w: {}", in1_block_w);
         log_debug(tt::LogOp, "in1_block_h: {}", in1_block_h);
         log_debug(tt::LogOp, "out_dram_addr: {}", out_dram_addr);
@@ -468,6 +595,7 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
         log_debug(tt::LogOp, "out_subblock_w: {}", out_subblock_w);
         log_debug(tt::LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
         log_debug(tt::LogOp, "num_dtx_groups: {}", num_dtx_groups);
+        log_debug(tt::LogOp, "scratch_pad_for_address_map_l1_address: {}", scratch_pad_for_address_map_l1_address);
     }
 
     create_CBs_for_fused_matmul_new_alloc(
@@ -483,22 +611,29 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
 
     string reader_kernel;
     vector<uint32_t> reader_rt_args;
-
     reader_kernel = "tt_metal/kernels/dataflow/reader_binary_dtx.cpp";
     reader_rt_args = {
         // arguments for in0
         in0_dram_addr,
         in0_noc_x,
         in0_noc_y,
-        act_address_map_l1_addr,
+        act_address_map_dram_addr,
+        act_address_map_dram_noc_x,
+        act_address_map_dram_noc_y,
+        act_address_map_metadata_l1_address,
         in0_block_num_tiles,
 
         // arguments for in1
         in1_dram_addr,
         in1_noc_x,
         in1_noc_y,
-        weight_address_map_l1_addr,
+        weight_address_map_dram_addr,
+        weight_address_map_dram_noc_x,
+        weight_address_map_dram_noc_y,
+        weight_address_map_metadata_l1_address,
         in1_block_num_tiles,
+
+        scratch_pad_for_address_map_l1_address,
     };
 
     string writer_kernel;
@@ -589,11 +724,9 @@ Tensor conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<i
 
     pass &= tt_metal::CompileProgram(device, program, false);
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    tt_metal::WriteToDeviceL1(device, core, act_address_map_l1_addr, act_address_map);
-    tt_metal::WriteToDeviceL1(device, core, weight_address_map_l1_addr, weight_address_map);
-
+    tt_metal::WriteToDeviceL1(device, core, act_address_map_metadata_l1_address, act_address_map_metadata);
+    tt_metal::WriteToDeviceL1(device, core, weight_address_map_metadata_l1_address, weight_address_map_metadata);
     pass &= tt_metal::LaunchKernels(device, program);
-
 
     TT_ASSERT(pass);
     return output;
