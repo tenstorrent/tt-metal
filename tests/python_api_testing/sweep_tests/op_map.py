@@ -1,3 +1,4 @@
+
 from functools import partial
 
 from python_api_testing.sweep_tests import (
@@ -5,7 +6,16 @@ from python_api_testing.sweep_tests import (
     tt_lib_ops,
 )
 
+
+
 op_map = {
+    ################################################
+    ################# Helper-Funcs #################
+    ################################################
+    "linear":{
+        "tt_lib_op": tt_lib_ops.linear,
+        "pytorch_op": pytorch_ops.linear
+    },
     ################################################
     #################### TT-DNN ####################
     ################################################

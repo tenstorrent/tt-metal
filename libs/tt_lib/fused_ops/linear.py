@@ -1,5 +1,8 @@
-from typing import List, Union
+from typing import List, Union, Optional
 from .. import tensor
+
+from loguru import logger
+
 
 def Linear(in_features: int, out_features: int, weight: List[Union[int, float]], bias, device):
     """
@@ -7,6 +10,7 @@ def Linear(in_features: int, out_features: int, weight: List[Union[int, float]],
 
     ``weight`` must be the weight as a tilized list of values.
     """
+    logger.warning("Linear will be deprecated soon, please use linear in models/helper_funcs")
     weight = tensor.Tensor(
         weight,
         [1, 1, out_features, in_features],

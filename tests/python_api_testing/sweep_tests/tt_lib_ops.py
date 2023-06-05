@@ -1,5 +1,7 @@
 import torch
 import tt_lib as ttl
+from python_api_testing.models.helper_funcs import Linear as tt_Linear
+import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -17,6 +19,54 @@ def setup_host_and_device(func):
         return output
 
     return wrap
+
+################################################
+################## Helper-Funcs ################
+################################################
+@setup_host_and_device
+def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
+    bias = None if len(args) == 0 else args[0]
+    tt_bias = None
+    t0 = tt_lib.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        tt_lib.tensor.Layout.ROW_MAJOR,
+    )
+
+    tt_weight = tt_lib.tensor.Tensor(
+        weight.reshape(-1).tolist(),
+        weight.shape,
+        dtype,
+        tt_lib.tensor.Layout.ROW_MAJOR,
+    )
+    if bias is not None:
+        tt_bias = tt_lib.tensor.Tensor(
+            bias.reshape(-1).tolist(),
+            bias.shape,
+            dtype,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
+
+
+    t0 = t0.to(layout)
+    tt_weight = tt_weight.to(layout)
+
+    if on_device:
+        t0 = t0.to(device)
+        tt_weight = tt_weight.to(device)
+        if bias is not None:
+            tt_bias = tt_bias.to(device)
+    _, __, out_features, in_features = tt_weight.shape()
+    tt_linear = tt_Linear(in_features, out_features, tt_weight, tt_bias)
+
+    t1 = tt_linear(t0)
+
+    output = torch.Tensor(t1.to(host).to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
 
 
 ################################################

@@ -5,6 +5,17 @@ from tt_lib.utils import (
     untilize as untilize_util,
 )
 
+################################################
+################# Helper-Funcs #################
+################################################
+
+def linear(x, weight, bias=None, *args, **kwargs):
+    while len(weight.shape) > 2:
+        weight = weight.squeeze(0)
+    while bias is not None and len(bias.shape) > 1:
+        bias = bias.squeeze(0)
+
+    return torch.nn.functional.linear(x, weight, bias)
 
 ################################################
 #################### TT-DNN ####################
