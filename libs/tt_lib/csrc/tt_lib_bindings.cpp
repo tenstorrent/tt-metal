@@ -1314,6 +1314,10 @@ void TensorModule(py::module &m_tensor) {
         py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 384, 64].
     )doc");
+    m_tensor.def("bert_large_concat_heads", &bert_large_concat_heads,
+        py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Reshuffles [9, 16, 384, 64] tensor into tensor with shape [9, 1, 384, 1024].
+    )doc");
 
     // Custom BERT matmuls/bmms
     m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul,
