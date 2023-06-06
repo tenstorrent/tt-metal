@@ -39,8 +39,8 @@ int main(int argc, char **argv) {
         );
 
         constexpr uint32_t single_tile_size = 2 * (32 * 32);
-        constexpr uint32_t num_tiles = 50;
-        constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
+        uint32_t num_tiles = stoi(argv[1]);
+        uint32_t dram_buffer_size = single_tile_size * num_tiles;
         constexpr uint32_t l1_buffer_addr = 400 * 1024;
 
         uint32_t l1_bank_id = device->bank_ids_from_logical_core(core).at(0);
@@ -57,7 +57,8 @@ int main(int argc, char **argv) {
         * Compile kernels used during execution
         */
 
-        pass &= CompileProgram(device, program);
+        constexpr bool profiler_kernel = true;
+        pass &= CompileProgram(device, program, profiler_kernel);
 
         /*
         * Create input data and runtime arguments, then execute
@@ -87,6 +88,8 @@ int main(int argc, char **argv) {
         );
 
         pass &= LaunchKernels(device, program);
+        DumpDeviceProfileResults(device, program);
+
 
         /*
         * Validation & Teardown

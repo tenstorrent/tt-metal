@@ -61,8 +61,8 @@ int main(int argc, char **argv) {
         constexpr CoreCoord core = {0, 0};
 
         constexpr uint32_t single_tile_size = 2 * 1024;
-        constexpr uint32_t num_tiles = 2048;
-        constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        uint32_t num_tiles = stoi(argv[1]);
+        uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         constexpr uint32_t dram_buffer_src0_addr = 0;
         constexpr int dram_src0_channel_id = 0;
@@ -136,7 +136,7 @@ int main(int argc, char **argv) {
          * Set the parameters that the compute kernel will use.
          */
         vector<uint32_t> compute_kernel_args = {
-            2048, // per_core_block_cnt
+            num_tiles, // per_core_block_cnt
             1 // per_core_block_size
         };
 
@@ -161,7 +161,8 @@ int main(int argc, char **argv) {
         /*
         * Compile kernels used during execution
         */
-        pass &= CompileProgram(device, program);
+        constexpr bool profiler_kernel = true;
+        pass &= CompileProgram(device, program, profiler_kernel);
 
         /*
          * Create source data and write to DRAM.
@@ -211,12 +212,14 @@ int main(int argc, char **argv) {
         );
 
         pass &= LaunchKernels(device, program);
+        tt_metal::DumpDeviceProfileResults(device, program);
 
         /*
          * Read in result into a host vector.
          */
         std::vector<uint32_t> result_vec;
         ReadFromBuffer(dst_dram_buffer, result_vec);
+        // tt_metal::DumpHostProfileResults("first");
 
         /*
          * Move src data back into DRAM src buffer 0 to do another eltwise calculation
@@ -289,7 +292,7 @@ int main(int argc, char **argv) {
         /*
          * Compile kernels.
          */
-        pass &= CompileProgram(device, program_mul);
+        pass &= CompileProgram(device, program_mul, profiler_kernel);
 
         /*
          * Send new input data.
@@ -340,12 +343,14 @@ int main(int argc, char **argv) {
          * Execute.
          */
         pass &= LaunchKernels(device, program_mul);
+        tt_metal::DumpDeviceProfileResults(device, program);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail
          * and teardown.
          */
         ReadFromBuffer(dst_dram_buffer, result_vec);
+        // tt_metal::DumpHostProfileResults("second");
 
         std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
             return bfloat16((a.to_float() + val_to_add) * val_to_mul);

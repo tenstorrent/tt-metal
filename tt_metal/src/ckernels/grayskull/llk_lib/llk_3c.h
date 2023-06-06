@@ -9,6 +9,7 @@
 #include "chlkc_list.h"
 //#include "llk_defs.h"
 
+#include "tools/profiler/kernel_profiler.hpp"
 #include "kernels/hostdevcommon/kernel_structs.h"
 
 #define SYNC SyncHalf
@@ -288,7 +289,13 @@ ALWI void mul_tiles_init() {
     UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>() ));
 }
 
-ALWI void add_tiles_init_nof() { MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>() )); }
+ALWI void add_tiles_init_nof() {
+
+    // MATH( kernel_profiler::mark_time(11) );
+    MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>() ));
+    MATH( kernel_profiler::mark_time(12) );
+
+    }
 ALWI void add_tiles_init() {
     MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>() ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>() ));
