@@ -1,3 +1,7 @@
+# only include these modules if we're in development
+ifdef TT_METAL_ENV_IS_DEV
+include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests/module.mk
+endif
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 TT_METAL_TESTS += \
 		 tests/tt_metal/ops/test_eltwise_binary_op \
