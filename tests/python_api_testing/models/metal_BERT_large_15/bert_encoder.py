@@ -238,8 +238,8 @@ class PytorchBertEncoder(torch.nn.Module):
         super().__init__()
         self.bert_encoder = hugging_face_reference_model.bert.encoder.layer[0]
 
-    def forward(self, x):
-        return self.bert_encoder(x)[0]
+    def forward(self, x, attention_mask=None):
+        return self.bert_encoder(x, attention_mask)[0]
 
 
 def run_bert_encoder_inference(
@@ -283,19 +283,38 @@ def run_bert_encoder_inference(
         torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size)
         * 2
     ) - 1
+    bert_attention_mask = torch.zeros(batch, 1, 1, seq_len)
+    extended_bert_attention_mask = torch.zeros(batch, 1, 32, seq_len)
 
-    pytorch_out = pytorch_bert_model(bert_encoder_input.squeeze(1)).unsqueeze(1)
+    pytorch_out = pytorch_bert_model(
+        bert_encoder_input.squeeze(1), bert_attention_mask
+    ).unsqueeze(1)
 
     pad_bert_encoder_input = pad_activation(bert_encoder_input)
-    tt_bert_encoder_input = ttl.tensor.Tensor(
-        pad_bert_encoder_input.reshape(-1).tolist(),
-        bert_encoder_input.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
-    tt_bert_encoder_input = tt_bert_encoder_input.to(device)
+    tt_bert_encoder_input = (
+        ttl.tensor.Tensor(
+            pad_bert_encoder_input.reshape(-1).tolist(),
+            bert_encoder_input.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(device)
+    )
+    tt_bert_attention_mask = (
+        ttl.tensor.Tensor(
+            extended_bert_attention_mask.reshape(-1).tolist(),
+            extended_bert_attention_mask.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(device)
+    )
 
-    tt_out = tt_bert_encoder_model(tt_bert_encoder_input).to(host)
+    tt_out = tt_bert_encoder_model(tt_bert_encoder_input, tt_bert_attention_mask).to(
+        host
+    )
     tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         tt_out.shape()
     )
