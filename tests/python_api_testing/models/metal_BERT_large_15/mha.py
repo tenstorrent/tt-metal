@@ -275,12 +275,16 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             """
 
             # profiler.start("___op10_unmake_attention_heads")
+            retval = ttl.tensor.bert_large_concat_heads(x)
+            """
+            # Old TM with transpose_hc and reshape
             ctx = ttl.tensor.transpose_hc(x)
             ushape = ctx.shape()
             reshaped = ttl.tensor.reshape(
                 ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3]
             )
             retval = ttl.tensor.tilize(reshaped)
+            """
             # profiler.end("___op10_unmake_attention_heads")
 
             return retval
