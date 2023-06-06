@@ -33,18 +33,18 @@ volatile uint32_t* instrn_buf[MAX_THREADS];
 volatile uint32_t* pc_buf[MAX_THREADS];
 volatile uint32_t* mailbox[MAX_THREADS];
 
-volatile uint32_t local_mem_barrier;
+volatile uint32_t local_mem_barrier __attribute__((used));
 
-uint8_t my_x[NUM_NOCS];
-uint8_t my_y[NUM_NOCS];
+uint8_t my_x[NUM_NOCS] __attribute__((used));
+uint8_t my_y[NUM_NOCS] __attribute__((used));
 #ifdef NOC_INDEX
-uint8_t loading_noc = NOC_INDEX;
+uint8_t loading_noc __attribute__((used)) = NOC_INDEX;
 #else
-uint8_t loading_noc = 0;  // BRISC uses NOC-0
+uint8_t loading_noc __attribute__((used)) = 0;  // BRISC uses NOC-0
 #endif
 
-uint8_t noc_size_x;
-uint8_t noc_size_y;
+uint8_t noc_size_x __attribute__((used));
+uint8_t noc_size_y __attribute__((used));
 
 // to reduce the amount of code changes, both BRISC and NRISCS instatiate these counter for both NOCs (ie NUM_NOCS)
 // however, atm NCRISC uses only NOC-1 and BRISC uses only NOC-0

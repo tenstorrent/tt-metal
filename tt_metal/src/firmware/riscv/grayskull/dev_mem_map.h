@@ -16,9 +16,7 @@
 // linker scripts
 // 3) Device static/global variables generally should NOT be listed here.  If
 // they are global to a core, declare them in the that core's source code and
-// tag them if needed with a section (e.g., "l1_data").  If the globals are
-// shared across all firmware/kernels, put them in brisc and reference them
-// with "extern" in the other cores' source
+// tag them if needed with a section (e.g., "l1_data")
 //
 
 /////////////

@@ -15,6 +15,9 @@
 #include "debug_print.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
+
+extern uint8_t loading_noc;
+
 /*
  * This is a trick with Doxygen to force it to not expand the always_inline
  * attribute property. We turn on predefine-only expansion with MACRO_EXPANSION

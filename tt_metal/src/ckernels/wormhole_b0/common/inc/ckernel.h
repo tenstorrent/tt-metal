@@ -49,14 +49,14 @@ constexpr uint RESET_VAL = 0;
 constexpr uint KERNEL_IN_PROGRESS = 15;
 constexpr uint KERNEL_COMPLETE = 1;
 
-extern volatile uint *reg_base;
-extern volatile uint *pc_buf_base;
-extern volatile uint *regfile;
+extern volatile uint * const reg_base;
+extern volatile uint * const pc_buf_base;
+extern volatile uint * const regfile;
 extern uint *regmem;
-extern volatile uint *instrn_buffer;
+extern volatile uint * const instrn_buffer;
 extern volatile uint *mailbox_base[4];
 extern volatile uint *dbg_event_scratch;
-extern volatile uint* trisc_l1_mailbox;
+extern volatile uint * const trisc_l1_mailbox;
 extern volatile uint local_mem_barrier;
 extern volatile uint8_t *debug_buffer;
 
@@ -539,28 +539,25 @@ inline __attribute__((always_inline)) uint32_t umodsi3_const_divisor(uint32_t a)
     return a - udivsi3_const_divisor<d>(a) * d;
 }
 
-inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t *l1_addr, int32_t len) {
-    // Cover L1 load latency of 6 cycles for the bulk of the copy
-    int32_t n = 0;
-    while (n < len - 5) {
-        uint32_t v0 = l1_addr[n + 0];
-        uint32_t v1 = l1_addr[n + 1];
-        uint32_t v2 = l1_addr[n + 2];
-        uint32_t v3 = l1_addr[n + 3];
-        uint32_t v4 = l1_addr[n + 4];
-        uint32_t v5 = l1_addr[n + 5];
-        local_mem_addr[n + 0] = v0;
-        local_mem_addr[n + 1] = v1;
-        local_mem_addr[n + 2] = v2;
-        local_mem_addr[n + 3] = v3;
-        local_mem_addr[n + 4] = v4;
-        local_mem_addr[n + 5] = v5;
-        n += 6;
-    }
-    // Could optimize this further (eg, loop of 2 or 4), probably not worth it
-    while (n < len) {
-        local_mem_addr[n] = l1_addr[n];
-        n++;
-    }
+inline void tensix_sync()
+{
+    volatile uint foo = 0x0;
+    volatile uint *fooptr = &foo;
+    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
+    pc_buf_base[1] = foo;
+
+    // Now read -- this read will block until we're idle
+    *fooptr = pc_buf_base[1];
+}
+
+inline void mop_sync()
+{
+    volatile uint foo = 0x0;
+    volatile uint *fooptr = &foo;
+    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
+    pc_buf_base[2] = foo;
+
+    // Now read -- this read will block until mops are done
+    *fooptr = pc_buf_base[2];
 }
 }
