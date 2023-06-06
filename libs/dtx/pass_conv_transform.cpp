@@ -234,6 +234,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> conv_transform(vector<int> activat
     assert(activation_shape.size() == 3);
     assert(weight_shape.size() == 4);
     assert(conv_params.size() == 6);
+    bool enable_dtx_caching = false;
     std::pair<vector<uint32_t>, vector<uint32_t>> conv_act_and_weight_address_maps;
     vector<int> act_block_shape_yx = {(int)act_block_h, (int)act_block_w};
     vector<int> weight_block_shape_yx = {(int)act_block_w, (int)weight_block_w};
@@ -246,7 +247,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> conv_transform(vector<int> activat
     string dtx_conv_weight_file_path = ((string) std::getenv("TT_METAL_HOME")) + "/tt_metal/third_party/lfs/dtx_transform_outputs/" + dtx_conv_weight_file_name;
     std::ifstream dtx_conv_act_file(dtx_conv_act_file_path);
     std::ifstream dtx_conv_weight_file(dtx_conv_weight_file_path);
-    if(dtx_conv_act_file.is_open() && dtx_conv_weight_file.is_open()) {
+    if(enable_dtx_caching && dtx_conv_act_file.is_open() && dtx_conv_weight_file.is_open()) {
         conv_act_and_weight_address_maps.first = read_address_map_from_file(dtx_conv_act_file);
         conv_act_and_weight_address_maps.second = read_address_map_from_file(dtx_conv_weight_file);
         return conv_act_and_weight_address_maps;
@@ -255,12 +256,13 @@ std::pair<vector<uint32_t>, vector<uint32_t>> conv_transform(vector<int> activat
     conv_act_and_weight_address_maps.second = conv_weight_transform(weight_shape, conv_params, weight_block_shape_yx, num_blocks_act_h, num_bytes_of_df);
 
     // Save and cache dtx transform outputs to file
-
-    std::ofstream conv_act_file(dtx_conv_act_file_path);
-    assert(conv_act_file.is_open());
-    for (const auto &v : conv_act_and_weight_address_maps.first) conv_act_file << to_string(v) << "\n";
-    std::ofstream conv_weight_file(dtx_conv_weight_file_path);
-    assert(conv_weight_file.is_open());
-    for (const auto &v : conv_act_and_weight_address_maps.second) conv_weight_file << to_string(v) << "\n";
+    if(enable_dtx_caching) {
+        std::ofstream conv_act_file(dtx_conv_act_file_path);
+        assert(conv_act_file.is_open());
+        for (const auto &v : conv_act_and_weight_address_maps.first) conv_act_file << to_string(v) << "\n";
+        std::ofstream conv_weight_file(dtx_conv_weight_file_path);
+        assert(conv_weight_file.is_open());
+        for (const auto &v : conv_act_and_weight_address_maps.second) conv_weight_file << to_string(v) << "\n";
+    }
     return conv_act_and_weight_address_maps;
 }
