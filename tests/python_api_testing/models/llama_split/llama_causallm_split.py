@@ -19,7 +19,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
 from typing import List, Optional, Tuple, Union
 from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
-from python_api_testing.models.llama_split.hf_classes_test import (
+from python_api_testing.models.llama_split.hf_llama_classes import (
     TtLlamaModelFirstHFModel,
     TtLlamaModelSecondHFModel,
 )
