@@ -41,12 +41,9 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(const 
     return kernel_name_to_last_compiled_dir;
 }
 
-
-
 // TODO: Replace this when we have debug/test hooks (GH: #964) to inspect inside CompileProgram
 KernelCacheStatus CompileProgramTestWrapper(Device *device, Program &program, bool profile_kernel=false) {
     // Check
-    //std::unordered_map<std::string, size_t>
     auto root_dir = get_kernel_compile_outpath();
     std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program);
 

@@ -131,10 +131,16 @@ void write_graph_interpreter_op_info_to_core(
 bool test_load_write_read_risc_binary(
     tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id);
 
+bool test_load_write_read_risc_binary(
+    tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id);
+
 // for TRISCs
 // hex_file_path is relative to the "kernels"/"firwmare" root
 bool test_load_write_read_trisc_binary(
     tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int triscv_id);
+
+bool test_load_write_read_trisc_binary(
+    tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int triscv_id);
 
 void disable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 

@@ -12,6 +12,25 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
+std::string get_latest_kernel_binary_path(const tt_metal::Kernel *kernel) {
+    auto root_dir = get_kernel_compile_outpath();
+    TT_ASSERT(kernel != nullptr);
+    TT_ASSERT(std::filesystem::exists(root_dir + kernel->name()));
+
+    std::filesystem::path kernel_path{root_dir + kernel->name()};
+    std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
+    std::string latest_hash;
+    for (auto const& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
+        auto kbtime = std::filesystem::last_write_time(dir_entry.path());
+        if (kbtime > ftime) {
+            ftime = kbtime;
+            latest_hash = dir_entry.path().filename().string();
+        }
+    }
+    TT_ASSERT(not latest_hash.empty());
+    return kernel->name() + "/" + latest_hash;
+}
+
 int main(int argc, char **argv) {
     bool pass = true;
 
@@ -124,6 +143,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
         auto kernel_group = program.kernels_on_core(core);
+        for (auto kernel : program.kernels()) {
+            std::filesystem::remove_all(get_kernel_compile_outpath() + kernel->name());
+        }
 
         int num_compiles = 3;
         // kernel->binaries() returns 32B aligned binaries
@@ -144,15 +166,15 @@ int main(int argc, char **argv) {
                 TT_ASSERT(kernel_group.riscv_0->binaries() == brisc_binaries);
                 TT_ASSERT(kernel_group.riscv_1->binaries() == ncrisc_binaries);
             }
-            std::string brisc_hex_path = kernel_group.riscv_0->binary_path() + "/brisc/brisc.hex";
+            std::string brisc_hex_path = get_latest_kernel_binary_path(kernel_group.riscv_0) + "/brisc/brisc.hex";
             ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path);
             TT_ASSERT(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
-            std::string ncrisc_hex_path = kernel_group.riscv_1->binary_path() + "/ncrisc/ncrisc.hex";
+            std::string ncrisc_hex_path = get_latest_kernel_binary_path(kernel_group.riscv_1) + "/ncrisc/ncrisc.hex";
             ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path);
             TT_ASSERT(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
-                std::string trisc_hex_path = kernel_group.compute->binary_path() + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
+                std::string trisc_hex_path = get_latest_kernel_binary_path(kernel_group.compute) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
                 ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path);
                 TT_ASSERT(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
             }

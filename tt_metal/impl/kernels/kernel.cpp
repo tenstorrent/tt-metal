@@ -171,20 +171,18 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
+    ll_api::memory binary_mem = this->binaries().at(0);
 
     int riscv_id;
-    std::string binary_path_suffix;
     uint64_t test_mailbox_addr;
     switch (processor_) {
         case (DataMovementProcessor::RISCV_0): {
             riscv_id = 0;
-            binary_path_suffix = "/brisc/brisc.hex";
             test_mailbox_addr = TEST_MAILBOX_ADDR;
         }
         break;
         case (DataMovementProcessor::RISCV_1): {
             riscv_id = 1;
-            binary_path_suffix = "/ncrisc/ncrisc.hex";
             test_mailbox_addr = TEST_MAILBOX_ADDR_NCRISC;
         }
         break;
@@ -192,8 +190,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
             TT_ASSERT(false, "Unsupported data movement processor!");
     }
 
-    pass &= tt::llrt::test_load_write_read_risc_binary(
-        cluster, this->binary_path_ + binary_path_suffix, pcie_slot, worker_core, riscv_id);
+    pass &= tt::llrt::test_load_write_read_risc_binary(cluster, binary_mem, pcie_slot, worker_core, riscv_id);
     init_test_mailbox(device, worker_core, test_mailbox_addr);
     if (processor_ == DataMovementProcessor::RISCV_1) {
         tt::llrt::enable_ncrisc(cluster, pcie_slot, worker_core);
@@ -209,12 +206,12 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
+    std::vector<ll_api::memory> binaries = this->binaries();
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-        std::string trisc_id_str = std::to_string(trisc_id);
         pass &= tt::llrt::test_load_write_read_trisc_binary(
             cluster,
-            this->binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex",
+            binaries.at(trisc_id),
             pcie_slot,
             worker_core,
             trisc_id);
