@@ -1,105 +1,75 @@
 #include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
+
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "tt_numpy/functions.hpp"
+
+#include "tensor/tensor.hpp"
 #include "constants.hpp"
 
-#include <algorithm>
-#include <functional>
-#include <random>
+using tt::tt_metal::Host;
+using tt::tt_metal::Device;
+using tt::tt_metal::Tensor;
+using tt::tt_metal::DataType;
+using tt::tt_metal::Layout;
 
-using namespace tt;
-using namespace tt_metal;
-using namespace constants;
+template<typename BinaryFunction>
+Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+    auto input_tensor_a_data = *reinterpret_cast<std::vector<bfloat16>*>(input_tensor_a.data_ptr());
+    auto input_tensor_b_data = *reinterpret_cast<std::vector<bfloat16>*>(input_tensor_b.data_ptr());
+    auto output_tensor_data = std::vector<bfloat16>(input_tensor_a_data.size(), 0.0f);
 
-bool nearly_equal(
-  float a, float b,
-  float epsilon = 1e-5, float abs_th = 1e-5) {
-  auto diff = std::abs(a-b);
-  auto norm = std::min((std::abs(a) + std::abs(b)), std::numeric_limits<float>::max());
-  return diff < std::max(abs_th, epsilon * norm);
+    for (auto index = 0; index < output_tensor_data.size(); index++) {
+        auto value = BinaryFunction{}(input_tensor_a_data[index].to_float(), input_tensor_b_data[index].to_float());
+        output_tensor_data[index] = bfloat16(value);
+    }
+    return Tensor(output_tensor_data, input_tensor_a.shape(), input_tensor_a.dtype(), input_tensor_a.layout());
 }
 
+template<auto Operation>
+Tensor device_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Host* host, Device* device) {
+    return Operation(input_tensor_a.to(device), input_tensor_b.to(device)).to(host);
+}
 
-//////////////////////////////////////////////////////////////////////////////////////////
-// TODO: explain what test does
-//////////////////////////////////////////////////////////////////////////////////////////
+template<auto HostFunction, auto DeviceFunction, typename ... Args>
+bool run_test(Host* host, Device* device, Args ...  args) {
+    std::array<uint32_t, 4> shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    auto input_tensor_a = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
+    auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
+
+    auto host_output = HostFunction(input_tensor_a, input_tensor_b);
+    auto device_output = DeviceFunction(input_tensor_a, input_tensor_b, host, device);
+
+    return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+}
+
 int main(int argc, char **argv) {
     bool pass = true;
 
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
-        tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
-        tt_metal::Host *host = tt_metal::GetHost();
+        auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+        auto host = tt::tt_metal::GetHost();
 
-        pass &= tt_metal::InitializeDevice(device);
+        pass &= tt::tt_metal::InitializeDevice(device);
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
-        std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-        // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
-        Tensor b = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
+        pass &= run_test<host_function<std::plus<float>>, device_function<tt::tt_metal::add>>(host, device);
+        pass &= run_test<host_function<std::minus<float>>, device_function<tt::tt_metal::sub>>(host, device);
+        pass &= run_test<host_function<std::multiplies<float>>, device_function<tt::tt_metal::mul>>(host, device, 1e-2f, 1e-3f);
 
-        std::vector<bfloat16> a_vec = *reinterpret_cast<std::vector<bfloat16>*>(a.to(host).data_ptr());
-        std::vector<bfloat16> b_vec = *reinterpret_cast<std::vector<bfloat16>*>(b.to(host).data_ptr());
-
-        Tensor add_output = add(a, b).to(host);
-        std::vector<bfloat16> add_output_vec = *reinterpret_cast<std::vector<bfloat16>*>(add_output.data_ptr());
-        for (int i = 0; i < a_vec.size(); i++) {
-            TT_ASSERT(nearly_equal(a_vec[i].to_float() + b_vec[i].to_float(), add_output_vec[i].to_float()), "EltwiseBinary Add: Comparison Failed");
-        }
-
-        Tensor sub_output = sub(a, b).to(host);
-        std::vector<bfloat16> sub_output_vec = *reinterpret_cast<std::vector<bfloat16>*>(sub_output.data_ptr());
-        for (int i = 0; i < a_vec.size(); i++) {
-            TT_ASSERT(nearly_equal(a_vec[i].to_float() - b_vec[i].to_float(), sub_output_vec[i].to_float()), "EltwiseBinary Sub: Comparison Failed");
-        }
-
-        Tensor mul_output = mul(a, b).to(host);
-        std::vector<bfloat16> mul_output_vec = *reinterpret_cast<std::vector<bfloat16>*>(mul_output.data_ptr());
-        for (int i = 0; i < a_vec.size(); i++) {
-            TT_ASSERT(nearly_equal(a_vec[i].to_float() * b_vec[i].to_float(), mul_output_vec[i].to_float(), 1e-2, 1e-3), "EltwiseBinary Mul: Comparison Failed");
-        }
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Validation & Teardown
-        ////////////////////////////////////////////////////////////////////////////
-        Tensor host_a = a.to(host); // Move tensor a to host to validate
-        //pass &= (host_a.data() == dcAdd.data());
-        //pass &= (host_a.data() == dcSub.data());
-        //pass &= (host_a.data() == dcMul.data());
-
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt::tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;
         // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
+        tt::log_error(tt::LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
+        tt::log_error(tt::LogTest, "System error message: {}", std::strerror(errno));
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        tt::log_info(tt::LogTest, "Test Passed");
     } else {
-        log_fatal(LogTest, "Test Failed");
+        tt::log_fatal(tt::LogTest, "Test Failed");
     }
 
     TT_ASSERT(pass);
