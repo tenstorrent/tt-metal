@@ -8,6 +8,13 @@
   any modifications should be made to tensix-sections-pre-proc.ld, tensix-sections.ld is a generated file
 */
 
+/*
+   Firmware text/ldm start at the start of the section
+   Kernel text/ldm start where firmware left off
+*/
+__firmware_start = DEFINED(__fw_export_end_text) ? __fw_export_end_text : ORIGIN(REGION_CODE);
+__ldm_start = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : ORIGIN(REGION_DATA);
+
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
@@ -43,121 +50,81 @@ SECTIONS
   } > REGION_CODE
   l1_data_noinit (NOLOAD) :
   {
-    *(l1_data_no_init)
+    *(l1_data_noinit)
   } > REGION_CODE
   PROVIDE (__etext = .);
   PROVIDE (_etext = .);
   PROVIDE (etext = .);
+  __fw_export_end_text = DEFINED(__fw_export_end_text) ? __fw_export_end_text : .;
 
-  .rodata         :
+  PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x800);
+  .ldm_data __ldm_start :
   {
-    __ldm_data_start = .;
+    /* ldm is copied in 4 byte chunks */
+    . = ALIGN(4);
+     __ldm_data_start = .;
      *(.rodata .rodata.* .gnu.linkonce.r.*)
-  } > REGION_RODATA
-  .rodata1        : { *(.rodata1) } > REGION_RODATA
-  .preinit_array     :
-  {
+     *(.rodata1)
     PROVIDE_HIDDEN (__preinit_array_start = .);
     KEEP (*(.preinit_array))
     PROVIDE_HIDDEN (__preinit_array_end = .);
-  } > REGION_RODATA
-  .init_array     :
-  {
     PROVIDE_HIDDEN (__init_array_start = .);
     KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
     KEEP (*(.init_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
     PROVIDE_HIDDEN (__init_array_end = .);
-  } > REGION_RODATA
-  .fini_array     :
-  {
     PROVIDE_HIDDEN (__fini_array_start = .);
     KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
     KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
     PROVIDE_HIDDEN (__fini_array_end = .);
-  } > REGION_RODATA
-  .ctors          :
-  {
-    /* gcc uses crtbegin.o to find the start of
-       the constructors, so we make sure it is
-       first.  Because this is a wildcard, it
-       doesn't matter if the user does not
-       actually link against crtbegin.o; the
-       linker won't look for a file to match a
-       wildcard.  The wildcard also means that it
-       doesn't matter which directory crtbegin.o
-       is in.  */
     KEEP (*crtbegin.o(.ctors))
     KEEP (*crtbegin?.o(.ctors))
-    /* We don't want to include the .ctor section from
-       the crtend.o file until after the sorted ctors.
-       The .ctor section from the crtend file contains the
-       end of ctors marker and it must be last */
     KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .ctors))
     KEEP (*(SORT(.ctors.*)))
     KEEP (*(.ctors))
-  } > REGION_RODATA
-  .dtors          :
-  {
     KEEP (*crtbegin.o(.dtors))
     KEEP (*crtbegin?.o(.dtors))
     KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .dtors))
     KEEP (*(SORT(.dtors.*)))
     KEEP (*(.dtors))
-  } > REGION_RODATA
-  .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_DATA
-  .dynamic        : { *(.dynamic) } > REGION_DATA
-
-  /* We want the small data sections together, so single-instruction offsets
-     can access them all, and initialized data all before uninitialized, so
-     we can shorten the on-disk segment size.  */
-  .sdata          :
-  {
-    __global_pointer$ = . + 0x800;
+    *(.dynamic)
+    *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
     *(.sdata .sdata.* .gnu.linkonce.s.*)
-  } > REGION_DATA
-  .sdata2         :
-  {
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_DATA
-  . = ALIGN(4);
-  .data           :
-  {
     *(.data .data.* .gnu.linkonce.d.*)
     SORT(CONSTRUCTORS)
-  } > REGION_DATA
-  .data1          : { *(.data1) } > REGION_DATA
-  .got            : { *(.got.plt) *(.igot.plt) *(.got) *(.igot) } > REGION_DATA
-  . = ALIGN(4); /* startup code will use word writes to zero bss */
+    *(.data1)
+    *(.got.plt) *(.igot.plt) *(.got) *(.igot)
 
-   __ldm_data_end = .;
-
-   __ldm_bss_start = .;
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_DATA
-  .sbss           :
-  {
+    /* bss is initialized with 4 byte writes */
+    . = ALIGN(4);
+    __ldm_data_end = .;
+    __ldm_bss_start = .;
+    *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
+    . = ALIGN(4);
+    *(.dynbss)
+    *(.bss .bss.* .gnu.linkonce.b.*)
+    *(COMMON)
+    . = ALIGN(4);
+    __ldm_bss_end = .;
   } > REGION_DATA
-  . = ALIGN(4);
 
-  .bss            :
-  {
-   *(.dynbss)
-   *(.bss .bss.* .gnu.linkonce.b.*)
-   *(COMMON)
-
-   /* Align to 4 bytes for bss copy */
-   . = ALIGN(4);
-   __ldm_bss_end = .;
-  } > REGION_DATA
-  local_data_noinit (NOLOAD):
+  /* Use __ldm_bss_end to pick up where the last REGION_DATA ended
+     This is needed because of the way kernel REGION_DATA picks up where firmware
+     ended.  If the section above is empty (highly unlikely) we don't want to
+     re-start at the origion of REGION_DATA
+  */
+  local_data_noinit __ldm_bss_end (NOLOAD) :
   {
     *(local_data_noinit)
   } > REGION_DATA
+
   _edata = .; PROVIDE (edata = .);
   _end = .; PROVIDE (end = .);
+  __fw_export_ldm_end = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : _end;
 
   /* Move to end of local memory for stack */
   .stack :
