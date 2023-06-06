@@ -220,8 +220,19 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
         } while (free_tiles < num_tiles);
 #endif
     } else {
+#if defined(PERF_DUMP) && PERF_DUMP_LEVEL > 0
+        if (regfile[p_gpr_pack::PACK_STREAM_SYNC + output] > (0)) {
+            uint32_t event_id = perf::get_event_id(
+                operand, num_tiles, perf::EventType::WAIT_FOR_FREE_TILES, current_outer_loop_iter);
+            record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+            while (regfile[p_gpr_pack::PACK_STREAM_SYNC + output] > (0))
+                ;  // Wait for prev push_tiles to complete write to register
+            record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+        }
+#else
         while (regfile[p_gpr_pack::PACK_STREAM_SYNC + output] > (0))
             ;  // Wait for prev push_tiles to complete write to register
+#endif
         if constexpr (!skip_sync) {
             regfile[p_gpr_pack::PACK_STREAM_SYNC + output]++;
             sync_regfile_write(p_gpr_pack::PACK_STREAM_SYNC + output);
