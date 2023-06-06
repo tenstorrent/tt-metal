@@ -188,6 +188,7 @@ namespace ckernel::packer
       }
 
       // Save to GPR for quick data format reconfig 
+      regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (         4) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + 2 + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = (1 + 1 + 32) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = (1 + 0 + 48) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
@@ -245,6 +246,7 @@ namespace ckernel::packer
       if (IS_BFP_FORMAT(pack_dst_format[operand_id])) {
          // Override exp section size for packers 1,2,3
          // Tile header + exp size + datum size 
+         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP0_SEC_SIZE_BFP);
          if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8_b) {
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP8);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP8);
@@ -260,6 +262,12 @@ namespace ckernel::packer
          } else {
             FWASSERT("Other data formats not supported", false);
          }
+      } else if (((uint)pack_dst_format[operand_id] == (uint)DataFormat::Lf8) || 
+                 ((uint)pack_dst_format[operand_id] == (uint)DataFormat::Int8)) {
+         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+         TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+         TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
       }   
 
       // Set l1 address offset

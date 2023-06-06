@@ -73,6 +73,7 @@ struct p_gpr_pack
     constexpr static uint TMP_LO            = 30;   // Temp data, upper 16-bit always 0
     constexpr static uint TMP_HI            = 31;   // Temp data, lower 16-bit always 0
     constexpr static uint PACK_STREAM_SYNC  = 32;  // sync between pack and output stream [32:63]
+    constexpr static uint EXP0_SEC_SIZE_BFP   = 52;  // pack0,1,2,3 exp section size for bfp8,4,2
     constexpr static uint EXP1_SEC_SIZE_BFP8  = 53;  // pack1 exp section size for bfp8
     constexpr static uint EXP2_SEC_SIZE_BFP8  = 54;  // pack2 exp section size for bfp8
     constexpr static uint EXP3_SEC_SIZE_BFP8  = 55;  // pack2 exp section size for bfp8
