@@ -18,13 +18,12 @@ def get_args_from_cmdline_args_(cmdline_args):
 
 
 def add_test_type_specific_args_(argparser, test_suite_type=TestSuiteType.UNKNOWN):
-    if test_suite_type == TestSuiteType.BUILD_KERNELS_FOR_RISCV:
-        argparser.add_argument("-j", help="Use specified number of processes", dest="num_processes", type=int, default=1)
-        argparser.add_argument("--num_processes", help="Use specified number of processes", dest="num_processes", type=int, default=1)
-    elif test_suite_type == TestSuiteType.LLRT:
+    if test_suite_type == TestSuiteType.LLRT:
         argparser.add_argument("--short-driver-tests", action="store_true", default=False, help="Use short-running silicon driver tests instead")
         # Set to 20 minutes for long silicon driver tests
         argparser.add_argument("--timeout", default=1200, type=int, help="Timeout in seconds for each test")
+    elif test_suite_type == TestSuiteType.BUILD_KERNELS_FOR_RISCV:
+        pass
     elif test_suite_type == TestSuiteType.TT_METAL:
         pass
     else:
@@ -72,10 +71,6 @@ def get_llrt_specific_args_from_parsed_args_(parsed_args):
     return (parsed_args.short_driver_tests,)
 
 
-def get_build_kernels_for_riscv_specific_args_from_parsed_args_(parsed_args):
-    return (parsed_args.num_processes,)
-
-
 get_llrt_arguments_from_cmdline_args = partial(get_full_arg_list_with_specific_args_, get_llrt_specific_args_from_parsed_args_)
-get_build_kernels_for_riscv_arguments_from_cmdline_args = partial(get_full_arg_list_with_specific_args_, get_build_kernels_for_riscv_specific_args_from_parsed_args_)
+get_build_kernels_for_riscv_arguments_from_cmdline_args = partial(get_full_arg_list_with_specific_args_, get_empty_args_from_parsed_args_)
 get_tt_metal_arguments_from_cmdline_args = partial(get_full_arg_list_with_specific_args_, get_empty_args_from_parsed_args_)

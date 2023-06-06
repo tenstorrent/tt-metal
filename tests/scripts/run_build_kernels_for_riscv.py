@@ -25,36 +25,22 @@ BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES = (
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_dispatch_datacopy_mvp", "test_build_kernel_dispatch_datacopy_mvp")
 )
 
-def run_compile_tests(num_processes, timeout, tt_arch):
+def run_compile_tests(timeout, tt_arch):
 
     run_process_and_get_result("rm -rf built")
     run_single_build_kernels_for_riscv_test = partial(run_single_test, "build_kernels_for_riscv", timeout=timeout, tt_arch=tt_arch)
 
-    if num_processes > 1:
-        # clamp the pool to number of inputs
-        num_processes = min(num_processes, len(BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES))
-        futures = []
-        inputs = []
-        with concurrent.futures.ProcessPoolExecutor(max_workers=num_processes) as executor:
-            for test_entry in BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES:
-                future = executor.submit(run_single_build_kernels_for_riscv_test, test_entry)
-                inputs.append(test_entry)
-                futures.append(future)
-        result = dict(zip(inputs, [f.result() for f in futures]))
-        return result
-    else:
-        # support the old single-process path without executor for debugging
-        make_test_status_entry = lambda test_entry_: (test_entry_, run_single_build_kernels_for_riscv_test(test_entry_))
+    make_test_status_entry = lambda test_entry_: (test_entry_, run_single_build_kernels_for_riscv_test(test_entry_))
 
-        test_and_status_entries = map(make_test_status_entry, BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES)
-        return dict(test_and_status_entries)
+    test_and_status_entries = map(make_test_status_entry, BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES)
+    return dict(test_and_status_entries)
 
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.BUILD_KERNELS_FOR_RISCV)
 
-    timeout, tt_arch, num_processes = get_build_kernels_for_riscv_arguments_from_cmdline_args(cmdline_args)
+    timeout, tt_arch = get_build_kernels_for_riscv_arguments_from_cmdline_args(cmdline_args)
 
-    test_report = run_compile_tests(num_processes, timeout, tt_arch)
+    test_report = run_compile_tests(timeout, tt_arch)
 
     report_tests(test_report)
 
