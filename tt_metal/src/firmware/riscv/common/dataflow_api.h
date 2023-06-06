@@ -1051,8 +1051,13 @@ void cq_wait_front() {
 }
 
 FORCE_INLINE
-void cq_pop_front(u32 cmd_size_16B) {
+void cq_pop_front(u32 cmd_size_B) {
+    // DPRINT << 'B' << 'E' << ':' << ' ' << cq_read_interface.fifo_rd_ptr << ENDL();
+    // DPRINT << 'C' << 'M' << 'D' << 'A' << ':' << ' ' << cmd_size_B << ENDL();
+    u32 cmd_size_16B = (((cmd_size_B - 1) | 31) + 1) >> 4;
+    // DPRINT << 'C' << 'M' << 'D' << 'B' << ':' << ' ' << cmd_size_16B << ENDL();
     cq_read_interface.fifo_rd_ptr += cmd_size_16B;
+    // DPRINT << 'A' << 'F' << ':' << ' ' << cq_read_interface.fifo_rd_ptr << ENDL();
 
     if (cq_read_interface.fifo_rd_ptr > cq_read_interface.fifo_limit) {
         cq_read_interface.fifo_rd_ptr -= cq_read_interface.fifo_size;
@@ -1069,4 +1074,5 @@ void cq_pop_front(u32 cmd_size_16B) {
     rd_ptr_ptr[0] = rd_ptr;
     noc_async_write(u32(rd_ptr_ptr), pcie_address, 4);
     noc_async_write_barrier();
+    DPRINT << ENDL();
 }

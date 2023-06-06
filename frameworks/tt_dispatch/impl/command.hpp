@@ -6,22 +6,56 @@
 using std::array;
 using std::vector;
 
-// DeviceCommand.desc orgranizes as follows
+struct TrailingWriteCommand {
+    u32 src;
+    u32 dst;
+    u32 dst_noc;
+    u32 transfer_size;
+    u32 num_receivers;
+};
+
+static constexpr u32 DeviceCommandNumEntries = 16 + 11 * 104;
+static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 11;
+static constexpr u32 CONTROL_SECTION_NUM_ENTRIES = 16;
+static constexpr u32 RELAY_BUFFER_NUM_ENTRIES = 4 * NUM_ENTRIES_PER_BUFFER_RELAY;
+static constexpr u32
+    RELAY_PROGRAM_NUM_ENTRIES =  // Whatever is left of the available size, we allocate for relaying program data
+    DeviceCommandNumEntries - CONTROL_SECTION_NUM_ENTRIES - RELAY_BUFFER_NUM_ENTRIES;
+
+// DeviceCommand.desc organized as follows
 // finish (whether we need to notify host when we finished)
 // launch (whether we need to notify all worker cores to run)
 // num relays (how many buffers are we moving around)
 // relay addresses (list with 'num relays' entries specifying
 // how to move the buffers around)
-static constexpr u32 DeviceCommandNumEntries = 6 + 11 * 110;
-static constexpr u32 NUM_16B_WORDS_IN_COMMAND_TABLE = (DeviceCommandNumEntries * 4) / 16;
+
+// We need to ensure that the command size is divisible by 32
+static_assert(DeviceCommandNumEntries * sizeof(u32) % 32 == 0);
+
+// To stay consistent with the 16B addressing on grayskull, I created this constant
+static constexpr u32 NUM_16B_WORDS_IN_COMMAND_TABLE = (DeviceCommandNumEntries * sizeof(u32)) / 16;
 class DeviceCommand {
    private:
-    const u32 finish_idx = 0;
-    const u32 launch_idx = 1;
-    const u32 data_size_in_bytes_idx = 2;
-    const u32 num_reads_idx = 3;
-    const u32 num_writes_idx = 4;
-    u32 relay_entry_idx = 5;                   // Not const, keeps track of which index in the array we're at
+    static constexpr u32 num_4B_words_in_relay_buffer_instruction = 11;
+    static constexpr u32 num_possible_relay_buffer_instructions = 4;
+
+    // Command header
+    static constexpr u32 finish_idx = 0;
+    static constexpr u32 launch_idx = 1;
+    static constexpr u32 data_size_in_bytes_idx = 2;
+    static constexpr u32 num_relay_buffer_reads_idx = 3;
+    static constexpr u32 num_relay_buffer_writes_idx = 4;
+    static constexpr u32 num_relay_program_writes_idx = 5;
+
+    // Relay instructions
+    static_assert(CONTROL_SECTION_NUM_ENTRIES == 16);
+    u32 relay_buffer_entry_idx = CONTROL_SECTION_NUM_ENTRIES;  // Not const, keeps track of which index in the array we're at
+
+    // This magic 16 coming from the fact that we needed to over-allocate the control bit
+    // section in order to have the command size be nicely divisble by 32
+    static_assert(CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES == 60);
+    u32 relay_program_entry_idx =
+        CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES;
 
     array<u32, DeviceCommandNumEntries> desc;
 
@@ -29,7 +63,7 @@ class DeviceCommand {
     // Num bursts corresponds to how many bursts of data we need to pull into the dispatch core (essentially the number
     // of relays). We try to read in as much data per burst as possible, and if the data is not divisible by num bursts,
     // we have a remainder step in which we try to relay the last chunk, specified by remainder_burst_size.
-    void add_relay(
+    void add_buffer_relay(
         u32 addr0,
         u32 addr0_noc,
         u32 addr1,
@@ -40,25 +74,15 @@ class DeviceCommand {
         u32 page_size,
         u32 remainder_burst_size,
         u32 num_pages_per_remainder_burst,
-        u32 banking_enum) {
-        this->desc[this->relay_entry_idx] = addr0;
-        this->desc[this->relay_entry_idx + 1] = addr0_noc;
-        this->desc[this->relay_entry_idx + 2] = addr1;
-        this->desc[this->relay_entry_idx + 3] = addr1_noc_start;
-        this->desc[this->relay_entry_idx + 4] = num_bursts;
-        this->desc[this->relay_entry_idx + 5] = burst_size;
-        this->desc[this->relay_entry_idx + 6] = num_pages_per_burst;
-        this->desc[this->relay_entry_idx + 7] = page_size;
-        this->desc[this->relay_entry_idx + 8] = remainder_burst_size;
-        this->desc[this->relay_entry_idx + 9] = num_pages_per_remainder_burst;
-        this->desc[this->relay_entry_idx + 10] = banking_enum;
-        this->relay_entry_idx += 11;
-    }
+        u32 banking_enum);
 
    public:
     DeviceCommand();
     static constexpr u32 size() { return DeviceCommandNumEntries; }
     static constexpr u32 size_in_bytes() { return DeviceCommandNumEntries * sizeof(u32); }
+    // static constexpr u32 relay_buffer_section_offset() { return 6; }
+    // static constexpr u32 relay_program_section_offset() { return DeviceCommand::relay_buffer_section_offset() +
+    // DeviceCommand::num_possible_relay_buffer_instructions; }
 
     void finish();  // Creates a finish command, in which the command queue is blocked until the device notifies host of
                     // completion.
@@ -66,7 +90,7 @@ class DeviceCommand {
     void launch();  // Launches a program
 
     // 'dst' must be a single bank
-    void add_read_relay(
+    void add_read_buffer_relay(
         u32 dst,
         u32 dst_noc,
         u32 src,
@@ -80,7 +104,7 @@ class DeviceCommand {
         u32 banking_enum);
 
     // 'src' must be a single bank
-    void add_write_relay(
+    void add_write_buffer_relay(
         u32 src,
         u32 src_noc,
         u32 dst,
@@ -92,8 +116,20 @@ class DeviceCommand {
         u32 remainder_burst_size,
         u32 num_pages_per_remainder_burst,
         u32 banking_enum);
+
+    // The data transfer pattern that this instruction
+    // attempts to resolve is when we need to read data
+    // such as kernel binaries/cb configs/sem configs into
+    // the dispatch core's L1 in one shot, and then sending
+    // small pieces of this data around (multicasting or
+    // unicasting) where the transfer sizes are not uniform
+    // in size
+    void add_write_program_relay(u32 src, u32 src_noc, u32 transfer_size, vector<TrailingWriteCommand> write_commands);
+
     // number of bytes in buffer following command, if applicable
     void set_data_size_in_bytes(u32 data_size_in_bytes);
+
+    u32 get_data_size_in_bytes() const;
 
     const array<u32, DeviceCommandNumEntries>& get_desc() const;
 };

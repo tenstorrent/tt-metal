@@ -204,6 +204,9 @@ void device_setup() {
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
     volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
+    #ifdef DEVICE_DISPATCH_MODE
+    *use_ncrisc = true;
+    #endif
     if (*use_ncrisc) {
         l1_to_ncrisc_iram_copy();
         // Bring NCRISC out of reset, keep TRISCs under reset
@@ -253,21 +256,9 @@ void device_setup() {
 
 #include "dataflow_api.h"
 #include "kernel.cpp"
-inline void notify_host_kernel_finished() {
-    uint32_t pcie_noc_x = NOC_X(0);
-    uint32_t pcie_noc_y = NOC_Y(4); // These are the PCIE core coordinates
-    uint64_t pcie_address =
-        get_noc_addr(pcie_noc_x, pcie_noc_y, 0);  // For now, we are writing to host hugepages at offset 0 (nothing else currently writing to it)
-
-    volatile uint32_t* done = reinterpret_cast<volatile uint32_t*>(NOTIFY_HOST_KERNEL_COMPLETE_ADDR);
-    done[0] = NOTIFY_HOST_KERNEL_COMPLETE_VALUE; // 512 was chosen arbitrarily, but it's less common than 1 so easier to check validity
-
-    // Write to host hugepages to notify of completion
-    noc_async_write(NOTIFY_HOST_KERNEL_COMPLETE_ADDR, pcie_address, 4);
-    noc_async_write_barrier();
-}
 
 int main() {
+
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint*)__ldm_data_start, (uint*)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
 
@@ -307,6 +298,10 @@ int main() {
 
     volatile uint32_t* use_triscs = (volatile uint32_t*)(RUNTIME_CONFIG_BASE + 4);
 
+    #ifdef DEVICE_DISPATCH_MODE
+    *use_triscs = true;
+    #endif
+
     if (*use_triscs) {
         // FIXME: this is not sufficient to bring Trisc / Tensix out of a bad state
         // do we need do more than just assert_trisc_reset() ?
@@ -322,15 +317,7 @@ int main() {
 #endif
     // Run the BRISC kernel
 
-#ifdef IS_DISPATCH_KERNEL
-    // while(true) { // Eventually, we want this to keep looping on some 'done' flag
-        kernel_main();
-
-        // Need some sort of semwait here
-    // }
-#else
-    kernel_main();
-#endif
+kernel_main();
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
     kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif
@@ -361,26 +348,13 @@ int main() {
     kernel_profiler::mark_time(CC_MAIN_END);
 #endif
 
-/*
-    Some preprocessor checks to ensure we don't mix
-    dispatch variables with non-dispatch variables
-*/
-#if (defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)) and defined(WRITE_TO_HUGE_PAGE)
-    static_assert(false, "If under 'DEVICE_DISPATCH_MODE' we implicitly write to huge page, we don't need to explicitly have the 'WRITE_TO_HUGE_PAGE' define");
-#endif
-
-#if defined(IS_DISPATCH_KERNEL) or defined(WRITE_TO_HUGE_PAGE)
-    // notify_host_kernel_finished();
-#endif
-
 #if defined(DEVICE_DISPATCH_MODE) and not defined(IS_DISPATCH_KERNEL)
     // Notify dispatcher core that it has completed
     volatile uint64_t* dispatch_addr = reinterpret_cast<volatile uint64_t*>(DISPATCH_MESSAGE_ADDR);
+
     noc_semaphore_inc(*dispatch_addr, 1);
 #endif
 
-    while (true) {
-    }
-
+    while (true);
     return 0;
 }

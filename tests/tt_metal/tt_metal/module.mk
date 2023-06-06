@@ -72,6 +72,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_bfp8_conversion \
 		 tests/tt_metal/test_semaphores \
 		 tests/tt_metal/tt_dispatch/test_enqueue_read_and_write \
+		 tests/tt_metal/tt_dispatch/test_enqueue_program \
 		 tests/tt_metal/test_core_range_set \
 		 tests/tt_metal/test_compile_sets_kernel_binaries \
 		 tests/tt_metal/test_compile_program \

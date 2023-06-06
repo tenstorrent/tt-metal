@@ -36,6 +36,8 @@ class memory {
   memory();
   memory(std::istream& is);
 
+  const std::vector<word_t>& data() const { return this->data_; }
+
   // memory& operator=(memory &&src);
   bool operator==(const memory& other) const;
 

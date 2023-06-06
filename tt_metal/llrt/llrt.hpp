@@ -126,6 +126,9 @@ void write_circular_buffer_config_vector_to_core(
 void write_graph_interpreter_op_info_to_core(
     tt_cluster *cluster, int chip, const CoreCoord &core, op_info_t op_info, int op_idx);
 
+
+void program_brisc_startup_addr(tt_cluster* cluster, int chip_id, const CoreCoord &core);
+
 // for BRISC and NCRISC
 // hex_file_path is relative to the "kernels"/"firwmare" root
 bool test_load_write_read_risc_binary(
@@ -219,6 +222,21 @@ void dispatch(
     uint32_t dispatch_done_addr);
 
 }  // namespace internal_
+
+inline uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr) {
+
+    uint64_t relo_addr;
+    if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
+        // Move addresses in the local memory range to l1 (copied by kernel)
+        relo_addr = (addr & ~MEM_LOCAL_BASE) | local_init_addr;
+    } else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
+        // Move addresses in the trisc memory range to l1 (copied by kernel)
+        relo_addr = (addr & ~MEM_NCRISC_IRAM_BASE) | MEM_NCRISC_INIT_IRAM_L1_BASE;
+    } else {
+        relo_addr = addr;
+    }
+    return relo_addr;
+}
 
 }  // namespace llrt
 

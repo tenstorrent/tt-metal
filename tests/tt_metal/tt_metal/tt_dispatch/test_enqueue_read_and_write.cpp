@@ -1,9 +1,5 @@
-#include <algorithm>
-
 #include "frameworks/tt_dispatch/impl/command_queue.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/profiler.hpp"
-// #include "llrt/tt_debug_print_server.hpp"
 
 using namespace tt;
 
@@ -23,11 +19,12 @@ bool test_enqueue_write_buffer(const ARCH& arch, BufferType buftype) {
     bool pass = true;
     // Need to scope the following code since there is a lifetime issue where buffers created need to be destroyed prior
     // to deleting a device
+    vector<u32> src;
+    vector<u32> res;
     {
         int num_tiles = 500;
         Buffer bufa(device, 2048 * num_tiles, 0, 2048, buftype);
 
-        vector<u32> src;
         for (u32 i = 0; i < 512 * num_tiles; i++) {
             src.push_back(i);
         }
@@ -37,16 +34,27 @@ bool test_enqueue_write_buffer(const ARCH& arch, BufferType buftype) {
         zero_out_sysmem(device);
 
         // tt_start_debug_print_server(device->cluster(), {0}, {{1, 11}});
-        vector<u32> res;
+
         {
             CommandQueue cq(device);
             EnqueueWriteBuffer(cq, bufa, src, false);
+            // EnqueueReadBuffer(cq, bufa, res, true);
         }
-
         ReadFromBuffer(bufa, res);
+
         pass = src == res;
-        TT_ASSERT(pass);
+
     }
+
+    // for (int i = 0; i < src.size(); i++) {
+    //     if (res.at(i) != 0) {
+
+    //         std::cout << "i: " << i << ", " << src.at(i) << ", " << res.at(i) << std::endl;
+    //     }
+    // }
+
+
+    TT_ASSERT(pass);
     delete device;
 
     return pass;
@@ -60,7 +68,7 @@ bool test_enqueue_read_buffer(const ARCH& arch, BufferType buftype) {
     // Need to scope the following code since there is a lifetime issue where buffers created need to be destroyed prior
     // to deleting a device
     {
-        int num_tiles = 1;
+        int num_tiles = 500;
 
         Buffer bufa(device, 2048 * num_tiles, 0, 2048, buftype);
 
@@ -81,6 +89,10 @@ bool test_enqueue_read_buffer(const ARCH& arch, BufferType buftype) {
             CommandQueue cq(device);
             EnqueueReadBuffer(cq, bufa, res, true);
         }
+
+        // for (int i = 0; i < src.size(); i++) {
+        //     std::cout << "I: " << i << ", " << src.at(i) << ", " << res.at(i) << std::endl;
+        // }
 
         pass = src == res;
         TT_ASSERT(pass);
@@ -259,7 +271,6 @@ bool test_chained_enqueue_writes_then_reads_stress(const ARCH& arch) {
 }
 
 int main(int argc, char **argv) {
-    int pci_express_slot = 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Initial Runtime Args Parse

@@ -170,21 +170,6 @@ void write_graph_interpreter_op_info_to_core(
     write_hex_vec_to_core(cluster, chip, core, op_info_vec, OP_INFO_BASE_ADDR + offset);
 }
 
-inline uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr) {
-
-    uint64_t relo_addr;
-    if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
-        // Move addresses in the local memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_LOCAL_BASE) | local_init_addr;
-    } else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
-        // Move addresses in the trisc memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_NCRISC_IRAM_BASE) | MEM_NCRISC_INIT_IRAM_L1_BASE;
-    } else {
-        relo_addr = addr;
-    }
-    return relo_addr;
-}
-
 ll_api::memory read_mem_from_core(
     tt_cluster *cluster, int chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
 
@@ -196,16 +181,8 @@ ll_api::memory read_mem_from_core(
     return read_mem;
 }
 
-bool test_load_write_read_risc_binary(
-    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id) {
-
-    assert(is_worker_core(cluster, core, chip_id));
-
-    log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_name);
-    ll_api::memory mem = get_risc_binary(hex_file_name);
-
-    if (riscv_id == 0) {
-        // Options for handling brisc fw not starting at mem[0]:
+void program_brisc_startup_addr(tt_cluster* cluster, int chip_id, const CoreCoord &core) {
+     // Options for handling brisc fw not starting at mem[0]:
         // 1) Program the register for the start address out of reset
         // 2) Encode a jump in crt0 for mem[0]
         // 3) Write the jump to mem[0] here
@@ -228,6 +205,18 @@ bool test_load_write_read_risc_binary(
             jal_offset_bits_19_to_12;
         jump_to_fw.push_back(jal_offset | opcode);
         write_hex_vec_to_core(cluster, chip_id, core, jump_to_fw, 0);
+}
+
+bool test_load_write_read_risc_binary(
+    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id) {
+
+    assert(is_worker_core(cluster, core, chip_id));
+
+    log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_name);
+    ll_api::memory mem = get_risc_binary(hex_file_name);
+
+    if (riscv_id == 0) {
+        program_brisc_startup_addr(cluster, chip_id, core);
     }
 
     uint64_t local_init_addr;

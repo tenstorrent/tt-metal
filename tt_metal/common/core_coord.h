@@ -74,6 +74,11 @@ struct CoreRange {
   CoreCoord end;
 
   std::string str() const { return "[" + start.str() + " - " + end.str() + "]"; }
+
+  size_t size() const {
+    size_t s = (this->end.x - this->start.x + 1) * (this->end.y - this->start.y + 1);
+    return (s > 0) ? s: -s;
+  }
 };
 
 constexpr inline bool operator==(const CoreRange &a, const CoreRange &b) { return a.start == b.start && a.end == b.end; }

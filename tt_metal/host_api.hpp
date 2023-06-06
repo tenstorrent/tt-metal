@@ -10,6 +10,7 @@
 #include "tools/profiler/profiler.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/registers.hpp"
+#include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
@@ -715,6 +716,12 @@ bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const 
 bool LaunchKernels(Device *device, const Program &program, bool stagger_start = false);
 
 bool WriteToDeviceL1(Device *device, const CoreCoord &core, op_info_t op_info, int op_idx);
+
+
+void GenerateBankToNocCoordHeaders(
+    Device *device,
+    build_kernel_for_riscv_options_t *build_options,
+    const std::string &op_path);
 
 }  // namespace tt_metal
 

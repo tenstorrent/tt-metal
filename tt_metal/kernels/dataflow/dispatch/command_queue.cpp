@@ -1,254 +1,64 @@
-#include <stdint.h>
+#include "tt_metal/kernels/dataflow/dispatch/command_queue.hpp"
 
-#include "dataflow_api.h"
 #include "debug_print.h"
-#include "frameworks/tt_dispatch/impl/command.hpp"
-
-template <typename T>
-void write(
-    T addr_gen,
-    u32 src_addr,
-    u32 src_noc,
-    u32 dst_addr,
-
-    u32 num_bursts,
-    u32 burst_size,
-    u32 num_pages_per_burst,
-    u32 page_size,
-    u32 remainder_burst_size,
-    u32 num_pages_per_remainder_burst,
-    u32 banking_enum) {
-    // Base address of where we are writing to
-    addr_gen.bank_base_address = dst_addr;
-    addr_gen.page_size = page_size;
-
-    u32 id = 0;
-    for (u32 j = 0; j < num_bursts; j++) {
-        u32 data_addr = UNRESERVED_BASE;
-        u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
-
-        noc_async_read(src_noc_addr, data_addr, burst_size);
-
-        src_addr += burst_size;
-        noc_async_read_barrier();
-
-
-        for (u32 k = 0; k < num_pages_per_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(id++);
-
-            noc_async_write(data_addr, addr, page_size);
-            data_addr += page_size;
-        }
-        noc_async_write_barrier();
-    }
-    // In case where the final burst a different size than the others
-    if (remainder_burst_size) {
-        u32 data_addr = UNRESERVED_BASE;
-        u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
-        noc_async_read(src_noc_addr, data_addr, remainder_burst_size);
-        noc_async_read_barrier();
-
-        for (u32 k = 0; k < num_pages_per_remainder_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(id++);
-
-            noc_async_write(data_addr, addr, page_size);
-            data_addr += page_size;
-        }
-        noc_async_write_barrier();
-    }
-}
-
-template <typename T>
-FORCE_INLINE void read(
-    T addr_gen,
-    u32 dst_addr,
-    u32 dst_noc,
-    u32 src_addr,
-
-    u32 num_bursts,
-    u32 burst_size,
-    u32 num_pages_per_burst,
-    u32 page_size,
-    u32 remainder_burst_size,
-    u32 num_pages_per_remainder_burst,
-    u32 banking_enum) {
-    // Base address of where we are reading from
-    addr_gen.bank_base_address = src_addr;
-    addr_gen.page_size = page_size;
-
-    u32 id = 0;
-    for (u32 j = 0; j < num_bursts; j++) {
-        u32 data_addr = UNRESERVED_BASE;
-        u64 dst_noc_addr = (u64(dst_noc) << 32) | dst_addr;
-
-        for (u32 k = 0; k < num_pages_per_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(id++);
-
-            noc_async_read(addr, data_addr, page_size);
-            data_addr += page_size;
-        }
-        noc_async_read_barrier();
-
-        noc_async_write(UNRESERVED_BASE, dst_noc_addr, burst_size);
-        dst_addr += burst_size;
-        noc_async_write_barrier();
-
-    }
-
-    if (remainder_burst_size) {
-        u32 data_addr = UNRESERVED_BASE;
-        u64 dst_noc_addr = (u64(dst_noc) << 32) | dst_addr;
-
-        for (u32 k = 0; k < num_pages_per_remainder_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(id++);
-
-            noc_async_read(addr, data_addr, page_size);
-            data_addr += page_size;
-        }
-        noc_async_read_barrier();
-
-        noc_async_write(UNRESERVED_BASE, dst_noc_addr, remainder_burst_size);
-        noc_async_write_barrier();
-    }
-}
 
 void kernel_main() {
     InterleavedAddrGen<true> dram_addr_gen;
     InterleavedAddrGen<false> l1_addr_gen;
+    // Read command from host command queue... l1 read addr since
+    // pulling in the actual command into l1
+    static constexpr u32 command_start_addr = UNRESERVED_BASE;
+    static constexpr u32 data_start_addr = 150 * 1024;  // Hard-coded for now
+
+    // These are totally temporary until PK checks in his changes for
+    // separating kernels from firmware
+    noc_prepare_deassert_reset_flag(DEASSERT_RESET_SRC_L1_ADDR);
+    noc_prepare_assert_reset_flag(ASSERT_RESET_SRC_L1_ADDR);
+
+    // Write my own NOC address to local L1 so that when I dispatch kernels,
+    // they will know how to let me know they have finished
+    *reinterpret_cast<volatile uint64_t*>(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR) = get_noc_addr(DISPATCH_MESSAGE_ADDR);
+
     // For time being, while true is here until Paul's changes,
     // in which while true loop will be in the firmware
     while (true) {
+        volatile u32* command_ptr = reinterpret_cast<volatile u32*>(command_start_addr);
         cq_wait_front();
-
         // Hardcoded for time being, need to clean this up
         uint64_t src_noc_addr = get_noc_addr(NOC_X(0), NOC_Y(4), cq_read_interface.fifo_rd_ptr << 4);
 
-        // // Read command from host command queue... l1 read addr since
-        // // pulling in the actual command into l1
-        u32 command_start_addr = 150 * 1024;
-        u32* command_ptr = (u32*)command_start_addr;
-
-        // For now, hardcoding the data start, but we can definitely
-        // pre-compute the right number
         noc_async_read(src_noc_addr, u32(command_start_addr), NUM_16B_WORDS_IN_COMMAND_TABLE << 4);
         noc_async_read_barrier();
-        u32 finish = command_ptr[0];
-        u32 launch = command_ptr[1];
-        u32 data_size_in_bytes = command_ptr[2];
-        u32 num_reads = command_ptr[3];
-        u32 num_writes = command_ptr[4];
-        command_ptr += 5;
 
-        if (finish) {
-            volatile u32* finish_ptr = get_cq_finish_ptr();
-            finish_ptr[0] = 1;
-            uint64_t finish_noc_addr = get_noc_addr(NOC_X(0), NOC_Y(4), HOST_CQ_FINISH_PTR);
-            noc_async_write(u32(finish_ptr), finish_noc_addr, 4);
-            noc_async_write_barrier();
-            finish_ptr[0] = 0;
-        }
+        // Control data
+        u32 finish = command_ptr[0];              // Whether to notify the host that we have finished
+        u32 launch = command_ptr[1];              // Whether or not to launch kernels
+        u32 data_size_in_bytes = command_ptr[2];  // The amount of trailing data after the command table rounded to the
+                                                  // nearest multiple of 32
+        u32 num_buffer_reads = command_ptr[3];    // How many ReadBuffer commands we are running
+        u32 num_buffer_writes = command_ptr[4];   // How many WriteBuffer commands we are running
+        u32 num_program_writes =
+            command_ptr[5];  // How many relays we need to make for program data (this needs more in depth explanation)
 
-        for (u32 i = 0; i < num_reads; i++) {
-            u32 dst_addr = command_ptr[0];
-            u32 dst_noc = command_ptr[1];
-            u32 src_addr = command_ptr[2];
-            u32 src_noc_start = command_ptr[3];
-            u32 num_bursts = command_ptr[4];
-            u32 burst_size = command_ptr[5];
-            u32 num_pages_per_burst = command_ptr[6];
-            u32 page_size = command_ptr[7];
-            u32 remainder_burst_size = command_ptr[8];
-            u32 num_pages_per_remainder_burst = command_ptr[9];
-            u32 banking_enum = command_ptr[10];
+        //DPRINT << 'F' << ':' << ' ' << finish << ENDL();
+        //DPRINT << 'L' << ':' << ' ' << launch << ENDL();
+        //DPRINT << 'D' << ':' << ' ' << data_size_in_bytes << ENDL();
+        //DPRINT << 'R' << ':' << ' ' << num_buffer_reads << ENDL();
+        //DPRINT << 'W' << ':' << ' ' << num_buffer_writes << ENDL();
+        //DPRINT << 'P' << ':' << ' ' << num_program_writes << ENDL();
+        //DPRINT << ENDL();
 
-            switch (banking_enum) {
-                case 0: // DRAM
-                    read(
-                        dram_addr_gen,
-                        dst_addr,
-                        dst_noc,
-                        src_addr,
+        command_ptr = reinterpret_cast<volatile u32*>(command_start_addr + (16) * sizeof(u32));
+        read_buffers(num_buffer_reads, command_ptr, dram_addr_gen, l1_addr_gen);
+        write_buffers(num_buffer_writes, command_ptr, dram_addr_gen, l1_addr_gen);
 
-                        num_bursts,
-                        burst_size,
-                        num_pages_per_burst,
-                        page_size,
-                        remainder_burst_size,
-                        num_pages_per_remainder_burst,
-                        banking_enum
-                    );
-                break;
-                case 1: // L1
-                    read(
-                        l1_addr_gen,
-                        dst_addr,
-                        dst_noc,
-                        src_addr,
+        command_ptr = reinterpret_cast<volatile u32*>(command_start_addr + (16 + 4 * 11) * sizeof(u32));
+        write_program(num_program_writes, command_ptr);
 
-                        num_bursts,
-                        burst_size,
-                        num_pages_per_burst,
-                        page_size,
-                        remainder_burst_size,
-                        num_pages_per_remainder_burst,
-                        banking_enum
-                    );
-                break;
-            }
-        }
-
-        for (u32 i = 0; i < num_writes; i++) {
-            u32 src_addr = command_ptr[0];
-            u32 src_noc = command_ptr[1];
-            u32 dst_addr = command_ptr[2];
-            u32 dst_noc_start = command_ptr[3];
-            u32 num_bursts = command_ptr[4];
-            u32 burst_size = command_ptr[5];
-            u32 num_pages_per_burst = command_ptr[6];
-            u32 page_size = command_ptr[7];
-            u32 remainder_burst_size = command_ptr[8];
-            u32 num_pages_per_remainder_burst = command_ptr[9];
-            u32 banking_enum = command_ptr[10];
-
-
-            u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
-            switch (banking_enum) {
-                case 0:  // DRAM
-                    write(
-                        dram_addr_gen,
-                        src_addr,
-                        src_noc,
-                        dst_addr,
-
-                        num_bursts,
-                        burst_size,
-                        num_pages_per_burst,
-                        page_size,
-                        remainder_burst_size,
-                        num_pages_per_remainder_burst,
-                        banking_enum);
-                    break;
-                case 1: // L1
-                    write(
-                        l1_addr_gen,
-                        src_addr,
-                        src_noc,
-                        dst_addr,
-
-                        num_bursts,
-                        burst_size,
-                        num_pages_per_burst,
-                        page_size,
-                        remainder_burst_size,
-                        num_pages_per_remainder_burst,
-                        banking_enum);
-                    break;
-            }
-
-            command_ptr += 7;
-        }
+        if (finish)
+            handle_finish();
 
         // This tells the dispatch core how to update its read pointer
-        cq_pop_front((data_size_in_bytes >> 4) + NUM_16B_WORDS_IN_COMMAND_TABLE);
+        cq_pop_front(data_size_in_bytes + DeviceCommand::size_in_bytes());
     }
 }
