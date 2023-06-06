@@ -9,7 +9,7 @@
         pkg:
           - software-properties-common=0.99.9.11
           - build-essential=12.8ubuntu1.1
-          - python3.8-venv=3.8.10-0ubuntu1~20.04.7
+          - python3.8-venv=3.8.10-0ubuntu1~20.04.8
           - libgoogle-glog-dev=0.4.0-1build1
           - ruby=1:2.7+1
           - libyaml-cpp-dev=0.6.2-4ubuntu1
