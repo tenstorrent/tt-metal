@@ -75,6 +75,22 @@ namespace ckernel::packer
       relu_config_t r;
    }relu_config_u;
 
+   // Dest rd control
+   typedef struct {
+      uint32_t PCK_DEST_RD_CTRL_Read_32b_data : 1;
+      uint32_t PCK_DEST_RD_CTRL_Read_unsigned : 1;
+      uint32_t PCK_DEST_RD_CTRL_Read_int8 : 1;
+      uint32_t PCK_DEST_RD_CTRL_Round_10b_mant : 1;
+      uint32_t PCK_DEST_RD_CTRL_Reserved : 28;
+   }dest_rd_ctrl_t;
+
+   static_assert(sizeof(dest_rd_ctrl_t) == (sizeof(uint32_t)));
+
+   typedef union {
+      uint32_t val;
+      dest_rd_ctrl_t f;
+   } dest_rd_ctrl_u;
+
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
    inline void packer_addr_counter_init()
    {
@@ -113,7 +129,8 @@ namespace ckernel::packer
          config.val[i] = 0;
       }
 
-      config.f.exp_section_size = (uint)pack_dst_format[operand_id] == (uint)DataFormat::Lf8 ? 0 : 4; // set to 4 as exp section size is not used for non-bfp formats except for lf8
+      config.f.exp_section_size = (((uint)pack_dst_format[operand_id] == (uint)DataFormat::Lf8) || 
+                                   ((uint)pack_dst_format[operand_id] == (uint)DataFormat::Int8)) ? 0 : 4; // set to 4 as exp section size is not used for non-bfp formats except for lf8/int8
 
       config.f.uncompress   = 1;
       config.f.out_data_format   = (uint)pack_dst_format[operand_id];
@@ -156,6 +173,11 @@ namespace ckernel::packer
       cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+3]=config.val[3];
       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+3]=config.val[3];
       cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+3]=config.val[3];
+
+      dest_rd_ctrl_u dest_rd_ctrl;
+      dest_rd_ctrl.val = 0;
+      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (uint)pack_src_format[operand_id] == (uint)DataFormat::Int8;
+      cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
 
       if (IS_BFP_FORMAT(pack_dst_format[operand_id])) {
          // Override exp section size for packers 1,2,3
