@@ -16,8 +16,8 @@ from loguru import logger
 from PIL import Image
 import pytest
 
-from libs import tt_lib
-from utility_functions import (
+import tt_lib
+from utility_functions_new import (
     profiler,
     enable_compile_cache,
     disable_compile_cache,
@@ -59,8 +59,15 @@ def run_vgg_inference(image_path, pcc, PERF_CNT=1):
         torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)
         profiler.end("\nExec time of reference model")
 
+        tt_image = tt_lib.tensor.Tensor(
+            image.reshape(-1).tolist(),
+            get_shape(image.shape),
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
+
         profiler.start("\nExecution time of tt_vgg first run")
-        tt_output = tt_vgg(image)
+        tt_output = tt_vgg(tt_image)
         profiler.end("\nExecution time of tt_vgg first run")
 
         enable_compile_cache()
@@ -68,34 +75,40 @@ def run_vgg_inference(image_path, pcc, PERF_CNT=1):
         logger.info(f"\nRunning the tt_vgg model for {PERF_CNT} iterations . . . ")
         for i in range(PERF_CNT):
             profiler.start("\nAverage execution time of tt_vgg model")
-            tt_output = tt_vgg(image)
+            tt_output = tt_vgg(tt_image)
             profiler.end("\nAverage execution time of tt_vgg model")
 
-        with open('imagenet_class_labels.txt', 'r') as file:
+        with open("imagenet_class_labels.txt", "r") as file:
             class_labels = ast.literal_eval(file.read())
-        logger.info(f"Correct Output: {class_labels[torch.argmax(torch_output).item()]}")
-        logger.info(f"Predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n")
+
+        tt_output = tt_output.to(host)
+        tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
+
+        logger.info(
+            f"Correct Output: {class_labels[torch.argmax(torch_output).item()]}"
+        )
+        logger.info(
+            f"Predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n"
+        )
         file.close()
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
-        assert(
-            pcc_passing
-        ), f"Model output does not meet PCC requirement {pcc}."
+        assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
 
         tt_lib.device.CloseDevice(device)
 
         profiler.print()
         assert profiler.get("tt_vgg model") < 30.0
 
+
 @pytest.mark.parametrize(
     "path_to_image, pcc, iter",
-    (
-        ("sample_image.JPEG", 0.99, 2),
-    ),
+    (("sample_image.JPEG", 0.99, 2),),
 )
 def test_vgg_inference(path_to_image, pcc, iter):
     disable_compile_cache()
     run_vgg_inference(path_to_image, pcc, iter)
+
 
 if __name__ == "__main__":
     run_vgg_inference("sample_image.JPEG", 0.99, 2)

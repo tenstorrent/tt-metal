@@ -15,10 +15,10 @@ import torchvision
 from torchvision import models
 import torchvision.transforms as transforms
 
-from libs import tt_lib
+import tt_lib
 from typing import List, Union, Optional, Dict, cast
 from utils import tt_linear, get_shape, is_torch_tensor
-from python_api_testing.models.conv_on_device_utils import (
+from python_api_testing.models.conv_on_device_utils_new import (
     is_conv_supported_on_device,
     run_conv_on_device_wrapper,
 )
@@ -111,45 +111,44 @@ class TtVGG(nn.Module):
             linear3,
         ]
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size = x.shape[0]
+    def forward(self, tt_x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        batch_size = tt_x.shape()[0]
         assert batch_size == 1
+
         for layer in self.features:
             if layer is tt_lib.tensor.relu:
-                if is_torch_tensor(x):
+                if is_torch_tensor(tt_x):
                     tt_x = tt_lib.tensor.Tensor(
-                        x.reshape(-1).tolist(),
-                        x.size(),
+                        tt_x.reshape(-1).tolist(),
+                        tt_x.size(),
                         tt_lib.tensor.DataType.BFLOAT16,
                         tt_lib.tensor.Layout.ROW_MAJOR,
                     )
-                x = layer(tt_x)
+                tt_x = layer(tt_x)
             else:
-                if not is_torch_tensor(x):
-                    x = x.to(self.host)
-                    x = torch.Tensor(x.data()).reshape(x.shape())
-                x = layer(x)
+                if not is_torch_tensor(tt_x):
+                    tt_x = tt_x.to(self.host)
+                    tt_x = torch.Tensor(tt_x.data()).reshape(tt_x.shape())
+                tt_x = layer(tt_x)
 
-        if not is_torch_tensor(x):
-            x = x.to(self.host)
-            x = torch.Tensor(x.data()).reshape(x.shape())
+        if not is_torch_tensor(tt_x):
+            tt_x = tt_x.to(self.host)
+            tt_x = torch.Tensor(tt_x.data()).reshape(tt_x.shape())
 
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1).unsqueeze(1).unsqueeze(1)
+        tt_x = self.avgpool(tt_x)
+        tt_x = torch.flatten(tt_x, 1).unsqueeze(1).unsqueeze(1)
 
-        x = tt_lib.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.size(),
+        tt_x = tt_lib.tensor.Tensor(
+            tt_x.reshape(-1).tolist(),
+            tt_x.size(),
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
         for layer in self.classifier:
-            x = layer(x)
+            tt_x = layer(tt_x)
 
-        x = x.to(self.host)
-        x = torch.Tensor(x.data()).reshape(x.shape())
-        return x
+        return tt_x
 
 
 def make_layers(

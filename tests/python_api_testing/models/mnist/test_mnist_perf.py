@@ -11,12 +11,13 @@ from torchvision import transforms, datasets
 from loguru import logger
 import pytest
 
-from libs import tt_lib
-from utility_functions import (
+import tt_lib
+from utility_functions_new import (
     profiler,
     enable_compile_cache,
     disable_compile_cache,
     comp_pcc,
+    get_oom_of_float,
 )
 from mnist import *
 
@@ -44,13 +45,21 @@ def run_mnist_inference(pcc, PERF_CNT=1):
 
     with torch.no_grad():
         first_input = next(iter(dataloader))
-        _, actual_output = first_input
+        x, actual_output = first_input
 
         profiler.enable()
 
+        tt_image = tt_lib.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            [1, 1, 1, x.shape[2] * x.shape[3]],
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+            device,
+        )
+
         # Run one input through the network
         profiler.start("\nExecution time of tt_mnist first run")
-        tt_out = tt_mnist_model(first_input)
+        tt_output = tt_mnist_model(tt_image)
         profiler.end("\nExecution time of tt_mnist first run")
 
         profiler.start("\nExec time of reference model")
@@ -62,22 +71,25 @@ def run_mnist_inference(pcc, PERF_CNT=1):
         logger.info(f"\nRunning the tt_mnist model for {PERF_CNT} iterations . . . ")
         for i in range(PERF_CNT):
             profiler.start("\nAverage execution time of tt_mnist model")
-            tt_output = tt_mnist_model(first_input)
+            tt_output = tt_mnist_model(tt_image)
             profiler.end("\nAverage execution time of tt_mnist model")
 
-        logger.info(f"Correct Output: {actual_output}")
-        logger.info(f"Predicted Output: {tt_out.topk(1).indices}\n")
+        tt_output = tt_output.to(host)
+        tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
 
-        pcc_passing, pcc_output = comp_pcc(pytorch_out, tt_out, pcc)
+        logger.info(f"Correct Output: {actual_output}")
+        logger.info(f"Predicted Output: {tt_output.topk(1).indices}\n")
+
+        pcc_passing, pcc_output = comp_pcc(pytorch_out, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
 
         assert (
-            tt_out.topk(10).indices == pytorch_out.topk(10).indices
+            tt_output.topk(10).indices == pytorch_out.topk(10).indices
         ).all(), "The outputs from device and pytorch must have the same topk indices"
 
         # Check that the scale of each output is the same
-        tt_out_oom = get_oom_of_float(tt_out.tolist()[0])
+        tt_out_oom = get_oom_of_float(tt_output.view(-1).tolist())
         pytorch_out_oom = get_oom_of_float(pytorch_out.tolist())
 
         assert (
@@ -85,6 +97,8 @@ def run_mnist_inference(pcc, PERF_CNT=1):
         ), "The order of magnitudes of the outputs must be the same"
 
         profiler.print()
+
+        tt_lib.device.CloseDevice(device)
 
 
 @pytest.mark.parametrize(
@@ -94,7 +108,6 @@ def run_mnist_inference(pcc, PERF_CNT=1):
 def test_mnist_inference(pcc, iter):
     disable_compile_cache()
     run_mnist_inference(pcc, iter)
-    tt_lib.device.CloseDevice(device)
 
 
 if __name__ == "__main__":

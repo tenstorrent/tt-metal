@@ -7,9 +7,10 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 
-from libs import tt_lib
-from utility_functions import get_oom_of_float
+import tt_lib
+from libs.tt_lib.fallback_ops import fallback_ops
 from utils import tt_linear, get_shape
+from utility_functions_new import torch2tt_tensor
 
 
 class TtMnistModel(torch.nn.Module):
@@ -76,19 +77,8 @@ class TtMnistModel(torch.nn.Module):
 
         self.act = tt_lib.tensor.relu
 
-    def forward(self, X):
-        x, labels = X
-
-        # x is a pytorch tensor,... need to convert to a TT_tensor
-        inp = tt_lib.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            [1, 1, 1, x.shape[2] * x.shape[3]],
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-            self.device,
-        )
-
-        lin1_out = self.lin1(inp)
+    def forward(self, tt_x):
+        lin1_out = self.lin1(tt_x)
         lin1_out_act = self.act(lin1_out)
 
         lin2_out = self.lin2(lin1_out_act)
@@ -105,7 +95,8 @@ class TtMnistModel(torch.nn.Module):
         lin3_out_cpu_pytorch = torch.Tensor(lin3_out_cpu.data()).reshape(
             lin3_out_cpu.shape()
         )[:, 0, 0, :10]
-        out = torch.nn.functional.softmax(lin3_out_cpu_pytorch)
+        out = fallback_ops.softmax(lin3_out_act, -1).to(self.host)
+        out = torch.Tensor(out.data()).reshape(out.shape())[:, 0, 0, :10]
 
         return out
 

@@ -1,4 +1,4 @@
-from libs import tt_lib
+import tt_lib
 
 
 def get_shape(shape):

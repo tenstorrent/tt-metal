@@ -14,8 +14,8 @@ from loguru import logger
 from PIL import Image
 import pytest
 
-from libs import tt_lib
-from utility_functions import comp_pcc
+import tt_lib
+from utility_functions_new import comp_pcc
 from vgg import *
 
 
@@ -47,22 +47,30 @@ def run_vgg_inference(image_path, pcc):
         tt_vgg = vgg16(device, host, state_dict, disable_conv_on_tt_device=True)
 
         torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)
-        tt_output = tt_vgg(image)
+        tt_image = tt_lib.tensor.Tensor(
+            image.reshape(-1).tolist(),
+            get_shape(image.shape),
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
+
+        tt_output = tt_vgg(tt_image)
+
+        tt_output = tt_output.to(host)
+        tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
 
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
-        assert(
-            pcc_passing
-        ), f"Model output does not meet PCC requirement {pcc}."
+        assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
+
 
 @pytest.mark.parametrize(
     "path_to_image, pcc",
-    (
-        ("sample_image.JPEG", 0.99),
-    ),
+    (("sample_image.JPEG", 0.99),),
 )
 def test_vgg_inference(path_to_image, pcc):
     run_vgg_inference(path_to_image, pcc)
+
 
 if __name__ == "__main__":
     run_vgg_inference("sample_image.JPEG", 0.99)

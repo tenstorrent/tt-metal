@@ -2,11 +2,11 @@ import torch
 import numpy as np
 from loguru import logger
 
-from libs import tt_lib
+import tt_lib
 
 
 def get_shape(shape):
-    ''' Insert 1's in the begining of shape list until the len(shape) = 4 '''
+    """Insert 1's in the begining of shape list until the len(shape) = 4"""
     if len(shape) <= 4:
         new_shape = [1 for i in range(4 - len(shape))]
         new_shape.extend(shape)
@@ -16,7 +16,8 @@ def get_shape(shape):
 
 
 def tt_linear(weight: tt_lib.tensor, bias: tt_lib.tensor, device):
-    ''' Perform a linear operation on the input tensor using transposed weight and bias. '''
+    """Perform a linear operation on the input tensor using transposed weight and bias."""
+
     def linear_(activation):
         weight_T = tt_lib.tensor.transpose(weight)
         output = tt_lib.tensor.matmul(activation, weight_T)
@@ -30,6 +31,7 @@ def tt_linear(weight: tt_lib.tensor, bias: tt_lib.tensor, device):
         return output
 
     return linear_
+
 
 def is_torch_tensor(x):
     if type(x) is torch.Tensor:

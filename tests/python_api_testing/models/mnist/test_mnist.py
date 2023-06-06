@@ -11,11 +11,13 @@ from torchvision import transforms, datasets
 from loguru import logger
 import pytest
 
-from libs import tt_lib
-from utility_functions import comp_pcc
+import tt_lib
+from utility_functions_new import comp_pcc, get_oom_of_float
 from mnist import *
 
 _batch_size = 1
+
+
 def run_mnist_inference(pcc):
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -38,25 +40,39 @@ def run_mnist_inference(pcc):
     with torch.no_grad():
         first_input = next(iter(dataloader))
 
+        x, _ = first_input
+        tt_image = tt_lib.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            [1, 1, 1, x.shape[2] * x.shape[3]],
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+            device,
+        )
+
         # Run one input through the network
-        tt_out = tt_mnist_model(first_input)
+        tt_output = tt_mnist_model(tt_image)
         pytorch_out = pytorch_mnist_model(first_input)
 
-        pcc_passing, pcc_output = comp_pcc(pytorch_out, tt_out, pcc)
+        tt_output = tt_output.to(host)
+        tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
+
+        pcc_passing, pcc_output = comp_pcc(pytorch_out, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
 
         assert (
-            tt_out.topk(10).indices == pytorch_out.topk(10).indices
+            tt_output.topk(10).indices == pytorch_out.topk(10).indices
         ).all(), "The outputs from device and pytorch must have the same topk indices"
 
         # Check that the scale of each output is the same
-        tt_out_oom = get_oom_of_float(tt_out.tolist()[0])
+        tt_out_oom = get_oom_of_float(tt_output.view(-1).tolist())
         pytorch_out_oom = get_oom_of_float(pytorch_out.tolist())
 
         assert (
             tt_out_oom == pytorch_out_oom
         ), "The order of magnitudes of the outputs must be the same"
+
+        tt_lib.device.CloseDevice(device)
 
 
 @pytest.mark.parametrize(
@@ -65,7 +81,6 @@ def run_mnist_inference(pcc):
 )
 def test_mnist_inference(pcc):
     run_mnist_inference(pcc)
-    tt_lib.device.CloseDevice(device)
 
 
 if __name__ == "__main__":
