@@ -64,11 +64,6 @@ typedef std::uint8_t byte;
 // MOP config registers
 #define TENSIX_MOP_CFG_BASE 0xFFB80000 // 0xFFB8000 - 0xFFB8100
 
-// These addresses are defined by software convention
-#define L1_KERNEL_BASE      0x1F000      // This is a 128-bit address
-const static uint32_t L1_MATH_KERNEL_BASE = 0x1E000;      // This is a 128-bit address
-#define L1_L0_DUMP          0x1D000      // This is a 128-bit address
-
 // TDMA register base
 #define RISCV_TDMA_REGS_START_ADDR      0xFFB11000
 #define RISCV_TDMA_REG_XMOV_SRC_ADDR    0xFFB11000

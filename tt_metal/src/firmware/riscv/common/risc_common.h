@@ -22,8 +22,6 @@
 #define TILE_WORD_16_BIT ((32*32*2 + 32) >> 4)
 #define TILE_WORD_32_BIT ((32*32*4 + 32) >> 4)
 
-#define RISC_LOCAL_DATA_MEM_BASE 0xFFB00000
-
 #define RISC_DETECTED_STREAM_ASSERT 0xdeeeaaad
 
 #ifdef COMPILE_FOR_BRISC
