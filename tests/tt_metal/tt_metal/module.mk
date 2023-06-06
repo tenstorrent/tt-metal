@@ -2,12 +2,13 @@ include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests/module.mk
 
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 TT_METAL_TESTS += \
-		 tests/tt_metal/ops/test_eltwise_binary_op \
-		 tests/tt_metal/ops/test_eltwise_unary_op \
 		 tests/tt_metal/dtx/unit_tests \
 		 tests/tt_metal/dtx/tensor \
 		 tests/tt_metal/dtx/overlap \
 		 tests/tt_metal/dtx/collapse_transformations \
+		 tests/tt_metal/ops/test_eltwise_binary_op \
+		 tests/tt_metal/ops/test_eltwise_unary_op \
+		 tests/tt_metal/ops/test_eltwise_unary_op_program_cache \
 		 tests/tt_metal/ops/test_softmax_op \
 		 tests/tt_metal/ops/test_layernorm_op \
 		 tests/tt_metal/ops/test_transpose_op \

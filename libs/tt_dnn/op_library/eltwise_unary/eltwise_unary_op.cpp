@@ -31,6 +31,22 @@ string get_op_name(UnaryOpType::Enum op_type) {
     return op_name;
 }
 
+static std::string op_type_to_string(UnaryOpType::Enum op_type) {
+    switch (op_type) {
+        case UnaryOpType::EXP: return "EXP";
+        case UnaryOpType::RECIP: return "RECIP";
+        case UnaryOpType::GELU: return "GELU";
+        case UnaryOpType::RELU: return "RELU";
+        case UnaryOpType::SQRT: return "SQRT";
+        case UnaryOpType::SIGMOID: return "SIGMOID";
+        case UnaryOpType::LOG: return "LOG";
+        case UnaryOpType::TANH: return "TANH";
+        case UnaryOpType::LOG10: return "LOG10";
+        case UnaryOpType::LOG2: return "LOG2";
+    }
+    throw std::runtime_error("Undefined op type");
+}
+
 void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type){
     string op_name = get_op_name(op_type);
     eltwise_unary_kernel->add_define("SFPU_OP_AND_PACK", op_name);
@@ -56,6 +72,14 @@ namespace tt {
 
 namespace tt_metal {
 
+ProgramHash EltwiseUnary::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+    const auto& input_shape = input_tensor.shape();
+
+    auto op_type = eltwise_unary_op_utils::op_type_to_string(this->op_type);
+    return fmt::format("{}_[{},{},{},{}]", op_type, input_shape[0], input_shape[1], input_shape[2], input_shape[3]);
+}
+
 void EltwiseUnary::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {}
 
 std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
@@ -64,7 +88,7 @@ std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<std::re
 }
 
 std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    return detail::generic_create_output_tensors(*this, input_tensors);
+    return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
 Program EltwiseUnary::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {

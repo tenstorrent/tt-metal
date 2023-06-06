@@ -170,7 +170,7 @@ std::vector<Shape> Untilize::compute_output_shapes(const std::vector<std::refere
 
 std::vector<Tensor> Untilize::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
-    return detail::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
 }
 
 Program Untilize::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -185,7 +185,7 @@ Tensor untilize(const Tensor &input_tensor_a) {
         log_warning("Perf warning: Trying to untilize non-tilized data.");
         return input_tensor_a;
     }
-    return detail::run_without_autopad(Untilize(), input_tensor_a);
+    return operation::run_without_autopad(Untilize(), input_tensor_a);
 }
 
 
@@ -406,7 +406,7 @@ std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vecto
 }
 std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
-    return detail::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
 }
 
 Program UntilizeWithUnpadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -432,7 +432,7 @@ Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const std::array<ui
             TT_ASSERT(false, "Cannot untilize and unpad input which is not tilized");
         }
     }
-    return detail::run_without_autopad(UntilizeWithUnpadding(output_tensor_start, output_tensor_end), input_tensor_a);
+    return operation::run_without_autopad(UntilizeWithUnpadding(output_tensor_start, output_tensor_end), input_tensor_a);
 }
 
 }  // namespace tt_metal

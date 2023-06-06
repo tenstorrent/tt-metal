@@ -130,7 +130,7 @@ std::vector<Shape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vect
 
 
 std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    return detail::generic_create_output_tensors(*this, input_tensors);
+    return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
 Program EltwiseBinaryBroadcast::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {

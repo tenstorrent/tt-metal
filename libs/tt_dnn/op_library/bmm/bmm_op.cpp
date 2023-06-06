@@ -281,11 +281,6 @@ Tensor large_bmm_single_block(const Tensor& a, const Tensor& b, bool tilize_a, b
     return large_bmm_single_core_single_block(a, b, tilize_a, untilize_out);
 }
 
-
-
-/*
- * GENERAL MATMUL AND BMM
- */
 void Matmul::validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
@@ -342,7 +337,6 @@ Program Matmul::create_program(const std::vector<std::reference_wrapper<const Te
     }
 
 }
-
 
 void BatchedMatmul::validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
@@ -470,7 +464,7 @@ std::vector<Shape> BertLargeMatmul::compute_output_shapes(const std::vector<std:
 }
 
 std::vector<Tensor> BertLargeMatmul::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
-    return detail::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
 Program BertLargeMatmul::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {

@@ -3,7 +3,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
-#include "tt_dnn/op_library/operation.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -49,7 +49,7 @@ inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, 
     else if (bcast_dim == BcastOpDim::H) {
         TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[3]);
     }
-    return detail::run_with_autopad(EltwiseBinaryBroadcast{bcast_op, bcast_dim}, input_tensor_a, input_tensor_b);
+    return operation::run_with_autopad(EltwiseBinaryBroadcast{bcast_op, bcast_dim}, input_tensor_a, input_tensor_b);
 }
 
 

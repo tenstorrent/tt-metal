@@ -65,7 +65,7 @@ std::vector<Shape> Transpose::compute_output_shapes(const std::vector<std::refer
 
 
 std::vector<Tensor> Transpose::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    return detail::generic_create_output_tensors(*this, input_tensors);
+    return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
 Program Transpose::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -105,7 +105,7 @@ Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
             }
     }
 
-    return detail::run_with_autopad(Transpose{transpose_dim}, a, 0, transpose_dim == TransposeOpDim::HC);
+    return operation::run_with_autopad(Transpose{transpose_dim}, a, 0, transpose_dim == TransposeOpDim::HC);
 }
 
 }  // namespace tt_metal

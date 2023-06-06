@@ -278,7 +278,7 @@ std::vector<Shape> Pad::compute_output_shapes(const std::vector<std::reference_w
 }
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
-    return detail::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
@@ -303,7 +303,7 @@ Tensor pad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_t
         log_warning("Perf warning: padding called on tensor with same shape as target shape.");
         return input_tensor_a;
     }
-    return detail::run_without_autopad(Pad{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
+    return operation::run_without_autopad(Pad{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
 
 }
 

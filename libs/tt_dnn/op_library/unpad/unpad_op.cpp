@@ -271,7 +271,7 @@ std::vector<Shape> Unpad::compute_output_shapes(const std::vector<std::reference
 }
 std::vector<Tensor> Unpad::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
-    return detail::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
 }
 
 // TODO: If unpad is called on a tile and output is not tile, we could untilize then unpad, and output is RM
@@ -302,7 +302,7 @@ Tensor unpad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output
         log_warning("Perf warning: unpadding called on tensor with same shape as target shape.");
         return input_tensor_a;
     }
-    return detail::run_without_autopad(Unpad(output_tensor_start, output_tensor_end), input_tensor_a);
+    return operation::run_without_autopad(Unpad(output_tensor_start, output_tensor_end), input_tensor_a);
 
 }
 

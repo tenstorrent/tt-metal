@@ -2,6 +2,8 @@
 
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
+#include "tt_dnn/op_library/program_cache.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
@@ -21,12 +23,8 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
 
     uint32_t single_tile_size = 2 * TILE_HW;
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
-
     TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume() / TILE_HW;
-
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
     tt_metal::Device *device = a.device();
 
@@ -38,10 +36,6 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
     for(uint32_t i = 0; i < num_tiles % num_cores; i++){
         num_tiles_per_core[i]++;
     }
-
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     std::vector<tt_metal::DataMovementKernel *> unary_reader_kernels;
     std::vector<tt_metal::DataMovementKernel *> unary_writer_kernels;
@@ -126,33 +120,41 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
         eltwise_unary_op_utils::add_defines(eltwise_unary_kernel, op_type);
     }
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            unary_reader_kernels[i],
-            core,
-            {src0_dram_buffer->address(),
-            uint32_t(dram_src0_noc_xy.x),
-            uint32_t(dram_src0_noc_xy.y),
-            num_tiles_per_core[i],
-            num_tiles_written, 0 /*disable scaler*/ }
-        );
+    if (not program_cache::is_enabled()) {
+        tt_metal::Buffer *src0_dram_buffer = a.buffer();
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            unary_writer_kernels[i],
-            core,
-            {dst_dram_buffer->address(),
-            uint32_t(dram_dst_noc_xy.x),
-            uint32_t(dram_dst_noc_xy.y),
-            num_tiles_per_core[i],
-            num_tiles_written }
-        );
-        num_tiles_written+=num_tiles_per_core[i];
+        tt_metal::Buffer *dst_dram_buffer = output.buffer();
+        TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+
+        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            tt_metal::WriteRuntimeArgsToDevice(
+                device,
+                program.data_movement_kernels().at(i * 2),
+                core,
+                {src0_dram_buffer->address(),
+                uint32_t(dram_src0_noc_xy.x),
+                uint32_t(dram_src0_noc_xy.y),
+                num_tiles_per_core[i],
+                num_tiles_written, 0 /*disable scaler*/ }
+            );
+
+            tt_metal::WriteRuntimeArgsToDevice(
+                device,
+                program.data_movement_kernels().at(i * 2 + 1),
+                core,
+                {dst_dram_buffer->address(),
+                uint32_t(dram_dst_noc_xy.x),
+                uint32_t(dram_dst_noc_xy.y),
+                num_tiles_per_core[i],
+                num_tiles_written }
+            );
+            num_tiles_written+=num_tiles_per_core[i];
+        }
     }
 
-    // output does not hold any data, contains pointer to buffer on device with the data
     return program;
 }
 

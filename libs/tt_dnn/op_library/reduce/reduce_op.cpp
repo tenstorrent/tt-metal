@@ -78,7 +78,7 @@ std::vector<Shape> Reduce::compute_output_shapes(const std::vector<std::referenc
 }
 
 std::vector<Tensor> Reduce::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    return detail::generic_create_output_tensors(*this, input_tensors);
+    return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
 Program Reduce::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -103,10 +103,10 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
     float pad_value = reduce_math == ReduceOpMath::MAX ? std::numeric_limits<float>::lowest() : 0;
     // TODO: For perf for reduce hw, we should autopad the tensor before running reduce w, reduce h, or else we may end up autopadding twice
     if (is_multicore_hw) {
-        const Tensor output_tensor = detail::run_with_autopad(Reduce{reduce_math, ReduceOpDim::W, scaler}, input_tensor, pad_value);
-        return detail::run_with_autopad(Reduce{reduce_math, ReduceOpDim::H, scaler}, output_tensor, pad_value);
+        const Tensor output_tensor = operation::run_with_autopad(Reduce{reduce_math, ReduceOpDim::W, scaler}, input_tensor, pad_value);
+        return operation::run_with_autopad(Reduce{reduce_math, ReduceOpDim::H, scaler}, output_tensor, pad_value);
     } else {
-        return detail::run_with_autopad(Reduce{reduce_math, reduce_dim, scaler}, input_tensor, pad_value);
+        return operation::run_with_autopad(Reduce{reduce_math, reduce_dim, scaler}, input_tensor, pad_value);
     }
 }
 

@@ -36,7 +36,6 @@ namespace tt {
 
 namespace tt_metal {
 
-
 void EltwiseBinary::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
@@ -49,7 +48,7 @@ std::vector<Shape> EltwiseBinary::compute_output_shapes(const std::vector<std::r
 }
 
 std::vector<Tensor> EltwiseBinary::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    return detail::generic_create_output_tensors(*this, input_tensors);
+    return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
 

@@ -191,7 +191,7 @@ std::vector<Shape> Tilize::compute_output_shapes(const std::vector<std::referenc
 
 std::vector<Tensor> Tilize::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
-    return detail::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
 }
 
 Program Tilize::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -206,7 +206,7 @@ Tensor tilize(const Tensor &input_tensor_a) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return input_tensor_a;
     }
-    return detail::run_without_autopad(Tilize(), input_tensor_a);
+    return operation::run_without_autopad(Tilize(), input_tensor_a);
 }
 
 Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
@@ -374,7 +374,7 @@ std::vector<Shape> TilizeWithZeroPadding::compute_output_shapes(const std::vecto
 
 std::vector<Tensor> TilizeWithZeroPadding::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
-    return detail::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
 }
 
 Program TilizeWithZeroPadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -389,7 +389,7 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return input_tensor_a;
     }
-    return detail::run_without_autopad(TilizeWithZeroPadding(), input_tensor_a);
+    return operation::run_without_autopad(TilizeWithZeroPadding(), input_tensor_a);
 }
 
 Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
@@ -608,7 +608,7 @@ std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector
 }
 std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
-    return detail::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
@@ -632,7 +632,7 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<ui
     }else {
         TT_ASSERT((input_tensor_a.layout() == Layout::ROW_MAJOR), "Can only tilize row major data");
     }
-    return detail::run_without_autopad(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
+    return operation::run_without_autopad(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
 
 }
 

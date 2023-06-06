@@ -2,7 +2,7 @@
 
 #include "tensor/tensor.hpp"
 
-#include "tt_dnn/op_library/operation.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
 
 namespace tt {
 
@@ -74,13 +74,13 @@ struct BatchedMatmul {
 inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(input_tensor_b.shape()[0]*input_tensor_b.shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
-    return detail::run_with_autopad(Matmul(), input_tensor_a, input_tensor_b);
+    return operation::run_with_autopad(Matmul(), input_tensor_a, input_tensor_b);
 }
 inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(input_tensor_a.shape()[1] == input_tensor_b.shape()[1] && input_tensor_a.shape()[0] == input_tensor_b.shape()[0]
         && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
-    return detail::run_with_autopad(BatchedMatmul(), input_tensor_a, input_tensor_b);
+    return operation::run_with_autopad(BatchedMatmul(), input_tensor_a, input_tensor_b);
 }
 
 
@@ -112,22 +112,22 @@ struct BertLargeMatmul {
 
 
 inline Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::FUSED_QKV, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FUSED_QKV, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::FF1, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF1, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::FF2, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF2, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::SELFOUT, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::SELFOUT, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 
 

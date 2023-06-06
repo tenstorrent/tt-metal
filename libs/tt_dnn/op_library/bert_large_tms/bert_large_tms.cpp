@@ -48,7 +48,7 @@ std::vector<Shape> BertLargeTM::compute_output_shapes(const std::vector<std::ref
 }
 
 std::vector<Tensor> BertLargeTM::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
-    return detail::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
 Program BertLargeTM::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {

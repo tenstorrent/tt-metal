@@ -295,7 +295,7 @@ std::vector<Shape> Reshape::compute_output_shapes(const std::vector<std::referen
 
 std::vector<Tensor> Reshape::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
-    return detail::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
 }
 
 Program Reshape::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -323,7 +323,7 @@ Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {
         input_tensor_a.reshape(N, C, H, W);
         return input_tensor_a;
     }
-    return detail::run_without_autopad(Reshape{N, C, H, W}, input_tensor_a);
+    return operation::run_without_autopad(Reshape{N, C, H, W}, input_tensor_a);
 }
 
 } // namespace tt_metal

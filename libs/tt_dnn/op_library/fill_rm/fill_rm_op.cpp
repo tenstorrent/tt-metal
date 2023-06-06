@@ -76,7 +76,7 @@ std::vector<Shape> FillRM::compute_output_shapes(const std::vector<std::referenc
 }
 
 std::vector<Tensor> FillRM::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    return detail::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
 }
 
 Program FillRM::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -87,7 +87,7 @@ Program FillRM::create_program(const std::vector<std::reference_wrapper<const Te
 }
 
 tt_metal::Tensor fill_rm(uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const tt_metal::Tensor& any, float val_hi, float val_lo) {
-    return detail::run_without_autopad(FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo}, any);
+    return operation::run_without_autopad(FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo}, any);
 }
 
 }  // namespace tt_metal

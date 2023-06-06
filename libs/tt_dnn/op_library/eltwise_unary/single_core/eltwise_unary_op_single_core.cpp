@@ -1,5 +1,7 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
+#include "tt_dnn/op_library/program_cache.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
@@ -21,19 +23,11 @@ Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::
 
     uint32_t single_tile_size = 2 * TILE_HW;
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
-
     TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume() / TILE_HW;
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -104,27 +98,35 @@ Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::
 
     eltwise_unary_op_utils::add_defines(eltwise_unary_kernel, op_type);
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
-        unary_reader_kernel,
-        core,
-        {src0_dram_buffer->address(),
-        uint32_t(dram_src0_noc_xy.x),
-        uint32_t(dram_src0_noc_xy.y),
-        num_tiles, 0,0,0,0,0 } // TODO(AP): [8] is scaler
-    );
+    if (not program_cache::is_enabled()) {
+        tt_metal::Buffer *src0_dram_buffer = a.buffer();
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
-        unary_writer_kernel,
-        core,
-        {dst_dram_buffer->address(),
-        uint32_t(dram_dst_noc_xy.x),
-        uint32_t(dram_dst_noc_xy.y),
-        num_tiles }
-    );
+        tt_metal::Buffer *dst_dram_buffer = output.buffer();
+        TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
-    // output does not hold any data, contains pointer to buffer on device with the data
+        tt_metal::WriteRuntimeArgsToDevice(
+            device,
+            program.data_movement_kernels().at(0),
+            core,
+            {src0_dram_buffer->address(),
+            uint32_t(dram_src0_noc_xy.x),
+            uint32_t(dram_src0_noc_xy.y),
+            num_tiles, 0,0,0,0,0 } // TODO(AP): [8] is scaler
+        );
+
+        tt_metal::WriteRuntimeArgsToDevice(
+            device,
+            program.data_movement_kernels().at(1),
+            core,
+            {dst_dram_buffer->address(),
+            uint32_t(dram_dst_noc_xy.x),
+            uint32_t(dram_dst_noc_xy.y),
+            num_tiles }
+        );
+    }
+
     return program;
 }
 
