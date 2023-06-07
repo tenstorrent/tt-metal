@@ -13,7 +13,6 @@
 #include "ckernel_globals.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-
 #include "debug_print.h"
 
 // TODO: commonize this w/ the runtime -- it's the same configs
@@ -37,23 +36,12 @@ volatile uint32_t local_mem_barrier __attribute__((used));
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-#ifdef NOC_INDEX
-uint8_t loading_noc __attribute__((used)) = NOC_INDEX;
-#else
-uint8_t loading_noc __attribute__((used)) = 0;  // BRISC uses NOC-0
-#endif
-
 uint8_t noc_size_x __attribute__((used));
 uint8_t noc_size_y __attribute__((used));
 
-// to reduce the amount of code changes, both BRISC and NRISCS instatiate these counter for both NOCs (ie NUM_NOCS)
-// however, atm NCRISC uses only NOC-1 and BRISC uses only NOC-0
-// this way we achieve full separation of counters / cmd_buffers etc.
-uint32_t noc_reads_num_issued[NUM_NOCS];
-uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
-uint32_t noc_nonposted_writes_acked[NUM_NOCS];
-
-int post_index;
+namespace kernel_profiler {
+uint32_t wIndex __attribute__((used));
+}
 
 bool staggered_start_enabled() {
     uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
@@ -253,9 +241,16 @@ void device_setup() {
     core.wall_clock_mailbox()[0] = core.read_wall_clock();
 }
 
-
-#include "dataflow_api.h"
-#include "kernel.cpp"
+void init_sync_registers() {
+    volatile uint* tiles_received_ptr;
+    volatile uint* tiles_acked_ptr;
+    for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
+      tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+      tiles_received_ptr[0] = 0;
+      tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
+      tiles_acked_ptr[0] = 0;
+    }
+}
 
 int main() {
 
@@ -283,18 +278,7 @@ int main() {
 
     init_sync_registers();  // this init needs to be done before NCRISC / TRISCs are launched, only done by BRISC
 
-#if defined(IS_DISPATCH_KERNEL)
-    setup_cq_read_write_interface();
-#else
-    setup_cb_read_write_interfaces();                // done by both BRISC / NCRISC
-#endif
-
-    init_dram_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
-    init_l1_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
-
     device_setup();  // NCRISC is disabled/enabled here
-
-    noc_init(loading_noc);
 
     volatile uint32_t* use_triscs = (volatile uint32_t*)(RUNTIME_CONFIG_BASE + 4);
 
@@ -316,8 +300,8 @@ int main() {
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
 #endif
     // Run the BRISC kernel
+    kernel_init();
 
-kernel_main();
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
     kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif

@@ -43,7 +43,6 @@ SECTIONS
     KEEP (*(SORT_NONE(.fini)))
   } > REGION_CODE
 
-  . = ALIGN(16);
   l1_data :
   {
     *(l1_data)
@@ -52,6 +51,11 @@ SECTIONS
   {
     *(l1_data_noinit)
   } > REGION_CODE
+
+  /* FW must align to 16 byte boundary so Kernel begins aligned to meet noc
+     alignment constraints */
+  . = ALIGN(16);
+
   PROVIDE (__etext = .);
   PROVIDE (_etext = .);
   PROVIDE (etext = .);
@@ -122,6 +126,9 @@ SECTIONS
     *(local_data_noinit)
   } > REGION_DATA
 
+  /* FW must align to 16 byte boundary so Kernel begins aligned to meet noc
+     alignment constraints */
+  . = ALIGN(16);
   _edata = .; PROVIDE (edata = .);
   _end = .; PROVIDE (end = .);
   __fw_export_ldm_end = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : _end;

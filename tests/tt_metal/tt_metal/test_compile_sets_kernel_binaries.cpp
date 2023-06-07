@@ -163,15 +163,15 @@ int main(int argc, char **argv) {
                 TT_ASSERT(kernel_group.riscv_1->binaries() == ncrisc_binaries);
             }
             std::string brisc_hex_path = get_latest_kernel_binary_path(kernel_group.riscv_0) + "/brisc/brisc.hex";
-            ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path);
+            ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, false);
             TT_ASSERT(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
             std::string ncrisc_hex_path = get_latest_kernel_binary_path(kernel_group.riscv_1) + "/ncrisc/ncrisc.hex";
-            ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path);
+            ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, false);
             TT_ASSERT(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
                 std::string trisc_hex_path = get_latest_kernel_binary_path(kernel_group.compute) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path);
+                ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, false);
                 TT_ASSERT(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
             }
         }

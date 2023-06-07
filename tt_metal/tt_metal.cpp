@@ -4,7 +4,6 @@
 #include <unordered_set>
 #include <string>
 
-#include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 #include "tt_metal/host_api.hpp"
 #include "llrt/tt_debug_print_server.hpp"
 
@@ -25,6 +24,10 @@ bool enable_compile_cache = false;
 void EnableCompileCache() { enable_compile_cache = true; }
 void DisableCompileCache() { enable_compile_cache = false; }
 bool GetCompileCacheEnabled() { return enable_compile_cache; }
+void GenerateBankToNocCoordHeaders(
+    Device *device,
+    build_kernel_for_riscv_options_t *build_options,
+    const std::string &op_path);
 
 bool enable_compilation_reports = false;
 void EnableCompilationReports() { enable_compilation_reports = true; }
@@ -80,7 +83,16 @@ Device *CreateDevice(tt::ARCH arch, int pcie_slot) {
     return new Device(arch, pcie_slot);
 }
 bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
-    bool init = device->initialize(memory_allocator);
+
+    bool init;
+    if (device->initialize(memory_allocator)) {
+        build_kernel_for_riscv_options_t build_options;
+        GenerateBankToNocCoordHeaders(device, &build_options, "");
+        device->initialize_firmware_build(&build_options);
+        init = true;
+    } else {
+        init = false;
+    }
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
         HACK_CQ = std::make_unique<CommandQueue>(device);

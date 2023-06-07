@@ -15,7 +15,30 @@ uint32_t unp_cfg_context = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
 uint32_t math_sync_tile_dst_index = 0;
 uint32_t gl_alu_format_spec_reg = 0;
-volatile uint32_t l1_buffer[16] __attribute__ ((section (".text#"))) __attribute__ ((aligned (16)));
+
+namespace ckernel
+{
+volatile uint * const regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
+volatile uint * const instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
+volatile uint * const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
+volatile uint * const trisc_l1_mailbox = reinterpret_cast<volatile uint *>(MAILBOX_ADDR);
+}
 
 CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS] = {0};
 CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS] = {0};
+
+void kernel_launch()
+{
+    // TODO(pgk): clean this up (into header shared with ckernel.cc)
+    uint *local_l1_start_addr;
+    if ((uint)__firmware_start == (uint)MEM_TRISC0_BASE) {
+        local_l1_start_addr = (uint *)MEM_TRISC0_INIT_LOCAL_L1_BASE;
+    } else if ((uint) __firmware_start == (uint)MEM_TRISC1_BASE) {
+        local_l1_start_addr = (uint *)MEM_TRISC1_INIT_LOCAL_L1_BASE;
+    } else {
+        local_l1_start_addr = (uint *)MEM_TRISC2_INIT_LOCAL_L1_BASE;
+    }
+    firmware_kernel_common_init(local_l1_start_addr);
+
+    run_kernel();
+}

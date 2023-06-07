@@ -29,13 +29,12 @@ namespace kernel_profiler{
      * https://pabloariasal.github.io/2019/02/28/cpp-inlining/
      *
      * */
-    inline volatile uint32_t *buffer;
-    inline uint32_t wIndex;
+    extern uint32_t wIndex;
 
     inline __attribute__((always_inline)) void init_profiler()
     {
 #if defined(PROFILE_KERNEL)
-        buffer = reinterpret_cast<uint32_t*>(get_debug_print_buffer());
+        volatile uint32_t *buffer = reinterpret_cast<uint32_t*>(get_debug_print_buffer());
         wIndex = MARKER_DATA_START;
         buffer [BUFFER_END_INDEX] = wIndex;
         buffer [DROPPED_MARKER_COUNTER] = 0;
@@ -51,6 +50,7 @@ namespace kernel_profiler{
     inline __attribute__((always_inline)) void init_BR_profiler()
     {
 #if defined(PROFILE_KERNEL) && defined(COMPILE_FOR_BRISC)
+        volatile uint32_t *buffer = reinterpret_cast<uint32_t*>(get_debug_print_buffer());
         buffer = reinterpret_cast<uint32_t*>(PRINT_BUFFER_NC);
         buffer [BUFFER_END_INDEX] = MARKER_DATA_START;
         buffer [DROPPED_MARKER_COUNTER] = 0;
@@ -80,6 +80,7 @@ namespace kernel_profiler{
 #endif
 
         // Either buffer has room for more markers or the end of FW marker is place on the last marker spot
+        volatile uint32_t *buffer = reinterpret_cast<uint32_t*>(get_debug_print_buffer());
 	if (((wIndex + (2*TIMER_DATA_UINT32_SIZE)) < (PRINT_BUFFER_SIZE/sizeof(uint32_t))) ||\
             ((timer_id == CC_MAIN_END) && !((wIndex + TIMER_DATA_UINT32_SIZE) > (PRINT_BUFFER_SIZE/sizeof(uint32_t))))) {
 	    buffer[wIndex+TIMER_ID] = timer_id;

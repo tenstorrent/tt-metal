@@ -6,6 +6,7 @@
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 
 namespace tt {
 
@@ -83,6 +84,7 @@ class Device {
     friend bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator);
     void initialize_cluster();
     void initialize_allocator(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC, const std::vector<uint32_t>& l1_bank_remap = {});
+    void initialize_firmware_build(build_kernel_for_riscv_options_t *build_options);
     void initialize_harvesting_information();
     // Puts device into reset
     bool close();

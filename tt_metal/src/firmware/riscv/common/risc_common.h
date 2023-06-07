@@ -40,7 +40,6 @@ const uint32_t MAX_TILES_PER_PHASE = 2048;
 
 extern uint8_t my_x[NUM_NOCS];
 extern uint8_t my_y[NUM_NOCS];
-//extern uint8_t loading_noc; // this is now a constexpr in brisc.cc / ncrisc.cc
 extern uint8_t noc_size_x;
 extern uint8_t noc_size_y;
 extern volatile uint32_t local_mem_barrier;
@@ -54,8 +53,6 @@ inline uint32_t READ_REG(uint32_t addr) {
   volatile uint32_t* ptr = (volatile uint32_t*)addr;
   return ptr[0];
 }
-
-extern int post_index;
 
 inline uint32_t dram_io_incr_ptr(uint32_t curr_ptr, uint32_t incr, uint32_t buf_size_q_slots) {
   uint32_t next_ptr = curr_ptr + incr;

@@ -18,17 +18,12 @@ uint8_t mailbox_end = 32;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-#ifdef NOC_INDEX
-uint8_t loading_noc __attribute__((used)) = NOC_INDEX;
-#else
-uint8_t loading_noc __attribute__((used)) = 1; // NCRISC uses NOC-1
-#endif
-uint8_t noc_size_x;
-uint8_t noc_size_y;
+uint8_t noc_size_x __attribute__((used));
+uint8_t noc_size_y __attribute__((used));
 
-uint32_t noc_reads_num_issued[NUM_NOCS];
-uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
-uint32_t noc_nonposted_writes_acked[NUM_NOCS];
+namespace kernel_profiler {
+uint32_t wIndex __attribute__((used));
+}
 
 inline void record_mailbox_value(uint16_t event_value) {
   if (mailbox_index < mailbox_end) {
@@ -61,9 +56,6 @@ inline void allocate_debug_mailbox_buffer() {
   debug_mailbox_base = reinterpret_cast<volatile uint16_t *>(debug_mailbox_addr);
 }
 
-#include "dataflow_api.h"
-#include "kernel.cpp"
-
 int main(int argc, char *argv[]) {
   int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
   l1_to_local_mem_copy((uint*)__ldm_data_start, (uint*)MEM_NCRISC_INIT_LOCAL_L1_BASE, num_words);
@@ -76,22 +68,12 @@ int main(int argc, char *argv[]) {
   init_riscv_context();
   allocate_debug_mailbox_buffer();
 
-  noc_init(loading_noc); // NCRISC uses NOC-1
   risc_init();
-
-  setup_cb_read_write_interfaces();
-
-#if defined(IS_DISPATCH_KERNEL)
-    setup_cq_read_write_interface();
-#endif
-
-  init_dram_bank_to_noc_coord_lookup_tables();
-  init_l1_bank_to_noc_coord_lookup_tables();
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
 #endif
-  kernel_main();
+  kernel_init();
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif

@@ -51,9 +51,9 @@ struct HexNameToMemVectorCache {
 
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
-ll_api::memory get_risc_binary(string path) {
+ll_api::memory get_risc_binary(string path, bool fw_build) {
 
-    string path_to_bin = get_kernel_compile_outpath() + path;
+    string path_to_bin = (fw_build ? get_firmware_compile_outpath() : get_kernel_compile_outpath()) + path;
     if (HexNameToMemVectorCache::inst().exists(path)) {
         // std::cout << "-- HEX2MEM CACHE HIT FOR " << path << std::endl;
         return HexNameToMemVectorCache::inst().get(path);
@@ -207,17 +207,10 @@ void program_brisc_startup_addr(tt_cluster* cluster, int chip_id, const CoreCoor
     write_hex_vec_to_core(cluster, chip_id, core, jump_to_fw, 0);
 }
 
-bool test_load_write_read_risc_binary(
-    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id) {
+static bool test_load_write_read_risc_binary_imp(
+    tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id) {
 
     assert(is_worker_core(cluster, core, chip_id));
-
-    log_debug(tt::LogLLRuntime, "hex_file_path = {}", hex_file_name);
-    ll_api::memory mem = get_risc_binary(hex_file_name);
-
-    if (riscv_id == 0) {
-        program_brisc_startup_addr(cluster, chip_id, core);
-    }
 
     uint64_t local_init_addr;
     switch (riscv_id) {
@@ -245,59 +238,51 @@ bool test_load_write_read_risc_binary(
     return true;
 }
 
+static void test_load_write_read_risc_fw_binary(
+    tt_cluster *cluster, int chip_id, const CoreCoord &core, int riscv_id) {
+
+    // TODO(pgk): this is wedged in here for now, will be fixed later
+    // XXXXX careful, if this gets called w/ CoreCoord different from before
+    // the chip won't be initialized (change corecoord to the whole chip???)
+    static bool fw_downloaded = false;
+    if (!fw_downloaded) {
+        if (riscv_id == 0) {
+            program_brisc_startup_addr(cluster, chip_id, core);
+        }
+
+        string fname;
+        switch (riscv_id) {
+            case 0: fname = "brisc/brisc.hex"; break;
+            case 1: fname = "ncrisc/ncrisc.hex"; break;
+            case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
+            case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
+            case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
+        }
+        ll_api::memory mem = get_risc_binary(fname, true);
+        log_debug(tt::LogLLRuntime, "hex_file_path = {}", get_firmware_compile_outpath() + fname);
+        test_load_write_read_risc_binary_imp(cluster, mem, chip_id, core, riscv_id);
+
+        //        fw_downloaded = true;
+    }
+}
+
 bool test_load_write_read_risc_binary(
     tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id) {
 
-    assert(is_worker_core(cluster, core, chip_id));
+    test_load_write_read_risc_fw_binary(cluster, chip_id, core, riscv_id);
+    test_load_write_read_risc_binary_imp(cluster, mem, chip_id, core, riscv_id);
 
-    if (riscv_id == 0) {
-        // Options for handling brisc fw not starting at mem[0]:
-        // 1) Program the register for the start address out of reset
-        // 2) Encode a jump in crt0 for mem[0]
-        // 3) Write the jump to mem[0] here
-        // This does #3.  #1 may be best, #2 gets messy (elf files
-        // drop any section before .init, crt0 needs ifdefs, etc)
-        vector<uint32_t> jump_to_fw;
-        constexpr uint32_t jal_opcode = 0x6f;
-        constexpr uint32_t jal_max_offset = 0x0007ffff;
-        uint32_t opcode = jal_opcode;
-        assert(MEM_BRISC_FIRMWARE_BASE < jal_max_offset);
-        // See riscv spec for offset encoding below
-        uint32_t jal_offset_bit_20 = 0;
-        uint32_t jal_offset_bits_10_to_1 = (MEM_BRISC_FIRMWARE_BASE & 0x7fe) << 20;
-        uint32_t jal_offset_bit_11 = (MEM_BRISC_FIRMWARE_BASE & 0x800) << 9;
-        uint32_t jal_offset_bits_19_to_12 = (MEM_BRISC_FIRMWARE_BASE & 0xff000) << 0;
-        uint32_t jal_offset =
-            jal_offset_bit_20 |
-            jal_offset_bits_10_to_1 |
-            jal_offset_bit_11 |
-            jal_offset_bits_19_to_12;
-        jump_to_fw.push_back(jal_offset | opcode);
-        write_hex_vec_to_core(cluster, chip_id, core, jump_to_fw, 0);
-    }
+    return true;
+}
 
-    uint64_t local_init_addr;
-    switch (riscv_id) {
-        case 0: local_init_addr = MEM_BRISC_INIT_LOCAL_L1_BASE; break;
-        case 1: local_init_addr = MEM_NCRISC_INIT_LOCAL_L1_BASE; break;
-        case 2: local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE; break;
-        case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
-        case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
-    }
+bool test_load_write_read_risc_binary(
+    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id) {
 
-    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
-        cluster->write_dram_vec(&*mem_ptr, len, tt_cxy_pair(chip_id, core), relo_addr);
-    });
+    test_load_write_read_risc_fw_binary(cluster, chip_id, core, riscv_id);
 
-    log_debug(tt::LogLLRuntime, "wrote hex to the core");
-
-    if (std::getenv("TT_KERNEL_READBACK_ENABLE") != nullptr) {
-        ll_api::memory read_mem = read_mem_from_core(cluster, chip_id, core, mem, local_init_addr);
-        log_debug(tt::LogLLRuntime, "read hex back from the core");
-        return mem == read_mem;
-    }
+    log_debug(tt::LogLLRuntime, "hex_file_path = {}", get_kernel_compile_outpath() + hex_file_name);
+    ll_api::memory mem = get_risc_binary(hex_file_name, false);
+    test_load_write_read_risc_binary_imp(cluster, mem, chip_id, core, riscv_id);
 
     return true;
 }

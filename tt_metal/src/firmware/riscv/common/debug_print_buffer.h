@@ -10,7 +10,7 @@ inline uint8_t* get_debug_print_buffer() {
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T0);
     #elif defined(UCK_CHLKC_MATH)
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T1);
-    #else
+    #elif defined(UCK_CHLKC_PACK)
         return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T2);
     #endif
 }

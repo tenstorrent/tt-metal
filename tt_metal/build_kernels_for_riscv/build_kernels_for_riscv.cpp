@@ -72,11 +72,13 @@ struct CompileState {
     string kernel_subdir_;
     string thread_bin_subdir;
     string log_file;
+    bool is_fw_build_;
 
     CompileState(RISCID risc_id,
                  const string& in_kernel_subdir,
                  tt::build_kernel_for_riscv_options_t* build_opts) {
 
+        is_fw_build_ = build_opts->fw_build_;
         home_ = tt::utils::get_root_dir();
         if (home_.back() != '/')
             home_.push_back('/');
@@ -309,16 +311,57 @@ struct CompileState {
         return results;
     }
 
+    string get_weaken_cmd(const string& elfname) const {
+        // Given this elf (A) and a later elf (B)
+        // Weakens symbols in A so that it can be used as a "library" for B.
+        // B imports A's weakened symbols, B's symbols of the same name don't
+        // result in duplicate symbols but B can reference A's symbols.
+        // Force the fw_export symbols to remain strong so to propogate link
+        // addresses
+        string hk = kernel_subdir_ + thread_bin_subdir;
+        return objcopy_ +
+            " --wildcard --weaken-symbol \"*\" --weaken-symbol \"!__fw_export_*\" " +
+            hk + elfname + ".elf " + hk + elfname + "_weakened.elf";
+    }
+
     vector<string> get_link_cmd(const vector<string>& obj_names) const
     {
-        string linkopts = " -march=rv32i -mabi=ilp32 -m" + get_string_aliased_arch_lowercase(arch) + " -flto -ffast-math -Wl,--gc-sections"
+        string linkopts = " -march=rv32i -mabi=ilp32 -m" + get_string_aliased_arch_lowercase(arch) + " -flto -ffast-math"
                           " -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 "
                           " -nostartfiles -g";
+
+        string elfname;
+        switch (hwthread) {
+            case RISCID::NC:
+                elfname = "ncrisc";
+            break;
+            case RISCID::BR:
+                elfname = "brisc";
+            break;
+            case RISCID::TR0:
+                elfname = "tensix_thread0";
+            break;
+            case RISCID::TR1:
+                elfname = "tensix_thread1";
+            break;
+            case RISCID::TR2:
+                elfname = "tensix_thread2";
+            break;
+            default: TT_ASSERT(false); break;
+        }
+
         if (is_trisc()) {
             linkopts += " -fno-exceptions"; // TODO(AP): odd that this was not present for brisc in the Makefile
         } else if (is_brisc()) {
             // TODO(AP): not on ncrisc, why?
             linkopts += " -fno-tree-loop-distribute-patterns";
+        }
+        if (!is_fw_build_) {
+            string weakened_elf_name = tt::get_firmware_compile_outpath() + elfname + "/" + elfname + "_weakened.elf";
+            if (!fs::exists(weakened_elf_name)) {
+                log_fatal(tt::LogBuildKernels, "File {} does not exist, link failed\n", weakened_elf_name);
+            }
+            linkopts += " -Xlinker \"--just-symbols=" + weakened_elf_name + "\"";
         }
 
         if (getenv("TT_KERNEL_LINKER_MAP") != nullptr) {
@@ -350,25 +393,6 @@ struct CompileState {
         for (auto oname: obj_names)
             link_str += hk + thread_bin_subdir + oname;
 
-        string elfname;
-        switch (hwthread) {
-            case RISCID::NC:
-                elfname = "ncrisc";
-            break;
-            case RISCID::BR:
-                elfname = "brisc";
-            break;
-            case RISCID::TR0:
-                elfname = "tensix_thread0";
-            break;
-            case RISCID::TR1:
-                elfname = "tensix_thread1";
-            break;
-            case RISCID::TR2:
-                elfname = "tensix_thread2";
-            break;
-            default: TT_ASSERT(false); break;
-        }
         // add -o target.elf
         link_str += " -o " + hk + thread_bin_subdir + elfname + ".elf";
         return vector<string>({link_str, elfname});
@@ -405,6 +429,7 @@ static CompileState pre_compile_for_risc(
         ctx.kernel_defines = build_kernel_for_riscv_options->ncrisc_defines;
     }
 
+    ctx.is_fw_build_ = build_kernel_for_riscv_options->fw_build_;
     ctx.noc_index = noc_index;
     ctx.profile_kernel = profile_kernel;
     ctx.compile_time_args = kernel_compile_time_args;
@@ -416,18 +441,20 @@ static CompileState pre_compile_for_risc(
     // indirectly from ckernel_main.cc
     // ckernel_main.cc then includes "chlkc_list.h" which in turn includes one of previously generated cpps for each trisc thread
     string kernel_file_name;
-    if (ctx.is_ncrisc()) {
-        kernel_file_name = build_kernel_for_riscv_options->ncrisc_kernel_file_name;
-        fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
-    } else if (ctx.is_brisc()) {
-        kernel_file_name = build_kernel_for_riscv_options->brisc_kernel_file_name;
-        fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
-    }
+    if (!ctx.is_fw_build_) {
+        if (ctx.is_ncrisc()) {
+            kernel_file_name = build_kernel_for_riscv_options->ncrisc_kernel_file_name;
+            fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
+        } else if (ctx.is_brisc()) {
+            kernel_file_name = build_kernel_for_riscv_options->brisc_kernel_file_name;
+            fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
+        }
 
-    // copy unpack/pack data formats to the kernel dir
-    if (fs::exists(ctx.kernel_subdir_ + "/chlkc_unpack_data_format.h")) {
-        fs::copy(ctx.kernel_subdir_ + "/chlkc_unpack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
-        fs::copy(ctx.kernel_subdir_ + "/chlkc_pack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
+        // copy unpack/pack data formats to the kernel dir
+        if (fs::exists(ctx.kernel_subdir_ + "/chlkc_unpack_data_format.h")) {
+            fs::copy(ctx.kernel_subdir_ + "/chlkc_unpack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
+            fs::copy(ctx.kernel_subdir_ + "/chlkc_pack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
+        }
     }
 
     return ctx;
@@ -435,47 +462,85 @@ static CompileState pre_compile_for_risc(
 
 static void compile_for_risc(
     RISCID risc_id,
+    tt::build_kernel_for_riscv_options_t* build_opts,
     const CompileState& ctx) {
 
-    vector<string> bcpps = {"brisc.cc", "risc_common.cc", "tdma_xmov.c", "noc.c", "substitutes.cpp", "tmu-crt0.S"};
-    vector<string> bobjs = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0.o"};
-    vector<string> bcwds = {"",        "",              "",            "",      "",                  ""};
+    struct build_files_t {
+        const vector<string> cpps, objs;
+    };
+    static const build_files_t bf[3][2] = {
+        {   // ncrisc
+            {   // kernel
+                {"ncrisck.cc", "context.cc", "risc_common.cc", "risc_chip_specific.c", "substitutes.cpp", "tmu-crt0k.S"},
+                {"ncrisck.o",  "context.o",  "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0k.o"},
+            },
+            {   // firmware
+                {"ncrisc.cc", "context.cc", "risc_common.cc", "risc_chip_specific.c", "substitutes.cpp", "tmu-crt0.S"},
+                {"ncrisc.o",  "context.o",  "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"},
+            },
+        },
+        {   // trisc
+            {   // kernel
+                {"src/ckernel_template.cc", "src/ckernel_main.cc", "substitutes.cpp", "tmu-crt0k.S" },
+                {"ckernel_template.o",      "ckernel_main.o",      "substitutes.o",   "tmu-crt0k.o" },
+            },
+            {   // firmware
+                {"src/ckernel.cc", "substitutes.cpp", "tmu-crt0.S" },
+                {"ckernel.o",      "substitutes.o",   "tmu-crt0.o" },
+            },
+        },
+        {   // brisc
+            {   // kernel
+                {"brisck.cc", "risc_common.cc", "tdma_xmov.c", "noc.c", "substitutes.cpp", "tmu-crt0k.S"},
+                {"brisck.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0k.o"},
+            },
+            {   // firmware
+                {"brisc.cc", "risc_common.cc", "tdma_xmov.c", "noc.c", "substitutes.cpp", "tmu-crt0.S"},
+                {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0.o"},
+            },
+        },
+    };
 
-    vector<string> ncpps = {"ncrisc.cc", "context.cc", "risc_common.cc", "risc_chip_specific.c", "substitutes.cpp", "tmu-crt0.S"};
-    vector<string> nobjs = {"ncrisc.o",  "context.o",  "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"};
-    vector<string> ncwds = {"",  "",  "", "",  "", ""};
-
-    vector<string> tcpps = {"src/ckernel.cc", "src/ckernel_template.cc", "src/ckernel_main.cc", "substitutes.cpp", "tmu-crt0.S" };
-    vector<string> tobjs = {"ckernel.o",      "ckernel_template.o",      "ckernel_main.o",      "substitutes.o",   "tmu-crt0.o" };
-    // TODO(AP): reorder link objects
-    vector<string> tcwds = {"",               "",                        "",                    "",                "" };
-
-    vector<string> cpps, objs, cwds;
-    string compile_cwd;
+    // TODO(pgk): have the build system copy these files into a build dir w/
+    // arch at the top level below root, move below into table above
+    vector<string> cwds;
+    int risc_type = 0;
     switch (risc_id) {
         case RISCID::NC:
-            ncwds[0] = "tt_metal/src/firmware/riscv/targets/ncrisc";
-            ncwds[2] = "tt_metal/src/firmware/riscv/common";
-            ncwds[3] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(ctx.arch) + "";
-            ncwds[4] = "tt_metal/src/firmware/riscv/toolchain";
-            cpps = move(ncpps); objs = move(nobjs); cwds = move(ncwds);
+            cwds.resize(6);
+            cwds[0] = "tt_metal/src/firmware/riscv/targets/ncrisc";
+            cwds[2] = "tt_metal/src/firmware/riscv/common";
+            cwds[3] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(ctx.arch) + "";
+            cwds[4] = "tt_metal/src/firmware/riscv/toolchain";
+            risc_type = 0;
         break;
         case RISCID::BR:
-            bcwds[0] = "tt_metal/src/firmware/riscv/targets/brisc";
-            bcwds[1] = "tt_metal/src/firmware/riscv/common";
-            bcwds[2] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(ctx.arch) + "";
-            bcwds[3] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(ctx.arch) + "/noc";
-            bcwds[4] = "tt_metal/src/firmware/riscv/toolchain";
-            cpps = move(bcpps); objs = move(bobjs); cwds = move(bcwds);
+            cwds.resize(6);
+            cwds[0] = "tt_metal/src/firmware/riscv/targets/brisc";
+            cwds[1] = "tt_metal/src/firmware/riscv/common";
+            cwds[2] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(ctx.arch) + "";
+            cwds[3] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(ctx.arch) + "/noc";
+            cwds[4] = "tt_metal/src/firmware/riscv/toolchain";
+            risc_type = 2;
         break;
         case RISCID::TR0:
         case RISCID::TR1:
         case RISCID::TR2:
-            tcwds[0] = "tt_metal/src/ckernels/" + get_string_lowercase(ctx.arch) + "/common";
-            tcwds[3] = "tt_metal/src/firmware/riscv/toolchain"; // TODO(AP): refactor
-            cpps = move(tcpps); objs = move(tobjs); cwds = move(tcwds);
+            if (build_opts->fw_build_) {
+                cwds.resize(3);
+                cwds[0] = "tt_metal/src/ckernels/" + get_string_lowercase(ctx.arch) + "/common";
+                cwds[1] = "tt_metal/src/firmware/riscv/toolchain"; // TODO(AP): refactor
+            } else {
+                cwds.resize(4);
+                cwds[0] = "tt_metal/src/ckernels/" + get_string_lowercase(ctx.arch) + "/common";
+                cwds[2] = "tt_metal/src/firmware/riscv/toolchain"; // TODO(AP): refactor
+            }
+            risc_type = 1;
         break;
     }
+
+    const vector<string> &cpps = bf[risc_type][build_opts->fw_build_].cpps;
+    const vector<string> &objs = bf[risc_type][build_opts->fw_build_].objs;
 
     string pushd_cmd;
 
@@ -497,13 +562,23 @@ static void compile_for_risc(
     for (auto& t: compile_threads) t.join();
 }
 
-void link_for_risc(RISCID risc_id, const CompileState& ctx) {
+void link_for_risc(RISCID risc_id,
+                   tt::build_kernel_for_riscv_options_t* build_opts,
+                   const CompileState& ctx) {
 
     string pushd_cmd = string("cd ") + ctx.home_ + "tt_metal/src/ckernels && "; // TODO(AP): Optimize
 
-    vector<string> bobjl = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0.o"};
-    vector<string> nobjl = {"ncrisc.o",  "context.o",  "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"};
-    vector<string> tobjl = {"ckernel_main.o", "substitutes.o",           "ckernel_template.o",  "ckernel.o",       "tmu-crt0.o" };
+    vector<string> bobjl, nobjl, tobjl;
+
+    if (!build_opts->fw_build_) {
+        bobjl = {"brisck.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0k.o"};
+        nobjl = {"ncrisck.o", "context.o", "risc_common.o", "risc_chip_specific.o", "substitutes.o", "tmu-crt0k.o"};
+        tobjl = {"ckernel_main.o", "substitutes.o", "ckernel_template.o", "tmu-crt0k.o" };
+    } else {
+        bobjl = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0.o"};
+        nobjl = {"ncrisc.o", "context.o", "risc_common.o", "risc_chip_specific.o", "substitutes.o", "tmu-crt0.o"};
+        tobjl = {"substitutes.o", "ckernel.o", "tmu-crt0.o" };
+    }
 
     vector<string> objls;
     switch (risc_id) {
@@ -531,6 +606,13 @@ void link_for_risc(RISCID risc_id, const CompileState& ctx) {
     auto verilogcmds = ctx.get_verilog_cmd(link[1]);
     tt::utils::run_command(pushd_cmd + verilogcmds[0], ctx.log_file, false);
     tt::utils::run_command(pushd_cmd + verilogcmds[1], ctx.log_file, false);
+
+    string weaken_cmd = ctx.get_weaken_cmd(link[1]);
+    log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", weaken_cmd);
+    if (!tt::utils::run_command(weaken_cmd, ctx.log_file, false)) {
+        log_fatal(tt::LogBuildKernels, "{}RISC objcopy failed -- cmd: {}", RISCID_to_string(ctx.hwthread), weaken_cmd);
+        exit(1);
+    }
 }
 
 void generate_binary_for_risc(RISCID risc_id,
@@ -549,8 +631,10 @@ void generate_binary_for_risc(RISCID risc_id,
         noc_index,
         kernel_compile_time_args,
         profile_kernel);
-    compile_for_risc(risc_id, state);
-    link_for_risc(risc_id, state);
+
+    compile_for_risc(risc_id, build_kernel_for_riscv_options, state);
+
+    link_for_risc(risc_id, build_kernel_for_riscv_options, state);
 }
 
 //////////////////
@@ -965,7 +1049,8 @@ void generate_bank_to_noc_coord_descriptor(
 ) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map);
 
-    string full_path = get_kernel_compile_outpath() + out_dir_path;
+    string full_path = build_kernel_for_riscv_options->fw_build_ ? get_firmware_compile_outpath() : get_kernel_compile_outpath();
+    full_path += out_dir_path;
     fs::create_directories(full_path + "/brisc");
     ofstream file_stream_br(full_path + "/brisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_br << output_string;
@@ -974,7 +1059,6 @@ void generate_bank_to_noc_coord_descriptor(
     ofstream file_stream_nc(full_path + "/ncrisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_nc << output_string;
     file_stream_nc.close();
-
 }
 
 void generate_binaries_all_riscs(
@@ -1140,16 +1224,7 @@ void generate_default_bank_to_noc_coord_descriptor(
             log_fatal("Unsupported arch in generate_default_bank_to_noc_coord_descriptor");
             break;
     }
-    string output_string = generate_bank_to_noc_coord_descriptor_string(dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map);
-    string full_path = get_kernel_compile_outpath() + out_dir_path;
-    fs::create_directories(full_path + "/brisc");
-    ofstream file_stream_br(full_path + "/brisc/generated_bank_to_noc_coord_mapping.h");
-    file_stream_br << output_string;
-    file_stream_br.close();
-    fs::create_directories(full_path + "/ncrisc");
-    ofstream file_stream_nc(full_path + "/ncrisc/generated_bank_to_noc_coord_mapping.h");
-    file_stream_nc << output_string;
-    file_stream_nc.close();
 
+    generate_bank_to_noc_coord_descriptor(build_kernel_for_riscv_options, out_dir_path, dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map);
 }
 }

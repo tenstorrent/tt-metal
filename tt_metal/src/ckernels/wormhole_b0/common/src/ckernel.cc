@@ -1,6 +1,5 @@
 #include "ckernel.h"
 #include "fw_debug.h"
-#include "ckernel_main.h"
 #include "ckernel_globals.h"
 #include <tensix.h>
 
@@ -76,6 +75,8 @@ inline void allocate_debug_buffer() {
 
 } // namespace ckernel
 
+volatile uint32_t l1_buffer[16] __attribute__ ((section ("l1_data"))) __attribute__ ((aligned (16))) __attribute__((used));
+
 using namespace ckernel;
 
 int main(int argc, char *argv[])
@@ -122,7 +123,7 @@ int main(int argc, char *argv[])
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
         kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
 #endif
-        run_kernel();
+        kernel_init();
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
         kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif
