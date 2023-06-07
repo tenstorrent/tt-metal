@@ -42,9 +42,13 @@ class TtBertEncoder(torch.nn.Module):
         self.mha = TtMultiHeadAttentionModel(config, encoder_idx, state_dict, device)
 
         self.attention_output_weight = pad_weight(
-            state_dict[
-                f"bert.encoder.layer.{encoder_idx}.attention.output.dense.weight"
-            ]
+            torch.transpose(
+                state_dict[
+                    f"bert.encoder.layer.{encoder_idx}.attention.output.dense.weight"
+                ],
+                -2,
+                -1,
+            )
         )
         self.attention_output_weight = (
             ttl.tensor.Tensor(
@@ -71,9 +75,9 @@ class TtBertEncoder(torch.nn.Module):
         )
 
         # Weights pre-transposed on host​. No on-the fly transpose of W.
-        self.attention_output_weight = ttl.tensor.transpose(
-            self.attention_output_weight
-        )
+        # self.attention_output_weight = ttl.tensor.transpose(
+        #     self.attention_output_weight
+        # )
 
         # MHA layernorm part
         gamma0 = state_dict[
@@ -264,9 +268,10 @@ def run_bert_encoder_inference(
         model_name, torchscript=False
     )
     config = hugging_face_reference_model.config
-    var_scaler = create_var_scaler(
-        seq_len, config.hidden_size, config.layer_norm_eps, device
-    )
+    # var_scaler = create_var_scaler(
+    #     seq_len, config.hidden_size, config.layer_norm_eps, device
+    # )
+    var_scaler = None
 
     tt_bert_encoder_model = TtBertEncoder(
         hugging_face_reference_model.config,

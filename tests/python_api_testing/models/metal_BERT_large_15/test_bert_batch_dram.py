@@ -55,7 +55,7 @@ class TtBertBatchDram(torch.nn.Module):
 
         num_classes, hidden_size = state_dict["qa_outputs.weight"].shape
 
-        weight = pad_weight(state_dict["qa_outputs.weight"])
+        weight = pad_weight(torch.transpose(state_dict["qa_outputs.weight"], -2, -1))
         weight = (
             ttl.tensor.Tensor(
                 weight.reshape(-1).tolist(),
@@ -193,12 +193,13 @@ def run_bert_question_and_answering_inference(
         model_name, torchscript=False
     )
     hugging_face_reference_model.eval()
-    var_scaler = create_var_scaler(
-        seq_len,
-        hugging_face_reference_model.config.hidden_size,
-        hugging_face_reference_model.config.layer_norm_eps,
-        device,
-    )
+    var_scaler = None
+    # var_scaler = create_var_scaler(
+    #     seq_len,
+    #     hugging_face_reference_model.config.hidden_size,
+    #     hugging_face_reference_model.config.layer_norm_eps,
+    #     device,
+    # )
     tt_bert_model = TtBertBatchDram(
         hugging_face_reference_model.config,
         hugging_face_reference_model,

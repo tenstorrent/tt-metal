@@ -5,7 +5,7 @@ from libs.tt_lib import tensor
 def Linear(
     in_features: int,
     out_features: int,
-    weight: tensor.Tensor,
+    weight_T: tensor.Tensor,
     bias: Optional[tensor.Tensor],
     device,
 ):
@@ -14,7 +14,7 @@ def Linear(
 
     ``weight`` must be the weight as a tilized list of values.
     """
-    assert weight.shape() == [1, 1, out_features, in_features]
+    assert weight_T.shape() == [1, 1, in_features, out_features]
     # weight = tensor.Tensor(
     #     weight,
     #     [1, 1, out_features, in_features],
@@ -36,7 +36,7 @@ def Linear(
         # )
 
     def linear_(activation):
-        weight_T = tensor.transpose(weight)
+        # weight_T = tensor.transpose(weight)
         output = tensor.matmul(activation, weight_T)
 
         if bias is not None:

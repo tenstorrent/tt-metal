@@ -24,8 +24,8 @@ def feed_forward(
     ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device
 ):
     # Weights pre-transposed on host​. No on-the fly transpose of W.
-    ff1_weighta = ttl.tensor.transpose(ff1_weighta)
-    ff2_weighta = ttl.tensor.transpose(ff2_weighta)
+    # ff1_weighta = ttl.tensor.transpose(ff1_weighta)
+    # ff2_weighta = ttl.tensor.transpose(ff2_weighta)
 
     # activation = [1, 9, 384, 1024]
     # ff1_weighta = [1, 1, 1024, 4096]
@@ -85,7 +85,13 @@ class TtFeedForwardModel(torch.nn.Module):
 
         # FF1 params
         encoder0_ff1_weight = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"]
+            torch.transpose(
+                state_dict[
+                    f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"
+                ],
+                -2,
+                -1,
+            )
         )
         encoder0_ff1_bias = pad_weight(
             state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.bias"]
@@ -117,7 +123,11 @@ class TtFeedForwardModel(torch.nn.Module):
 
         # FF2 params
         encoder0_ff2_weight = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.weight"]
+            torch.transpose(
+                state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.weight"],
+                -2,
+                -1,
+            )
         )
         encoder0_ff2_bias = pad_weight(
             state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.bias"]

@@ -101,9 +101,11 @@ class TtAddAndNormModel(torch.nn.Module):
 
     def forward(self, a, b):
         out_dram = True
-        fused_result = ttl.tensor.add_layernorm_gamma_beta(a, b, self.eps, self.gamma_, self.beta_, out_dram)
+        fused_result = ttl.tensor.add_layernorm_gamma_beta(
+            a, b, self.eps, self.gamma_, self.beta_, out_dram
+        )
         return fused_result
-        #return self.add_and_norm(a, b)
+        # return self.add_and_norm(a, b)
 
 
 class PytorchAddAndNormModel(torch.nn.Module):
@@ -224,5 +226,10 @@ def test_add_and_norm_inference(
 
 if __name__ == "__main__":
     run_add_and_norm_inference(
-        "mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99, model_location_generator_
+        "mrm8488/bert-tiny-finetuned-squadv2",
+        1,
+        128,
+        True,
+        0.99,
+        model_location_generator_,
     )
