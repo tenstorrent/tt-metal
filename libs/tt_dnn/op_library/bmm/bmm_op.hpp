@@ -2,6 +2,8 @@
 
 #include "tensor/tensor.hpp"
 
+#include "tt_dnn/op_library/operation.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -32,53 +34,84 @@ struct BmmOpParallelizationStrategy {
     }
 };
 
-Tensor matmul (const Tensor &A, const Tensor &B); // broadcasts batch, expects N=1 for now
-Tensor bmm     (const Tensor &A, const Tensor &B); // doesn't broadcast batch, expects batch to match in A and B
-Tensor large_bmm(const Tensor& A, const Tensor& B, bool tilize_act, bool untilize_out); // Tilizes, untilizes b
-Tensor large_bmm_single_block(const Tensor& A, const Tensor& B, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
-Tensor matmul_single_core  (const Tensor &A, const Tensor &B); // broadcasts batch, expects N=1 for now
-Tensor bmm_single_core     (const Tensor &A, const Tensor &B); // doesn't broadcast batch, expects batch to match in A and B
+
+Program matmul_single_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // broadcasts batch, expects N=1 for now
+Program bmm_single_core     (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // doesn't broadcast batch, expects batch to match in A and B
+Program matmul_multi_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // broadcasts batch, expects N=1 for now
+Program bmm_multi_core     (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // doesn't broadcast batch, expects batch to match in A and B
+Program matmul_multi_core_reuse  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program bmm_multi_core_reuse  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program matmul_multi_core_reuse_mcast  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program bmm_multi_core_reuse_mcast  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program matmul_multi_core_reuse_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program bmm_multi_core_reuse_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program matmul_multi_core_reuse_mcast_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program bmm_multi_core_reuse_mcast_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program matmul_multi_core_reuse_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program bmm_multi_core_reuse_padding  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program matmul_multi_core_reuse_mcast_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+Program bmm_multi_core_reuse_mcast_padding  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+
+struct Matmul : Operation {
+
+    Matmul() {}
+    Matmul(const Matmul&) = delete;
+    Matmul& operator=(const Matmul&) = delete;
+    ~Matmul() {}
+
+    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+};
+
+
+struct BatchedMatmul : Operation {
+
+    BatchedMatmul() {}
+    BatchedMatmul(const BatchedMatmul&) = delete;
+    BatchedMatmul& operator=(const BatchedMatmul&) = delete;
+    ~BatchedMatmul() {}
+
+    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+};
+
+
+Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b);
+Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b);
+
+Tensor large_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes, untilizes b
+Tensor large_bmm_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
 Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b,
                            uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
                            uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
                            uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
                            bool tilize_b, bool untilize_out);
-Tensor bmm_single_core_tilize_untilize(const Tensor &A, const Tensor &B,
+Tensor bmm_single_core_tilize_untilize(const Tensor &input_tensor_a, const Tensor &input_tensor_b,
                                        uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
                                        uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
                                        uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
                                        bool tilize_b, bool untilize_out);
-Tensor large_bmm_single_core(const Tensor& A, const Tensor& B, bool tilize_act, bool untilize_out); // Tilizes a, untilizes b
-Tensor large_bmm_single_core_single_block(const Tensor& A, const Tensor& B, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
-Tensor matmul_multi_core  (const Tensor &A, const Tensor &B); // broadcasts batch, expects N=1 for now
-Tensor bmm_multi_core     (const Tensor &A, const Tensor &B); // doesn't broadcast batch, expects batch to match in A and B
-Tensor matmul_multi_core_reuse  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor bmm_multi_core_reuse  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor matmul_multi_core_reuse_mcast  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor bmm_multi_core_reuse_mcast  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor matmul_multi_core_reuse_generalized  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor bmm_multi_core_reuse_generalized  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor matmul_multi_core_reuse_mcast_generalized  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor bmm_multi_core_reuse_mcast_generalized  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor matmul_multi_core_reuse_padding (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor bmm_multi_core_reuse_padding  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor matmul_multi_core_reuse_mcast_padding (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
-Tensor bmm_multi_core_reuse_mcast_padding  (const Tensor &A, const Tensor &B); // Only supports 2D matmul expects N=1 for now
+Tensor large_bmm_single_core(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes a, untilizes b
+Tensor large_bmm_single_core_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
 
-Tensor bert_large_fused_qkv_matmul(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
-Tensor bert_large_ff1_matmul(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
-Tensor bert_large_ff2_matmul(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
-Tensor bert_large_selfout_matmul(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
-Tensor bert_large_pre_softmax_bmm(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
-Tensor bert_large_post_softmax_bmm(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config);
-Tensor matmul_multi_core_reuse_mcast_padding_generalized(const Tensor& A, const Tensor& B, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
-Tensor bmm_multi_core_reuse_mcast_padding_generalized(const Tensor& A, const Tensor& B, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
-Tensor matmul_multi_core_reuse_generalized_bert_large  (const Tensor& A, const Tensor& B, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
-Tensor bmm_multi_core_reuse_generalized_bert_large  (const Tensor& A, const Tensor& B, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
-Tensor matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor& A, const Tensor& B, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config);
+Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config);
+Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config);
+Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config);
+Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config);
+Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config);
+Tensor matmul_multi_core_reuse_mcast_padding_generalized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+Tensor bmm_multi_core_reuse_mcast_padding_generalized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+Tensor matmul_multi_core_reuse_generalized_bert_large  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
+Tensor bmm_multi_core_reuse_generalized_bert_large  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
+Tensor matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 // bmm_multi_core_reuse_mcast_optimized_bert_large not used
 // matmul_multi_core_reuse_optimized_bert_large not used
-Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& A, const Tensor& B, const std::array<uint32_t, 4> &ashape, const std::array<uint32_t, 4> &bshape, const std::array<uint32_t, 4> &cshape, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::array<uint32_t, 4> &ashape, const std::array<uint32_t, 4> &bshape, const std::array<uint32_t, 4> &cshape, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 }  // namespace tt_metal
 

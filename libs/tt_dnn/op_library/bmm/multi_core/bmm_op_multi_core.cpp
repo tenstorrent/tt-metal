@@ -10,7 +10,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
+Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -44,7 +44,7 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
+    std::array<uint32_t, 4> cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
 
     auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
     uint32_t num_cores_x = compute_and_storage_grid_size.x;
@@ -56,12 +56,9 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         num_output_tiles_per_core[i]++;
     }
 
-    tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device);
-
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool pass = true;
     // C = A*B
     // MN = MK*KN
     if (bcast_batch)
@@ -187,23 +184,16 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         num_tiles_written += num_output_tiles_per_core[i];
     }
 
-    pass &= tt_metal::CompileProgram(device, program);
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-
-    pass &= tt_metal::LaunchKernels(device, program);
-
-    TT_ASSERT(pass);
-
     // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
-Tensor matmul_multi_core(const Tensor& a, const Tensor& b) {
-    return matmul_multi_core_(a, b, true);
+Program matmul_multi_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+    return matmul_multi_core_(input_tensor_a, input_tensor_b, output_tensor, true);
 }
 
-Tensor bmm_multi_core(const Tensor& a, const Tensor& b) {
-    return matmul_multi_core_(a, b, false);
+Program bmm_multi_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+    return matmul_multi_core_(input_tensor_a, input_tensor_b, output_tensor, false);
 }
 
 }  // namespace tt_metal

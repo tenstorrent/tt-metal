@@ -224,7 +224,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor matmul_multi_core_reuse_generalized_(const Tensor &a, const Tensor &b, bool bcast_batch) {
+Program matmul_multi_core_reuse_generalized_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -294,8 +294,7 @@ Tensor matmul_multi_core_reuse_generalized_(const Tensor &a, const Tensor &b, bo
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
-    tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+    std::array<uint32_t, 4> cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -321,30 +320,16 @@ Tensor matmul_multi_core_reuse_generalized_(const Tensor &a, const Tensor &b, bo
         in0_dram_addr, in1_dram_addr, out_dram_addr
     );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    bool pass = true;
-    pass &= tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    pass &= tt_metal::LaunchKernels(device, program);
-
-    TT_ASSERT(pass);
-
     // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
-Tensor matmul_multi_core_reuse_generalized(const Tensor& a, const Tensor& b) {
-    return matmul_multi_core_reuse_generalized_(a, b, true);
+Program matmul_multi_core_reuse_generalized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+    return matmul_multi_core_reuse_generalized_(input_tensor_a, input_tensor_b, output_tensor, true);
 }
 
-Tensor bmm_multi_core_reuse_generalized(const Tensor& a, const Tensor& b) {
-    return matmul_multi_core_reuse_generalized_(a, b, false);
+Program bmm_multi_core_reuse_generalized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+    return matmul_multi_core_reuse_generalized_(input_tensor_a, input_tensor_b, output_tensor, false);
 }
 
 }  // namespace tt_metal

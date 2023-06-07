@@ -10,7 +10,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
+Program matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core = {0, 0};
@@ -49,13 +49,10 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
-    tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+    std::array<uint32_t, 4> cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    bool pass = true;
 
     // C = A*B
     // MN = MK*KN
@@ -148,23 +145,16 @@ Tensor matmul_single_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
         {out_dram_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
     );
 
-
-    pass &= tt_metal::CompileProgram(device, program);
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    pass &= tt_metal::LaunchKernels(device, program);
-
-    TT_ASSERT(pass);
-
     // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
-Tensor matmul_single_core(const Tensor& a, const Tensor& b) {
-    return matmul_single_core_(a, b, true);
+Program matmul_single_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+    return matmul_single_core_(input_tensor_a, input_tensor_b, output_tensor, true);
 }
 
-Tensor bmm_single_core(const Tensor& a, const Tensor& b) {
-    return matmul_single_core_(a, b, false);
+Program bmm_single_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+    return matmul_single_core_(input_tensor_a, input_tensor_b, output_tensor, false);
 }
 
 void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program& program,

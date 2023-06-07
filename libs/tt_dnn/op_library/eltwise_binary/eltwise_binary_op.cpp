@@ -106,7 +106,6 @@ Tensor eltwise_binary(const EltwiseBinary& op, const Tensor &input_tensor_a, con
         AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
         return output;
     }
-
 }
 
 }  // namespace tt_metal
