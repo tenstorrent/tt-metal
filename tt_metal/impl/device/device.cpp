@@ -92,6 +92,11 @@ void Device::initialize_harvesting_information() {
         "this->pcie_slot_={} has this->num_harvested_rows_={}>2",
         this->pcie_slot_,
         this->num_harvested_rows_);
+    tt::log_assert(
+        (this->num_harvested_rows_ == 0) or (this->arch_ == tt::ARCH::WORMHOLE_B0),
+        tt::LogDevice,
+        "Harvested Rows={} -- Harvesting is only supported on WORMHOLE_B0",
+        this->num_harvested_rows_);
     // Populate lookup table
     this->logical_to_routing_coord_lookup_table_.clear();
     unsigned int num_rows = soc_desc.worker_grid_size.y - this->num_harvested_rows_;
