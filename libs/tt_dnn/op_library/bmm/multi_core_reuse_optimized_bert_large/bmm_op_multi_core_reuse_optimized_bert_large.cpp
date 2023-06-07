@@ -58,6 +58,74 @@ tt_metal::Program create_program(
         num_output_blocks_per_core[i]++;
     }
 
+    // Assume all of core_range is used (ie. num_evenly_divided_output_blocks > 0)
+    TT_ASSERT(num_evenly_divided_output_blocks > 0, "Not all cores from core_range was used!");
+    uint32_t start_core_x = 0;
+    uint32_t start_core_y = 0;
+    uint32_t num_cores_c = core_range.x;
+    uint32_t num_cores_r = core_range.y;
+
+    CoreRange left_half{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + 4, (std::size_t) start_core_y + num_cores_r - 1}};
+
+    CoreRange right_half{
+        .start={(std::size_t) start_core_x + 5, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+
+    // Compile time args
+    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+    std::uint32_t tile_size_pow2_exponent = tile_size_is_power_of_two ? (std::uint32_t)log2(single_tile_size) : 0;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_writer_compile_time_args = {
+                // interleaved accessor args
+                (std::uint32_t) tile_size_is_power_of_two,
+                (std::uint32_t) tile_size_pow2_exponent,
+                (std::uint32_t) in0_is_dram,
+                (std::uint32_t) in1_is_dram,
+                (std::uint32_t) out_is_dram
+        };
+
+    // left half
+    auto mm_kernel_in0_reader = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
+        left_half,
+        reader_writer_compile_time_args,
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_0_default
+    );
+
+    auto mm_kernel_in1_reader_writer = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
+        left_half,
+        reader_writer_compile_time_args,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_1_default
+    );
+
+    // right half
+    auto mm_kernel_in0_reader_other_noc_setup = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
+        right_half,
+        reader_writer_compile_time_args,
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_1_default
+    );
+
+    auto mm_kernel_in1_reader_writer_other_noc_setup = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
+        right_half,
+        reader_writer_compile_time_args,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_0_default
+    );
+
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
         uint32_t core_idx_x = i / core_range.y;
         uint32_t core_idx_y = i % core_range.y;
@@ -112,20 +180,6 @@ tt_metal::Program create_program(
             cb_output->address(),
             cb_data_format
         );
-
-        bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-        std::uint32_t tile_size_pow2_exponent = tile_size_is_power_of_two ? (std::uint32_t)log2(single_tile_size) : 0;
-        bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-        bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-        bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-        std::vector<uint32_t> reader_writer_compile_time_args = {
-                // interleaved accessor args
-                (std::uint32_t) tile_size_is_power_of_two,
-                (std::uint32_t) tile_size_pow2_exponent,
-                (std::uint32_t) in0_is_dram,
-                (std::uint32_t) in1_is_dram,
-                (std::uint32_t) out_is_dram
-        };
 
         vector<uint32_t> compute_kernel_args = {
             in0_block_w, // in0_block_w
@@ -205,8 +259,19 @@ tt_metal::Program create_program(
             (std::uint32_t) num_output_blocks_per_core[i] // batch
         };
 
-        // Create reader and writer kernels per core
-        // Checkerboard
+        // left half
+        if (core_idx_x <= 4) {
+            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_reader, core, mm_reader_args);
+            mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
+            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_reader_writer, core, mm_reader_args);
+        }
+        // right half
+        else {
+            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_reader_other_noc_setup, core, mm_reader_args);
+            mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
+            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_reader_writer_other_noc_setup, core, mm_reader_args);
+        }
+        /* Checkerboard logic
         // white
         if ((core_idx_x + core_idx_y) % 2 == 0) {
             auto mm_kernel_in0_reader = tt_metal::CreateDataMovementKernel(
@@ -255,6 +320,7 @@ tt_metal::Program create_program(
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
             tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_reader_writer, core, mm_reader_args);
         }
+        */
 
         /* Uncomment if we don't checkerboard
         auto mm_kernel_in0_reader = tt_metal::CreateDataMovementKernel(
