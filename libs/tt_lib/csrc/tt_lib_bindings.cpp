@@ -867,7 +867,32 @@ void TensorModule(py::module &m_tensor) {
         | arg0     | Tensor log is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
+    m_tensor.def("log2", &log2, R"doc(
+        Returns tensor with the base 2 logarithm of elements of the input tensor ``arg0``.
 
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     | Tensor log2 is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+    m_tensor.def("log10", &log10, R"doc(
+        Returns tensor with the base 10 logarithm of elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     | Tensor log10 is applied to| Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
     m_tensor.def("tanh", &tanh, R"doc(
         Returns tensor with the hyperbolic tangent of elements of the input tensor ``arg0``.
 

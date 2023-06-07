@@ -10,8 +10,24 @@ namespace tt {
 namespace tt_metal {
 
 struct UnaryOpType {
-    enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7 };
-    static const vector<Enum> all() { return { EXP, RECIP, GELU, RELU, SQRT, SIGMOID, LOG, TANH }; }
+    enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9 };
+    static const vector<Enum> all() { return { EXP, RECIP, GELU, RELU, SQRT, SIGMOID, LOG, TANH, LOG2, LOG10 }; }
+    static UnaryOpType::Enum str2enum(std::string value_) {
+      std::string value(value_.size(),'\0');
+      for(int i = 0; i < value_.size(); i++) value[i] = toupper(value_[i]);
+      if ( value == "EXP" ) return EXP;
+      if ( value == "RECIP" ) return RECIP;
+      if ( value == "GELU" ) return GELU;
+      if ( value == "RELU" ) return RELU;
+      if ( value == "SQRT" ) return SQRT;
+      if ( value == "SIGMOID" ) return SQRT;
+      if ( value == "LOG" ) return LOG;
+      if ( value == "TANH" ) return TANH;
+      if ( value == "LOG2" ) return LOG2;
+      if ( value == "LOG10" ) return LOG10;
+      TT_ASSERT(false,"string does not match any known operator");
+      return LOG10;
+    }
 };
 
 struct UnaryOpParallelizationStrategy {
@@ -40,7 +56,8 @@ inline Tensor relu(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType
 inline Tensor sigmoid(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::SIGMOID).run({input_tensor}).at(0); }
 inline Tensor log(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::LOG).run({input_tensor}).at(0); }
 inline Tensor tanh(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::TANH).run({input_tensor}).at(0); }
-
+inline Tensor log2(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::LOG2).run({input_tensor}).at(0); }
+inline Tensor log10(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::LOG10).run({input_tensor}).at(0); }
 
 }  // namespace tt_metal
 

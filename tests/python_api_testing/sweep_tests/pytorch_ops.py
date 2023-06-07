@@ -37,6 +37,14 @@ def log(x, *args, **kwargs):
     return torch.log(x)
 
 
+def log2(x, *args, **kwargs):
+    return torch.log2(x)
+
+
+def log10(x, *args, **kwargs):
+    return torch.log10(x)
+
+
 def tanh(x, *args, **kwargs):
     return torch.tanh(x)
 

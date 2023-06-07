@@ -154,8 +154,9 @@ def eltwise_sigmoid(x, *args, host, device, dtype, layout, on_device, **kwargs):
     return output
 
 
-@setup_host_and_device
-def eltwise_log(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_log_common(
+    log_kind, x, *args, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -167,12 +168,60 @@ def eltwise_log(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.log(t0)
+    t1 = getattr(ttl.tensor, log_kind)(t0)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
 
+    return output
+
+
+@setup_host_and_device
+def eltwise_log(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    output = eltwise_log_common(
+        "log",
+        x,
+        *args,
+        host=host,
+        device=device,
+        dtype=dtype,
+        layout=layout,
+        on_device=on_device,
+        **kwargs
+    )
+    return output
+
+
+@setup_host_and_device
+def eltwise_log2(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    output = eltwise_log_common(
+        "log2",
+        x,
+        *args,
+        host=host,
+        device=device,
+        dtype=dtype,
+        layout=layout,
+        on_device=on_device,
+        **kwargs
+    )
+    return output
+
+
+@setup_host_and_device
+def eltwise_log10(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    output = eltwise_log_common(
+        "log10",
+        x,
+        *args,
+        host=host,
+        device=device,
+        dtype=dtype,
+        layout=layout,
+        on_device=on_device,
+        **kwargs
+    )
     return output
 
 

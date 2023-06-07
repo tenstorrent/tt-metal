@@ -1,15 +1,14 @@
 
-#include "llk_param_structs.h"
-
-#include "ckernel_include.h"
-#include "ckernel_template.h"
 #include <type_traits>
 
-#include "cmath_common.h"
-#include "llk_math_common.h"
-#include "llk_format_conversions.h"
 #include "ckernel_globals.h"
+#include "ckernel_include.h"
 #include "ckernel_sfpu.h"
+#include "ckernel_template.h"
+#include "cmath_common.h"
+#include "llk_format_conversions.h"
+#include "llk_math_common.h"
+#include "llk_param_structs.h"
 
 using namespace ckernel;
 template <SfpuType sfpu_type>
@@ -17,7 +16,7 @@ void static_assert_sfpu_type_dependent() {
     static_assert(sfpu_type == SfpuType::unused, "sfpu_type exception");
 }
 // local function declarations
-inline void eltwise_unary_sfpu_configure_addrmod(){
+inline void eltwise_unary_sfpu_configure_addrmod() {
     // NOTE: this kernel is typically used in conjunction with
     //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
     //       that doesn't conflict!
@@ -25,7 +24,8 @@ inline void eltwise_unary_sfpu_configure_addrmod(){
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
-    }.set(ADDR_MOD_3);
+    }
+        .set(ADDR_MOD_3);
 }
 inline void eltwise_unary_sfpu_configure_mop();
 
@@ -125,6 +125,16 @@ inline void llk_math_eltwise_unary_sfpu_log(uint dst_index) {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_log_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::log, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_log_with_base(uint dst_index,uint base) {
+    llk_math_eltwise_unary_sfpu<SfpuType::log_with_base, APPROXIMATE, dst_sync>(dst_index,base);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_log_with_base_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::log_with_base, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>

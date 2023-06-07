@@ -81,11 +81,11 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
             num_output_tiles * single_tile_size,
             DataFormat::Float16_b
         );
-        bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+        bool tile_size_is_power_of_two = (ceil(std::log2(single_tile_size)) == floor(std::log2(single_tile_size)));
         std::vector<uint32_t> reader_writer_compile_time_args;
         if (tile_size_is_power_of_two) {
             // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-            reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
+            reader_writer_compile_time_args = {1, (std::uint32_t)std::log2(single_tile_size)};
         } else {
             reader_writer_compile_time_args = {0, 0};
         }

@@ -64,6 +64,10 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.log
 
+.. autofunction:: tt_lib.tensor.log2
+
+.. autofunction:: tt_lib.tensor.log10
+
 .. autofunction:: tt_lib.tensor.tanh
 
 

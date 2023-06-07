@@ -116,6 +116,34 @@ test-list:
     comparison:
       function: comp_pcc
     output-file: all_op_parallelization_sweep.csv
+  eltwise-log2:
+    shape:
+      shape-list:
+        - [ [ 1, 1, 32, 32 ] ] # Single core
+        - [ [ 1, 1, 320, 384 ] ] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 1
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-log10:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 1
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
   eltwise-tanh:
     shape:
       shape-list:

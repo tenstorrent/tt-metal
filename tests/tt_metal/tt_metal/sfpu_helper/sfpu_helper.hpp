@@ -29,6 +29,14 @@ float ref_log(float x) {
     return logf(x);
 }
 
+float ref_log10(float x) {
+    return ref_log(x)*0.4342944819032518;
+}
+
+float ref_log2(float x) {
+    return ref_log(x)*1.4426950408889634f;
+}
+
 float ref_tanh(float x) {
     return tanh(x);
 }
@@ -107,17 +115,18 @@ bool is_close_rtol_0p175_atol_0p1(float a, float b) {
 }
 
 // SFPU maps -> relevant kernels, golden functions, comparison functions
-const map<string, string> sfpu_op_to_hlk_op_name = {
-    // TODO(AP): auto-generate inits
-    { "relu", "pack_relu_tile_to_stream(0, CB::c_out0);" },
-    { "exponential", "exp_tile_init(); exp_tile(0); pack_tile(0, CB::c_out0);" },
-    { "reciprocal", "recip_tile_init(); recip_tile(0); pack_tile(0, CB::c_out0);" },
-    { "gelu", "gelu_tile_init(); gelu_tile(0); pack_tile(0, CB::c_out0);" },
-    { "sqrt", "sqrt_tile_init(); sqrt_tile(0); pack_tile(0, CB::c_out0);" },
-    { "sigmoid", "sigmoid_tile_init(); sigmoid_tile(0); pack_tile(0, CB::c_out0);" },
-    { "log", "log_tile_init(); log_tile(0); pack_tile(0, CB::c_out0);" },
-    { "tanh", "tanh_tile_init(); tanh_tile(0); pack_tile(0, CB::c_out0);" },
-};
+static std::vector<string> sfpu_op =
+    { "relu",
+     "exponential",
+     "reciprocal",
+     "gelu",
+     "sqrt",
+     "sigmoid",
+     "log",
+     "log2",
+     "log10",
+     "tanh",
+    };
 
 const map<string, std::function<float(float)>> sfpu_op_to_function = {
     {"relu",        relu},
@@ -127,6 +136,8 @@ const map<string, std::function<float(float)>> sfpu_op_to_function = {
     {"sqrt",        ref_sqrt},
     {"sigmoid",     sigmoid},
     {"log",         ref_log},
+    {"log2",        ref_log2},
+    {"log10",       ref_log10},
     {"tanh",        ref_tanh},
 };
 
@@ -138,6 +149,8 @@ const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>>
     {"sqrt",        create_random_vector_of_bfloat16_0_2},
     {"sigmoid",     create_random_vector_of_bfloat16_1_1},
     {"log",         create_random_vector_of_bfloat16_0_2},
+    {"log2",         create_random_vector_of_bfloat16_0_2},
+    {"log10",         create_random_vector_of_bfloat16_0_2},
     {"tanh",        create_random_vector_of_bfloat16_1_1},
 };
 
@@ -149,5 +162,7 @@ const map<string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_f
     {"sqrt", is_close_rtol_0p06_atol_0p006},
     {"sigmoid", is_close_rtol_0p06_atol_0p006},
     {"log", is_close_rtol_0p06_atol_0p006},
+    {"log2", is_close_rtol_0p06_atol_0p006},
+    {"log10", is_close_rtol_0p06_atol_0p006},
     {"tanh", is_close_rtol_0p175_atol_0p1},
 };

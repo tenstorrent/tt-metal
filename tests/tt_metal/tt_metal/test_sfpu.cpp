@@ -6,8 +6,18 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "sfpu_helper/sfpu_helper.hpp"
+#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 // #include "tt_gdb/tt_gdb.hpp"
 
+
+// SFPU maps -> relevant kernels, golden functions, comparison functions
+std::map<std::string,std::string> sfpu_op_to_hlk_op_name={};
+
+void update_sfpu_op_to_hlk_op()
+{
+  for(const std::string& op_name : sfpu_op)
+    sfpu_op_to_hlk_op_name[op_name]  = eltwise_unary_op_utils::get_op_name( tt::tt_metal::UnaryOpType::str2enum( op_name ) );
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -120,6 +130,8 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
             fp32_dest_acc_en,
             math_approx_mode
         );
+
+	update_sfpu_op_to_hlk_op();
         const string hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
         // this macro combines 2 ops due to relu_pack op LLK interface being different from other SFPU ops
         eltwise_unary_kernel->add_define("SFPU_OP_AND_PACK", hlk_op_name);

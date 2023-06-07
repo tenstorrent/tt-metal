@@ -98,6 +98,34 @@ test-list:
     comparison:
       function: comp_pcc
     output-file: eltwise_log_parallelization_pcc_stresstest_range_32_to_7712.csv
+  eltwise-log2:
+    shape:
+      start-shape: [ 1, 1, 32, 32 ]
+      end-shape: [ 1, 1, 7712, 7712 ]
+      interval: 512
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 1
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_log2_parallelization_pcc_stresstest_range_32_to_7712.csv
+  eltwise-log10:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 1
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_log10_parallelization_pcc_stresstest_range_32_to_7712.csv
   eltwise-tanh:
     shape:
       start-shape: [1, 1, 32, 32]

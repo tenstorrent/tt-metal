@@ -128,6 +128,17 @@ inline void llk_math_eltwise_unary_sfpu_log_init() {
 }
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_log_with_base(uint dst_index,uint base_scale) {
+    llk_math_eltwise_unary_sfpu<SfpuType::log_with_base, APPROXIMATE, dst_sync>(dst_index,base_scale);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_log_with_base_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::log_with_base, APPROXIMATE>();
+}
+
+
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_tanh(uint dst_index) {
     llk_math_eltwise_unary_sfpu<SfpuType::tanh, APPROXIMATE, dst_sync>(dst_index);
 }

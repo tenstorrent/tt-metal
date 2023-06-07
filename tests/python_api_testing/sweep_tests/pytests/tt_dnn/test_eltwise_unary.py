@@ -3,6 +3,7 @@ import sys
 import torch
 from pathlib import Path
 from functools import partial
+from itertools import product
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
@@ -159,15 +160,26 @@ def test_run_eltwise_sigmoid_test(input_shapes, pcie_slot, function_level_defaul
     )
 
 
+# explore ops for Single core and Multi core tensor sizes
 @pytest.mark.parametrize(
-    "input_shapes, pcie_slot",
+    "log_kind, input_shapes, pcie_slot",
     (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[1, 1, 320, 384]], 0),  # Multi core
-        ([[1, 3, 320, 384]], 0),  # Multi core
+        list(
+            product(
+                ("log", "log2", "log10"),
+                (
+                    [[1, 1, 32, 32]],
+                    [[1, 1, 320, 384]],
+                    [[1, 3, 320, 384]],
+                ),  # single, multi core sizes
+                (0,),
+            )
+        )
     ),
 )
-def test_run_eltwise_log_test(input_shapes, pcie_slot, function_level_defaults):
+def test_run_eltwise_log_with_base_test(
+    log_kind, input_shapes, pcie_slot, function_level_defaults
+):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand, low=1, high=100), torch.float32
@@ -175,7 +187,7 @@ def test_run_eltwise_log_test(input_shapes, pcie_slot, function_level_defaults):
     ]
     comparison_func = partial(comparison_funcs.comp_pcc)
     run_single_pytorch_test(
-        "eltwise-log",
+        "eltwise-"+log_kind,
         input_shapes,
         datagen_func,
         comparison_func,

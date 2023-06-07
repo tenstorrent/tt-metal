@@ -38,6 +38,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_log,
         "pytorch_op": pytorch_ops.log,
     },
+    "eltwise-log2": {
+        "tt_lib_op": tt_lib_ops.eltwise_log2,
+        "pytorch_op": pytorch_ops.log2,
+    },
+    "eltwise-log10": {
+        "tt_lib_op": tt_lib_ops.eltwise_log10,
+        "pytorch_op": pytorch_ops.log10,
+    },
     "eltwise-tanh": {
         "tt_lib_op": tt_lib_ops.eltwise_tanh,
         "pytorch_op": pytorch_ops.tanh,

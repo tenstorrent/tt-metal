@@ -26,6 +26,7 @@ Compute APIs
   sqrt_tile
   sigmoid_tile
   log_tile
+  log_with_base_tile
   tanh_tile
 
   reduce_tile

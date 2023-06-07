@@ -462,10 +462,21 @@ ALWI void log_tile_init() {
 }
 
 /**
- *  Please refer to documentation for exp_tile.
+ *  Please refer to documentation for log_tile.
  */
 ALWI void log_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_log<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void log_with_base_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX>()));  // TODO(AP): move out init
+}
+
+/**
+ *  Please refer to documentation for log_with_base_tile.
+ */
+ALWI void log_with_base_tile(uint32_t idst,uint32_t base_scale) {
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, SyncHalf>(idst, base_scale)));
 }
 
 ALWI void tanh_tile_init() {
