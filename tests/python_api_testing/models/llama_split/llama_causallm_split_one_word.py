@@ -320,8 +320,10 @@ if __name__ == "__main__":
     # parameters
     base_url = "model.layers"
     max_position_embeddings = 2048
-    tokenizer_name = "huggyllama/llama-7b"
-    llama_model_name = "huggyllama/llama-7b"
+    # tokenizer_name = "huggyllama/llama-7b"
+    # llama_model_name = "huggyllama/llama-7b"
+    tokenizer_name = "hf-internal-testing/llama-tokenizer"
+    llama_model_name = "decapoda-research/llama-7b-hf"
 
     # create llama pytorch model =====================================================
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -335,14 +337,36 @@ if __name__ == "__main__":
     state_dict = hugging_face_reference_model.state_dict()
 
     # generate real input ============================================================
-    prompt = "I believe the meaning of life is"
+    # prompt = "I believe the meaning of life is to find your gift. The purpose of life is to give it away. I believe that we are all happy about that."
+    prompt = "The odd numbers in this group add up to an even number: 15, 32, 5, 13, 4."
     inputs = tokenizer(prompt, return_tensors="pt")
-    # padded output
-    input_ids = pad_input_32(inputs.input_ids, configuration.pad_token_id)
-    attention_mask = pad_input_32(inputs.attention_mask, 0)
+    input_ids = inputs.input_ids
+    print(f"Input IDs: {input_ids.shape}")
+
+    logits_processor = get_logits_processor(
+        input_ids, hugging_face_reference_model.config
+    )
+
+    # padded input ids and attention mask
+    # input_ids = pad_input_32(inputs.input_ids, configuration.pad_token_id)
+    # attention_mask = pad_input_32(inputs.attention_mask, 0)
+
+    # attention mask
+    attention_mask = None
+
+    # get positions_ids values
+    past_key_values_length = 0
+    seq_length = input_ids.shape[1]
+    position_ids = torch.arange(
+        past_key_values_length,
+        seq_length + past_key_values_length,
+        dtype=torch.long,
+        device=None,
+    )
+    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
 
     # generate output of 30 words ----------------------------------
-    generate_ids = hugging_face_reference_model.generate(input_ids, max_length=60)
+    generate_ids = hugging_face_reference_model.generate(input_ids, max_length=50)
     logger.info(f"generate_ids shape: {generate_ids.shape}")
     output = tokenizer.batch_decode(
         generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
@@ -354,18 +378,6 @@ if __name__ == "__main__":
         input_ids=input_ids, attention_mask=attention_mask
     )
     logger.info(f"PT output shape: {pytorch_out.logits.shape}")
-
-    # get positions_ids values
-    past_key_values_length = 0
-    seq_length = input_ids.shape[1]
-
-    position_ids = torch.arange(
-        past_key_values_length,
-        seq_length + past_key_values_length,
-        dtype=torch.long,
-        device=None,
-    )
-    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
 
     # ================================================================================
     device = None
@@ -433,11 +445,11 @@ if __name__ == "__main__":
         logger.info(f"TT out shape: {tt_out.shape}")
 
         # check outputs -----------------------------------------------------------
-        # pcc = 0.98
-        # logger.info(comp_allclose(pytorch_out.logits, tt_out))
+        pcc = 0.98
+        logger.info(comp_allclose(pytorch_out.logits, tt_out))
 
-        # does_pass, pcc_value = comp_pcc(pytorch_out.logits, tt_out, pcc)
-        # logger.info(f"PCC value: {pcc_value}")
+        does_pass, pcc_value = comp_pcc(pytorch_out.logits, tt_out, pcc)
+        logger.info(f"PCC value: {pcc_value}")
 
         # if does_pass:
         #     logger.info("Llama Model Passed!")
