@@ -72,7 +72,9 @@ whose tests are in the said non-post-commit pipeline.
 ### Git rules and guidelines
 
 - Any commit message must be accompanied with an appropriate GitHub issue
-  number with a colon and following message. Ex.
+  number with a colon and following message. The message must start with an
+  imperative verb and descripton of what was done. Preferably a reason is
+  included. Ex.
   ```
   #41: Fix data format error in Gelu op.
   ```
