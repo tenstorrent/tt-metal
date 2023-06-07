@@ -1,1 +1,1 @@
-from ._C import tensor, device, dtx
+from ._C import tensor, device, dtx, profiler

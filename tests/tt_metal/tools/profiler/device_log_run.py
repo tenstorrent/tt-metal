@@ -66,7 +66,7 @@ def beautify_tt_js_blob(testOutputFolder):
 
 def run_device_log_compare_golden(test):
     goldenPath = f"{GOLDEN_OUTPUTS_DIR}/{test}"
-    underTestPath = f"{PROFILER_DIR}/output"
+    underTestPath = f"{PROFILER_DIR}/output/device"
 
     ret = os.system(
         f"cd {PROFILER_DIR} && ./process_device_log.py -d {goldenPath}/profile_log_device.csv --no-print-stats --no-artifacts --no-webapp"

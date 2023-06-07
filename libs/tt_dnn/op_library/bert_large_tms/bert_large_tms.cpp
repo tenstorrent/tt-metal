@@ -62,6 +62,9 @@ operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<st
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
 
     Program program;
+
+    op_profiler::set_preferred_name(this->bert_large_tm_op_type);
+
     switch (this->bert_large_tm_op_type) {
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
             return  multi_core_split_fused_qkv(input_tensor, output_tensors, compute_and_storage_grid_size);

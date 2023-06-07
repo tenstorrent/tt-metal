@@ -141,6 +141,7 @@ void DumpHostProfileResults(std::string name_prepend){
 }
 
 void DumpDeviceProfileResults(Device *device, const Program &program) {
+    tt_metal_profiler.markStart("DumpDeviceProfileResults");
     TT_ASSERT(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
     auto worker_cores_used_in_program =\
         device->worker_cores_from_logical_cores(program.logical_cores());
@@ -148,6 +149,11 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
     tt_metal_profiler.dumpDeviceResults(cluster, pcie_slot, worker_cores_used_in_program);
+    tt_metal_profiler.markStop("DumpDeviceProfileResults");
+}
+
+void SetHostProfilerFlag(bool do_profile){
+     tt_metal_profiler.setHostDoProfile(do_profile);
 }
 
 void SetProfilerDir(std::string output_dir){
@@ -487,7 +493,6 @@ void WriteToDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 }
 
 void WriteToBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
-    tt_metal_profiler.markStart("WriteToBuffer");
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
         case BufferType::L1: {
@@ -501,7 +506,6 @@ void WriteToBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
         default:
             TT_ASSERT(false && "Unsupported buffer type!");
     }
-    tt_metal_profiler.markStop("WriteToBuffer");
 }
 
 void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {

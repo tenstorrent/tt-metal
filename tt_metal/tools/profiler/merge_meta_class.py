@@ -1,5 +1,4 @@
 class MergeMetaclass(type):
-
     mergeList = ["timerAnalysis"]
 
     def __new__(metacls, name, bases, attrs):

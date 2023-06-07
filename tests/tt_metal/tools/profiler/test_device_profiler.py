@@ -10,7 +10,7 @@ import tests.tt_metal.tools.profiler.common as common
 REPO_PATH = common.get_repo_path()
 TT_METAL_PATH = f"{REPO_PATH}/tt_metal"
 PROFILER_DIR = f"{TT_METAL_PATH}/tools/profiler/"
-PROFILER_OUT_DIR = f"{PROFILER_DIR}/output"
+PROFILER_OUT_DIR = f"{PROFILER_DIR}/output/device"
 GS_PROG_EXMP_DIR = "programming_examples/profiler/device/grayskull"
 
 
@@ -49,7 +49,7 @@ def get_function_name():
     return frame.f_code.co_name
 
 
-@pytest.mark.skip(reason="Some machines are acting flaky on this test")
+# @pytest.mark.skip(reason="Some machines are acting flaky on this test")
 def test_custom_cycle_count():
     REF_CYCLE_COUNT = 52
     REF_CYCLE_COUNT_MARGIN = 6

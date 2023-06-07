@@ -2,6 +2,47 @@
 Execution Time Profiler
 ========================
 
+OPs
+===
+
+Ops implemented using the ``operation`` module will automatically be profiled if the profiling flag is enabled during the execution of the op. The op profiling flag can be set using
+``op_profiler::set_profiler_flag`` from the C++ host side or using the ``ttl.profiler.set_profiler_flag`` python function. With the flag set, profiler logs will be generated under
+the default folder. The logs folder can be modified using  ``op_profiler::set_profiler_location`` on C++ host side and the ``ttl.profiler.set_profiler_location`` on the python
+side.
+
+Once ops finish running either as part of a model or as standalone unit tests, the post processing python script ``process_ops_logs.py`` generates a csv of all executed ops and it
+profiling information.
+
+Please refer to the ``ttl.profiler`` module of the python binding docs for info on more API functions available for profiling. Functions such as ``set_preferred_name`` can be used
+while profiling a section, to add more information about the section being profiled.
+
+**NOTE**: ``ttl.profiler`` is a separate module from the ``utility_functions.profiler`` module. ``utility_functions.profiler`` will be deprecated once all of its features are
+covered by ``ttl.profiler``.
+
+Post-processing ops profiler
+----------------------------
+
+1. Follow the tt-metal :ref:`Getting Started<Getting Started>` and
+   :ref:`Getting Started for Devs<Getting started for devs>` guides and make sure ``PYTHONPATH``
+   and other tt-metal environment variables are set. Activate the python environment as suggested by the guides.
+
+2. Run ops profiler script on default ops' logs folder ``$TT_METAL_HOME/tt_metal/tools/profiler/logs/ops/`` with:
+
+..  code-block:: sh
+
+    cd $TT_METAL_HOME/tt_metal/tools/profiler/
+    ./process_ops_logs.py
+
+3. Output csv will be generated under ``$TT_METAL_HOME/tt_metal/tools/profiler/output/ops/`` by default. CLI options can be used to change this directory and also prepend
+   datetimestamp and append extra information to the name of the csv. A tarball of the ops logs folder is also generated with the same name as the csv under the same output folder.
+
+4. Use  ``./process_ops_logs.py --help`` to get a list of available cli options to run the post processes differently. Some of the notable options are:
+    - Path to ops' profiler logs folder
+    - Path to  output folder
+    - Run plots dashboard (Beta stage)
+    - Custom webapp port
+
+
 Host Side
 =========
 
@@ -35,6 +76,8 @@ instantiated as a static member of the module ``tt_metal/tt_metal.cpp`` as follo
 ..  code-block:: C++
 
     static Profiler tt_metal_profiler = Profiler();
+    tt_metal_profiler.setHostDoProfile(true);
+
 
 In functions such as ``LaunchKernels`` the entire code within the function is wrapped under the
 ``markStart`` and ``markStop`` calls with the timer name ``"LaunchKernels"``.
@@ -163,7 +206,7 @@ Post-processing device profiler
    you connect via ``ssh``.  Otherwise, you will not be able to access the
    dashboard.
 
-4. The following are the notable artifacts that will be generated under the ``tt_metal/tools/profiler/output`` folder:
+4. The following are the notable artifacts that will be generated under the ``tt_metal/tools/profiler/output/device`` folder:
     - ``device_perf.html`` contains the interactive time series plot
     - ``device_stats.txt`` contains the extended stats for the run
     - ``device_rearranged_timestamps.csv`` contains all timestamps arranged by each row dedicated to cores

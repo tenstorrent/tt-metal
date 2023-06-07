@@ -169,8 +169,7 @@ def run_bert_question_and_answering_inference(
     model_location_generator,
     PERF_CNT,
 ):
-    start_time = time.time()
-
+    ttl.profiler.start_profiling("Whole_Test")
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -352,26 +351,7 @@ def run_bert_question_and_answering_inference(
     ttl.device.CloseDevice(device)
     profiler.print()
 
-    whole_test_runtime = time.time() - start_time
-
-    # Dump all profiler keys to csv + entire test runtime
-    output_fields = ["whole_test_runtime", "model_runtime_to_fill_cache"]
-    output_fields.extend(profiler.times.keys())
-    dt_prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-    output_csv_path = Path(f"{dt_prefix}_metal_bert_15_perf.csv")
-    with open(output_csv_path, "w", newline="") as output_csv:
-        output_csv_writer = csv.DictWriter(output_csv, fieldnames=output_fields)
-        output_csv_writer.writeheader()
-
-        output = {
-            "whole_test_runtime": whole_test_runtime,
-            "model_runtime_to_fill_cache": model_runtime_to_fill_cache,
-        }
-        for key in profiler.times.keys():
-            output[key] = profiler.get(key)
-
-        output_csv_writer.writerow(output)
-
+    ttl.profiler.stop_profiling("Whole_Test")
     # assert profiler.get("whole_model") < 60.0
     assert (
         passing_start and passing_end
@@ -400,6 +380,9 @@ def test_bert_batch_dram(
 
     disable_compile_cache()
     enable_compilation_reports()
+
+    ttl.profiler.set_profiler_flag(False)
+    ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_full/")
 
     run_bert_question_and_answering_inference(
         model_version,

@@ -290,6 +290,8 @@ def import_device_profile_log(logPath):
                         "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData)]}}}}
                     }
 
+            elif lineCount == 0:
+                assert "Chip clock is at " in row[0], f"CSV {logPath} has bad header format"
     # Sort all timeseries and find global min timestamp
     globalMinTS = (1 << 64) - 1
     globalMinRisc = "BRISC"
@@ -808,7 +810,7 @@ def timeline_annotations(yVals, deviceData, fig, setup):
     return fig
 
 
-def generate_plots(devicesData, setup):
+def generate_plots(devicesData, setup, saveFigure=True):
     timelineFigs = {}
     for chipID, deviceData in devicesData["devices"].items():
         timeseries_to_durations(deviceData)
@@ -829,8 +831,10 @@ def generate_plots(devicesData, setup):
             f"{setup.outputFolder}/{fig.replace(' ','_')}_{setup.devicePerfHTML}": fig
             for fig in sorted(timelineFigs.keys())
         }
-        for filename, figHtml in figHtmls.items():
-            timelineFigs[figHtml].write_html(filename)
+
+        if saveFigure:
+            for filename, figHtml in figHtmls.items():
+                timelineFigs[figHtml].write_html(filename)
 
     return timelineFigs
 
@@ -846,7 +850,6 @@ def run_dashbaord_webapp(devicesData, timelineFigs, setup):
 
     plotsDiv = []
     for num, item in enumerate(sorted(set(timelineFigs.keys()) | set(statTables.keys()))):
-
         plotRiscs = set()
         for marker in timelineFigs[item]["data"]:
             if marker["y"][-1][0] in setup.riscs:

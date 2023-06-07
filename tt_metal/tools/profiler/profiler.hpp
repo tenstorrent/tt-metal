@@ -28,6 +28,10 @@ struct TimerPeriod {
 
 class Profiler {
     private:
+        // Do prfoile flag
+        bool do_profile_host = false;
+
+        // Holds name to timers
         std::unordered_map <std::string, TimerPeriod> name_to_timer_map;
 
         // Recreate host side log file with header
@@ -63,11 +67,14 @@ class Profiler {
         //Constructor
         Profiler();
 
+        //Enable/disable host side profiling on host side
+        void setHostDoProfile(bool profile_flag);
+
         //Mark the steady_clock for the start of the asked name
         void markStart(std::string timer_name);
 
         //Mark the steady_clock time for the end of the asked name
-        void markStop(std::string timer_name);
+        void markStop(std::string timer_name, bool dumpResults = true);
 
         //Set the host side file flag
         void setHostNewLogFlag(bool new_log_flag);
@@ -78,8 +85,11 @@ class Profiler {
         //Change the output dir of the profile logs
         void setOutputDir(std::string new_output_dir);
 
-        //Traverse all timers and dump the results
-        void dumpHostResults(std::string name_append);
+        //Traverse all timers and dump the results, appending addtional fields
+        void dumpHostResults(const std::vector<std::pair<std::string,std::string>>& additional_fields, std::string name_append = "");
+
+        //Traverse all timers and dump the results with only default fields
+        void dumpHostResults(std::string name_append = "");
 
         //Traverse all cores on the device and dump the device profile results
         void dumpDeviceResults(tt_cluster *cluster, int pcie_slot, const vector<CoreCoord> &worker_cores);

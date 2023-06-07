@@ -139,7 +139,11 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
-    switch (bcast_op_utils::get_parallelization_strategy(input_tensor_a, this->dim)) {
+    auto parallelization_strategy = bcast_op_utils::get_parallelization_strategy(input_tensor_a, this->dim);
+
+    op_profiler::set_parallelization_strategy(parallelization_strategy);
+
+    switch (parallelization_strategy){
         case BcastOpParallelizationStrategy::MULTI_CORE_H:
             return bcast_multi_core_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
         case BcastOpParallelizationStrategy::MULTI_CORE_W:

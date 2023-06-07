@@ -92,6 +92,19 @@ void DumpHostProfileResults(std::string name_prepend = "");
  * */
 void DumpDeviceProfileResults(Device *device, const Program &program);
 
+
+
+/**
+ * Enable/Disable host side profiling of tt_metal API
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                |  Data type  | Valid range              | required |
+ * |--------------|------------------------------------------------------------|-------------|--------------------------|----------|
+ * | do_profile   | Enable or Disable the host side profiling through this arg | bool        | true/false               | Yes      |
+ * */
+void SetHostProfilerFlag(bool do_profile);
+
 /**
  * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
  *

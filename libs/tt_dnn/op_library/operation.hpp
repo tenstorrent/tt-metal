@@ -6,6 +6,7 @@
 
 #include <experimental/type_traits>
 
+#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 namespace tt::tt_metal {
 
@@ -117,6 +118,7 @@ class Operation {
         virtual operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
 
         virtual bool supports_program_caching() const = 0;
+        virtual std::string get_op_name() const = 0 ;
     };
 
     template< typename T >
@@ -189,6 +191,10 @@ class Operation {
         bool supports_program_caching() const override {
             return implements_compute_program_hash<T>();
         }
+        
+        std::string get_op_name() const {
+            return typeid(T).name();
+        }
 
       private:
         T object;
@@ -241,8 +247,12 @@ class Operation {
     bool supports_program_caching() const {
         return this->implementation_->supports_program_caching();
     }
+    std::string get_op_name() const {
+        return this->implementation_->get_op_name();
+    }
+
+
 };
 
 }
-
 }

@@ -100,7 +100,7 @@ class default_setup(metaclass=MergeMetaclass):
 
     webappPort = 8050
 
-    outputFolder = "output"
+    outputFolder = "output/device"
     deviceInputLog = "logs/profile_log_device.csv"
     deviceRearranged = "device_rearranged_timestamps.csv"
     deviceAnalysisData = "device_analysis_data.json"

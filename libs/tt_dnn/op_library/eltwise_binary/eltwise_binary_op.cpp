@@ -58,7 +58,12 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
-    switch (eltwise_binary_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b)){
+    auto parallelization_strategy = eltwise_binary_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b);
+
+    op_profiler::set_preferred_name(this->op_type);
+    op_profiler::set_parallelization_strategy(parallelization_strategy);
+
+    switch (parallelization_strategy){
         case BinaryOpParallelizationStrategy::MULTI_CORE:
             return eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
             break;

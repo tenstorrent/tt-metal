@@ -59,7 +59,7 @@ def main(wipe):
                 )
                 assert ret == 0, f"Log process script crashed with exit code {ret}"
 
-                os.system(f"cp {PROFILER_DIR}/output/*.* {GOLDEN_OUTPUTS_DIR}/test_{testName}/")
+                os.system(f"cp {PROFILER_DIR}/output/device/*.* {GOLDEN_OUTPUTS_DIR}/test_{testName}/")
                 beautify_tt_js_blob(f"{GOLDEN_OUTPUTS_DIR}/test_{testName}/")
                 filter_device_analysis_data(f"{GOLDEN_OUTPUTS_DIR}/test_{testName}/")
 

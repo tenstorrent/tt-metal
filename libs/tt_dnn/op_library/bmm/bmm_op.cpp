@@ -308,7 +308,10 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<std::re
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
-    switch (bmm_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b)){
+    auto parallelization_strategy = bmm_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b);
+    op_profiler::set_parallelization_strategy (parallelization_strategy);
+
+    switch (parallelization_strategy){
         case BmmOpParallelizationStrategy::MULTI_CORE:
             return {matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor)};
             break;
@@ -366,7 +369,10 @@ operation::ProgramWithCallbacks BatchedMatmul::create_program(const std::vector<
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
-    switch (bmm_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b)){
+    auto parallelization_strategy = bmm_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b);
+    op_profiler::set_parallelization_strategy (parallelization_strategy);
+
+    switch (parallelization_strategy){
         case BmmOpParallelizationStrategy::MULTI_CORE:
             return {bmm_multi_core(input_tensor_a, input_tensor_b, output_tensor)};
             break;
@@ -394,7 +400,6 @@ operation::ProgramWithCallbacks BatchedMatmul::create_program(const std::vector<
     }
 
 }
-
 
 /*
  * BERT LARGE MATMUL AND BMM
@@ -508,6 +513,9 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
     MathFidelity math_fidelity = MathFidelity::LoFi;
     uint32_t in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N;
     bool fuse_batch = true;
+
+    op_profiler::set_preferred_name(this->bert_large_matmul_op_type);
+
     switch (this->bert_large_matmul_op_type) {
         case BertLargeMatmulOpType::FUSED_QKV:
             compute_and_storage_grid_size = {12, 9};
@@ -575,7 +583,6 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
     }
     return {std::move(program)};
 }
-
 
 }  // namespace tt_metal
 

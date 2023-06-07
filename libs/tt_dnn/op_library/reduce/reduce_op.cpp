@@ -86,7 +86,11 @@ operation::ProgramWithCallbacks Reduce::create_program(const std::vector<std::re
     const auto& input_tensor = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
 
-    switch (reduce_op_utils::get_parallelization_strategy(input_tensor, this->dim)){
+    auto parallelization_strategy = reduce_op_utils::get_parallelization_strategy(input_tensor, this->dim);
+
+    op_profiler::set_parallelization_strategy(parallelization_strategy);
+
+    switch (parallelization_strategy){
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
             return {reduce_multi_core_h(input_tensor, output_tensor, this->math_op, this->dim, this->scaler)};
         case ReduceOpParallelizationStrategy::MULTI_CORE_W:
