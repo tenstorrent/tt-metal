@@ -24,6 +24,116 @@ void EnableCompileCache() { enable_compile_cache = true; }
 void DisableCompileCache() { enable_compile_cache = false; }
 bool GetCompileCacheEnabled() { return enable_compile_cache; }
 
+const std::string &metal_reports_dir() {
+    static const std::string reports_path = utils::get_reports_dir() + "tt_metal/";
+    return reports_path;
+}
+
+bool enable_compilation_reports = false;
+void EnableCompilationReports() { enable_compilation_reports = true; }
+
+class CompilationReporter {
+   public:
+    CompilationReporter() {}
+
+    ~CompilationReporter() {
+        if (enable_compilation_reports) {
+            string footer = "Number of CompileProgram API calls: " + std::to_string(this->total_num_compile_programs_) + "\n";
+            this->detailed_report_ << footer;
+            this->summary_report_ << footer;
+            this->detailed_report_.close();
+            this->summary_report_.close();
+        }
+    }
+
+    void add_kernel_compile_stats(const Program &program, Kernel *kernel, bool cache_hit, size_t kernel_hash) {
+        if (not enable_compilation_reports) {
+            return;
+        }
+        unique_lock<mutex> lock(mutex_);
+
+        auto id = this->total_num_compile_programs_;
+        if (cache_hit) {
+            this->program_id_to_cache_hit_counter_[id].hits++;
+        } else {
+            this->program_id_to_cache_hit_counter_[id].misses++;
+        }
+        std::string kernel_stats = "," + kernel->name() + ",";
+        std::string cache_status = cache_hit ? "cache hit" : "cache miss";
+
+        int index = 0;
+        for (auto core_range : kernel->core_range_set().ranges()) {
+            if (index == 0) {
+                kernel_stats += "\"" + core_range.str() + "\", " + cache_status + ", " + kernel_attributes_str(kernel) + ", " + std::to_string(kernel_hash) + "\n";
+            } else {
+                kernel_stats += ",,\"" + core_range.str() + "\", , ,\n";
+            }
+            index++;
+        }
+        this->program_id_to_kernel_stats_[id].push_back(kernel_stats);
+    }
+
+    void flush_program_entry(const Program &program) {
+        if (not enable_compilation_reports) {
+            return;
+        }
+        unique_lock<mutex> lock(mutex_);
+        auto id = this->total_num_compile_programs_;
+        auto num_cache_misses = this->program_id_to_cache_hit_counter_.at(id).misses;
+        auto num_cache_hits = this->program_id_to_cache_hit_counter_.at(id).hits;
+        if (this->total_num_compile_programs_ == 0) {
+            this->init_reports();
+        }
+        this->summary_report_ << id << ", "
+                              << program.compute_kernels().size() << ", "
+                              << program.data_movement_kernels().size() << ", "
+                              << (enable_compile_cache ? "Y" : "N") << ", "
+                              << num_cache_misses << ", "
+                              << num_cache_hits << "\n";
+
+        this->detailed_report_ << "Compiling Program: " << id << "\n";
+        this->detailed_report_ << "\n,Kernel Creation Report:\n";
+        this->detailed_report_ << ",,Number of CreateComputeKernel API calls: " << program.compute_kernels().size() << "\n";
+        this->detailed_report_ << ",,Number of CreateDataMovementKernel API calls: " << program.data_movement_kernels().size() << "\n";
+
+        this->detailed_report_ << "\n,Kernel Compilation Report:\n";
+        this->detailed_report_ << ",,Persistent kernel compile cache enabled: " << (enable_compile_cache ? "Y\n" : "N\n");
+        this->detailed_report_ << ",,Total number of kernel compile cache misses: " << num_cache_misses << "\n";
+        this->detailed_report_ << ",,Total number of kernel compile cache hits: " << num_cache_hits << "\n";
+
+        this->detailed_report_ << "\n,Kernel File Name, Core Range, Cache Hit, Kernel Attributes, Hash\n";
+        auto kernel_stats_vec = this->program_id_to_kernel_stats_.at(id);
+        for (const auto &kernel_stats : kernel_stats_vec) {
+            this->detailed_report_ << kernel_stats;
+        }
+        this->detailed_report_ << "\n";
+
+        this->summary_report_.flush();
+        this->detailed_report_.flush();
+        this->total_num_compile_programs_++;
+    }
+
+   private:
+    void init_reports() {
+        static const std::string compile_report_path = metal_reports_dir() + "compile_program.csv";
+        static const std::string summary_report_path = metal_reports_dir() + "compile_program_summary.csv";
+        fs::create_directories(metal_reports_dir());
+        this->detailed_report_.open(compile_report_path);
+        this->summary_report_.open(summary_report_path);
+        this->summary_report_ << "Program, Number of CreateComputeKernel API calls, Number of CreateDataMovementKernel API calls, Persistent Kernel Compile Cache Enabled, Total Number of Kernel Cache Misses, Total Number of Kernel Cache Hits\n";
+    }
+
+    struct cache_counters {int misses = 0; int hits = 0; };
+    std::mutex mutex_;
+    size_t total_num_compile_programs_ = 0;
+    std::unordered_map<size_t, cache_counters> program_id_to_cache_hit_counter_;
+    std::unordered_map<size_t, std::vector<string>> program_id_to_kernel_stats_;
+    std::ofstream detailed_report_;
+    std::ofstream summary_report_;
+};
+
+static CompilationReporter compilation_reporter = CompilationReporter();
+
 void DumpHostProfileResults(std::string name_prepend){
     tt_metal_profiler.dumpHostResults(name_prepend);
 }
@@ -743,23 +853,18 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
     // if path exists we assume that the complied kernel is there and is valid and up to date
     // This is obviously an incorrect assumption (because there's no checking performed)
     // but allows to improve iteration speed.
-    // cout << "Enable cache = " << enable_compile_cache << std::endl;
     if (enable_compile_cache or HashLookup::inst().exists(kernel_hash)) {
         path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix); // PROF_END("CCGEN_PREAMBLE")
     }
 
     if (not path_exists) {
-        //if (enable_compile_cache)
-        //    cout << "======= Compiling" << std::endl;
         // PROF_BEGIN("CCGEN_BIN")
         GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
         HashLookup::inst().add(kernel_hash);
         // PROF_END("CCGEN_BIN")
-    } else {
-        //if (enable_compile_cache)
-        //    cout << "======= Skipping compiling..." << std::endl;
-        //TT_ASSERT(kernel->binary_path().empty() and kernel->binaries().empty());
     }
+
+    compilation_reporter.add_kernel_compile_stats(program, kernel, path_exists, kernel_hash);
 
     kernel->set_binary_path(kernel_path_suffix);
     kernel->set_binaries(kernel_path_suffix);
@@ -799,6 +904,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     // This can be removed when we load BRISC FW separately from kernel
     AddBlankDataMovementKernel(device, program, profile_kernel);
 
+    compilation_reporter.flush_program_entry(program);
     tt_metal_profiler.markStop("CompileProgram");
     return pass;
 }

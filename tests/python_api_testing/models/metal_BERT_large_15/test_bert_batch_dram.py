@@ -18,6 +18,7 @@ from python_api_testing.models.metal_BERT_large_15.fused_ops.linear import Linea
 from libs.tt_lib.utils import pad_activation, pad_weight
 from utility_functions import (
     enable_compile_cache,
+    enable_compilation_reports,
     comp_allclose_and_pcc,
     comp_pcc,
     comp_allclose,

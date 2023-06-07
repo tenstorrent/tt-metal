@@ -224,6 +224,9 @@ class ComputeKernel : public Kernel {
     bool math_approx_mode_;       // Run math in approx mode
 };
 
+// TODO (abhullar): As part of #885 this function can be cleaned up and be incorporated into Kernel << overloaded func
+std::string kernel_attributes_str(Kernel *kernel);
+
 struct KernelDefinesHash {
     KernelDefinesHash() {}
 

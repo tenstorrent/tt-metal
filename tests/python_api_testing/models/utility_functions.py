@@ -127,6 +127,13 @@ def get_compile_cache_enabled():
     return ttl.device.GetCompileCacheEnabled()
 
 
+def enable_compilation_reports():
+    """
+    Enables generating reports of compilation statistics in .reports/tt_metal dir
+    """
+    return ttl.device.EnableCompilationReports()
+
+
 def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)

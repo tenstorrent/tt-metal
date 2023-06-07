@@ -37,5 +37,10 @@ namespace utils
         }
         return root_dir;
     }
+
+    const std::string& get_reports_dir() {
+        static const std::string outpath = get_root_dir() + "/.reports/";
+        return outpath;
+    }
 }
 }

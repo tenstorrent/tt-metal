@@ -243,6 +243,40 @@ std::ostream& operator<<(std::ostream& os, const KernelType& type) {
     return os;
 }
 
+std::string kernel_attributes_str(Kernel *kernel) {
+    std::string attr_str = "{";
+    if (not kernel->compile_time_args().empty()) {
+        attr_str += "Compile args: [";
+        for (const auto compile_arg : kernel->compile_time_args()) {
+            attr_str += std::to_string(compile_arg) + " ";
+        }
+        attr_str += "] ";
+    }
+    if (not kernel->defines().empty()) {
+        attr_str += "Defines: {";
+        for (const auto &[k, v] : kernel->defines()) {
+            attr_str += "{ " + k + " - " + v + " } ";
+        }
+        attr_str += "} ";
+    }
+    if (kernel->kernel_type() == KernelType::DataMovement) {
+        auto data_movement_kernel = dynamic_cast<DataMovementKernel *>(kernel);
+        attr_str += "NOC: " + std::to_string(data_movement_kernel->noc()) + " ";
+    } else {
+        auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel);
+        std::stringstream math_fidel_str;
+        math_fidel_str << compute_kernel->math_fidelity();
+        attr_str += "Math fidelity: " + math_fidel_str.str() + " ";
+        string fp32_en_str = compute_kernel->fp32_dest_acc_en() ? "Y" : "N";
+        attr_str += "FP32 dest accumulate enabled: " + fp32_en_str + " ";
+        string math_approx_str = compute_kernel->math_approx_mode() ? "Y" : "N";
+        attr_str += "Math approx mode enabled: " + math_approx_str + " ";
+    }
+
+    attr_str += "}";
+    return attr_str;
+}
+
 size_t KernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {
     size_t hash_value = 0;
     for (auto it = c_defines.begin(); it != c_defines.end(); ++it)
