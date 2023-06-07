@@ -265,6 +265,7 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.decoders_first):
+            print(f"First dec id: {idx}")
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -312,6 +313,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
         config,
         num_decoders_start,
         num_decoders,
+        is_causallm=True,
     ):
         super().__init__()
 
@@ -324,6 +326,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
         self.num_decoders_start = num_decoders_start
         self.num_decoders = num_decoders
         self.config = config
+        self.is_causallm = is_causallm
 
         # stack all decoders
         self.decoders_second = build_decoders(
@@ -468,6 +471,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.decoders_second):
+            print(f"Second dec id: {idx}")
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -491,7 +495,8 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
         hidden_states = self.final_layernorm(hidden_states)
 
         # apply linear layer for causallm model
-        hidden_states = linear(hidden_states, self.weight, self.bias)
+        if self.is_causallm:
+            hidden_states = linear(hidden_states, self.weight, self.bias)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:

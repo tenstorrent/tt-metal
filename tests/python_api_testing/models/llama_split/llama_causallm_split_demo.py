@@ -273,6 +273,7 @@ def run_llama_split_inference(
     num_decoders_start,
     num_decoders,
     x_inputs=None,
+    att_mask=None,
     position_ids=None,
     half=1,
 ):
@@ -287,7 +288,9 @@ def run_llama_split_inference(
             num_decoders_start,
             num_decoders,
         )
-        tt_out = tt_llama_model(input_ids=x_inputs, position_ids=position_ids)
+        tt_out = tt_llama_model(
+            input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
+        )
     else:
         logger.info("Second pass throught TT model")
         tt_llama_model = TtLlamaModelSecondHFModel(
@@ -299,7 +302,9 @@ def run_llama_split_inference(
             num_decoders_start,
             num_decoders,
         )
-        tt_out = tt_llama_model(input_ids=x_inputs, position_ids=position_ids)
+        tt_out = tt_llama_model(
+            input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
+        )
 
     # returned type from the model is tuple
     tt_output = tt2torch_tensor(tt_out[0])
@@ -332,21 +337,27 @@ if __name__ == "__main__":
     # generate real input ============================================================
     prompt = "I believe the meaning of life is"
     inputs = tokenizer(prompt, return_tensors="pt")
-    # generate_ids = hugging_face_reference_model.generate(
-    #     inputs.input_ids, max_length=30
-    # )
-    out_tensor = hugging_face_reference_model(inputs.input_ids)
-    logger.info(f"HF output fw shape: {out_tensor.shape}")
+    # padded output
+    input_ids = pad_input_32(inputs.input_ids, configuration.pad_token_id)
+    attention_mask = pad_input_32(inputs.attention_mask, 0)
 
+    # generate output of 30 words ----------------------------------
+    generate_ids = hugging_face_reference_model.generate(input_ids, max_length=60)
     logger.info(f"generate_ids shape: {generate_ids.shape}")
     output = tokenizer.batch_decode(
         generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
     logger.info(f"PyTorch response: {output}")
 
+    # call forward function one time -------------------------------
+    pytorch_out = hugging_face_reference_model(
+        input_ids=input_ids, attention_mask=attention_mask
+    )
+    logger.info(f"PT output shape: {pytorch_out.logits.shape}")
+
     # get positions_ids values
     past_key_values_length = 0
-    seq_length = inputs.input_ids.shape[1]
+    seq_length = input_ids.shape[1]
 
     position_ids = torch.arange(
         past_key_values_length,
@@ -360,16 +371,16 @@ if __name__ == "__main__":
     device = None
 
     for i in range(1):
-        text_input_ids = inputs.input_ids
+        text_input_ids = input_ids
 
         # add padding
-        input_ids = pad_input_32(text_input_ids, configuration.pad_token_id)
-        attention_mask = pad_input_32(inputs.attention_mask, 0)
-        position_ids = pad_input_32(position_ids, 0)
+        # input_ids = pad_input_32(text_input_ids, configuration.pad_token_id)
+        # attention_mask = pad_input_32(inputs.attention_mask, 0)
+        # position_ids = pad_input_32(position_ids, 0)
 
-        logits_processor = get_logits_processor(
-            input_ids, hugging_face_reference_model.config
-        )
+        # logits_processor = get_logits_processor(
+        #     input_ids, hugging_face_reference_model.config
+        # )
 
         logger.info(f"The first call started: loop {i+1}")
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -384,7 +395,8 @@ if __name__ == "__main__":
             configuration,
             num_decoders_start=first_decoder_start,
             num_decoders=num_consecutive_decoders,
-            x_inputs=input_ids,
+            x_inputs=text_input_ids,
+            att_mask=attention_mask,
             position_ids=position_ids,
             half=1,
         )
@@ -409,6 +421,7 @@ if __name__ == "__main__":
             num_decoders_start=second_decoder_start,
             num_decoders=num_consecutive_decoders,
             x_inputs=tt_input,
+            att_mask=attention_mask,
             position_ids=position_ids,
             half=2,
         )
@@ -417,6 +430,24 @@ if __name__ == "__main__":
 
         # squeeze
         tt_out = tt_out.squeeze(1)
+        logger.info(f"TT out shape: {tt_out.shape}")
+
+        # check outputs -----------------------------------------------------------
+        pcc = 0.98
+        logger.info(comp_allclose(pytorch_out.logits, tt_out))
+
+        does_pass, pcc_value = comp_pcc(pytorch_out.logits, tt_out, pcc)
+        logger.info(f"PCC value: {pcc_value}")
+
+        if does_pass:
+            logger.info("Llama Model Passed!")
+        else:
+            logger.warning("Llama Model Failed!")
+            assert does_pass, f"PCC value is lower than {pcc}"
+
+        import sys
+
+        sys.exit(0)
 
         # update the inputs
         next_token_logits = tt_out
