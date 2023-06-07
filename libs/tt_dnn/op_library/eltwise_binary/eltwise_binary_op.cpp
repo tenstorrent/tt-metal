@@ -20,8 +20,8 @@ void add_defines(ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_ty
     eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_code.c_str());
 }
 
-BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, const Tensor &b){
-    uint32_t num_tiles = a.volume() / TILE_HW;
+BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &input_tensor_a, const Tensor &input_tensor_b){
+    uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
     if(num_tiles > 1){
         return BinaryOpParallelizationStrategy::MULTI_CORE;
     }
@@ -36,49 +36,70 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor eltwise_binary_(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_type) {
-    switch (eltwise_binary_op_utils::get_parallelization_strategy(a, b)){
+ std::vector<Shape> EltwiseBinary::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+    return {input_tensor.shape()};
+}
+
+std::vector<Tensor> EltwiseBinary::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+    std::vector<Tensor> output_tensors;
+    output_tensors.emplace_back(tt_metal::Tensor(input_tensor.shape(), input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device()));
+    return output_tensors;
+}
+
+
+Program EltwiseBinary::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
+    auto& output_tensor = output_tensors.at(0);
+
+    switch (eltwise_binary_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b)){
         case BinaryOpParallelizationStrategy::MULTI_CORE:
-            return eltwise_binary_multi_core(a, b, op_type);
+            return eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
             break;
         case BinaryOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return eltwise_binary_single_core(a, b, op_type);
+            return eltwise_binary_single_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
     }
+
 }
-Tensor eltwise_binary(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_type) {
+
+Tensor eltwise_binary(const EltwiseBinary& op, const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
 
     Device * device;
-
-    // Get the device
-    if (a.on_host() && b.on_host()) {
+    if (input_tensor_a.on_host() && input_tensor_b.on_host()) {
         device = AutoPad::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else if (!a.on_host()){
-        device = a.device();
+    } else if (!input_tensor_a.on_host()){
+        device = input_tensor_a.device();
     } else {
-        device = b.device();
+        device = input_tensor_b.device();
     }
-    TT_ASSERT(a.shape() == b.shape() && "Operand to eltwise binary need to be the same size!");
+    TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape() && "Operand to eltwise binary need to be the same size!");
 
-    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape());
-    auto b_pad_shape = AutoPad::pad_to_tile_shape(b.shape());
-    auto out_shape = a.shape();
-    auto no_pad_a = AutoPad::check_input_tensor_format(a, a_pad_shape);
-    auto no_pad_b = AutoPad::check_input_tensor_format(b, b_pad_shape);
+    auto padded_input_shape_a = AutoPad::pad_to_tile_shape(input_tensor_a.shape());
+    auto padded_input_shape_b = AutoPad::pad_to_tile_shape(input_tensor_b.shape());
+    auto output_shape = input_tensor_a.shape();
+    auto no_pad_a = AutoPad::check_input_tensor_format(input_tensor_a, padded_input_shape_a);
+    auto no_pad_b = AutoPad::check_input_tensor_format(input_tensor_b, padded_input_shape_b);
     if (no_pad_a && no_pad_b) {
-        return eltwise_binary_(a, b, op_type);
+        return std::move(op.run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
     } else if (no_pad_a) {
-        auto output = eltwise_binary_(a, AutoPad::format_input_tensor(b, device, b_pad_shape, 0), op_type);
-        AutoPad::format_output_tensor(a, output, out_shape, device);
+        const auto padded_input_tensor_b = AutoPad::format_input_tensor(input_tensor_b, device, padded_input_shape_b, 0);
+        auto output = std::move(op.run({std::cref(input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
+        AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
         return output;
     } else if (no_pad_b) {
-        auto output = eltwise_binary_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), b, op_type);
-        AutoPad::format_output_tensor(a, output, out_shape, device);
+        const auto padded_input_tensor_a = AutoPad::format_input_tensor(input_tensor_a, device, padded_input_shape_a, 0);
+        auto output = std::move(op.run({std::cref(padded_input_tensor_a), std::cref(input_tensor_b)}).at(0));
+        AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
         return output;
     } else {
-        auto output = eltwise_binary_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), AutoPad::format_input_tensor(b, device, b_pad_shape, 0), op_type);
-        AutoPad::format_output_tensor(a, output, out_shape, device);
+        const auto padded_input_tensor_a = AutoPad::format_input_tensor(input_tensor_a, device, padded_input_shape_a, 0);
+        const auto padded_input_tensor_b = AutoPad::format_input_tensor(input_tensor_b, device, padded_input_shape_b, 0);
+        auto output = std::move(op.run({std::cref(padded_input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
+        AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
         return output;
     }
 

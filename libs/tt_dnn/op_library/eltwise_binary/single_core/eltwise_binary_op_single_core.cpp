@@ -8,10 +8,9 @@ using namespace tt::constants;
 namespace tt {
 
 namespace tt_metal {
+Program eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType::Enum op_type) {
 
-Tensor eltwise_binary_single_core(const Tensor &a, const Tensor &b, BinaryOpType::Enum op_type) {
-    tt_metal::Program program = tt_metal::Program();
-
+    Program program{};
     CoreCoord core = {0, 0};
 
     // TODO: Build some sort of dispatcher based on location of op operands
@@ -34,7 +33,6 @@ Tensor eltwise_binary_single_core(const Tensor &a, const Tensor &b, BinaryOpType
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -110,16 +108,6 @@ Tensor eltwise_binary_single_core(const Tensor &a, const Tensor &b, BinaryOpType
 
     eltwise_binary_op_utils::add_defines(eltwise_binary_kernel, op_type);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
 
     tt_metal::WriteRuntimeArgsToDevice(
         device,
@@ -142,11 +130,8 @@ Tensor eltwise_binary_single_core(const Tensor &a, const Tensor &b, BinaryOpType
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,
         num_tiles});
-
-    tt_metal::LaunchKernels(device, program);
-
     // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 }  // namespace tt_metal
