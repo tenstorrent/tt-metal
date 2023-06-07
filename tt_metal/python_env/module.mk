@@ -9,7 +9,6 @@ python_env/dev: $(PYTHON_ENV)/.installed-dev
 # .PRECIOUS: $(PYTHON_ENV)/.installed $(PYTHON_ENV)/%
 $(PYTHON_ENV)/.installed: tt_metal/python_env/requirements.txt
 	python3.8 -m venv $(PYTHON_ENV)
-	bash -c "source $(PYTHON_ENV)/bin/activate && pip3.8 install wheel==0.37.1"
 	bash -c "source $(PYTHON_ENV)/bin/activate && pip3.8 install -r tt_metal/python_env/requirements.txt"
 	touch $@
 
