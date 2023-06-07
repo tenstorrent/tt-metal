@@ -118,6 +118,7 @@ namespace ckernel::packer
       TTI_NOP; TTI_NOP;
    }
 
+   template <bool is_fp32_dest_acc_en>
    inline void set_packer_config(const uint operand_id){
 
       // Get pointer to registers for current state ID
@@ -176,7 +177,7 @@ namespace ckernel::packer
 
       dest_rd_ctrl_u dest_rd_ctrl;
       dest_rd_ctrl.val = 0;
-      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (uint)pack_src_format[operand_id] == (uint)DataFormat::Int8;
+      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = ((uint)pack_src_format[operand_id] == (uint)DataFormat::Int8) | (is_fp32_dest_acc_en ? 1 : 0);
       cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
 
       if (IS_BFP_FORMAT(pack_dst_format[operand_id])) {
@@ -321,8 +322,6 @@ namespace ckernel::packer
          tensix_sync();	         
       }	      
 
-      cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = is_fp32_dest_acc_en ? (0x1) : (0x0);
-
       set_packer_strides(pack_output);
 
       t6_mutex_acquire(mutex::REG_RMW);
@@ -333,7 +332,7 @@ namespace ckernel::packer
 
       t6_mutex_release(mutex::REG_RMW);
 
-      set_packer_config(pack_output);
+      set_packer_config<is_fp32_dest_acc_en>(pack_output);
 
       set_packer_l1_offset(pack_output);
 
