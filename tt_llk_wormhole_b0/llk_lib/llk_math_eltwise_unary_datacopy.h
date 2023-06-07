@@ -163,7 +163,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_o
     if constexpr (type == A2D) {
         eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16);
     } else if constexpr (type == B2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type, false>(p_movb2d::MOV_4_ROWS, 16);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16);
     } else {
         FWASSERT("Unsupported op!", false);
     }
