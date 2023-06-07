@@ -512,8 +512,8 @@ def gen_unpad_args(input_shapes):
                     random.randrange(output_tensor_start[i], input_shapes[0][i], 1)
                     for i in range(4)
                 ]
-                output_tensor_end[-2] = nearest_32(output_tensor_end[-2]) - 1
-                output_tensor_end[-1] = nearest_32(output_tensor_end[-1]) - 1
+                output_tensor_end[-2] = max(nearest_32(output_tensor_end[-2]), 32) - 1
+                output_tensor_end[-1] = max(nearest_32(output_tensor_end[-1]), 32) - 1
                 input_info.update(
                     {
                         "output_tensor_start": output_tensor_start,
