@@ -17,10 +17,10 @@ import pytest
 
 
 def run_mnist_inference(model, on_weka, pcc, model_location_generator):
-    with torch.no_grad():
-        torch.manual_seed(1234)
-        # Initialize the device
 
+    with torch.no_grad():
+
+        # Initialize the device
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
@@ -65,10 +65,6 @@ def run_mnist_inference(model, on_weka, pcc, model_location_generator):
     "model, on_weka, pcc",
     (("convnet_mnist.pt", True, 0.99),),
 )
-def test_mnist_inference(model, on_weka, pcc, model_location_generator):
+def test_mnist_inference(model, on_weka, pcc, model_location_generator, reset_seeds):
     run_mnist_inference(model, on_weka, pcc, model_location_generator)
-
-
-if __name__ == "__main__":
-    test_mnist_inference("convnet_mnist.pt", True, 0.99, model_location_generator_)
 
