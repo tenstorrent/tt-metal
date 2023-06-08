@@ -31,13 +31,14 @@ const std::string &metal_reports_dir() {
 
 bool enable_compilation_reports = false;
 void EnableCompilationReports() { enable_compilation_reports = true; }
+void DisableCompilationReports() { enable_compilation_reports = false; }
 
 class CompilationReporter {
    public:
     CompilationReporter() {}
 
     ~CompilationReporter() {
-        if (enable_compilation_reports) {
+        if (enable_compilation_reports or (this->detailed_report_.is_open() and this->summary_report_.is_open())) {
             string footer = "Number of CompileProgram API calls: " + std::to_string(this->total_num_compile_programs_) + "\n";
             this->detailed_report_ << footer;
             this->summary_report_ << footer;

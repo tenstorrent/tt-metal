@@ -116,6 +116,11 @@ Current Workarounds:
 
 .. autofunction:: tt_lib.device.GetDefaultDevice
 
+See :ref:`compilation-report-label` for more details on program compilation reports
+
+.. autofunction:: tt_lib.device.EnableCompilationReports
+
+.. autofunction:: tt_lib.device.DisableCompilationReports
 
 
 Models statuses

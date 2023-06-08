@@ -34,7 +34,6 @@ namespace tt_metal {
 extern void EnableCompileCache();
 extern int  DisableCompileCache();
 extern bool GetCompileCacheEnabled();
-extern void EnableCompilationReports();
 
 void TensorModule(py::module &m_tensor) {
     // ENUM SECTION
@@ -1509,7 +1508,12 @@ void DeviceModule(py::module &m_device) {
     m_device.def("DisableCompileCache", &DisableCompileCache);
     m_device.def("GetCompileCacheEnabled", &GetCompileCacheEnabled);
 
-    m_device.def("EnableCompilationReports", &EnableCompilationReports);
+    m_device.def("EnableCompilationReports", &EnableCompilationReports, R"doc(
+        Enables tt-metal to generate reports of compilation statistics
+    )doc");
+    m_device.def("DisableCompilationReports", &DisableCompilationReports, R"doc(
+        Disables generation of compilation statistics reports in tt-metal
+    )doc");
 
     m_device.def("GetHost", &GetHost, R"doc(
         Get a reference to host machine of a TT accelerator device, usually a reference to the host

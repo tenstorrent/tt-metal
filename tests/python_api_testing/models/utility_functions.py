@@ -134,6 +134,13 @@ def enable_compilation_reports():
     return ttl.device.EnableCompilationReports()
 
 
+def disable_compilation_reports():
+    """
+    Disables generating reports of compilation statistics
+    """
+    return ttl.device.DisableCompilationReports()
+
+
 def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
