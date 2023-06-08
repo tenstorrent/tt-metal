@@ -44,6 +44,7 @@ class Device {
     int num_dram_channels() const;
 
     uint32_t l1_size() const;
+    uint32_t dram_bank_size() const;
 
     CoreCoord logical_grid_size() const;
 

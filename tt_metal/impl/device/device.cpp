@@ -174,6 +174,12 @@ uint32_t Device::l1_size() const {
     }
     return this->cluster_->get_soc_desc(pcie_slot_).worker_l1_size;
 }
+uint32_t Device::dram_bank_size() const {
+    if (not cluster_is_initialized()) {
+        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
+    }
+    return this->cluster_->get_soc_desc(pcie_slot_).dram_bank_size;
+}
 
 CoreCoord Device::logical_grid_size() const {
     if (not cluster_is_initialized()) {
@@ -193,6 +199,12 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
+    log_assert(
+        logical_core < this->post_harvested_worker_grid_size_,
+        "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
+        logical_core.str(),
+        this->post_harvested_worker_grid_size_.str()
+    );
     CoreCoord worker_core = this->logical_to_routing_coord_lookup_table_.at(logical_core);
     return worker_core;
 }
@@ -225,6 +237,12 @@ CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
+    log_assert(
+        dram_channel < this->num_dram_channels(),
+        "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
+        dram_channel,
+        this->num_dram_channels()
+    );
     return this->cluster_->get_soc_desc(pcie_slot_).get_preferred_worker_core_for_dram_channel(dram_channel);
 }
 

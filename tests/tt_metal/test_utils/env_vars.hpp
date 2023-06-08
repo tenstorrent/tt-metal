@@ -1,10 +1,11 @@
+#pragma once
 #include "common/utils.hpp"
 
 namespace tt
 {
 namespace test_utils
 {
-    std::string get_env_arch_name() {
+    inline std::string get_env_arch_name() {
         constexpr std::string_view ARCH_NAME_ENV_VAR = "ARCH_NAME";
         std::string arch_name;
 

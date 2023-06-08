@@ -53,12 +53,12 @@ int main(int argc, char **argv) {
         CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t num_tiles = 2048;
+        uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src_addr = 0;
+        uint32_t dram_buffer_src_addr = 16*32*32;
         int dram_src_channel_id = 0;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
+        uint32_t dram_buffer_dst_addr = 0; // 512 MB (upper half)
         int dram_dst_channel_id = 0;
 
         auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
@@ -70,8 +70,8 @@ int main(int argc, char **argv) {
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
         uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 200 * 1024;
-        uint32_t num_input_tiles = 8;
+        uint32_t src0_cb_addr = 174080;
+        uint32_t num_input_tiles = 1;
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
             device,
@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
         );
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 300 * 1024;
+        uint32_t output_cb_addr = 225280;
         uint32_t num_output_tiles = 1;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
+            "tt_metal/kernels/dataflow/reader_unary.cpp",
             core,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
         bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "tt_metal/kernels/compute/eltwise_copy_3m.cpp",
+            "tt_metal/kernels/compute/eltwise_copy.cpp",
             core,
             compute_kernel_args,
             MathFidelity::HiFi4,

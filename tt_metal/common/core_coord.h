@@ -28,7 +28,7 @@ constexpr inline bool operator==(const CoreCoord &a, const CoreCoord &b) { retur
 constexpr inline bool operator!=(const CoreCoord &a, const CoreCoord &b) { return !(a == b); }
 
 constexpr inline bool operator<(const CoreCoord &left, const CoreCoord &right) {
-  return (left.x < right.x || (left.x == right.x && left.y < right.y));
+  return (left.x < right.x) && (left.y < right.y);
 }
 
 struct RelativeCoreCoord {
