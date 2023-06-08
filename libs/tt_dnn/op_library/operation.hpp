@@ -28,6 +28,7 @@ struct Operation {
     Operation& operator=(const Operation&) = delete;
     virtual ~Operation() {}
 
+    virtual void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
     virtual std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
     virtual std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
     virtual Program create_program(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, std::vector<Tensor> &output_tensors) const = 0;

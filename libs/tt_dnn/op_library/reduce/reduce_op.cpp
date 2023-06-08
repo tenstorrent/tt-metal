@@ -55,7 +55,9 @@ ReduceOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor 
 namespace tt {
 namespace tt_metal {
 
- std::vector<Shape> Reduce::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+void Reduce::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {}
+
+std::vector<Shape> Reduce::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0).get();
 
     auto output_shape = input_tensor.shape();

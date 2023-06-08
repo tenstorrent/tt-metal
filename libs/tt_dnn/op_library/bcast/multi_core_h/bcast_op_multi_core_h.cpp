@@ -13,7 +13,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor bcast_multi_core_h(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
+Program bcast_multi_core_h(const Tensor &a, const Tensor &b, Tensor& output, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
     TT_ASSERT(bcast_dim == BcastOpDim::H);
 
     const auto ashape = a.shape();
@@ -48,9 +48,6 @@ Tensor bcast_multi_core_h(const Tensor &a, const Tensor &b, BcastOpMath::Enum bc
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to bcast need to be allocated in buffers on device!");
 
     uint32_t single_tile_size = 2 * 1024;
-
-    // This should allocate a DRAM buffer on the device
-    tt_metal::Tensor output = Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
 
     const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::MULTI_CORE_H);
     const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
@@ -132,15 +129,6 @@ Tensor bcast_multi_core_h(const Tensor &a, const Tensor &b, BcastOpMath::Enum bc
 		bcast_op_utils::add_defines(bcast_kernel, bcast_dim, bcast_math);
 	}
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
 	for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores; num_Wtiles_read+=Ht_per_core[i]*Wt, i++){
 		CoreCoord core = {i / num_cores_y, i % num_cores_y};
 		uint32_t num_tensor_tiles_per_core = NC*Ht_per_core[i]*Wt;
@@ -185,12 +173,7 @@ Tensor bcast_multi_core_h(const Tensor &a, const Tensor &b, BcastOpMath::Enum bc
 		);
 	}
 
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 }  // namespace tt_metal

@@ -56,12 +56,12 @@ namespace tt {
 
 namespace tt_metal {
 
+void EltwiseUnary::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {}
 
- std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0).get();
     return {input_tensor.shape()};
 }
-
 
 std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0).get();

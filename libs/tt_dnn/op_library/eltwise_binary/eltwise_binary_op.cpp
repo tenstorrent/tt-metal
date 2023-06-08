@@ -36,7 +36,14 @@ namespace tt {
 
 namespace tt_metal {
 
- std::vector<Shape> EltwiseBinary::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+
+void EltwiseBinary::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
+    TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
+}
+
+std::vector<Shape> EltwiseBinary::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0).get();
     return {input_tensor.shape()};
 }

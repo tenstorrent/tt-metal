@@ -11,7 +11,7 @@ using namespace tt::constants;
 
 // FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
 const char* get_reader_name(BcastOpDim::Enum bcast_dim, BcastOpParallelizationStrategy::Enum bcast_parallelization_strategy) {
-		if (bcast_parallelization_strategy == BcastOpParallelizationStrategy::SINGLE_CORE) {
+    if (bcast_parallelization_strategy == BcastOpParallelizationStrategy::SINGLE_CORE) {
         if (bcast_dim == BcastOpDim::H) {
             return "tt_metal/kernels/dataflow/reader_bcast_h_8bank.cpp";
         } else if (bcast_dim == BcastOpDim::W) {
@@ -53,10 +53,10 @@ void add_defines(ComputeKernel* k, BcastOpDim::Enum bcast_dim, BcastOpMath::Enum
     k->add_define("BCAST_DIM", bdim_to_llkdim_define[int(bcast_dim)]);
 }
 
-BcastOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, BcastOpDim::Enum bcast_dim){
-    uint32_t num_tiles = a.volume() / TILE_HW;
-    uint32_t Ht = a.shape()[2] / TILE_HEIGHT;
-    uint32_t Wt = a.shape()[3] / TILE_WIDTH;
+BcastOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &input_tensor_a, BcastOpDim::Enum bcast_dim){
+    uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
+    uint32_t Ht = input_tensor_a.shape()[2] / TILE_HEIGHT;
+    uint32_t Wt = input_tensor_a.shape()[3] / TILE_WIDTH;
 
     if(Ht > 1 and bcast_dim == BcastOpDim::H){
         return BcastOpParallelizationStrategy::MULTI_CORE_H;
@@ -84,88 +84,113 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor bcast_(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
-    const auto ashape = a.shape();
-    const auto bshape = b.shape();
-    u32 N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
-    u32 bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
-    u32 NC = N*C;
-    u32 HW = H*W;
+void EltwiseBinaryBroadcast::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
 
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && NC > 0);
-    TT_ASSERT(a.volume() % TILE_HW == 0);
+    const auto input_shape_a = input_tensor_a.shape();;
+    const auto input_shape_b = input_tensor_b.shape();
 
-    TT_ASSERT((bN*bC == 1 || (bN == N && bC == C)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
+    if (this->dim == BcastOpDim::W) {
+        TT_ASSERT(input_shape_a[2] == input_shape_b[2]);
+    }
+    else if (this->dim == BcastOpDim::H) {
+        TT_ASSERT(input_shape_a[3] == input_shape_b[3]);
+    }
+
+    auto batch_size_a = input_shape_a[0];
+    auto num_channels_a = input_shape_a[1];
+    auto height_a = input_shape_a[2];
+    auto width_a = input_shape_a[3];
+    auto batch_size_b = input_shape_b[0];
+    auto num_channels_b = input_shape_b[1];
+    auto height_b = input_shape_b[2];
+    auto width_b = input_shape_b[3];
+
+    TT_ASSERT((batch_size_b * num_channels_b == 1 || (batch_size_b == batch_size_a && num_channels_b == num_channels_a)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
+
+    TT_ASSERT(width_a % TILE_WIDTH == 0 && height_a % TILE_HEIGHT == 0);
+    TT_ASSERT(height_a > 0 && width_a > 0 && batch_size_a * num_channels_a > 0);
+    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
+
     // validate input dimensions
-    if (bcast_dim == BcastOpDim::W)
-        TT_ASSERT(H == bH && bW == TILE_WIDTH);
-    if (bcast_dim == BcastOpDim::H)
-        TT_ASSERT(W == bW && bH == TILE_HEIGHT);
-    if (bcast_dim == BcastOpDim::HW)
-        TT_ASSERT(bW == TILE_WIDTH && bH == TILE_HEIGHT);
+    if (this->dim == BcastOpDim::W)
+        TT_ASSERT(height_a == height_b && width_b == TILE_WIDTH);
+    if (this->dim == BcastOpDim::H)
+        TT_ASSERT(width_a == width_b && height_b == TILE_HEIGHT);
+    if (this->dim == BcastOpDim::HW)
+        TT_ASSERT(width_b == TILE_WIDTH && height_b == TILE_HEIGHT);
+}
 
-    switch (bcast_op_utils::get_parallelization_strategy(a, bcast_dim)){
+
+std::vector<Shape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+    return {input_tensor.shape()};
+}
+
+
+std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+    auto output_tensor = tt_metal::Tensor(input_tensor.shape(), input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device());
+    return {output_tensor};
+}
+
+Program EltwiseBinaryBroadcast::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
+    auto& output_tensor = output_tensors.at(0);
+
+    switch (bcast_op_utils::get_parallelization_strategy(input_tensor_a, this->dim)) {
         case BcastOpParallelizationStrategy::MULTI_CORE_H:
-            return bcast_multi_core_h(a, b, bcast_math, bcast_dim);
+            return bcast_multi_core_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
             break;
         case BcastOpParallelizationStrategy::MULTI_CORE_W:
-            return bcast_multi_core_w(a, b, bcast_math, bcast_dim);
+            return bcast_multi_core_w(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
             break;
         case BcastOpParallelizationStrategy::MULTI_CORE_HW:
-            return bcast_multi_core_hw(a, b, bcast_math, bcast_dim);
+            return bcast_multi_core_hw(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
             break;
         case BcastOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return bcast_single_core(a, b, bcast_math, bcast_dim);
+            return bcast_single_core(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
     }
 }
 
-Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
+Tensor eltwise_binary_broadcast(const EltwiseBinaryBroadcast &op, const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
 
     Device * device;
-
-    // Get the device
-    if (a.on_host() && b.on_host()) {
+    if (input_tensor_a.on_host() && input_tensor_b.on_host()) {
         device = AutoPad::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else if (!a.on_host()){
-        device = a.device();
+    } else if (!input_tensor_a.on_host()){
+        device = input_tensor_a.device();
     } else {
-        device = b.device();
+        device = input_tensor_b.device();
     }
 
-    if (bcast_dim == BcastOpDim::W)
-        TT_ASSERT(a.shape()[2] == b.shape()[2]);
-    else if (bcast_dim == BcastOpDim::H)
-        TT_ASSERT(a.shape()[3] == b.shape()[3]);
+    auto padded_input_shape_a = AutoPad::pad_to_tile_shape(input_tensor_a.shape());
+    auto padded_input_shape_b = AutoPad::pad_to_tile_shape(input_tensor_b.shape());
+    auto output_shape = input_tensor_a.shape();
 
-
-    u32 N  = a.shape()[0], C  = a.shape()[1];
-    u32 bN = b.shape()[0], bC = b.shape()[1];
-
-
-    TT_ASSERT((bN*bC == 1 || (bN == N && bC == C)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
-
-    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape());
-    auto b_pad_shape = AutoPad::pad_to_tile_shape(b.shape());
-    auto out_shape = a.shape();
-
-    auto no_pad_a = AutoPad::check_input_tensor_format(a, a_pad_shape);
-    auto no_pad_b = AutoPad::check_input_tensor_format(b, b_pad_shape);
+    auto no_pad_a = AutoPad::check_input_tensor_format(input_tensor_a, padded_input_shape_a);
+    auto no_pad_b = AutoPad::check_input_tensor_format(input_tensor_b, padded_input_shape_b);
     if (no_pad_a && no_pad_b) {
-        return bcast_(a, b, bcast_math, bcast_dim);
+        return std::move(op.run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
     } else if (no_pad_a) {
-        auto output = bcast_(a, AutoPad::format_input_tensor(b, device, b_pad_shape, 0), bcast_math, bcast_dim);
-        AutoPad::format_output_tensor(a, output, out_shape, device);
+        const auto padded_input_tensor_b = AutoPad::format_input_tensor(input_tensor_b, device, padded_input_shape_b, 0);
+        auto output = std::move(op.run({std::cref(input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
+        AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
         return output;
     } else if (no_pad_b) {
-        auto output = bcast_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), b, bcast_math, bcast_dim);
-        AutoPad::format_output_tensor(a, output, out_shape, device);
+        const auto padded_input_tensor_a = AutoPad::format_input_tensor(input_tensor_a, device, padded_input_shape_a, 0);
+        auto output = std::move(op.run({std::cref(padded_input_tensor_a), std::cref(input_tensor_b)}).at(0));
+        AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
         return output;
     } else {
-        auto output = bcast_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), AutoPad::format_input_tensor(b, device, b_pad_shape, 0), bcast_math, bcast_dim);
-        AutoPad::format_output_tensor(a, output, out_shape, device);
+        const auto padded_input_tensor_a = AutoPad::format_input_tensor(input_tensor_a, device, padded_input_shape_a, 0);
+        const auto padded_input_tensor_b = AutoPad::format_input_tensor(input_tensor_b, device, padded_input_shape_b, 0);
+        auto output = std::move(op.run({std::cref(padded_input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
+        AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
         return output;
     }
 }

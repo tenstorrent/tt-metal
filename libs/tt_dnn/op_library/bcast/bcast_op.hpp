@@ -3,6 +3,8 @@
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
+#include "tt_dnn/op_library/operation.hpp"
+
 using namespace tt::tt_metal;
 
 namespace tt {
@@ -25,14 +27,33 @@ struct BcastOpParallelizationStrategy {
     static const vector<Enum> all() { return { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE }; }
 };
 
-Tensor bcast(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
-Tensor bcast_single_core(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
-Tensor bcast_multi_core_h(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
-Tensor bcast_multi_core_w(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
-Tensor bcast_multi_core_hw(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
+Program bcast_single_core(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
+Program bcast_multi_core_h(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
+Program bcast_multi_core_w(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
+Program bcast_multi_core_hw(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
 
-// TODO(AP): make 9 of these?
-inline Tensor bcast_add_h(const Tensor &a, const Tensor &b) { return bcast(a, b, BcastOpMath::ADD, BcastOpDim::H); }
+struct EltwiseBinaryBroadcast : Operation {
+    BcastOpMath::Enum math_op;
+    BcastOpDim::Enum dim;
+
+    EltwiseBinaryBroadcast(BcastOpMath::Enum math_op, BcastOpDim::Enum dim) : math_op{math_op}, dim{dim} {}
+
+    EltwiseBinaryBroadcast(const EltwiseBinaryBroadcast&) = delete;
+    EltwiseBinaryBroadcast& operator=(const EltwiseBinaryBroadcast&) = delete;
+    ~EltwiseBinaryBroadcast() {}
+
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+};
+
+Tensor eltwise_binary_broadcast(const EltwiseBinaryBroadcast &op, const Tensor &input_tensor_a, const Tensor &input_tensor_b);
+
+inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim) {
+    return eltwise_binary_broadcast(EltwiseBinaryBroadcast(bcast_op, bcast_dim), input_tensor_a, input_tensor_b);
+}
+
 
 }  // namespace tt_metal
 

@@ -13,7 +13,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor bcast_single_core(const Tensor &a, const Tensor &b, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
+Program bcast_single_core(const Tensor &a, const Tensor &b, Tensor& output, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
 
     const auto ashape = a.shape();
     const auto bshape = b.shape();
@@ -54,7 +54,6 @@ Tensor bcast_single_core(const Tensor &a, const Tensor &b, BcastOpMath::Enum bca
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    tt_metal::Tensor output = Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::TILE, device);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -126,16 +125,6 @@ Tensor bcast_single_core(const Tensor &a, const Tensor &b, BcastOpMath::Enum bca
     );
     bcast_op_utils::add_defines(bcast_kernel, bcast_dim, bcast_math);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-
     uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
     tt_metal::WriteRuntimeArgsToDevice(
         device,
@@ -163,12 +152,7 @@ Tensor bcast_single_core(const Tensor &a, const Tensor &b, BcastOpMath::Enum bca
         }
     );
 
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 }  // namespace tt_metal
