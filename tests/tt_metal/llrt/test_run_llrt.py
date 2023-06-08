@@ -49,7 +49,7 @@ LLRT_TEST_ENTRIES = set(
         TestEntry("llrt/tests/test_run_sync", "test_run_sync"),
         TestEntry("llrt/tests/test_run_sync_db", "test_run_sync_db"),
         TestEntry("llrt/tests/test_run_dataflow_cb_test", "test_run_dataflow_cb_test"),
-        TestEntry("llrt/tests/test_run_test_debug_print", "test_run_test_debug_print"),
+        # TestEntry("llrt/tests/test_run_test_debug_print", "test_run_test_debug_print"), See https://github.com/tenstorrent-metal/tt-metal/issues/1070
         TestEntry(
             "llrt/tests/test_run_datacopy_switched_riscs",
             "test_run_datacopy_switched_riscs",
@@ -66,7 +66,7 @@ LLRT_TEST_ENTRIES = set(
 SKIP_LLRT_WORMHOLE_ENTRIES = set(
     [
         TestEntry("llrt/tests/test_run_eltwise_sync", "test_run_eltwise_sync"),
-        TestEntry("llrt/tests/test_run_test_debug_print", "test_run_test_debug_print"),
+        # TestEntry("llrt/tests/test_run_test_debug_print", "test_run_test_debug_print"),
         TestEntry(
             "llrt/tests/test_run_datacopy_switched_riscs",
             "test_run_datacopy_switched_riscs",
