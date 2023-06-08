@@ -200,13 +200,8 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         # Attention scores computation
         # profiler.start("___op8_scale_mask_softmax")
 
-        N, C, H, W = qkt.shape()
-
-        # ref = op8_scale_mask_softmax_ref(qkt, attention_mask)
-
-        new_shape = [N, 1, C * H, W]
-        ttl.tensor.reshape(qkt, *new_shape)
-
+        # Input and output tensors of this fused op is: [9, 1, 6144, 384] instead of [9, 16, 384, 384]
+        # No-op reshapes are handled within pre-softmax (op 7) and post-softmax bmms (op 9)
         if attention_mask is not None:
             attention_scores = ttl.tensor.scale_mask_softmax_in_place(
                 freciprocal_of_sqrt_hidden_dim, attention_mask, qkt
@@ -214,17 +209,9 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         else:
             attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
             attention_scores = ttl.tensor.softmax_in_place(attention_score_input)
-        ttl.tensor.reshape(
-            attention_scores, N, C, H, W
-        )  # Reshape back to original shape
-        # profiler.end("___op8_scale_mask_softmax")
 
-        return attention_scores
-
-    def op8_scale_mask_softmax_ref(qkt, attention_mask):
-        # Attention scores computation
-        # profiler.start("___op8_scale_mask_softmax")
-
+        """
+        # Old unfused scale, mask, and softmax
         N, C, H, W = qkt.shape()
         new_shape = [N, 1, C * H, W]
         ttl.tensor.reshape(qkt, *new_shape)
@@ -242,6 +229,8 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         ttl.tensor.reshape(
             attention_scores, N, C, H, W
         )  # Reshape back to original shape
+        """
+
         # profiler.end("___op8_scale_mask_softmax")
 
         return attention_scores
