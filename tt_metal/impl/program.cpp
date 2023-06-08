@@ -79,36 +79,16 @@ std::map<CoreCoord, KernelGroup> Program::core_to_kernel_group() const {
     return core_to_kernel_group;
 }
 
-std::string Program::core_to_op(const CoreCoord &core) const {
-    for (auto kernel : kernels_) {
-        auto cores = kernel->logical_cores();
-        std::string bin_path = kernel->binary_path();
-        size_t bin_path_size = bin_path.size();
-        // The hash corresponds to string after last '/'
-        int i;
-        for (i = bin_path_size - 1; i > -1; i--) {
-            if (bin_path.at(i) == '/') {
-                i--;
-                break;
-            }
-        }
-
-        // The op name corresponds to string after second last '/'
-        for (; i > -1; i--) {
-            if (bin_path.at(i) == '/') {
-                std::string op = bin_path.substr(i + 1, bin_path_size - i - 1);
-                return op;
-            }
-        }
-    }
-    return "";
-}
-
 std::vector<std::string> Program::cores_to_ops() const {
     std::vector<std::string> ops;
 
     for (const auto &core : this->logical_cores()) {
-        ops.push_back(this->core_to_op(core));
+        for (auto kernel : kernels_) {
+        auto cores = kernel->logical_cores();
+            if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
+                ops.push_back(kernel->name());
+            }
+        }
     }
     return ops;
 }

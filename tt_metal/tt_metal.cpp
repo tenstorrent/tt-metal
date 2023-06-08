@@ -866,7 +866,6 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
 
     compilation_reporter.add_kernel_compile_stats(program, kernel, path_exists, kernel_hash);
 
-    kernel->set_binary_path(kernel_path_suffix);
     kernel->set_binaries(kernel_path_suffix);
 }
 
