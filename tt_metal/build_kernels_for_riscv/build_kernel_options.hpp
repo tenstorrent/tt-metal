@@ -2,7 +2,7 @@
 
 #include "common/core_coord.h"
 #include "common/utils.hpp"
-#include "kernels/hostdevcommon/kernel_structs.h"
+#include "hostdevcommon/kernel_structs.h"
 #include "hlk_desc.hpp"
 
 namespace tt

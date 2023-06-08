@@ -3,7 +3,7 @@
 #include <string>
 #include <boost/functional/hash.hpp>
 
-#include "kernels/hostdevcommon/kernel_structs.h"
+#include "hostdevcommon/kernel_structs.h"
 #include "common/base_types.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "common/assert.hpp"

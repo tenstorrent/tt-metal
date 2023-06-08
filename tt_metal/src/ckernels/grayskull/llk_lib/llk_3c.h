@@ -9,7 +9,7 @@
 #include "chlkc_list.h"
 //#include "llk_defs.h"
 
-#include "kernels/hostdevcommon/kernel_structs.h"
+#include "hostdevcommon/kernel_structs.h"
 
 #define SYNC SyncHalf
 #if __DOXYGEN__
