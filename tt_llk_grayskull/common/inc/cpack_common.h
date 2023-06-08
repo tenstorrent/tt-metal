@@ -115,39 +115,39 @@ namespace ckernel::packer
 
       TT_SETDMAREG(0, (config.val[2] & 0xffff), 0, LO_16(p_gpr_pack::TMP0));
       TT_SETDMAREG(0, ((config.val[2]>>16) & 0xffff), 0, HI_16(p_gpr_pack::TMP0));
+      TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32+2);
+      TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Row_start_section_size_ADDR32+2);
+      TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Row_start_section_size_ADDR32+2);
+      TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Row_start_section_size_ADDR32+2);
 
-      //TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32+2);
-      //TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Row_start_section_size_ADDR32+2);
-      //TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Row_start_section_size_ADDR32+2);
-      //TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Row_start_section_size_ADDR32+2);
-      TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP0); //16-bit write
-      TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP0);
-      TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP0);
-      TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP0);
+      // Fix for #1392
+      // Break dependancy between data format update and exception section size update below by inserting nop cycles
+      TTI_DMANOP; TTI_DMANOP;
 
       if ((uint)(pack_dst_format[operand_id]&0x2) != 0) {
          // Override exp section size for packers 1,2,3
          // Tile header + exp size + datum size 
          if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8_b) {
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP8_EXP_SEC_SIZE+0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP8_EXP_SEC_SIZE+1);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP8_EXP_SEC_SIZE+2);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP8_EXP_SEC_SIZE+3);
+            TTI_WRCFG(p_gpr_pack::BFP8_EXP_SEC_SIZE+0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP8_EXP_SEC_SIZE+1, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP8_EXP_SEC_SIZE+2, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP8_EXP_SEC_SIZE+3, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Row_start_section_size_ADDR32);
          } else if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp4 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp4_b) {
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP4_EXP_SEC_SIZE+0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP4_EXP_SEC_SIZE+1);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP4_EXP_SEC_SIZE+2);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP4_EXP_SEC_SIZE+3);
+            TTI_WRCFG(p_gpr_pack::BFP4_EXP_SEC_SIZE+0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP4_EXP_SEC_SIZE+1, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP4_EXP_SEC_SIZE+2, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP4_EXP_SEC_SIZE+3, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Row_start_section_size_ADDR32);
          } else if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp2 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp2_b) {
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP2_EXP_SEC_SIZE+0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP2_EXP_SEC_SIZE+1);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP2_EXP_SEC_SIZE+2);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::BFP2_EXP_SEC_SIZE+3);
+            TTI_WRCFG(p_gpr_pack::BFP2_EXP_SEC_SIZE+0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP2_EXP_SEC_SIZE+1, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP2_EXP_SEC_SIZE+2, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP2_EXP_SEC_SIZE+3, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Row_start_section_size_ADDR32);
          } else {
             FWASSERT("Other data formats not supported", false);
          }
       } 
-      TTI_DMANOP;
+      TTI_DMANOP; TTI_DMANOP;
+
    }
 
    //reconfig the packer dst format
@@ -155,6 +155,7 @@ namespace ckernel::packer
    {
       set_packer_config(operand_id);
 
+      //regfile[p_gpr_pack::TILE_HEADER]   = GET_L1_TILE_SIZE((uint)pack_dst_format[operand_id]);
       uint tile_header_0 = GET_L1_TILE_SIZE((uint)pack_dst_format[operand_id]);
       TT_SETDMAREG(0, (tile_header_0 & 0xffff), 0, LO_16(p_gpr_pack::TILE_HEADER));
       TT_SETDMAREG(0, ((tile_header_0 >> 16) & 0xffff), 0, HI_16(p_gpr_pack::TILE_HEADER));
@@ -162,6 +163,7 @@ namespace ckernel::packer
       uint one_msg_size = ((1*GET_L1_TILE_SIZE((uint)pack_dst_format[operand_id]))<<12)|1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/;
       TT_SETDMAREG(0, (one_msg_size & 0xffff), 0, LO_16(p_gpr_pack::ONE_MSG_RECEIVED));
       TT_SETDMAREG(0, ((one_msg_size >> 16) & 0xffff), 0, HI_16(p_gpr_pack::ONE_MSG_RECEIVED));
+      //regfile[p_gpr_pack::ONE_MSG_RECEIVED] = ((1*GET_L1_TILE_SIZE((uint)pack_dst_format[operand_id]))<<12)|1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/;
    }
 
    inline void wait_for_unpack_config_done()
