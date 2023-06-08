@@ -4,14 +4,6 @@ BASE_INCLUDES+=-I./ -I./tt_metal/ # make all tt_metal modules includable
 
 CFLAGS += -DFMT_HEADER_ONLY -I$(TT_METAL_HOME)/tt_metal/third_party/fmt
 
-ifeq ("$(ARCH_NAME)", "wormhole_b0")
-	CFLAGS += "-DARCH_WORMHOLE"
-else ifeq ("$(ARCH_NAME)", "wormhole")
-	CFLAGS += "-DARCH_WORMHOLE"
-else
-	CFLAGS += "-DARCH_GRAYSKULL"
-endif
-
 include $(TT_METAL_HOME)/tt_metal/common/module.mk
 include $(TT_METAL_HOME)/tt_metal/device/module.mk
 include $(TT_METAL_HOME)/tt_metal/src/firmware/module.mk
