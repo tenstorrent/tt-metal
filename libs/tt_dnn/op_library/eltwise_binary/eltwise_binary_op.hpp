@@ -38,10 +38,15 @@ struct EltwiseBinary : Operation {
     Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
 };
 
-Tensor eltwise_binary(const EltwiseBinary& op, const Tensor &a, const Tensor &b);
-inline Tensor add(const Tensor &a, const Tensor &b) { return eltwise_binary(EltwiseBinary(BinaryOpType::ADD), a, b); }
-inline Tensor sub(const Tensor &a, const Tensor &b) { return eltwise_binary(EltwiseBinary(BinaryOpType::SUB), a, b); }
-inline Tensor mul(const Tensor &a, const Tensor &b) { return eltwise_binary(EltwiseBinary(BinaryOpType::MUL), a, b); }
+inline Tensor add(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+    return detail::run_with_autopad(EltwiseBinary(BinaryOpType::ADD), input_tensor_a, input_tensor_b);
+}
+inline Tensor sub(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+    return detail::run_with_autopad(EltwiseBinary(BinaryOpType::SUB), input_tensor_a, input_tensor_b);
+}
+inline Tensor mul(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+    return detail::run_with_autopad(EltwiseBinary(BinaryOpType::MUL), input_tensor_a, input_tensor_b);
+}
 
 }  // namespace tt_metal
 

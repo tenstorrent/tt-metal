@@ -53,17 +53,16 @@ struct EltwiseUnary : Operation {
     Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
 };
 
-Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor);
-inline Tensor sqrt(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::SQRT), input_tensor); }
-inline Tensor exp(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::EXP), input_tensor); }
-inline Tensor recip(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::RECIP), input_tensor); }
-inline Tensor gelu(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::GELU), input_tensor); }
-inline Tensor relu(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::RELU), input_tensor); }
-inline Tensor sigmoid(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::SIGMOID), input_tensor); }
-inline Tensor log(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::LOG), input_tensor); }
-inline Tensor tanh(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::TANH), input_tensor); }
-inline Tensor log2(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::LOG2), input_tensor); }
-inline Tensor log10(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::LOG10), input_tensor); }
+inline Tensor sqrt(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::SQRT), input_tensor); }
+inline Tensor exp(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::EXP), input_tensor); }
+inline Tensor recip(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::RECIP), input_tensor); }
+inline Tensor gelu(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::GELU), input_tensor); }
+inline Tensor relu(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::RELU), input_tensor); }
+inline Tensor sigmoid(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::SIGMOID), input_tensor); }
+inline Tensor log(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::LOG), input_tensor); }
+inline Tensor tanh(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::TANH), input_tensor); }
+inline Tensor log2(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::LOG2), input_tensor); }
+inline Tensor log10(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::LOG10), input_tensor); }
 
 
 }  // namespace tt_metal

@@ -48,10 +48,8 @@ struct EltwiseBinaryBroadcast : Operation {
     Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
 };
 
-Tensor eltwise_binary_broadcast(const EltwiseBinaryBroadcast &op, const Tensor &input_tensor_a, const Tensor &input_tensor_b);
-
 inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim) {
-    return eltwise_binary_broadcast(EltwiseBinaryBroadcast(bcast_op, bcast_dim), input_tensor_a, input_tensor_b);
+    return detail::run_with_autopad(EltwiseBinaryBroadcast(bcast_op, bcast_dim), input_tensor_a, input_tensor_b);
 }
 
 

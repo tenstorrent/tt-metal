@@ -80,8 +80,12 @@ struct BatchedMatmul : Operation {
 };
 
 
-Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b);
-Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b);
+inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+    return detail::run_with_autopad(Matmul(), input_tensor_a, input_tensor_b);
+}
+inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+    return detail::run_with_autopad(BatchedMatmul(), input_tensor_a, input_tensor_b);
+}
 
 Tensor large_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes, untilizes b
 Tensor large_bmm_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b

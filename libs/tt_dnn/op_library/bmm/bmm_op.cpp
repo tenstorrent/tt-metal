@@ -526,48 +526,6 @@ Program BatchedMatmul::create_program(const std::vector<std::reference_wrapper<c
 
 }
 
-template<typename MatmulOp>
-Tensor matmul_(const MatmulOp& op, const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
-
-    Device * device;
-    if (input_tensor_a.on_host() && input_tensor_b.on_host()) {
-        device = AutoPad::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else if (!input_tensor_a.on_host()){
-        device = input_tensor_a.device();
-    } else {
-        device = input_tensor_b.device();
-    }
-
-    auto padded_input_shape_a = AutoPad::pad_to_tile_shape(input_tensor_a.shape());
-    auto padded_input_shape_b = AutoPad::pad_to_tile_shape(input_tensor_b.shape());
-    auto output_shape = op.compute_output_shapes({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0);
-    auto no_pad_a = AutoPad::check_input_tensor_format(input_tensor_a, padded_input_shape_a);
-    auto no_pad_b = AutoPad::check_input_tensor_format(input_tensor_b, padded_input_shape_b);
-    if (no_pad_a && no_pad_b) {
-        return std::move(op.run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
-    } else if (no_pad_a) {
-        const auto padded_input_tensor_b = AutoPad::format_input_tensor(input_tensor_b, device, padded_input_shape_b, 0);
-        auto output = std::move(op.run({std::cref(input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
-        AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
-        return output;
-    } else if (no_pad_b) {
-        const auto padded_input_tensor_a = AutoPad::format_input_tensor(input_tensor_a, device, padded_input_shape_a, 0);
-        auto output = std::move(op.run({std::cref(padded_input_tensor_a), std::cref(input_tensor_b)}).at(0));
-        AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
-        return output;
-    } else {
-        const auto padded_input_tensor_a = AutoPad::format_input_tensor(input_tensor_a, device, padded_input_shape_a, 0);
-        const auto padded_input_tensor_b = AutoPad::format_input_tensor(input_tensor_b, device, padded_input_shape_b, 0);
-        auto output = std::move(op.run({std::cref(padded_input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
-        AutoPad::format_output_tensor(input_tensor_a, output, output_shape, device);
-        return output;
-    }
-}
-
-Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b) { return matmul_(Matmul(), input_tensor_a, input_tensor_b); }
-Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b) { return matmul_(BatchedMatmul(), input_tensor_a, input_tensor_b); }
-
 }  // namespace tt_metal
 
 }  // namespace tt

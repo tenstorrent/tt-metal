@@ -81,28 +81,6 @@ Program EltwiseUnary::create_program(const std::vector<std::reference_wrapper<co
 
 }
 
-
-Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor) {
-    Device* device;
-    if (input_tensor.on_host()) {
-        device = AutoPad::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = input_tensor.device();
-    }
-
-    auto padded_input_shape = AutoPad::pad_to_tile_shape(input_tensor.shape());
-    auto output_shape = input_tensor.shape();
-    if (AutoPad::check_input_tensor_format(input_tensor, padded_input_shape)) {
-        return std::move(op.run({std::cref(input_tensor)}).at(0));
-    } else {
-        const auto padded_tensor = AutoPad::format_input_tensor(input_tensor, device, padded_input_shape, 0);
-        auto output = std::move(op.run({std::cref(padded_tensor)}).at(0));
-        AutoPad::format_output_tensor(input_tensor, output, output_shape, device);
-        return output;
-    }
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt
