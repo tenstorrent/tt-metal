@@ -32,7 +32,8 @@ struct Reduce : Operation {
     const ReduceOpMath::Enum math_op;
     const ReduceOpDim::Enum dim;
     const float scaler;
-
+    
+    ~Reduce() {}
     Reduce(ReduceOpMath::Enum math_op, ReduceOpDim::Enum dim, float scaler) : math_op{math_op}, dim{dim}, scaler{scaler}  {}
 
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const override;

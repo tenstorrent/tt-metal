@@ -26,7 +26,7 @@ struct EltwiseUnary : Operation {
     const UnaryOpType::Enum op_type;
 
     EltwiseUnary(UnaryOpType::Enum op_type) : op_type{op_type} {}
-
+    ~EltwiseUnary() {}
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const override;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const override;
     Program create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const override;
