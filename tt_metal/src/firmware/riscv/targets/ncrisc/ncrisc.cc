@@ -1,4 +1,3 @@
-#include "context.h"
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
 #include "noc_nonblocking_api.h"
@@ -65,7 +64,6 @@ int main(int argc, char *argv[]) {
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_MAIN_START);
 #endif
-  init_riscv_context();
   allocate_debug_mailbox_buffer();
 
   risc_init();
