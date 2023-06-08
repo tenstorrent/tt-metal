@@ -49,10 +49,7 @@ std::vector<Shape> EltwiseBinary::compute_output_shapes(const std::vector<std::r
 }
 
 std::vector<Tensor> EltwiseBinary::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
-    std::vector<Tensor> output_tensors;
-    output_tensors.emplace_back(tt_metal::Tensor(input_tensor.shape(), input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device()));
-    return output_tensors;
+    return detail::generic_create_output_tensors(*this, input_tensors);
 }
 
 

@@ -19,6 +19,16 @@ static Device* get_device(const std::vector<std::reference_wrapper<const Tensor>
     return device;
 }
 
+template<typename Operation>
+static std::vector<Tensor> generic_create_output_tensors(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
+    const auto& input_tensor = input_tensors.at(0).get();
+    std::vector<Tensor> output_tensors;
+    for (const auto& output_shape : op.compute_output_shapes(input_tensors)) {
+        output_tensors.emplace_back(tt_metal::Tensor(output_shape, input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device()));
+    }
+    return output_tensors;
+}
+
 }
 
 struct Operation {

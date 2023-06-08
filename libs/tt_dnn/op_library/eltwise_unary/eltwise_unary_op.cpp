@@ -64,10 +64,7 @@ std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<std::re
 }
 
 std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
-    std::vector<Tensor> output_tensors;
-    output_tensors.emplace_back(tt_metal::Tensor(input_tensor.shape(), input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device()));
-    return output_tensors;
+    return detail::generic_create_output_tensors(*this, input_tensors);
 }
 
 Program EltwiseUnary::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {

@@ -33,8 +33,8 @@ Program bcast_multi_core_w(const Tensor &input_tensor_a, const Tensor &input_ten
 Program bcast_multi_core_hw(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
 
 struct EltwiseBinaryBroadcast : Operation {
-    BcastOpMath::Enum math_op;
-    BcastOpDim::Enum dim;
+    const BcastOpMath::Enum math_op;
+    const BcastOpDim::Enum dim;
 
     EltwiseBinaryBroadcast(BcastOpMath::Enum math_op, BcastOpDim::Enum dim) : math_op{math_op}, dim{dim} {}
 
