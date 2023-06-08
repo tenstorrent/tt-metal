@@ -32,13 +32,16 @@ struct Reduce : Operation {
     const ReduceOpMath::Enum math_op;
     const ReduceOpDim::Enum dim;
     const float scaler;
-    
-    ~Reduce() {}
+
     Reduce(ReduceOpMath::Enum math_op, ReduceOpDim::Enum dim, float scaler) : math_op{math_op}, dim{dim}, scaler{scaler}  {}
 
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const override;
-    Program create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+    Reduce(const Reduce&) = delete;
+    Reduce& operator=(const Reduce&) = delete;
+    ~Reduce() {}
+
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
 };
 
 Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);

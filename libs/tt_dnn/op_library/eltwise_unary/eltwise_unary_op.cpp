@@ -57,20 +57,21 @@ namespace tt {
 namespace tt_metal {
 
 
- std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+ std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
     return {input_tensor.shape()};
 }
 
 
-std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    auto output_tensor = tt_metal::Tensor(input_tensor.shape(), input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device());
-    return {output_tensor};
+std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+    std::vector<Tensor> output_tensors;
+    output_tensors.emplace_back(tt_metal::Tensor(input_tensor.shape(), input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device()));
+    return output_tensors;
 }
 
-Program EltwiseUnary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+Program EltwiseUnary::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
     switch (eltwise_unary_op_utils::get_parallelization_strategy(input_tensor)){
         case UnaryOpParallelizationStrategy::MULTI_CORE:
@@ -81,6 +82,28 @@ Program EltwiseUnary::create_program(const std::vector<Tensor>& input_tensors, s
             return eltwise_unary_single_core(input_tensor, output_tensor, this->op_type);
     }
 
+}
+
+
+Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor) {
+    Device* device;
+    if (input_tensor.on_host()) {
+        device = AutoPad::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else {
+        device = input_tensor.device();
+    }
+
+    auto padded_input_shape = AutoPad::pad_to_tile_shape(input_tensor.shape());
+    auto output_shape = input_tensor.shape();
+    if (AutoPad::check_input_tensor_format(input_tensor, padded_input_shape)) {
+        return std::move(op.run({std::cref(input_tensor)}).at(0));
+    } else {
+        const auto padded_tensor = AutoPad::format_input_tensor(input_tensor, device, padded_input_shape, 0);
+        auto output = std::move(op.run({std::cref(padded_tensor)}).at(0));
+        AutoPad::format_output_tensor(input_tensor, output, output_shape, device);
+        return output;
+    }
 }
 
 }  // namespace tt_metal

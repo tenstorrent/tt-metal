@@ -55,8 +55,8 @@ ReduceOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor 
 namespace tt {
 namespace tt_metal {
 
- std::vector<Shape> Reduce::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+ std::vector<Shape> Reduce::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
 
     auto output_shape = input_tensor.shape();
     switch (this->dim){
@@ -75,15 +75,16 @@ namespace tt_metal {
     return {output_shape};
 }
 
-std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+std::vector<Tensor> Reduce::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
     const auto output_shape = compute_output_shapes(input_tensors).at(0);
-    auto output_tensor = tt_metal::Tensor(output_shape, input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device());
-    return {output_tensor};
+    std::vector<Tensor> output_tensors;
+    output_tensors.emplace_back(tt_metal::Tensor(output_shape, input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device()));
+    return output_tensors;
 }
 
-Program Reduce::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+Program Reduce::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
 
     switch (reduce_op_utils::get_parallelization_strategy(input_tensor, this->dim)){
@@ -98,14 +99,35 @@ Program Reduce::create_program(const std::vector<Tensor>& input_tensors, std::ve
 
 }
 
-Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler) {
+Tensor reduce_(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler) {
     auto parallelization_strategy = reduce_op_utils::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     if (is_multicore_hw) {
-        Tensor output_tensor = Reduce(reduce_math, ReduceOpDim::W, scaler).run({input_tensor}).at(0);
-        return Reduce(reduce_math, ReduceOpDim::H, scaler).run({output_tensor}).at(0);
+        const Tensor output_tensor = std::move(Reduce(reduce_math, ReduceOpDim::W, scaler).run({std::cref(input_tensor)}).at(0));
+        return std::move(Reduce(reduce_math, ReduceOpDim::H, scaler).run({std::cref(output_tensor)}).at(0));
     } else {
-        return Reduce(reduce_math, reduce_dim, scaler).run({input_tensor}).at(0);
+        return std::move(Reduce(reduce_math, reduce_dim, scaler).run({std::cref(input_tensor)}).at(0));
+    }
+}
+
+Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler) {
+    Device * device;
+    if (input_tensor.on_host()) {
+        device = AutoPad::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else {
+        device = input_tensor.device();
+    }
+
+    auto padded_input_shape = AutoPad::pad_to_tile_shape(input_tensor.shape());
+    auto output_shape = Reduce(reduce_math, reduce_dim, scaler).compute_output_shapes({std::cref(input_tensor)}).at(0);
+
+    if (AutoPad::check_input_tensor_format(input_tensor, padded_input_shape)) {
+        return reduce_(input_tensor, reduce_math, reduce_dim, scaler);
+    } else {
+        auto output = reduce_(AutoPad::format_input_tensor(input_tensor, device, padded_input_shape, 0), reduce_math, reduce_dim, scaler);
+        AutoPad::format_output_tensor(input_tensor, output, output_shape, device);
+        return output;
     }
 }
 

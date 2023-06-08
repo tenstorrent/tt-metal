@@ -42,22 +42,28 @@ struct EltwiseUnary : Operation {
     const UnaryOpType::Enum op_type;
 
     EltwiseUnary(UnaryOpType::Enum op_type) : op_type{op_type} {}
+
+    EltwiseUnary(const EltwiseUnary&) = delete;
+    EltwiseUnary& operator=(const EltwiseUnary&) = delete;
     ~EltwiseUnary() {}
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const override;
-    Program create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
 };
 
-inline Tensor sqrt(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::SQRT).run({input_tensor}).at(0); }
-inline Tensor exp(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::EXP).run({input_tensor}).at(0); }
-inline Tensor recip(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::RECIP).run({input_tensor}).at(0); }
-inline Tensor gelu(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::GELU).run({input_tensor}).at(0); }
-inline Tensor relu(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::RELU).run({input_tensor}).at(0); }
-inline Tensor sigmoid(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::SIGMOID).run({input_tensor}).at(0); }
-inline Tensor log(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::LOG).run({input_tensor}).at(0); }
-inline Tensor tanh(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::TANH).run({input_tensor}).at(0); }
-inline Tensor log2(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::LOG2).run({input_tensor}).at(0); }
-inline Tensor log10(const Tensor &input_tensor) { return EltwiseUnary(UnaryOpType::LOG10).run({input_tensor}).at(0); }
+Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor);
+inline Tensor sqrt(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::SQRT), input_tensor); }
+inline Tensor exp(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::EXP), input_tensor); }
+inline Tensor recip(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::RECIP), input_tensor); }
+inline Tensor gelu(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::GELU), input_tensor); }
+inline Tensor relu(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::RELU), input_tensor); }
+inline Tensor sigmoid(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::SIGMOID), input_tensor); }
+inline Tensor log(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::LOG), input_tensor); }
+inline Tensor tanh(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::TANH), input_tensor); }
+inline Tensor log2(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::LOG2), input_tensor); }
+inline Tensor log10(const Tensor &input_tensor) { return eltwise_unary(EltwiseUnary(UnaryOpType::LOG10), input_tensor); }
+
 
 }  // namespace tt_metal
 
