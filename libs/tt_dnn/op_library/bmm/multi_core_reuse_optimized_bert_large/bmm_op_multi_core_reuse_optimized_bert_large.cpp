@@ -358,9 +358,10 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const MemoryConfig& mem_config, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const std::array<uint32_t, 4> &ashape, const std::array<uint32_t, 4> &bshape, const std::array<uint32_t, 4> &cshape, const MemoryConfig& mem_config, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
-    const auto& ashape = a.shape(), bshape = b.shape();
+    // Pass in a and b shapes instead
+    // const auto& ashape = a.shape(), bshape = b.shape();
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to matmul need to be on device!");
@@ -429,7 +430,8 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
+    // Pass in cshape instead
+    // std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
     tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device, mem_config);
     tt_metal::Buffer *out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -470,8 +472,8 @@ Tensor matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tens
 }
 
 // matmul_multi_core_reuse_optimized_bert_large not used
-Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
-    return matmul_multi_core_reuse_optimized_bert_large_(a, b, mem_config, false, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const std::array<uint32_t, 4>& ashape, const std::array<uint32_t, 4>& bshape, const std::array<uint32_t, 4>& cshape, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+    return matmul_multi_core_reuse_optimized_bert_large_(a, b, ashape, bshape, cshape, mem_config, false, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 }  // namespace tt_metal
