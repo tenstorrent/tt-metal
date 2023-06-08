@@ -1,5 +1,5 @@
 #include "common/utils.hpp"
-
+#include <mutex>
 namespace tt
 {
 namespace utils
@@ -7,14 +7,24 @@ namespace utils
     bool run_command(const string &cmd, const string &log_file, const bool verbose)
     {
         int ret;
+        static std::mutex io_mutex;
         if (getenv("TT_BACKEND_DUMP_RUN_CMD") or verbose) {
-            cout << "===== RUNNING SYSTEM COMMAND:" << std::endl;
-            cout << cmd << std::endl << std::endl;
+            {
+                std::lock_guard<std::mutex> lk(io_mutex);
+                cout << "===== RUNNING SYSTEM COMMAND:" << std::endl;
+                cout << cmd << std::endl << std::endl;
+            }
             ret = system(cmd.c_str());
+            // {
+            //     std::lock_guard<std::mutex> lk(io_mutex);
+            //     cout << "===== DONE SYSTEM COMMAND: " << cmd << std::endl;
+            // }
+
         } else {
             string redirected_cmd = cmd + " >> " + log_file + " 2>&1";
             ret = system(redirected_cmd.c_str());
         }
+
         return (ret == 0);
     }
 

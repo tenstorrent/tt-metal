@@ -77,6 +77,7 @@ class Kernel {
     void add_define(const std::string& name, const std::string& value) { defines_[name] = value; }
     void add_define(const std::string& name, int value) { defines_[name] = std::to_string(value); }
     size_t define_args_hash() const;
+    void set_binaries(const std::string &binary_path);
 
    protected:
     std::string kernel_path_file_name_;                 // Full kernel path and file name
@@ -89,9 +90,7 @@ class Kernel {
 
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
     friend void SetRuntimeArgs(Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
-
-    void set_binaries(const std::string &binary_path);
-    friend void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profile_kernel);
+    friend std::tuple<Kernel*, std::string> CompileKernel(Device *device, Program &program, Kernel *kernel, bool profile_kernel);
 };
 
 class DataMovementKernel : public Kernel {
