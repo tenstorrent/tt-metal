@@ -12,24 +12,14 @@ struct p_setrwc
 {
 #ifdef PERF_DUMP
 
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
     constexpr static uint CLR_A        = 0x0;
-    #if SKIP_UNP1 == 1
-        constexpr static uint CLR_B        = 0x0;
-        constexpr static uint CLR_AB       = 0x0;
-    #else
-        constexpr static uint CLR_B        = 0x2;
-        constexpr static uint CLR_AB       = 0x2;
-    #endif
+    constexpr static uint CLR_B        = 0x0;
+    constexpr static uint CLR_AB       = 0x0;
 #else
     constexpr static uint CLR_A        = 0x1;
-    #if SKIP_UNP1 == 1
-        constexpr static uint CLR_B        = 0x0;
-        constexpr static uint CLR_AB       = 0x1;
-    #else
-        constexpr static uint CLR_B        = 0x2;
-        constexpr static uint CLR_AB       = 0x3;
-    #endif
+    constexpr static uint CLR_B        = 0x2;
+    constexpr static uint CLR_AB       = 0x3;
 #endif
 
 #else

@@ -17,7 +17,7 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uin
     const bool reuse_a = ct_dim >= rt_dim;
     constexpr uint replay_buf_prog_len = 10;
     if (reuse_a) {
-        #if SKIP_UNP0 == 1
+        #if SKIP_UNP == 1
             TTI_REPLAY(0, 1, 0, 1);
             TTI_NOP;
         #else
@@ -37,7 +37,7 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uin
             TTI_NOP;
         #endif    
     } else {
-        #if SKIP_UNP1 == 1
+        #if SKIP_UNP == 1
             TTI_REPLAY(0, 1, 0, 1);
             TTI_NOP;
         #else
@@ -157,7 +157,7 @@ inline void llk_unpack_AB_matmul(
         } 
 
         if (reuse_a) {
-            #if SKIP_UNP1 == 1
+            #if SKIP_UNP == 1
                 TTI_NOP;
             #else
                 TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
@@ -176,7 +176,7 @@ inline void llk_unpack_AB_matmul(
                 }
             #endif    
         } else {
-            #if SKIP_UNP0 == 1
+            #if SKIP_UNP == 1
                 TTI_NOP;
             #else
                 TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);

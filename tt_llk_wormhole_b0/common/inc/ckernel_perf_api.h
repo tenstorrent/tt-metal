@@ -87,10 +87,8 @@ inline void record_pack_input_end_timestamp() {
 }
 
 inline void perf_math_counter_start() {
-   if constexpr(SKIP_UNP0) {
+   if constexpr(SKIP_UNP) {
       TTI_SETDVALID(p_setrwc::SET_A);
-   }
-   if constexpr(SKIP_UNP1) {
       TTI_SETDVALID(p_setrwc::SET_B);
    }
    if (record_perf_events) {
@@ -101,10 +99,8 @@ inline void perf_math_counter_start() {
 }
 
 inline void record_perf_math_counter() {
-   if constexpr(SKIP_UNP0) {
+   if constexpr(SKIP_UNP) {
       TTI_CLEARDVALID(0x1, 0);
-   }
-   if constexpr(SKIP_UNP1) {
       TTI_CLEARDVALID(0x2, 0);
    }
    if (record_perf_events) {

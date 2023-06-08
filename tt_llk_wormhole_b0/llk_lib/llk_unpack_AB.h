@@ -13,15 +13,12 @@ using namespace ckernel::unpacker;
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_mop_config(const bool transpose_of_faces=false) {
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
     static constexpr uint unpack_srca = TT_OP_NOP;
+    static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
-#if SKIP_UNP1 == 1
-    static constexpr uint unpack_srcb = TT_OP_NOP;
-#else
     static constexpr uint unpack_srcb =
         TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif

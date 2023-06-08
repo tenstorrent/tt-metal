@@ -14,7 +14,7 @@ using namespace ckernel::unpacker;
 inline void llk_unpack_tilize_mop_config() {
     constexpr uint replay_buf_len = 3;
 
-    #if SKIP_UNP0 == 1
+    #if SKIP_UNP == 1
         TTI_REPLAY(0, 1, 0, 1);
         TTI_NOP;
     #else

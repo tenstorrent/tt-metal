@@ -24,10 +24,9 @@
 #endif
 
 #ifdef PERF_DUMP
-#define DECOUPLINGS_EN (SKIP_UNP0 || SKIP_UNP1 || MATH_PACK_DECOUPLE)
+#define DECOUPLINGS_EN (SKIP_UNP || MATH_PACK_DECOUPLE)
 #else
-#define SKIP_UNP0 0
-#define SKIP_UNP1 0
+#define SKIP_UNP 0
 #define MATH_PACK_DECOUPLE 0
 #define DECOUPLINGS_EN 0
 #endif

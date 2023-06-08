@@ -17,20 +17,17 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
     static_assert(!((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
 
     if constexpr (BType == BroadcastType::COL) {
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
         static constexpr uint unpack_srca = TT_OP_NOP;
+        static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
         static constexpr uint unpack_srca = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? 
             TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID) : 
             TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         
 #endif
 
-#if SKIP_UNP1 == 1
-        static constexpr uint unpack_srcb = TT_OP_NOP;
-#else
-        static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
         static constexpr uint unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
         if constexpr (acc_to_dest) {
             ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -58,16 +55,13 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
             tmp.program(instrn_buffer);
         }
     } else if constexpr (BType == BroadcastType::ROW) {
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
         static constexpr uint unpack_srca = TT_OP_NOP;
+        static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
         static constexpr uint unpack_srca = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? 
             TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID) : 
             TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
-#if SKIP_UNP1 == 1
-        static constexpr uint unpack_srcb = TT_OP_NOP;
-#else
         static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
         static constexpr uint unpack_srcb_clear_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 0, 0b0001);
@@ -99,7 +93,7 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
         }
     } else if constexpr (BType == BroadcastType::SCALAR) {
         static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
-#if SKIP_UNP1 == 1
+#if SKIP_UNP == 1
         static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
         static constexpr uint unpack_srcb =
@@ -111,7 +105,7 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
         if (transpose_of_faces) {
             constexpr uint replay_buf_len = 7;
 
-            #if SKIP_UNP0 == 1
+            #if SKIP_UNP == 1
                 TTI_REPLAY(0, 1, 0, 1);
                 TTI_NOP;
             #else
@@ -141,17 +135,15 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
 
         } else {
             if constexpr (acc_to_dest) {
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
                 static constexpr uint unpack_srca = TT_OP_NOP;
+                static constexpr uint unpack_srcb = TT_OP_NOP;
+                static constexpr uint unpack_srcb_set_dvalid = TT_OP_NOP;
 #else
                 static constexpr uint unpack_srca = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? 
                     TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID) : 
                     TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
-#if SKIP_UNP1 == 1
-                static constexpr uint unpack_srcb = TT_OP_NOP;
-                static constexpr uint unpack_srcb_set_dvalid = TT_OP_NOP;
-#else
+
                 static constexpr uint unpack_srcb = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ?
                     TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC) : 
                     TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -171,7 +163,7 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
             } else {
                 constexpr uint replay_buf_len = 3;
 
-                #if SKIP_UNP0 == 1
+                #if SKIP_UNP == 1
                     TTI_REPLAY(0, 1, 0, 1);
                     TTI_NOP;
                 #else

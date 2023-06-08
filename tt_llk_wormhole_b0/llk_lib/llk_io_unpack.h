@@ -116,7 +116,7 @@ inline void llk_pop_tiles(
         num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[input]);
     }
 
-#if defined(PERF_DUMP) && (SKIP_UNP0 || SKIP_UNP1)
+#if defined(PERF_DUMP) && (SKIP_UNP)
     if (!operand_is_intermediate(operand)) {
         volatile std::uint32_t tt_reg_ptr * tiles_acked_ptr = get_operand_tiles_acked_ptr(operand);
         operands[input].f.tiles_acked += num_tiles;
