@@ -12,10 +12,10 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     assert(len(conv_params) == 10)
     K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
     # Hardcode block sizes
-    act_block_h = 4
-    act_block_w = 4
+    act_block_h = 8
+    act_block_w = 8
     weight_block_h = act_block_w
-    weight_block_w = 4
+    weight_block_w = 8
     out_subblock_h = 4
     out_subblock_w = 2
     if dilation != 1 or groups != 1:

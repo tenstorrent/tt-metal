@@ -18,7 +18,7 @@ import torch
     (
         # # resnet18 convs
         # # ~10 mins
-        # (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
+        #(64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
         # #K=128 C=64 H=56 W=56 R=3 S=3 U=2 V=2 PH=1 PW=1 dilation=1 groups=1
         # (128, 64, 56, 56, 3, 3, 2, 2, 1, 1),
         # #K=128 C=128 H=28 W=28 R=3 S=3 U=1 V=1 PH=1 PW=1 dilation=1 groups=1

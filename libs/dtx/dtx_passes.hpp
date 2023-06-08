@@ -27,7 +27,7 @@ vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order)
 // ========================================================
 
 // WORKS, WELL TESTED - Collapse all the transformations down to 1. Required step before generating transfer addresses
-bool collapse_transformations(DataTransformations * dtx);               // TO DO: rename to "merge_transformations"
+bool collapse_transformations(DataTransformations * dtx, pair<int,int> collapse_range = {-1,-1});               // TO DO: rename to "merge_transformations"
 
 // WORKS, WELL TESTED, (missing golden check) - Reverse the transformations
 DataTransformations * reverse_transformations(DataTransformations * forward);

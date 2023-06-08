@@ -92,7 +92,7 @@ bool block_2d_with_duplicate_blocks(DataTransformations * dtx, vector<int> dim_o
 
     // Identify producer TX & Consumer
     TransformationNode * producer = dtx->transformations.back();
-    TransformationNode * consumer = new TransformationNode("tilize_and_store", producer->groups.size());  // TODO: generalize for groups>1
+    TransformationNode * consumer = new TransformationNode("block_2d_matrix_with_duplicates", producer->groups.size());  // TODO: generalize for groups>1
     dtx->transformations.push_back(consumer);
 
     for (int group_idx=0; group_idx<producer->groups.size(); group_idx++) {
