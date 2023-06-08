@@ -131,7 +131,6 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
             math_approx_mode
         );
 
-	update_sfpu_op_to_hlk_op();
         const string hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
         // this macro combines 2 ops due to relu_pack op LLK interface being different from other SFPU ops
         eltwise_unary_kernel->add_define("SFPU_OP_AND_PACK", hlk_op_name);
@@ -230,9 +229,11 @@ int main(int argc, char **argv) {
     } catch (const std::exception& e) {
         log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
     }
+    update_sfpu_op_to_hlk_op();    
     const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
         log_info(LogTest, "Running {}", op_name);
+
         bool pass_ = run_sfpu_test(arch, op_name);
 
         if (pass_) {

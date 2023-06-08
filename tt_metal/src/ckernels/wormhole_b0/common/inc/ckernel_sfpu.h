@@ -257,6 +257,8 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
     case SfpuType::dropout:
         init_dropout_seed(param0);
         break;
+    case SfpuType::sigmoid_piecewise_linear:
+      break;
     default:
         // Should result in compile time error??
         break;
@@ -726,16 +728,27 @@ inline void calculate_lrelu(uint slope)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_power(uint exponent)
 {
+
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
-        vFloat result = in * in;
-        for (uint i = 2; i < exponent; i++) {
-            result *= in;
+        vFloat result = 1.0f;
+
+        vFloat b[sizeof(uint)] = {1.0f,};
+        // kind of a LUT
+        b[0] = in;
+        #pragma GCC unroll 32
+        for (uint i =  1; i < sizeof(uint); i++) {
+            b[i] = b[i-1]*b[i-1];
+        }
+
+        //reduce with product
+        for (uint i = 0; i < sizeof(uint)+1; i++) {
+            if ( exponent & (1<<i) )
+                result *= b[i];
         }
 
         dst_reg[0] = result;
-
         dst_reg++;
     }
 }
@@ -947,27 +960,23 @@ inline void calculate_abs()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_sign(uint exponent_size_8)
+inline void calculate_sign()
 {
     // All params are in FP16 format
-    // uint format = 1;
-    #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0];
-        dst_reg[0] = vConst1;
-        v_if (v < 0.0F) {
-            dst_reg[0] = vConstNeg1;
+	vFloat result = vConst1;
+        v_if (v < 0.0f) {
+           result = vConstNeg1;
+        } v_elseif(v > 0.0f) {
+	  result = vConst1;
+	} v_else {
+	  result = vConst0;
         }
         v_endif;
 
-        //param0 == 0 is Bfp8 format. It does not require bias removal.
-        //param0 != 0 is Float16 format and exp bias needs to be removed for zero check.
-        v_if (sfpu_is_fp16_zero(v, exponent_size_8)) {
-            dst_reg[0] = vConst0;
-        }
-        v_endif;
-
+	dst_reg[0] = result;
         dst_reg++;
     }
 }
@@ -980,6 +989,22 @@ inline void calculate_max()
         vFloat a = dst_reg[0];
         vFloat b = dst_reg[32];
         v_if(a < b) {
+            dst_reg[0] = b;
+        }
+        v_endif;
+
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_min()
+{
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat a = dst_reg[0];
+        vFloat b = dst_reg[32];
+        v_if(a > b) {
             dst_reg[0] = b;
         }
         v_endif;
@@ -1005,18 +1030,29 @@ sfpi_inline vFloat sfpu_sine_maclaurin_series(vFloat val)
     // x^7/7!
     tmp = tmp*val*val;
     output += -0.0001984126*tmp;
+
+    // x^9/9!
+    tmp = tmp*val*val;
+    output +=  0.0000027557*tmp;
+
+    // x^11/11!
+    tmp = tmp*val*val;
+    output += -0.00000002505*tmp;
+
     if constexpr (not APPROXIMATION_MODE) {
-        // x^9/9!
-        tmp = tmp*val*val;
-        output +=  0.0000027557*tmp;
-        // x^11/11!
+	// x^11/11!
         tmp = tmp*val*val;
         output += -0.00000002505*tmp;
+
+	// x^13/13!
+	tmp = tmp*val*val;
+	output += 1.6059043836821613e-10*(tmp);
     }
 
     // Write out output
     return output;
 }
+
 template <bool APPROXIMATION_MODE>
 sfpi_inline vFloat sfpu_cosine_maclaurin_series(vFloat val)
 {
@@ -1033,13 +1069,23 @@ sfpi_inline vFloat sfpu_cosine_maclaurin_series(vFloat val)
     // x^6/6!
     tmp = tmp*val*val;
     output += -0.0013888888*tmp;
+
+    // x^8/8!
+    tmp = tmp*val*val;
+    output +=  0.0000248015*tmp;
+
+    // x^10/10!
+    tmp = tmp*val*val;
+    output += -0.0000002755*tmp;
+
     if constexpr (not APPROXIMATION_MODE) {
-        // x^8/8!
-        tmp = tmp*val*val;
-        output +=  0.0000248015*tmp;
-        // x^10/10!
-        tmp = tmp*val*val;
-        output += -0.0000002755*tmp;
+	// x^12/12!
+	tmp = tmp*val*val;
+	output += 2.08767569878681e-9*tmp;
+
+	// x^14/14!
+	tmp = tmp*val*val;
+	output += -1.1470745597729725e-11*tmp;
     }
 
     // Write out output
@@ -1110,6 +1156,7 @@ inline void relu_max(uint uint_threshold)
         dst_reg++;
     }
 }
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_min(uint uint_threshold)
 {
@@ -1125,6 +1172,71 @@ inline void relu_min(uint uint_threshold)
         dst_reg++;
     }
 }
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_negative()
+{
+
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat val = dst_reg[0];
+        dst_reg[0] = -val;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_add1()
+{
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat val = dst_reg[0];
+        dst_reg[0] = 1.0f + val;
+        dst_reg++;
+    }
+}
+
+#define POLYVAL5(coef4,coef3,coef2,coef1,coef0,val) (((coef4*val + coef3)*val + coef2)*val + coef1)*val + coef0
+
+inline
+vFloat sigmoid_piecewise_linear_positive(vFloat val) {
+        vFloat result = 0.0f;
+	v_if ( val >= +5.0f)  {
+	  result = 1.0f;
+	} v_elseif ( val > 1.0f && val < 5.0f ) {
+	  result = POLYVAL5(0.00144462f, -0.01055479f, -0.01203685f,  0.24300185f,  0.50437757f,val);
+	} v_else {
+	  result = 0.25f*val + 0.5f; // linear appx as y = 0.25x + 0.5
+	}
+	v_endif;
+	return result;
+}
+
+//sigmoid is anti-symmetric and offset by 1
+//sigmoid[-x] = 1 - sigmoid[x]
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_sigmoid_piecewise_linear()
+{
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat val = dst_reg[0];
+	vFloat result = 0.0f;
+
+	v_if ( val < 0.0f ) {
+	  result = sigmoid_piecewise_linear_positive(-val);
+	  result = 1.0f - result;
+	} v_else {
+	  result = sigmoid_piecewise_linear_positive(val);
+	}
+	v_endif;
+
+	dst_reg[0] = result;
+	dst_reg++;
+    }
+
+    return;
+}
+
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int ITERATIONS=8>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
@@ -1148,6 +1260,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::sigmoid) {
         calculate_sigmoid<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::sigmoid_piecewise_linear) {
+        calculate_sigmoid_piecewise_linear<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::sqrt) {
         calculate_sqrt<APPROXIMATION_MODE, ITERATIONS, 2>();
@@ -1191,10 +1306,13 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
         calculate_abs<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::sign) {
-        calculate_sign<APPROXIMATION_MODE, ITERATIONS>(param5);
+        calculate_sign<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::max) {
         calculate_max<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::min) {
+        calculate_min<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::sine) {
         calculate_sine<APPROXIMATION_MODE, ITERATIONS>();

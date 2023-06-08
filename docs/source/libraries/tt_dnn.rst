@@ -53,9 +53,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.relu
 
-..
-    autofunction:: tt_lib.tensor.sigmoid
-
 .. autofunction:: tt_lib.tensor.exp
 
 .. autofunction:: tt_lib.tensor.recip
@@ -69,7 +66,6 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.log10
 
 .. autofunction:: tt_lib.tensor.tanh
-
 
 Tensor matrix math operations
 -----------------------------
@@ -141,6 +137,16 @@ Experimental Operations
 =======================
 
 Operations in this section are experimental, don't have full support, and may behave in unexpected ways.
+
+Tensor elementwise operations
+-----------------------------
+.. autofunction:: tt_lib.tensor.sigmoid
+
+.. autofunction:: tt_lib.tensor.silu
+
+.. autofunction:: tt_lib.tensor.cos
+
+.. autofunction:: tt_lib.tensor.sin
 
 Fused Operations from ``tt_lib`` Mini-Graph Library
 ---------------------------------------------------

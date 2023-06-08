@@ -143,6 +143,29 @@ inline void llk_math_eltwise_unary_sfpu_log_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::log, APPROXIMATE>();
 }
 
+//abs
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_abs(uint dst_index, int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::abs, APPROXIMATE, dst_sync>(dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_abs_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::abs, APPROXIMATE>();
+}
+
+//sign
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_sign(uint dst_index, int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::sign, APPROXIMATE, dst_sync>(dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_sign_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sign, APPROXIMATE>();
+}
+
+//log with base
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_log_with_base(uint dst_index, uint base, int vector_mode = Dim::RC) {
   llk_math_eltwise_unary_sfpu<SfpuType::log_with_base, APPROXIMATE, dst_sync>(dst_index, vector_mode, base);
@@ -158,9 +181,29 @@ inline void llk_math_eltwise_unary_sfpu_tanh(uint dst_index, int vector_mode = D
     llk_math_eltwise_unary_sfpu<SfpuType::tanh, APPROXIMATE, dst_sync>(dst_index, vector_mode);
 }
 
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_sin(uint dst_index, int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::sine, APPROXIMATE, dst_sync>(dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_cos(uint dst_index, int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::cosine, APPROXIMATE, dst_sync>(dst_index, vector_mode);
+}
+
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_tanh_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::tanh, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_sin_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sine, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_cos_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
@@ -208,8 +251,9 @@ inline void llk_math_eltwise_unary_sfpu_square_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::square, APPROXIMATE>();
 }
 
+// Power : y = x^(const param0)
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_power(uint dst_index, int vector_mode = Dim::RC, int pow = 0) {
+inline void llk_math_eltwise_unary_sfpu_power(uint dst_index, int vector_mode = Dim::RC, uint pow = 0) {
     llk_math_eltwise_unary_sfpu<SfpuType::power, APPROXIMATE, dst_sync>(dst_index, vector_mode, pow);
 }
 
@@ -237,3 +281,93 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_cosine_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>();
 }
+
+
+//EQZ
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_eqz(uint dst_index,int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::equal_zero, APPROXIMATE, dst_sync>(dst_index,vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_eqz_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::equal_zero, APPROXIMATE>();
+}
+
+//NEZ
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_nez(uint dst_index,int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::not_equal_zero, APPROXIMATE, dst_sync>(dst_index,vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_nez_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::not_equal_zero, APPROXIMATE>();
+}
+
+//LTZ
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull,int vector_mode = Dim::RC>
+inline void llk_math_eltwise_unary_sfpu_ltz(uint dst_index) {
+    llk_math_eltwise_unary_sfpu<SfpuType::less_than_zero, APPROXIMATE, dst_sync>(dst_index,vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_ltz_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_zero, APPROXIMATE>();
+}
+
+//GTZ
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_gtz(uint dst_index,int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::greater_than_zero, APPROXIMATE, dst_sync>(dst_index,vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_gtz_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_zero, APPROXIMATE>();
+}
+
+//LEZ
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_lez(uint dst_index,int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::less_than_equal_zero, APPROXIMATE, dst_sync>(dst_index,vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_lez_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_equal_zero, APPROXIMATE>();
+}
+
+//GEZ
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_gez(uint dst_index,int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::greater_than_equal_zero, APPROXIMATE, dst_sync>(dst_index,vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_gez_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_equal_zero, APPROXIMATE>();
+}
+
+// RELU MAX
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_relu_max(uint dst_index,uint param0, int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::relu_max, APPROXIMATE, dst_sync>(dst_index,vector_mode,param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_relu_max_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROXIMATE>();
+}
+
+// RELU MIN
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index,uint param0, int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::relu_min, APPROXIMATE, dst_sync>(dst_index,vector_mode,param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_relu_min_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROXIMATE>();
+}
+

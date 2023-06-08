@@ -9,8 +9,91 @@ from tt_lib.utils import (
 ################################################
 #################### TT-DNN ####################
 ################################################
+
+
+# Unary Ops
+def power(x, *args, **kwargs):
+    exponent = kwargs["exponent"]
+    result = x**exponent
+    return result
+
+
+def polyval(x, *args, **kwargs):
+    coeffs = kwargs["coeffs"]
+    result = x * 0.0
+    for coeff in coeffs:
+        result = result * x + coeff
+    return result
+
+
+def relu_max(x, *args, **kwargs):
+    upper_limit = kwargs["upper_limit"]
+    return torch.min(torch.relu(x), torch.tensor(upper_limit))
+
+
+def relu_min(x, *args, **kwargs):
+    lower_limit = kwargs["lower_limit"]
+    return torch.min(torch.relu(x), torch.tensor(lower_limit))
+
+
+def abs(x, *args, **kwargs):
+    return x.abs()
+
+
+def ltz(x, *args, **kwargs):
+    return (x < 0.0).to(x.dtype)
+
+
+def gtz(x, *args, **kwargs):
+    return (x > 0.0).to(x.dtype)
+
+
+def lez(x, *args, **kwargs):
+    return (x <= 0.0).to(x.dtype)
+
+
+def gez(x, *args, **kwargs):
+    return (x >= 0.0).to(x.dtype)
+
+
+def eqz(x, *args, **kwargs):
+    return (x == 0.0).to(x.dtype)
+
+
+def nez(x, *args, **kwargs):
+    return (x != 0.0).to(x.dtype)
+
+
+def sign(x, *args, **kwargs):
+    return torch.sign(x)
+
+
 def datacopy(x, *args, **kwargs):
     return x
+
+
+def neg(x, *args, **kwargs):
+    return -x
+
+
+def square(x, *args, **kwargs):
+    return torch.square(x)
+
+
+def log1p(x, *args, **kwargs):
+    return torch.log1p(x)
+
+
+def softplus(x, *args, **kwargs):
+    return torch.nn.functional.softplus(x)
+
+
+def add1(x, *args, **kwargs):
+    return 1 + x
+
+
+def mish(x, *args, **kwargs):
+    return x * torch.tanh(softplus(x))
 
 
 def recip(x, *args, **kwargs):
@@ -51,6 +134,42 @@ def log10(x, *args, **kwargs):
 
 def tanh(x, *args, **kwargs):
     return torch.tanh(x)
+
+
+def sin(x, *args, **kwargs):
+    return torch.sin(x)
+
+
+def cos(x, *args, **kwargs):
+    return torch.cos(x)
+
+
+def swish(x, *args, **kwargs):
+    return torch.nn.functional.silu(x)
+
+
+def silu(x, *args, **kwargs):
+    return torch.nn.functional.silu(x)
+
+
+## Trinary op
+def mac(x, *args, **kwargs):
+    if len(args) == 0:
+        y = x
+        z = x
+    else:
+        y = args[0]
+        z = args[1]
+    return x * y + z
+
+
+## Binary Ops
+def max(x, y, *args, **kwargs):
+    return torch.max(x, y)
+
+
+def min(x, y, *args, **kwargs):
+    return torch.min(x, y)
 
 
 def add(x, y, *args, **kwargs):
@@ -106,7 +225,9 @@ def untilize(x, *args, **kwargs):
 
 
 def tilize_with_zero_padding(x, *args, **kwargs):
-    return tilize_util(torch.nn.functional.pad(x, (0, 0, 0, nearest_32(x.shape[-2]) - x.shape[-2])))
+    return tilize_util(
+        torch.nn.functional.pad(x, (0, 0, 0, nearest_32(x.shape[-2]) - x.shape[-2]))
+    )
 
 
 def tilize_with_val_padding(

@@ -483,11 +483,27 @@ ALWI void tanh_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_tanh_init<APPROX>() )); // TODO(AP): move out init
 }
 
+ALWI void sin_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_sin_init<APPROX>() ));
+}
+
+ALWI void cos_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_cos_init<APPROX>() ));
+}
+
 /**
  *  Please refer to documentation for exp_tile.
  */
 ALWI void tanh_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_tanh<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void sin_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_sin<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void cos_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_cos<APPROX, SyncHalf>(idst) ));
 }
 
 // relu is implemented via unpack with llk_pack_relu_config(0) enabled
@@ -498,6 +514,113 @@ ALWI void pack_relu_tile_to_stream(uint32_t idst, uint32_t cbid) {
 ALWI void pack_relu_config(uint32_t enable) {
     PACK(( llk_pack_relu_config(enable) ));
 }
+
+
+//abs
+ALWI void abs_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_abs<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void abs_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_abs_init<APPROX>() ));
+}
+
+//sign
+ALWI void sign_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_sign<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void sign_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_sign_init<APPROX>() ));
+}
+
+//square
+ALWI void square_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_square<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void square_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_square_init<APPROX>() ));
+}
+
+//compare to zero operators
+
+ALWI void ltz_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_ltz<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void ltz_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_ltz_init<APPROX>() ));
+}
+
+
+ALWI void eqz_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_eqz<APPROX,SyncHalf>(idst) ));
+}
+
+ALWI void eqz_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_eqz_init<APPROX>() ));
+}
+
+ALWI void lez_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_lez<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void lez_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_lez_init<APPROX>() ));
+}
+
+ALWI void gtz_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_gtz<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void gtz_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_gtz_init<APPROX>() ));
+}
+
+ALWI void nez_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_nez<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void nez_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_nez_init<APPROX>() ));
+}
+
+ALWI void gez_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_gez<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void gez_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_gez_init<APPROX>() ));
+}
+
+
+//RELU MAX-MIN ops
+ALWI void relu_max_tile(uint32_t idst,uint32_t param0) {
+    MATH(( llk_math_eltwise_unary_sfpu_relu_max<APPROX, SyncHalf>(idst,param0) ));
+}
+
+ALWI void relu_max_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_relu_max_init<APPROX>() ));
+}
+
+ALWI void relu_min_tile(uint32_t idst,uint32_t param0) {
+    MATH(( llk_math_eltwise_unary_sfpu_relu_min<APPROX, SyncHalf>(idst,param0) ));
+}
+
+ALWI void relu_min_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_relu_min_init<APPROX>() ));
+}
+
+//POWER : y = x^(const param0)
+ALWI void power_tile(uint32_t idst,uint32_t param0) {
+    MATH(( llk_math_eltwise_unary_sfpu_power<APPROX, SyncHalf>(idst,param0) ));
+}
+
+ALWI void power_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_power_init<APPROX>() ));
+}
+
 
 /**
  * Shorthand template instantiation of sub_tiles_bcast.

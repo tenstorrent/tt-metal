@@ -28,7 +28,8 @@ Compute APIs
   log_tile
   log_with_base_tile
   tanh_tile
-
+  sin_tile
+  cos_tile
   reduce_tile
   transpose_wh_tile
 

@@ -4,6 +4,7 @@ import torch
 from pathlib import Path
 from functools import partial
 from itertools import product
+from math import pi
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
@@ -162,6 +163,53 @@ def test_run_eltwise_sigmoid_test(input_shapes, pcie_slot, function_level_defaul
 
 # explore ops for Single core and Multi core tensor sizes
 @pytest.mark.parametrize(
+    "fn_kind, input_shapes, pcie_slot",
+    (
+        list(
+            product(
+                (
+                    "square",
+                    "neg",
+                    "ltz",
+                    "gtz",
+                    "lez",
+                    "gez",
+                    "eqz",
+                    "nez",
+                    "abs",
+                    "relu_max",
+                    "relu_min",
+                ),
+                (
+                    [[1, 1, 32, 32]],
+                    [[1, 1, 320, 384]],
+                    [[1, 3, 320, 384]],
+                ),  # single, multi core sizes
+                (0,),
+            )
+        )
+    ),
+)
+def test_run_eltwise_unary_test(
+    fn_kind, input_shapes, pcie_slot, function_level_defaults
+):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand, low=1, high=100), torch.float32
+        )
+    ]
+    comparison_func = partial(comparison_funcs.comp_pcc)
+    run_single_pytorch_test(
+        "eltwise-" + fn_kind,
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
+
+
+# explore ops for Single core and Multi core tensor sizes
+@pytest.mark.parametrize(
     "log_kind, input_shapes, pcie_slot",
     (
         list(
@@ -187,7 +235,7 @@ def test_run_eltwise_log_with_base_test(
     ]
     comparison_func = partial(comparison_funcs.comp_pcc)
     run_single_pytorch_test(
-        "eltwise-"+log_kind,
+        "eltwise-" + log_kind,
         input_shapes,
         datagen_func,
         comparison_func,
@@ -212,6 +260,98 @@ def test_run_eltwise_tanh_test(input_shapes, pcie_slot, function_level_defaults)
     comparison_func = partial(comparison_funcs.comp_pcc)
     run_single_pytorch_test(
         "eltwise-tanh",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shapes, pcie_slot",
+    (
+        ([[1, 1, 32, 32]], 0),  # Single core
+        ([[1, 1, 320, 384]], 0),  # Multi core
+    ),
+)
+def test_run_eltwise_sin_test(input_shapes, pcie_slot, function_level_defaults):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand, low=0.0, high=2.0 * pi), torch.float32
+        )
+    ]
+    comparison_func = partial(comparison_funcs.comp_pcc)
+    run_single_pytorch_test(
+        "eltwise-sin",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shapes, pcie_slot",
+    (
+        ([[1, 1, 32, 32]], 0),  # Single core
+        ([[1, 1, 320, 384]], 0),  # Multi core
+    ),
+)
+def test_run_eltwise_cos_test(input_shapes, pcie_slot, function_level_defaults):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand, low=0.0, high=2.0 * pi), torch.float32
+        )
+    ]
+    comparison_func = partial(comparison_funcs.comp_pcc)
+    run_single_pytorch_test(
+        "eltwise-cos",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shapes, pcie_slot",
+    (
+        ([[1, 1, 32, 32]], 0),  # Single core
+        ([[1, 1, 320, 384]], 0),  # Multi core
+    ),
+)
+def test_run_eltwise_power_test(input_shapes, pcie_slot, function_level_defaults):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_randint, low=0, high=10), torch.float32
+        )
+    ]
+    comparison_func = partial(comparison_funcs.comp_pcc)
+    run_single_pytorch_test(
+        "eltwise-power",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shapes, pcie_slot",
+    (
+        ([[1, 1, 32, 32]], 0),  # Single core
+        ([[1, 1, 320, 384]], 0),  # Multi core
+    ),
+)
+def test_run_eltwise_sign_test(input_shapes, pcie_slot, function_level_defaults):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand, low=-10, high=10), torch.float32
+        )
+    ]
+    comparison_func = partial(comparison_funcs.comp_pcc)
+    run_single_pytorch_test(
+        "eltwise-sign",
         input_shapes,
         datagen_func,
         comparison_func,

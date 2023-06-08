@@ -1,4 +1,6 @@
 // Sfpu golden functions
+#include<cmath>
+
 float exponential(float x) {
     return exp(x);
 }
@@ -22,7 +24,7 @@ float ref_sqrt(float x) {
 }
 
 float sigmoid(float x) {
-    return 1 / (1 + exp(-x));
+    return 1.0f / (1.0f + exp(-x));
 }
 
 float ref_log(float x) {
@@ -39,6 +41,24 @@ float ref_log2(float x) {
 
 float ref_tanh(float x) {
     return tanh(x);
+}
+
+namespace helper {
+template <typename T> int sgn(T val) {
+    return (T(0) < val) - (val < T(0));
+}
+}
+
+float ref_sign(float x) {
+    return helper::sgn(x);
+}
+
+float ref_square(float x) {
+    return x*x;
+}
+
+float ref_abs(float x) {
+    return std::abs(x);
 }
 
 vector<uint32_t> sfpu(const vector<uint32_t> &src, std::function<float(float)> sfpu_func) {
@@ -126,6 +146,9 @@ static std::vector<string> sfpu_op =
      "log2",
      "log10",
      "tanh",
+     "sign",
+     "abs",
+     "square"
     };
 
 const map<string, std::function<float(float)>> sfpu_op_to_function = {
@@ -139,6 +162,9 @@ const map<string, std::function<float(float)>> sfpu_op_to_function = {
     {"log2",        ref_log2},
     {"log10",       ref_log10},
     {"tanh",        ref_tanh},
+    {"sign",        ref_sign},
+    {"abs",         ref_abs},
+    {"square",      ref_square}
 };
 
 const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>> sfpu_op_to_init_func = {
@@ -152,6 +178,9 @@ const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>>
     {"log2",         create_random_vector_of_bfloat16_0_2},
     {"log10",         create_random_vector_of_bfloat16_0_2},
     {"tanh",        create_random_vector_of_bfloat16_1_1},
+    {"sign",        create_random_vector_of_bfloat16_1_1},
+    {"abs",         create_random_vector_of_bfloat16_1_1},
+    {"square",      create_random_vector_of_bfloat16_1_1}
 };
 
 const map<string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_function = {
@@ -165,4 +194,7 @@ const map<string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_f
     {"log2", is_close_rtol_0p06_atol_0p006},
     {"log10", is_close_rtol_0p06_atol_0p006},
     {"tanh", is_close_rtol_0p175_atol_0p1},
+    {"sign", is_close_rtol_0p175_atol_0p1},
+    {"abs",  is_close_rtol_0p175_atol_0p1},
+    {"square", is_close_rtol_0p175_atol_0p1}
 };

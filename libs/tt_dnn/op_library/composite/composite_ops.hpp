@@ -1,0 +1,102 @@
+#pragma once
+#include <type_traits>
+#include "common/constants.hpp"
+
+#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tensor/tensor.hpp"
+
+
+namespace tt {
+
+namespace tt_metal {
+
+using unary_tensor_op_t = Tensor (const Tensor& a);
+using binary_tensor_op_t = Tensor (const Tensor& a, const Tensor& b);
+
+//Note: inline doesn't allow pybind to work well so we keep few function not inlined.
+
+template<typename T>
+Tensor mk_scalar(T val) {
+    assert(std::is_scalar<T>::value && "T should be scalar");
+    std::array<unsigned int,4> shape1 = {1,1,1,1};
+    std::vector<bfloat16> val_vec1 = {(bfloat16)val};
+    Tensor scalar = Tensor(val_vec1,shape1,DataType::BFLOAT16,Layout::ROW_MAJOR);
+    return std::move(scalar);
+}
+
+// Function: MAC
+// compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
+// being a scalar or tensor
+Tensor mac(const Tensor& a, const Tensor& b, const Tensor & c);
+Tensor mac_scalar(const Tensor& a, float b, float c);
+
+
+Tensor mk_zero_tensor_like(const Tensor& reference_tensor) {
+  static const Tensor zero = mk_scalar(0.0f);
+  Tensor zero_like = bcast(reference_tensor,zero,BcastOpMath::MUL,BcastOpDim::HW);
+  return std::move(zero_like);
+}
+
+//TODO: enable zeroes(), ones() and eye() type functions on-device using this type of logic
+template<typename T>
+Tensor mk_filled_tensor_like(const Tensor& reference_tensor, T val) {
+  Tensor k = mk_scalar(val);
+  Tensor zero_like = mk_zero_tensor_like(reference_tensor);
+  Tensor result = bcast(zero_like,k,BcastOpMath::ADD,BcastOpDim::HW);
+  return std::move(result);
+}
+
+//Function sign
+//compute sgn(x) = (x>=0) - (x<=0);
+//inline
+//Tensor sign(const Tensor& x);
+
+// Function SILU
+// use activation Silu[x] = x*Sigmoid[x]
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
+Tensor silu(const Tensor& a);
+
+// Function neg
+//use transformation y = -1 * x by broadcast
+Tensor neg(const Tensor& a);
+
+//add 1
+//use transformation y = 1.0 + x by broadcast
+Tensor add1(const Tensor& a);
+
+//log1p 1
+//use transformation y = log(1.0 + x) by broadcast
+Tensor log1p(const Tensor& x);
+
+//softplus[x] = log[1 + exp[x]]
+//use transformation y = log[1+exp[x]] by broadcast
+Tensor softplus(const Tensor& x);
+
+//mish[x] = x*tanh[softplus[x]]
+//use transformation y = x*tanh[softplus[x]] by broadcast
+//Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
+Tensor mish(const Tensor& x);
+
+// Function Selu - scaled exponential linear
+//use transformation y = scale * alpha * (exp(X)-1) by broadcast
+//Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
+Tensor selu(const Tensor& x,const float scale = 1.0507009873554804934193349852946, const float alpha = 1.6732632423543772848170429916717);
+
+// Function Swish = same as SILU
+//use transformation y = x * sigmoid( x ) by broadcast
+extern std::function<unary_tensor_op_t> swish;
+
+//compute polyval by Horner's rule
+Tensor polyval(const Tensor &input_tensor,std::vector<float> coeffs);
+
+//min(a,b)
+Tensor min(const Tensor &input_a,const Tensor &input_b);
+
+//max(a,b)
+Tensor max(const Tensor &input_a,const Tensor &input_b);
+
+} //namespace tt_metal
+
+} //namespace tt

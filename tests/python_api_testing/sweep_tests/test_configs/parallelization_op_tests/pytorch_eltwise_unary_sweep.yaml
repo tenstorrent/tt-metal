@@ -140,3 +140,31 @@ test-list:
     comparison:
       function: comp_pcc
     output-file: eltwise_tanh_parallelization_pcc_stresstest_range_32_to_7712.csv
+  eltwise-sin:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 0
+        high: 6.283185307179586
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_sin_parallelization_pcc_stresstest_range_32_to_7712.csv
+  eltwise-cos:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 0
+        high: 6.283185307179586
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_cos_parallelization_pcc_stresstest_range_32_to_7712.csv

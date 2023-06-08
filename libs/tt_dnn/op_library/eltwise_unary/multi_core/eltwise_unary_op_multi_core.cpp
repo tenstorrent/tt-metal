@@ -14,8 +14,7 @@ namespace tt {
 
 namespace tt_metal {
 
-tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type) {
-
+tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param /* = {} */) {
     tt_metal::Program program{};
 
     // TODO: Build some sort of dispatcher based on location of op operands
@@ -108,7 +107,7 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
         math_approx_mode
     );
 
-    eltwise_unary_op_utils::add_defines(eltwise_unary_kernel_group_1, op_type);
+    eltwise_unary_op_utils::add_defines(eltwise_unary_kernel_group_1, op_type, param);
     if(!core_group_2.ranges().empty()){
         vector<uint32_t> compute_kernel_args_group_2 = {
             num_tiles_per_core_group_2, // per_core_block_cnt
@@ -125,7 +124,7 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
             math_approx_mode
         );
 
-        eltwise_unary_op_utils::add_defines(eltwise_unary_kernel_group_2, op_type);
+        eltwise_unary_op_utils::add_defines(eltwise_unary_kernel_group_2, op_type, param);
     }
 
     if (not program_cache::is_enabled()) {

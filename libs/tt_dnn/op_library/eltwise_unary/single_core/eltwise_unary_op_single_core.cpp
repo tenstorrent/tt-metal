@@ -11,8 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type) {
-
+Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param /* = {} */) {
     Program program{};
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
@@ -96,7 +95,7 @@ Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::
         math_approx_mode
     );
 
-    eltwise_unary_op_utils::add_defines(eltwise_unary_kernel, op_type);
+    eltwise_unary_op_utils::add_defines(eltwise_unary_kernel, op_type, param);
 
     if (not program_cache::is_enabled()) {
         tt_metal::Buffer *src0_dram_buffer = a.buffer();

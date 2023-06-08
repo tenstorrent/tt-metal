@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -10,23 +11,40 @@ namespace tt {
 namespace tt_metal {
 
 struct UnaryOpType {
-    enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9 };
-    static const vector<Enum> all() { return { EXP, RECIP, GELU, RELU, SQRT, SIGMOID, LOG, TANH, LOG2, LOG10 }; }
+    enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
+                ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23  };
+    static const vector<Enum> all() { return { EXP, RECIP, GELU, RELU, SQRT, SIGMOID, LOG, TANH, LOG2, LOG10, SIN, COS, ABS, SIGN, SQUARE,
+                EQZ , NEZ , GTZ , LTZ , GEZ , LEZ , RELU_MAX , RELU_MIN, POWER }; }
     static UnaryOpType::Enum str2enum(std::string value_) {
       std::string value(value_.size(),'\0');
       for(int i = 0; i < value_.size(); i++) value[i] = toupper(value_[i]);
-      if ( value == "EXP" ) return EXP;
-      if ( value == "RECIP" ) return RECIP;
+      if ( value == "EXP" || value == "EXPONENTIAL" ) return EXP;
+      if ( value == "RECIP" || value == "RECIPROCAL" ) return RECIP;
       if ( value == "GELU" ) return GELU;
       if ( value == "RELU" ) return RELU;
       if ( value == "SQRT" ) return SQRT;
-      if ( value == "SIGMOID" ) return SQRT;
+      if ( value == "SIGMOID" ) return SIGMOID;
       if ( value == "LOG" ) return LOG;
       if ( value == "TANH" ) return TANH;
       if ( value == "LOG2" ) return LOG2;
       if ( value == "LOG10" ) return LOG10;
-      TT_ASSERT(false,"string does not match any known operator");
-      return LOG10;
+      if ( value == "SIN" ) return SIN;
+      if ( value == "COS" ) return COS;
+      if ( value == "ABS" ) return ABS;
+      if ( value == "SIGN" ) return SIGN;
+      if ( value == "SQUARE" ) return SQUARE;
+      if ( value == "EQZ") return EQZ;
+      if ( value == "NEZ") return NEZ;
+      if ( value == "GTZ") return GTZ;
+      if ( value == "LTZ") return LTZ;
+      if ( value == "GEZ") return GEZ;
+      if ( value == "LEZ") return LEZ;
+      if ( value == "RELU_MIN" ) return RELU_MIN;
+      if ( value == "RELU_MAX" ) return RELU_MAX;
+      if ( value == "POWER" ) return POWER;
+
+      TT_ASSERT(false && "string does not match any known operator");
+      return POWER;
     }
 };
 
@@ -35,11 +53,11 @@ struct UnaryOpParallelizationStrategy {
     static const vector<Enum> all() { return { MULTI_CORE, SINGLE_CORE }; }
 };
 
-Program eltwise_unary_single_core (const Tensor &input_tensor, Tensor &output_tensor, UnaryOpType::Enum op_type);
-Program eltwise_unary_multi_core (const Tensor &input_tensor, Tensor &output_tensor, UnaryOpType::Enum op_type);
-
 struct EltwiseUnary {
     const UnaryOpType::Enum op_type;
+    std::optional<float> param;
+
+    explicit EltwiseUnary(UnaryOpType::Enum op_type,std::optional<float> param_={}) : op_type{op_type}, param(param_) {}
 
     ProgramHash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
@@ -48,17 +66,38 @@ struct EltwiseUnary {
     Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
-inline Tensor sqrt(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::SQRT}, input_tensor); }
-inline Tensor exp(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::EXP}, input_tensor); }
-inline Tensor recip(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::RECIP}, input_tensor); }
-inline Tensor gelu(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::GELU}, input_tensor); }
-inline Tensor relu(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::RELU}, input_tensor); }
-inline Tensor sigmoid(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::SIGMOID}, input_tensor); }
-inline Tensor log(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::LOG}, input_tensor); }
-inline Tensor tanh(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::TANH}, input_tensor); }
-inline Tensor log2(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::LOG2}, input_tensor); }
-inline Tensor log10(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary{UnaryOpType::LOG10}, input_tensor); }
+Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor);
+Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param = {});
+Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param = {});
 
+inline Tensor sqrt(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::SQRT), input_tensor); }
+inline Tensor exp(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::EXP), input_tensor); }
+inline Tensor recip(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::RECIP), input_tensor); }
+inline Tensor gelu(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::GELU), input_tensor); }
+inline Tensor relu(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::RELU), input_tensor); }
+inline Tensor sigmoid(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::SIGMOID), input_tensor); }
+inline Tensor log(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::LOG), input_tensor); }
+inline Tensor tanh(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::TANH), input_tensor); }
+inline Tensor log2(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::LOG2), input_tensor); }
+inline Tensor log10(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::LOG10), input_tensor); }
+
+
+inline Tensor sin(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::SIN), input_tensor); }
+inline Tensor cos(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::COS), input_tensor); }
+inline Tensor abs(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::ABS), input_tensor); }
+inline Tensor sign(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::SIGN), input_tensor); }
+inline Tensor square(const Tensor &input_tensor) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::SQUARE), input_tensor); }
+
+inline Tensor eqz(const Tensor &a) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::EQZ),a); }
+inline Tensor nez(const Tensor &a) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::NEZ),a); }
+inline Tensor gez(const Tensor &a) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::GEZ),a); }
+inline Tensor lez(const Tensor &a) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::LEZ),a); }
+inline Tensor gtz(const Tensor &a) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::GTZ),a); }
+inline Tensor ltz(const Tensor &a) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::LTZ),a); }
+
+inline Tensor relu_max(const Tensor& a,float upper_limit) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::RELU_MAX,upper_limit),a); }
+inline Tensor relu_min(const Tensor& a,float lower_limit) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::RELU_MIN,lower_limit),a); }
+inline Tensor power(const Tensor& a,uint32_t exponent) { return operation::run_with_autopad(EltwiseUnary(UnaryOpType::POWER,exponent),a); }
 
 }  // namespace tt_metal
 
@@ -67,9 +106,8 @@ inline Tensor log10(const Tensor &input_tensor) { return operation::run_with_aut
 namespace eltwise_unary_op_utils {
 using namespace tt::tt_metal;
 
-string get_op_name(UnaryOpType::Enum op_type);
-
-void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type);
+string get_op_name(UnaryOpType::Enum op_type,std::optional<float> param={});
+void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type,std::optional<float> param={});
 
 UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &input_tensor);
 
