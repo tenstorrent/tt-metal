@@ -12,7 +12,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 inline void llk_unpack_tilize_mop_config() {
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
     static constexpr uint unpack_srca = TT_OP_NOP;
 #else
     static constexpr uint unpack_srca =

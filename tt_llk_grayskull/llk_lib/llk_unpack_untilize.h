@@ -12,7 +12,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 inline void llk_unpack_untilize_mop_config() {
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
     static constexpr uint unpack_srca = TT_OP_NOP;
 #else
     static constexpr uint unpack_srca =
@@ -109,7 +109,7 @@ inline void llk_unpack_untilize(std::uint32_t operand, std::uint32_t block_tile_
             if ((face_2xr_cnt + rem_blocks_in_row) >= (FACE_HEIGHT / 2)) {
                 // Run MOP
                 TT_MOP(0, 8 - face_2xr_cnt - 1, 0);                                              // Run the MOP
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
                 TTI_NOP;
 #else
                 TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 0, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // set data valid

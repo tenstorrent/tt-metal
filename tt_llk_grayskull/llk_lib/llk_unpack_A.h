@@ -15,19 +15,16 @@ template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false>
 inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
 
     if constexpr (BType == BroadcastType::COL) {
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
         static constexpr uint unpack_srca = TT_OP_NOP;
+        static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
         static constexpr uint unpack_srca =
             TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
-
-#if SKIP_UNP1 == 1
-        static constexpr uint unpack_srcb = TT_OP_NOP;
-#else
         static constexpr uint unpack_srcb =
             TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
+
         static constexpr uint unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
         if constexpr (acc_to_dest) {
             ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -55,15 +52,12 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
             tmp.program(instrn_buffer);
         }    
     } else if constexpr (BType == BroadcastType::ROW) {
-#if SKIP_UNP0 == 1
-            static constexpr uint unpack_srca = TT_OP_NOP;
-#else
-            static constexpr uint unpack_srca =
-                   TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
-#if SKIP_UNP1 == 1
+#if SKIP_UNP == 1
+        static constexpr uint unpack_srca = TT_OP_NOP;
         static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
+        static constexpr uint unpack_srca =
+            TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         static constexpr uint unpack_srcb =
             TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
@@ -94,9 +88,10 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
                 0);
             tmp.program(instrn_buffer);
         }    
-    } else if constexpr (BType == BroadcastType::SCALAR) {
+    } 
+    else if constexpr (BType == BroadcastType::SCALAR) {
         static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
-#if SKIP_UNP1 == 1
+#if SKIP_UNP == 1
         static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
         static constexpr uint unpack_srcb =
@@ -104,10 +99,11 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
 #endif
         ckernel_unpack_template tmp = ckernel_unpack_template::lB(unpack_srcb, TT_OP_NOP);
         tmp.program(instrn_buffer);
-    } else {
+    }
+    else {
         if (transpose_of_faces) {
             static constexpr uint unpack_srca_set_z = TT_OP_SETADCZW(0b001, 0, 0, 0, 1, 0b0001);
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
             static constexpr uint unpack_srca = TT_OP_NOP;
 #else
             static constexpr uint unpack_srca =
@@ -126,18 +122,15 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
             tmp.program(instrn_buffer);
         } else {
             if constexpr (acc_to_dest) {
-#if SKIP_UNP0 == 1
-               static constexpr uint unpack_srca = TT_OP_NOP;
+#if SKIP_UNP == 1
+                static constexpr uint unpack_srca = TT_OP_NOP;
+                static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
-               static constexpr uint unpack_srca =
-                   TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                static constexpr uint unpack_srca =
+                    TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                static constexpr uint unpack_srcb =
+                    TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-#endif
-#if SKIP_UNP1 == 1
-               static constexpr uint unpack_srcb = TT_OP_NOP;
-#else
-               static constexpr uint unpack_srcb =
-                   TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
                ckernel_unpack_template tmp = ckernel_unpack_template(
                    true,   // src B
@@ -151,7 +144,7 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces) {
                    0);
                tmp.program(instrn_buffer);
             } else {
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
                static constexpr uint unpack_srca = TT_OP_NOP;
 #else
                static constexpr uint unpack_srca =

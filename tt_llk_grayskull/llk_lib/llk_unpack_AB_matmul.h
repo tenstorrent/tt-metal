@@ -27,22 +27,21 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose) {
     // UNPACK SRCB Z 0,2,1,3
     static constexpr uint unpack_src_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 1, 0b0001);
     static constexpr uint unpack_src_set_z_transpose = TT_OP_SETADCZW(0b011, 0, 0, 0, 1, 0b0001);
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
     static constexpr uint unpack_srca0 = TT_OP_NOP;
     static constexpr uint unpack_srca1 = TT_OP_NOP;
     static constexpr uint unpack_srca0_transpose = TT_OP_NOP;
     static constexpr uint unpack_srca1_transpose = TT_OP_NOP;
+
+    static constexpr uint unpack_srcb_top = TT_OP_NOP;
+    static constexpr uint unpack_srcb_bot = TT_OP_NOP;
 #else
     static constexpr uint unpack_srca0 = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srca1 = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     static constexpr uint unpack_srca0_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srca1_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
-#if SKIP_UNP1 == 1
-    static constexpr uint unpack_srcb_top = TT_OP_NOP;
-    static constexpr uint unpack_srcb_bot = TT_OP_NOP;
-#else
+
     static constexpr uint unpack_srcb_top =
         TT_OP_UNPACR(SrcB, 0b01000010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb_bot =
