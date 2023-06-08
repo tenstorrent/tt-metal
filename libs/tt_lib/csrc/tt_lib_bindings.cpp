@@ -19,6 +19,7 @@
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
+#include "tt_dnn/op_library/split/split_last_dim_qk_tiled.hpp"
 #include "tensor/tensor_utils.hpp"
 
 #include "tt_lib_bindings.hpp"
@@ -1773,8 +1774,15 @@ void TensorModule(py::module &m_tensor) {
 
     // TMs
 
+    m_tensor.def("split_last_dim_qk_tiled", &split_last_dim_qk_tiled, R"doc(
+        Splits a tensor's last dimension in two equal sized chunks
 
-
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | in0      | Input tensor         | Tensor    |             | Yes      |
+        +---------------------+-----------+-----------+-------------+----------+
+    )doc");
     m_tensor.def("tilize_with_zero_padding", &tilize_with_zero_padding, R"doc(
         Tilizes a given tensor across memory on device. Pads zeroes height-wise if required.
 
