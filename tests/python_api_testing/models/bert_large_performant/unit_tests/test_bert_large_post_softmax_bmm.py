@@ -21,8 +21,14 @@ def run_bert_large_post_softmax_bmm_test(
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
     host = ttl.device.GetHost()
-    a_shape = [9, 16, 384, 384]
+    a_shape = [
+        9,
+        1,
+        16 * 384,
+        384,
+    ]  # No-op reshape to [9, 16, 384, 384] in post_softmax_bmm
     b_shape = [9, 16, 384, 64]
+    out_shape = [9, 16, 384, 64]
 
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
@@ -58,11 +64,11 @@ def run_bert_large_post_softmax_bmm_test(
     logger.debug(f"in1 is on: {b_t.buffer_type()}")
     logger.debug(f"out is on: {t2.buffer_type()}")
 
-    assert t2.shape() == [9, 16, 384, 64]
+    assert t2.shape() == out_shape
     tt_host_rm = t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm = torch.Tensor(tt_host_rm.data()).reshape(tt_host_rm.shape())
 
-    ref_bmm = torch.matmul(A, B)
+    ref_bmm = torch.matmul(A.reshape([9, 16, 384, 384]), B)
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.info(f"Passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")

@@ -1363,11 +1363,11 @@ void TensorModule(py::module &m_tensor) {
     )doc");
     m_tensor.def("bert_large_pre_softmax_bmm", &bert_large_pre_softmax_bmm,
         py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
-        Perform a bert_large_pre_softmax_bmm batched matmul ``A x B`` with two tensors.
+        Perform a bert_large_pre_softmax_bmm batched matmul ``[9, 16, 384, 64] x [9, 16, 64, 384]`` with two tensors and returns a reshaped output of [9, 1, 6144, 384].
     )doc");
     m_tensor.def("bert_large_post_softmax_bmm", &bert_large_post_softmax_bmm,
         py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
-        Perform a bert_large_post_softmax_bmm batched matmul ``A x B`` with two tensors.
+        Perform a bert_large_post_softmax_bmm batched matmul by reshaping tensor A to [9, 16, 384, 384] first, then returning ``[9, 16, 384, 384] x [9, 16, 384, 64]``.
     )doc");
     m_tensor.def("compute_conv_op_block_info", &compute_conv_op_block_info);
 

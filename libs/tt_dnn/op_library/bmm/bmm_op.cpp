@@ -505,7 +505,7 @@ Tensor bert_large_pre_softmax_bmm(const Tensor& a, const Tensor& b, const Memory
     TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 16, 384, 64})), "Unsupported input shape");
     TT_ASSERT((b.shape() == std::array<uint32_t, 4>({9, 16, 64, 384})), "Unsupported input shape");
     const auto& ashape = a.shape(), bshape = b.shape();
-    const std::array<uint32_t, 4>& cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
+    const std::array<uint32_t, 4>& cshape{ashape[0], 1, ashape[1] * ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
 
     CoreCoord compute_and_storage_grid_size = {12, 9};
     auto device_compute_and_storage_grid_size = a.device()->compute_and_storage_grid_size();
@@ -525,9 +525,10 @@ Tensor bert_large_pre_softmax_bmm(const Tensor& a, const Tensor& b, const Memory
 }
 
 Tensor bert_large_post_softmax_bmm(const Tensor& a, const Tensor& b, const MemoryConfig& mem_config) {
-    TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 16, 384, 384})), "Unsupported input shape");
+    TT_ASSERT((a.shape() == std::array<uint32_t, 4>({9, 1, 16 * 384, 384})), "Unsupported input shape");
     TT_ASSERT((b.shape() == std::array<uint32_t, 4>({9, 16, 384, 64})), "Unsupported input shape");
-    const auto& ashape = a.shape(), bshape = b.shape();
+    const std::array<uint32_t, 4>& ashape{9, 16, 384, 384};
+    const auto& bshape = b.shape();
     const std::array<uint32_t, 4>& cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
 
     CoreCoord compute_and_storage_grid_size = {12, 9};
