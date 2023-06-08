@@ -584,24 +584,19 @@ bool GenerateBinaries(
     return true;
 }
 
-bool BlankKernelBinariesExist(const std::string &blank_op_path) {
-    bool binaries_exist = std::filesystem::exists(blank_op_path + "/brisc/brisc.hex");
-    binaries_exist &= std::filesystem::exists(blank_op_path + "/ncrisc/ncrisc.hex");
-    for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-        std::string trisc_id_str = std::to_string(trisc_id);
-        std::string trisc_hex_name = blank_op_path + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-        binaries_exist &= std::filesystem::exists(trisc_hex_name);
-    }
-    return binaries_exist;
-}
-
 void CompileBlankKernel(Device *device) {
-    build_kernel_for_riscv_options_t blank_build_options("blank_op", "blank_op");
     // Crude way to check if blank_op needs to be compiled or not
-    std::string blank_op_path = blank_build_options.outpath + blank_build_options.name;
-    if (BlankKernelBinariesExist(blank_op_path)) {
+    // TODO(pgk):
+    //  - fw is compiled every run
+    //  - for unknown reasons, fw size can vary run to run
+    //  - kernels from one run linked against fw from another run may clash
+    //  - rebuid blank kernels once per run
+    static bool compiled = false;
+    if (compiled) {
         return;
     }
+
+    build_kernel_for_riscv_options_t blank_build_options("blank_op", "blank_op");
     struct hlk_args_t {
         std::int32_t dummy;
     };
@@ -617,6 +612,8 @@ void CompileBlankKernel(Device *device) {
     generate_binaries_params_t default_params;
     GenerateBankToNocCoordHeaders(device, &blank_build_options, blank_build_options.name);
     generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params, /*profile_kernel=*/false);
+
+    compiled = true;
 }
 
 void SetCircularBufferDataFormat(Device *device, const Program &program, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) {
