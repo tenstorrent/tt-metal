@@ -9,21 +9,24 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
+
 import torch
 from torchvision import models
+import torchvision.transforms as transforms
+from PIL import Image
 
 from loguru import logger
 import pytest
 
-from libs import tt_lib as ttl
-from utility_functions import comp_allclose_and_pcc, comp_pcc
-from torch_vgg.vgg import vgg16
+from utility_functions_new import comp_allclose_and_pcc, comp_pcc
+from reference.vgg import vgg16
 
 _batch_size = 1
 
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
 def test_vgg16_inference(fuse_ops, imagenet_sample_input):
     image = imagenet_sample_input
+
     batch_size = _batch_size
     with torch.no_grad():
 
@@ -43,7 +46,7 @@ def test_vgg16_inference(fuse_ops, imagenet_sample_input):
 
         torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)
         tt_output = tt_vgg(image)
-
+        logger.info(torch.argmax(tt_output))
         passing = comp_pcc(torch_output, tt_output)
         assert passing[0], passing[1:]
 

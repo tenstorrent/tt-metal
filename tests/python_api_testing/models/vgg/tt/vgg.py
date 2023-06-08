@@ -17,7 +17,8 @@ import torchvision.transforms as transforms
 
 import tt_lib
 from typing import List, Union, Optional, Dict, cast
-from utils import tt_linear, get_shape, is_torch_tensor
+from utils import get_shape, is_torch_tensor
+from helper_funcs import tt_linear
 from python_api_testing.models.conv_on_device_utils_new import (
     is_conv_supported_on_device,
     run_conv_on_device_wrapper,
@@ -249,12 +250,45 @@ cfgs: Dict[str, List[Union[str, int]]] = {
 }
 
 
-def vgg16(
-    device, host, state_dict, base_address="", disable_conv_on_tt_device=True
-) -> TtVGG:
-    model = TtVGG(
+def _vgg(features, init_weights, device, host, state_dict, base_address=""):
+    return TtVGG(
+                features,
+                init_weights=init_weights,
+                device=device,
+                host=host,
+                state_dict=state_dict,
+                base_address=base_address
+                )
+
+def vgg16(device, host, disable_conv_on_tt_device=True) -> TtVGG:
+
+    torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
+    torch_vgg.eval()
+    state_dict = torch_vgg.state_dict()
+    model = _vgg(
         make_layers(
             cfgs["D"],
+            batch_norm=False,
+            state_dict=state_dict,
+            device=device,
+            host=host,
+            disable_conv_on_tt_device=disable_conv_on_tt_device,
+        ),
+        init_weights=False,
+        device=device,
+        host=host,
+        state_dict=state_dict,
+    )
+    return model
+
+def vgg11(device, host, disable_conv_on_tt_device=True) -> TtVGG:
+
+    torch_vgg = models.vgg11(weights=models.VGG11_Weights.IMAGENET1K_V1)
+    torch_vgg.eval()
+    state_dict = torch_vgg.state_dict()
+    model = _vgg(
+        make_layers(
+            cfgs["A"],
             batch_norm=False,
             state_dict=state_dict,
             device=device,

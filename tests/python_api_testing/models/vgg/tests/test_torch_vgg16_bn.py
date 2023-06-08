@@ -11,19 +11,21 @@ sys.path.append(f"{f}/../../../../..")
 
 import torch
 from torchvision import models
+import torchvision.transforms as transforms
 
 import pytest
 from loguru import logger
+from PIL import Image
 
-from libs import tt_lib as ttl
-from utility_functions import comp_allclose_and_pcc, comp_pcc
-from torch_vgg.vgg import vgg16_bn
+from utility_functions_new import comp_allclose_and_pcc, comp_pcc
+from reference.vgg import vgg16_bn
 
 _batch_size = 1
 
-@pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
-def test_vgg16_inference(fuse_ops, imagenet_sample_input):
+@pytest.mark.parametrize("fuse_ops", [(False), (True)], ids=['Not Fused', "Ops Fused"])
+def test_vgg16_bn_inference(fuse_ops, imagenet_sample_input):
     image = imagenet_sample_input
+
     batch_size = _batch_size
     with torch.no_grad():
 

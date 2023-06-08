@@ -23,19 +23,15 @@ from utility_functions_new import (
     disable_compile_cache,
     comp_pcc,
 )
-from vgg import *
+from tt.vgg import *
 
 
 _batch_size = 1
 
-
-def run_vgg_inference(image_path, pcc, PERF_CNT=1):
-    im = Image.open(image_path)
-    im = im.resize((224, 224))
-
-    # Apply the transformation to the random image and Add an extra dimension at the beginning
-    # to match the desired shape of 3x224x224
-    image = transforms.ToTensor()(im).unsqueeze(0)
+@pytest.mark.parametrize("pcc, PERF_CNT", ((0.99, 2),),)
+def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input):
+    disable_compile_cache()
+    image = imagenet_sample_input
 
     batch_size = _batch_size
     with torch.no_grad():
@@ -51,7 +47,7 @@ def run_vgg_inference(image_path, pcc, PERF_CNT=1):
 
         state_dict = torch_vgg.state_dict()
         # TODO: enable conv on tt device after adding fast dtx transform
-        tt_vgg = vgg16(device, host, state_dict, disable_conv_on_tt_device=True)
+        tt_vgg = vgg16(device=device, host=host, disable_conv_on_tt_device=True)
 
         profiler.enable()
 
@@ -78,7 +74,7 @@ def run_vgg_inference(image_path, pcc, PERF_CNT=1):
             tt_output = tt_vgg(tt_image)
             profiler.end("\nAverage execution time of tt_vgg model")
 
-        with open("imagenet_class_labels.txt", "r") as file:
+        with open(f"{f}/../imagenet_class_labels.txt", "r") as file:
             class_labels = ast.literal_eval(file.read())
 
         tt_output = tt_output.to(host)
@@ -99,16 +95,3 @@ def run_vgg_inference(image_path, pcc, PERF_CNT=1):
 
         profiler.print()
         assert profiler.get("tt_vgg model") < 30.0
-
-
-@pytest.mark.parametrize(
-    "path_to_image, pcc, iter",
-    (("sample_image.JPEG", 0.99, 2),),
-)
-def test_vgg_inference(path_to_image, pcc, iter):
-    disable_compile_cache()
-    run_vgg_inference(path_to_image, pcc, iter)
-
-
-if __name__ == "__main__":
-    run_vgg_inference("sample_image.JPEG", 0.99, 2)

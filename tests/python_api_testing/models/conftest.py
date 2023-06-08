@@ -2,6 +2,7 @@ import pytest
 from PIL import Image
 import torchvision.transforms as transforms
 from pathlib import Path
+import ast
 
 
 def model_location_generator_(rel_path):
@@ -17,6 +18,15 @@ def model_location_generator_(rel_path):
 @pytest.fixture(scope="session")
 def model_location_generator():
     return model_location_generator_
+
+
+@pytest.fixture
+def imagenet_label_dict(model_location_generator):
+    imagenet_class_labels_path = "/mnt/MLPerf/tt_dnn-models/samples/imagenet_class_labels"
+    path = model_location_generator(imagenet_class_labels_path)
+    with open(path, "r") as file:
+        class_labels = ast.literal_eval(file.read())
+    return class_labels
 
 
 @pytest.fixture
