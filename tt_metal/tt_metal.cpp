@@ -9,6 +9,7 @@
 #include "llrt/tt_debug_print_server.hpp"
 
 #include "tools/cpuprof/cpuprof.h"
+#include "common/executor.hpp"
 
 using std::unique_lock;
 using std::mutex;
@@ -891,18 +892,29 @@ void AddBlankDataMovementKernel(Device *device, Program &program, bool profile_k
 bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
-
+    std::vector< std::future<void> > wait_events;
     TT_ASSERT(!(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
     CompileBlankKernel(device); // PROF_BEGIN("CCBLANK") PROF_END("CCBLANK")
 
+    // auto compileBlankFunc = [device] () { CompileBlankKernel(device ); };
+    // wait_events.push_back ( tt::tt_metal::GetExecutor().async( compileBlankFunc) ); // PROF_BEGIN("CCBLANK") PROF_END("CCBLANK")
+
     for (auto kernel : program.kernels()) {
-        CompileKernel(device, program, kernel, profile_kernel);
+        auto compileKernelFunc = [kernel, device, &program, profile_kernel] { CompileKernel(device, program, kernel, profile_kernel); };
+        wait_events.push_back ( tt::tt_metal::GetExecutor().async( compileKernelFunc) );
     }
 
+
+
     // This can be removed when we load BRISC FW separately from kernel
-    AddBlankDataMovementKernel(device, program, profile_kernel);
+    wait_events.push_back ( tt::tt_metal::GetExecutor().async( [device, &program, profile_kernel ] {
+                                        AddBlankDataMovementKernel(device, program, profile_kernel);
+                                       } ) );
+
+    for (auto & f : wait_events)
+        f.wait();
 
     compilation_reporter.flush_program_entry(program);
     tt_metal_profiler.markStop("CompileProgram");
