@@ -48,7 +48,7 @@ static void slice_output_tensors(const Tensor& input_tensor, std::vector<Tensor>
 }
 
 struct Operation {
-    virtual ~Operation();
+    virtual ~Operation() {}
 
     virtual std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const = 0;
     virtual std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const = 0;
