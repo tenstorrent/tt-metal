@@ -92,7 +92,7 @@ class Command {
     Command() {}
     virtual void process(){};
     virtual EnqueueCommandType type() = 0;
-    virtual const DeviceCommand device_command(u32 buffer_size) = 0;
+    virtual const DeviceCommand assemble_device_command(u32 buffer_size) = 0;
 };
 
 class EnqueueReadBufferCommand : public Command {
@@ -107,7 +107,7 @@ class EnqueueReadBufferCommand : public Command {
     u32 read_buffer_addr;
     EnqueueReadBufferCommand(Device* device, Buffer& buffer, vector<u32>& dst, SystemMemoryWriter& writer);
 
-    const DeviceCommand device_command(u32 dst);
+    const DeviceCommand assemble_device_command(u32 dst);
 
     void process();
 
@@ -126,7 +126,7 @@ class EnqueueWriteBufferCommand : public Command {
    public:
     EnqueueWriteBufferCommand(Device* device, Buffer& buffer, vector<u32>& src, SystemMemoryWriter& writer);
 
-    const DeviceCommand device_command(u32 src_address);
+    const DeviceCommand assemble_device_command(u32 src_address);
 
     void process();
 
@@ -146,7 +146,7 @@ class EnqueueProgramCommand : public Command {
     static map<const Program*, DeviceCommand> command_cache;
     EnqueueProgramCommand(Device*, Buffer&, ProgramToDeviceMap&, SystemMemoryWriter&, RuntimeArgs);
 
-    const DeviceCommand device_command(u32);
+    const DeviceCommand assemble_device_command(u32);
 
     void process();
 
@@ -165,7 +165,7 @@ class FinishCommand : public Command {
    public:
     FinishCommand(Device* device, SystemMemoryWriter& writer);
 
-    const DeviceCommand device_command(u32);
+    const DeviceCommand assemble_device_command(u32);
 
     void process();
 

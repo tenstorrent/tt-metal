@@ -200,7 +200,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     this->device = device;
 }
 
-const DeviceCommand EnqueueReadBufferCommand::device_command(u32 dst) {
+const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst) {
     DeviceCommand command;
     command.set_data_size_in_bytes(this->buffer.size());
 
@@ -233,7 +233,7 @@ void EnqueueReadBufferCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
     u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::size_in_bytes();
     this->read_buffer_addr = system_memory_temporary_storage_address;
-    const auto command_desc = this->device_command(system_memory_temporary_storage_address).get_desc();
+    const auto command_desc = this->assemble_device_command(system_memory_temporary_storage_address).get_desc();
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
     u32 cmd_size = DeviceCommand::size_in_bytes() + this->buffer.size();
 
@@ -256,7 +256,7 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     this->device = device;
 }
 
-const DeviceCommand EnqueueWriteBufferCommand::device_command(u32 src_address) {
+const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_address) {
     DeviceCommand command;
 
     command.set_data_size_in_bytes(this->buffer.size());
@@ -290,7 +290,7 @@ void EnqueueWriteBufferCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
     u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::size_in_bytes();
 
-    const auto command_desc = this->device_command(system_memory_temporary_storage_address).get_desc();
+    const auto command_desc = this->assemble_device_command(system_memory_temporary_storage_address).get_desc();
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
     u32 cmd_size = DeviceCommand::size_in_bytes() + this->buffer.size();
 
@@ -313,7 +313,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->rt_args = runtime_args;
 }
 
-const DeviceCommand EnqueueProgramCommand::device_command(u32 runtime_args_src) {
+const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_args_src) {
     DeviceCommand command;
     command.launch();
 
@@ -408,7 +408,7 @@ void EnqueueProgramCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
     u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::size_in_bytes();
 
-    const DeviceCommand cmd = this->device_command(system_memory_temporary_storage_address);
+    const DeviceCommand cmd = this->assemble_device_command(system_memory_temporary_storage_address);
     const auto command_desc = cmd.get_desc();
 
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
@@ -439,7 +439,7 @@ EnqueueCommandType EnqueueProgramCommand::type() { return this->type_; }
 // FinishCommand section
 FinishCommand::FinishCommand(Device* device, SystemMemoryWriter& writer) : writer(writer) { this->device = device; }
 
-const DeviceCommand FinishCommand::device_command(u32) {
+const DeviceCommand FinishCommand::assemble_device_command(u32) {
     DeviceCommand command;
     command.finish();
     return command;
@@ -447,7 +447,7 @@ const DeviceCommand FinishCommand::device_command(u32) {
 
 void FinishCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
-    const auto command_desc = this->device_command(0).get_desc();
+    const auto command_desc = this->assemble_device_command(0).get_desc();
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
 
     u32 cmd_size = DeviceCommand::size_in_bytes();
