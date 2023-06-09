@@ -22,7 +22,7 @@ def model_location_generator():
 
 @pytest.fixture
 def imagenet_label_dict(model_location_generator):
-    imagenet_class_labels_path = "/mnt/MLPerf/tt_dnn-models/samples/imagenet_class_labels"
+    imagenet_class_labels_path = "tt_dnn-models/samples/imagenet_class_labels.txt"
     path = model_location_generator(imagenet_class_labels_path)
     with open(path, "r") as file:
         class_labels = ast.literal_eval(file.read())
@@ -31,7 +31,7 @@ def imagenet_label_dict(model_location_generator):
 
 @pytest.fixture
 def imagenet_sample_input(model_location_generator):
-    sample_path = "/mnt/MLPerf/tt_dnn-models/samples/ILSVRC2012_val_00048736.JPEG"
+    sample_path = "tt_dnn-models/samples/ILSVRC2012_val_00048736.JPEG"
     path = model_location_generator(sample_path)
     im = Image.open(path)
     im = im.resize((224, 224))

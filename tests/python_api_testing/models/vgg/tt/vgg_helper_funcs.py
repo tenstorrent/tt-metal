@@ -1,6 +1,3 @@
-import torch
-import numpy as np
-
 import tt_lib
 
 def tt_linear(weight: tt_lib.tensor, bias: tt_lib.tensor, device):

@@ -1,8 +1,5 @@
 import torch
-import numpy as np
 from loguru import logger
-
-import tt_lib
 
 
 def get_shape(shape):

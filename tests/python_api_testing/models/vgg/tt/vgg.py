@@ -11,19 +11,19 @@ sys.path.append(f"{f}/../../../..")
 # Load in relevant libraries, and alias where appropriate
 import torch
 import torch.nn as nn
-import torchvision
 from torchvision import models
-import torchvision.transforms as transforms
 
 import tt_lib
-from typing import List, Union, Optional, Dict, cast
-from utils import get_shape, is_torch_tensor
-from helper_funcs import tt_linear
+from tt_lib.fallback_ops import fallback_ops
+from typing import List, Union, Dict, cast
+from vgg_utils import get_shape
+from vgg_helper_funcs import tt_linear
 from python_api_testing.models.conv_on_device_utils_new import (
     is_conv_supported_on_device,
     run_conv_on_device_wrapper,
 )
 
+from utility_functions_new import torch_to_tt_tensor_rm
 
 num_classes = 1000
 
@@ -48,7 +48,7 @@ class TtVGG(nn.Module):
         self.base_address = base_address
 
         self.features = features
-        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+        self.avgpool = fallback_ops.AdaptiveAvgPool2d((7, 7))
 
         linear1_weight = state_dict[f"classifier.0.weight"]
         linear1_weight = tt_lib.tensor.Tensor(
@@ -118,34 +118,14 @@ class TtVGG(nn.Module):
 
         for layer in self.features:
             if layer is tt_lib.tensor.relu:
-                if is_torch_tensor(tt_x):
-                    tt_x = tt_lib.tensor.Tensor(
-                        tt_x.reshape(-1).tolist(),
-                        tt_x.size(),
-                        tt_lib.tensor.DataType.BFLOAT16,
-                        tt_lib.tensor.Layout.ROW_MAJOR,
-                    )
                 tt_x = layer(tt_x)
             else:
-                if not is_torch_tensor(tt_x):
-                    tt_x = tt_x.to(self.host)
-                    tt_x = torch.Tensor(tt_x.data()).reshape(tt_x.shape())
                 tt_x = layer(tt_x)
 
-        if not is_torch_tensor(tt_x):
-            tt_x = tt_x.to(self.host)
-            tt_x = torch.Tensor(tt_x.data()).reshape(tt_x.shape())
+        batch, c, w, h = tt_x.shape()
 
         tt_x = self.avgpool(tt_x)
-        tt_x = torch.flatten(tt_x, 1).unsqueeze(1).unsqueeze(1)
-
-        tt_x = tt_lib.tensor.Tensor(
-            tt_x.reshape(-1).tolist(),
-            tt_x.size(),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        )
-
+        tt_x = fallback_ops.reshape(tt_x, batch, 1, 1, c * w * h)
         for layer in self.classifier:
             tt_x = layer(tt_x)
 
@@ -166,7 +146,7 @@ def make_layers(
 
     for v in cfg:
         if v == "M":
-            layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+            layers += [fallback_ops.MaxPool2d(kernel_size=2, stride=2)]
 
         else:
             v = cast(int, v)
@@ -187,11 +167,17 @@ def make_layers(
                         conv2d_bias,
                     )
                 else:
-                    conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
-                    conv2d.weight = nn.Parameter(
-                        state_dict[f"{base_address}.{ind}.weight"]
-                    )
-                    conv2d.bias = nn.Parameter(state_dict[f"{base_address}.{ind}.bias"])
+                    weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.{ind}.weight"], device=device, put_on_device=False)
+                    bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.{ind}.bias"], device=device, put_on_device=False)
+                    conv2d = fallback_ops.Conv2d(
+                                weights=weight,
+                                biases=bias,
+                                in_channels=in_channels,
+                                out_channels=v,
+                                kernel_size=3,
+                                padding=1
+                                )
+
                 layers += [conv2d, tt_lib.tensor.relu]
             else:
                 assert False, "we do not support batchnorm"

@@ -11,11 +11,8 @@ sys.path.append(f"{f}/../../../../..")
 
 import torch
 from torchvision import models
-import torchvision.transforms as transforms
-
 import pytest
 from loguru import logger
-from PIL import Image
 
 from utility_functions_new import comp_allclose_and_pcc, comp_pcc
 from reference.vgg import vgg16_bn

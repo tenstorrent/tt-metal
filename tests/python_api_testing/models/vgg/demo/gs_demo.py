@@ -8,13 +8,9 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-import torchvision.transforms as transforms
 import torch
-import pytest
-import ast
 from torchvision import models
 from loguru import logger
-from PIL import Image
 
 import tt_lib
 
@@ -25,14 +21,9 @@ _batch_size = 1
 
 
 
-@pytest.mark.parametrize("image_path", [f"{f}/../sample_image.JPEG"])
-def test_gs_demo(image_path):
-    im = Image.open(image_path)
-    im = im.resize((224, 224))
-
-    # Apply the transformation to the random image and Add an extra dimension at the beginning
-    # to match the desired shape of 3x224x224
-    image = transforms.ToTensor()(im).unsqueeze(0)
+def test_gs_demo(imagenet_sample_input, imagenet_label_dict):
+    image = imagenet_sample_input
+    class_labels = imagenet_label_dict
 
     batch_size = _batch_size
     with torch.no_grad():
@@ -54,9 +45,6 @@ def test_gs_demo(image_path):
         )
 
         tt_output = tt_vgg(tt_image)
-
-        with open(f"{f}/../imagenet_class_labels.txt", "r") as file:
-            class_labels = ast.literal_eval(file.read())
 
         tt_output = tt_output.to(host)
         tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())

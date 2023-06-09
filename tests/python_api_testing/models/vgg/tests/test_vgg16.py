@@ -10,20 +10,18 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 from torchvision import models
-import torchvision.transforms as transforms
 from loguru import logger
-from PIL import Image
 import pytest
 
 import tt_lib
 from utility_functions_new import comp_pcc
 from tt.vgg import vgg16
-from utils import get_shape
+from vgg_utils import get_shape
 
 _batch_size = 1
 
 @pytest.mark.parametrize("pcc", ((0.99),),)
-def test_vgg_inference(pcc, imagenet_sample_input):
+def test_vgg16_inference(pcc, imagenet_sample_input):
     image = imagenet_sample_input
 
     batch_size = _batch_size

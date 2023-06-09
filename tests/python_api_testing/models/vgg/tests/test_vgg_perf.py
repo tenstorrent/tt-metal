@@ -9,11 +9,8 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
-import numpy as np
-import ast
 from torchvision import models
 from loguru import logger
-from PIL import Image
 import pytest
 
 import tt_lib
@@ -29,10 +26,10 @@ from tt.vgg import *
 _batch_size = 1
 
 @pytest.mark.parametrize("pcc, PERF_CNT", ((0.99, 2),),)
-def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input):
+def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict):
     disable_compile_cache()
     image = imagenet_sample_input
-
+    class_labels = imagenet_label_dict
     batch_size = _batch_size
     with torch.no_grad():
         # Initialize the device
@@ -74,9 +71,6 @@ def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input):
             tt_output = tt_vgg(tt_image)
             profiler.end("\nAverage execution time of tt_vgg model")
 
-        with open(f"{f}/../imagenet_class_labels.txt", "r") as file:
-            class_labels = ast.literal_eval(file.read())
-
         tt_output = tt_output.to(host)
         tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
 
@@ -86,7 +80,6 @@ def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input):
         logger.info(
             f"Predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n"
         )
-        file.close()
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."

@@ -12,9 +12,6 @@ sys.path.append(f"{f}/../../../../..")
 
 import torch
 from torchvision import models
-import torchvision.transforms as transforms
-from PIL import Image
-
 from loguru import logger
 import pytest
 

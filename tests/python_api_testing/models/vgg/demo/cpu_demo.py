@@ -8,13 +8,9 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-import torchvision.transforms as transforms
 import torch
-import pytest
-import ast
 from torchvision import models
 from loguru import logger
-from PIL import Image
 
 
 _batch_size = 1
@@ -22,7 +18,7 @@ _batch_size = 1
 
 def test_cpu_demo(imagenet_sample_input, imagenet_label_dict):
     image = imagenet_sample_input
-    class_labels = imagenet_labels
+    class_labels = imagenet_label_dict
 
     batch_size = _batch_size
     with torch.no_grad():
