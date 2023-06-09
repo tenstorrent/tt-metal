@@ -7,7 +7,7 @@ void kernel_main() {
     InterleavedAddrGen<false> l1_addr_gen;
     // Read command from host command queue... l1 read addr since
     // pulling in the actual command into l1
-    static constexpr u32 command_start_addr = UNRESERVED_BASE;
+    static constexpr u32 command_start_addr = UNRESERVED_BASE; // Space between UNRESERVED_BASE -> data_start is for commands
     static constexpr u32 data_start_addr = 150 * 1024;  // Hard-coded for now
 
     // These are totally temporary until PK checks in his changes for
@@ -33,7 +33,7 @@ void kernel_main() {
         // Control data
         u32 finish = command_ptr[0];              // Whether to notify the host that we have finished
         u32 launch = command_ptr[1];              // Whether or not to launch kernels
-        u32 data_size_in_bytes = command_ptr[2];  // The amount of trailing data after the command table rounded to the
+        u32 data_size_in_bytes = command_ptr[2];  // The amount of trailing data after the device command rounded to the
                                                   // nearest multiple of 32
         u32 num_buffer_reads = command_ptr[3];    // How many ReadBuffer commands we are running
         u32 num_buffer_writes = command_ptr[4];   // How many WriteBuffer commands we are running

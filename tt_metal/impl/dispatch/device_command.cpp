@@ -124,4 +124,4 @@ void DeviceCommand::set_data_size_in_bytes(u32 data_size_in_bytes) {
 
 u32 DeviceCommand::get_data_size_in_bytes() const { return this->desc[this->data_size_in_bytes_idx]; }
 
-const array<u32, DeviceCommandNumEntries>& DeviceCommand::get_desc() const { return this->desc; }
+const array<u32, DEVICE_COMMAND_NUM_ENTRIES>& DeviceCommand::get_desc() const { return this->desc; }

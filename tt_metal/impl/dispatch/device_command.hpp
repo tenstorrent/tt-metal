@@ -16,13 +16,13 @@ struct TrailingWriteCommand {
     u32 num_receivers;
 };
 
-static constexpr u32 DeviceCommandNumEntries = 16 + 11 * 104;
+static constexpr u32 DEVICE_COMMAND_NUM_ENTRIES = 16 + 11 * 104;
 static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 11;
 static constexpr u32 CONTROL_SECTION_NUM_ENTRIES = 16;
 static constexpr u32 RELAY_BUFFER_NUM_ENTRIES = 4 * NUM_ENTRIES_PER_BUFFER_RELAY;
 static constexpr u32
     RELAY_PROGRAM_NUM_ENTRIES =  // Whatever is left of the available size, we allocate for relaying program data
-    DeviceCommandNumEntries - CONTROL_SECTION_NUM_ENTRIES - RELAY_BUFFER_NUM_ENTRIES;
+    DEVICE_COMMAND_NUM_ENTRIES - CONTROL_SECTION_NUM_ENTRIES - RELAY_BUFFER_NUM_ENTRIES;
 
 // DeviceCommand.desc organized as follows
 // finish (whether we need to notify host when we finished)
@@ -32,10 +32,10 @@ static constexpr u32
 // how to move the buffers around)
 
 // We need to ensure that the command size is divisible by 32
-static_assert(DeviceCommandNumEntries * sizeof(u32) % 32 == 0);
+static_assert(DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32) % 32 == 0);
 
 // To stay consistent with the 16B addressing on grayskull, I created this constant
-static constexpr u32 NUM_16B_WORDS_IN_COMMAND_TABLE = (DeviceCommandNumEntries * sizeof(u32)) / 16;
+static constexpr u32 NUM_16B_WORDS_IN_COMMAND_TABLE = (DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32)) / 16;
 class DeviceCommand {
    private:
     static constexpr u32 num_4B_words_in_relay_buffer_instruction = 11;
@@ -59,7 +59,7 @@ class DeviceCommand {
     u32 relay_program_entry_idx =
         CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES;
 
-    array<u32, DeviceCommandNumEntries> desc;
+    array<u32, DEVICE_COMMAND_NUM_ENTRIES> desc;
 
     // Creates a relay instruction in which the first address is a single page and the second can be multiple pages.
     // Num bursts corresponds to how many bursts of data we need to pull into the dispatch core (essentially the number
@@ -80,8 +80,8 @@ class DeviceCommand {
 
    public:
     DeviceCommand();
-    static constexpr u32 size() { return DeviceCommandNumEntries; }
-    static constexpr u32 size_in_bytes() { return DeviceCommandNumEntries * sizeof(u32); }
+    static constexpr u32 size() { return DEVICE_COMMAND_NUM_ENTRIES; }
+    static constexpr u32 size_in_bytes() { return DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32); }
     // static constexpr u32 relay_buffer_section_offset() { return 6; }
     // static constexpr u32 relay_program_section_offset() { return DeviceCommand::relay_buffer_section_offset() +
     // DeviceCommand::num_possible_relay_buffer_instructions; }
@@ -133,5 +133,5 @@ class DeviceCommand {
 
     u32 get_data_size_in_bytes() const;
 
-    const array<u32, DeviceCommandNumEntries>& get_desc() const;
+    const array<u32, DEVICE_COMMAND_NUM_ENTRIES>& get_desc() const;
 };
