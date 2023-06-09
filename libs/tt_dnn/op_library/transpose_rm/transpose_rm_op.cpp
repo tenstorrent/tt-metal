@@ -2,7 +2,7 @@
 #include "common/test_tiles.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
 
 namespace blank_hlk {
 // FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file

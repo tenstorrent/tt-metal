@@ -1,7 +1,7 @@
 #pragma once
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"

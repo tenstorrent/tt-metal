@@ -1,11 +1,11 @@
 #include "libs/tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "libs/tt_dnn/op_library/work_split.hpp"
-#include "tile_math.hpp"
 
 #include "../op_config.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/tile_math.hpp"
 
 #include <iostream>
 

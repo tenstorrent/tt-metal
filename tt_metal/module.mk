@@ -1,7 +1,5 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
-BASE_INCLUDES+=-I./ -I./tt_metal/ # make all tt_metal modules includable
-
 CFLAGS += -DFMT_HEADER_ONLY -I$(TT_METAL_HOME)/tt_metal/third_party/fmt
 
 include $(TT_METAL_HOME)/tt_metal/common/module.mk
@@ -18,7 +16,7 @@ include $(TT_METAL_HOME)/tt_metal/programming_examples/module.mk
 
 TT_METAL_LIB = $(LIBDIR)/libtt_metal.a
 TT_METAL_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
-TT_METAL_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal -I$(TT_METAL_HOME)/.
+TT_METAL_INCLUDES = $(COMMON_INCLUDES)
 TT_METAL_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal_impl
 TT_METAL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 

@@ -2,7 +2,7 @@
 #include "common/test_tiles.hpp"
 #include <algorithm>
 #include "tt_metal/host_api.hpp"
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/auto_pad.hpp"
 

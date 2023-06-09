@@ -1,7 +1,7 @@
 TT_LIB_LIB = $(LIBDIR)/libtt_lib_csrc.so
 TT_LIB_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
-TT_LIB_INCLUDES = $(LIBS_INCLUDES) $(shell python3-config --includes) -I$(TT_METAL_HOME)/tt_metal/third_party/pybind11/include
-TT_LIB_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -L$(TT_METAL_HOME) -ldtx -ldevice -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal -ltt_dnn -lyaml-cpp -lprofiler -lbuild_kernels_for_riscv
+TT_LIB_INCLUDES = $(LIBS_INCLUDES) $(shell python3-config --includes) -Itt_metal/third_party/pybind11/include
+TT_LIB_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -ldtx -ldevice -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal -ltt_dnn -lyaml-cpp -lprofiler -lbuild_kernels_for_riscv
 TT_LIB_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 TT_LIB_SRCS = \
@@ -22,8 +22,8 @@ $(TT_LIB_LIB): $(COMMON_LIB) $(TT_LIB_OBJS) $(DEVICE_LIB) $(TT_DNN_LIB)
 
 .PHONY: tt_lib/csrc/setup_local_so
 tt_lib/csrc/setup_local_so: $(TT_LIB_LIB)
-	rm -f $(TT_METAL_HOME)/libs/tt_lib/_C.so
-	cp $^ $(TT_METAL_HOME)/libs/tt_lib/_C.so
+	rm -f libs/tt_lib/_C.so
+	cp $^ libs/tt_lib/_C.so
 
 # Compile obj files
 $(OBJDIR)/libs/tt_lib/csrc/%.o: libs/tt_lib/csrc/%.cpp

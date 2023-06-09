@@ -1,7 +1,7 @@
 #include "libs/tt_dnn/op_library/layernorm/layernorm_op.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "libs/tt_dnn/op_library/work_split.hpp"
 
 #include "../op_config.hpp"

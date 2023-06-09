@@ -7,7 +7,7 @@ TENSOR_SRCS = \
 TENSOR_LIB = $(LIBDIR)/libtensor.a
 TENSOR_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
 TENSOR_INCLUDES = $(LIBS_INCLUDES)
-TENSOR_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lllrt -ltt_metal
+TENSOR_LDFLAGS = -lcommon -lllrt -ltt_metal
 TENSOR_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 TENSOR_OBJS = $(addprefix $(OBJDIR)/, $(TENSOR_SRCS:.cpp=.o))

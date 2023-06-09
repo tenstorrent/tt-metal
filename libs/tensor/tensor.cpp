@@ -5,7 +5,7 @@
 #include "tensor/tensor_utils.hpp"
 #include "common/bfloat16.hpp"
 #include "llrt/llrt.hpp"
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
 
 using namespace tt::constants;
 

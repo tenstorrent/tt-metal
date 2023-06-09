@@ -1,6 +1,6 @@
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tt_metal/host_api.hpp"
-#include "common/constants.hpp"
+#include "tt_metal/common/constants.hpp"
 
 using namespace tt::constants;
 using namespace tt;

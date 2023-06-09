@@ -1,10 +1,10 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "common/constants.hpp"
+#include "tt_metal/common/constants.hpp"
 
-#include "llrt/tt_debug_print_server.hpp"
-#include "hostdevcommon/debug_print_common.h"
+#include "tt_metal/llrt/tt_debug_print_server.hpp"
+#include "tt_metal/hostdevcommon/debug_print_common.h"
 
 namespace tt {
 namespace tt_metal {

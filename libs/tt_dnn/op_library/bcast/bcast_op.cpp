@@ -3,7 +3,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_dnn/op_library/auto_pad.hpp"
 
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
 
 namespace bcast_op_utils {
 using namespace tt::tt_metal;

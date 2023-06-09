@@ -1,7 +1,7 @@
 #include "tt_dnn/op_library/conv/conv_op.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "common/constants.hpp"
+#include "tt_metal/common/constants.hpp"
 // #include "test/tt_metal/llrt/test_libs/debug_mailbox.hpp"
 #include "libs/dtx/dtx.hpp"
 #include "libs/dtx/dtx_passes.hpp"

@@ -3,7 +3,7 @@
 
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_metal/host_api.hpp"
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
 namespace untilize {
 // FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
 struct hlk_args_t {

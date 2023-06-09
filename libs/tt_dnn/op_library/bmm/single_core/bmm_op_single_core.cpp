@@ -1,7 +1,7 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "common/constants.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "tests/tt_metal/llrt/test_libs/debug_mailbox.hpp"
 
 using namespace tt::constants;

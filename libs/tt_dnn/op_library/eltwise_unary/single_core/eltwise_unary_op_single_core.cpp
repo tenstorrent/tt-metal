@@ -1,7 +1,7 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
 
 using namespace tt::constants;
 

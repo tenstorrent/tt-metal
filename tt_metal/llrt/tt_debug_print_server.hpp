@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tt_cluster.hpp"
-#include "core_coord.h"
+#include "tt_metal/common/core_coord.h"
 
 enum DebugPrintHartFlags : unsigned int {
     DPRINT_HART_NC  = 1,

@@ -2,7 +2,7 @@
 
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_metal/host_api.hpp"
-#include "constants.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "dtx/dtx.hpp"
 #include "dtx/dtx_passes.hpp"
 using namespace tt::constants;
