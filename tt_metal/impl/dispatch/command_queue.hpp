@@ -63,12 +63,12 @@ struct ProgramSection {
 // the mapping between binaries within DRAM to worker cores.
 // Given that our program buffer could potentially be bigger
 // than available L1, we may need
-struct ProgramToDeviceMap {
+struct ProgramSrcToDstAddrMap {
     vector<u32> program_vector;
     vector<ProgramSection> program_sections;
 };
 
-ProgramToDeviceMap ConstructProgramToDeviceMap(const Device* device, Program& program);
+ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Program& program);
 
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, INVALID };
@@ -137,14 +137,14 @@ class EnqueueProgramCommand : public Command {
    private:
     Device* device;
     Buffer& buffer;
-    ProgramToDeviceMap& program_to_dev_map;
+    ProgramSrcToDstAddrMap& program_to_dev_map;
     RuntimeArgs rt_args;
     SystemMemoryWriter& writer;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
     static map<const Program*, DeviceCommand> command_cache;
-    EnqueueProgramCommand(Device*, Buffer&, ProgramToDeviceMap&, SystemMemoryWriter&, RuntimeArgs);
+    EnqueueProgramCommand(Device*, Buffer&, ProgramSrcToDstAddrMap&, SystemMemoryWriter&, RuntimeArgs);
 
     const DeviceCommand assemble_device_command(u32);
 
@@ -190,7 +190,7 @@ class CommandQueue {
         program_to_buffer;  // Using raw pointer since I want to be able to hash program inexpensively. This implies
                             // program object cannot be destroyed during the lifetime of the user's program
 
-    map<const Program*, ProgramToDeviceMap> program_to_dev_map;
+    map<const Program*, ProgramSrcToDstAddrMap> program_to_dev_map;
 
     void enqueue_command(shared_ptr<Command> command, bool blocking);
 

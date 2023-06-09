@@ -6,12 +6,12 @@ u64 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& botto
 
 u32 align(u32 addr, u32 alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
-ProgramToDeviceMap ConstructProgramToDeviceMap(const Device* device, Program& program) {
+ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Program& program) {
     // This function retrieves all the required information to group program binaries into sections,
     // such that each section is the largest amount of data that can be read into the dispatch
     // core's L1 at a time. For each section, it also specifies the relay program information,
     // as described in device_command.hpp.
-    ProgramToDeviceMap program_to_device_map;
+    ProgramSrcToDstAddrMap program_to_device_map;
     vector<u32>& program_vector = program_to_device_map.program_vector;
     vector<ProgramSection>& sections = program_to_device_map.program_sections;
 
@@ -305,7 +305,7 @@ EnqueueCommandType EnqueueWriteBufferCommand::type() { return this->type_; }
 EnqueueProgramCommand::EnqueueProgramCommand(
     Device* device,
     Buffer& buffer,
-    ProgramToDeviceMap& program_to_dev_map,
+    ProgramSrcToDstAddrMap& program_to_dev_map,
     SystemMemoryWriter& writer,
     RuntimeArgs runtime_args) :
     buffer(buffer), program_to_dev_map(program_to_dev_map), writer(writer) {
@@ -547,7 +547,7 @@ void CommandQueue::enqueue_program(Program& program, const RuntimeArgs& runtime_
     // we are seeing it
     static int channel_id = 0;  // Are there issues with this being static?
     if (not this->program_to_buffer.count(&program)) {
-        ProgramToDeviceMap program_to_device_map = ConstructProgramToDeviceMap(this->device, program);
+        ProgramSrcToDstAddrMap program_to_device_map = ConstructProgramSrcToDstAddrMap(this->device, program);
 
         vector<u32>& program_vector = program_to_device_map.program_vector;
         u32 program_data_size_in_bytes = program_vector.size() * sizeof(u32);
