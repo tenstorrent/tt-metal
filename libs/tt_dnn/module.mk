@@ -1,4 +1,5 @@
 TT_DNN_SRCS = \
+	libs/tt_dnn/op_library/auto_pad.cpp \
 	libs/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.cpp \
 	libs/tt_dnn/op_library/eltwise_binary/single_core/eltwise_binary_op_single_core.cpp \
 	libs/tt_dnn/op_library/eltwise_binary/multi_core/eltwise_binary_op_multi_core.cpp \

@@ -20,13 +20,18 @@ static Device* get_device(const std::vector<std::reference_wrapper<const Tensor>
 }
 
 template<typename Operation>
-static std::vector<Tensor> generic_create_output_tensors(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
+static std::vector<Tensor> generic_create_output_tensors(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, Layout output_layout = tt::tt_metal::Layout::TILE) {
     const auto& input_tensor = input_tensors.at(0).get();
     std::vector<Tensor> output_tensors;
     for (const auto& output_shape : op.compute_output_shapes(input_tensors)) {
-        output_tensors.emplace_back(tt_metal::Tensor(output_shape, input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.device()));
+        output_tensors.emplace_back(tt_metal::Tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device()));
     }
     return output_tensors;
+}
+
+template<typename Operation>
+static Tensor run_without_autopad(const Operation &op, const Tensor &input_tensor) {
+    return std::move(op.run({std::cref(input_tensor)}).at(0));
 }
 
 template<typename Operation>
@@ -107,6 +112,7 @@ struct Operation {
     std::vector<Tensor> run(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
 
         auto device = detail::get_device(input_tensors);
+        this->validate(input_tensors);
         auto output_shapes = this->compute_output_shapes(input_tensors);
         auto output_tensors = this->create_output_tensors(input_tensors);
         auto program = this->create_program(input_tensors, output_tensors);
