@@ -6,6 +6,8 @@
 using std::array;
 using std::vector;
 
+// This is used for relays in which we read a large block of data
+// and we want to relay small portions of this data to workers
 struct TrailingWriteCommand {
     u32 src;
     u32 dst;
@@ -90,7 +92,7 @@ class DeviceCommand {
     void launch();  // Launches a program
 
     // 'dst' must be a single bank
-    void add_read_buffer_relay(
+    void add_read_buffer_instruction(
         u32 dst,
         u32 dst_noc,
         u32 src,
@@ -104,7 +106,7 @@ class DeviceCommand {
         u32 banking_enum);
 
     // 'src' must be a single bank
-    void add_write_buffer_relay(
+    void add_write_buffer_instruction(
         u32 src,
         u32 src_noc,
         u32 dst,
@@ -119,12 +121,12 @@ class DeviceCommand {
 
     // The data transfer pattern that this instruction
     // attempts to resolve is when we need to read data
-    // such as kernel binaries/cb configs/sem configs into
+    // such as kernel binaries/cb configs/sem configs/rt args into
     // the dispatch core's L1 in one shot, and then sending
     // small pieces of this data around (multicasting or
     // unicasting) where the transfer sizes are not uniform
     // in size
-    void add_write_program_relay(u32 src, u32 src_noc, u32 transfer_size, vector<TrailingWriteCommand> write_commands);
+    void add_read_multi_write_instruction(u32 src, u32 src_noc, u32 transfer_size, vector<TrailingWriteCommand> write_commands);
 
     // number of bytes in buffer following command, if applicable
     void set_data_size_in_bytes(u32 data_size_in_bytes);

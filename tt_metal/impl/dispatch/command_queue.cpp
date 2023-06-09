@@ -213,7 +213,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst) {
     u32 num_pages_per_remainder_burst = remainder_burst_size / this->buffer.page_size();
 
     // Need to make a PCIE coordinate variable
-    command.add_read_buffer_relay(
+    command.add_read_buffer_instruction(
         dst,
         NOC_XY_ENCODING(NOC_X(0), NOC_Y(4)),
         this->buffer.address(),
@@ -270,7 +270,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_a
     u32 num_pages_per_remainder_burst = remainder_burst_size / this->buffer.page_size();
 
     // Need to make a PCIE coordinate variable
-    command.add_write_buffer_relay(
+    command.add_write_buffer_instruction(
         src_address,
         NOC_XY_ENCODING(NOC_X(0), NOC_Y(4)),
         this->buffer.address(),
@@ -362,7 +362,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
         // This is not fully correct since if there are multiple sections, they are not starting at the correct
         // part of the program buffer... a simpler method would be for there to be multiple buffers, where each
         // buffer owns a section... that is definitely a TODO(agrebenisan)
-        command.add_write_program_relay(program_src, program_src_noc, transfer_size, trailing_write_commands);
+        command.add_read_multi_write_instruction(program_src, program_src_noc, transfer_size, trailing_write_commands);
     }
 
     // Deal with runtime args
@@ -398,7 +398,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
         }
     }
     u32 host_noc_addr = noc_coord_to_u32({0, 4});
-    command.add_write_program_relay(runtime_args_src, host_noc_addr, data_size_in_bytes, trailing_write_commands);
+    command.add_read_multi_write_instruction(runtime_args_src, host_noc_addr, data_size_in_bytes, trailing_write_commands);
 
     command.set_data_size_in_bytes(data_size_in_bytes);
     return command;

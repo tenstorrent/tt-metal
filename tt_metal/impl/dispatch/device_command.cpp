@@ -45,7 +45,7 @@ void DeviceCommand::add_buffer_relay(
     this->relay_buffer_entry_idx += this->num_4B_words_in_relay_buffer_instruction;
 }
 
-void DeviceCommand::add_read_buffer_relay(
+void DeviceCommand::add_read_buffer_instruction(
     u32 dst,
     u32 dst_noc,
     u32 src,
@@ -72,7 +72,7 @@ void DeviceCommand::add_read_buffer_relay(
         banking_enum);
 }
 
-void DeviceCommand::add_write_buffer_relay(
+void DeviceCommand::add_write_buffer_instruction(
     u32 src,
     u32 src_noc,
     u32 dst,
@@ -99,7 +99,7 @@ void DeviceCommand::add_write_buffer_relay(
         banking_enum);
 }
 
-void DeviceCommand::add_write_program_relay(
+void DeviceCommand::add_read_multi_write_instruction(
     u32 src, u32 src_noc, u32 transfer_size, vector<TrailingWriteCommand> write_commands) {
     this->desc[this->num_relay_program_writes_idx]++;
 
