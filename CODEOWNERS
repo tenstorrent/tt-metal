@@ -15,3 +15,6 @@ setup.py @tt-rkim
 
 Makefile @tt-rkim
 module.mk @tt-rkim
+
+tests/scripts/run_pre_post_commit_regressions.sh @tt-rkim
+tests/scripts/run_tests.sh @tt-rkim
