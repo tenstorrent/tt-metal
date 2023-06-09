@@ -17,7 +17,6 @@ using namespace tt::tt_metal;
 using std::pair;
 using std::set;
 using std::shared_ptr;
-using std::thread;
 using std::tuple;
 using std::unique_ptr;
 
