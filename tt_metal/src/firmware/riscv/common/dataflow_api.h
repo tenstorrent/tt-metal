@@ -542,7 +542,6 @@ struct InterleavedPow2AddrGen {
         uint32_t noc_y;
 
         #ifdef TEMP_DEBUG2
-        // DPRINT << this->bank_base_address << ENDL();
         #endif
         if constexpr (DRAM) {
 #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
@@ -712,7 +711,6 @@ std::uint64_t get_noc_addr(
         InterleavedPow2AddrGen: Check struct for attribute definitions.
     */
 
-    // DPRINT << s.bank_base_address << ',' << ' ' << uint(DRAM) << ENDL();
     return s.get_noc_addr(id);
 }
 
@@ -1051,12 +1049,8 @@ void cq_wait_front() {
 
 FORCE_INLINE
 void cq_pop_front(u32 cmd_size_B) {
-    // DPRINT << 'B' << 'E' << ':' << ' ' << cq_read_interface.fifo_rd_ptr << ENDL();
-    // DPRINT << 'C' << 'M' << 'D' << 'A' << ':' << ' ' << cmd_size_B << ENDL();
     u32 cmd_size_16B = (((cmd_size_B - 1) | 31) + 1) >> 4;
-    // DPRINT << 'C' << 'M' << 'D' << 'B' << ':' << ' ' << cmd_size_16B << ENDL();
     cq_read_interface.fifo_rd_ptr += cmd_size_16B;
-    // DPRINT << 'A' << 'F' << ':' << ' ' << cq_read_interface.fifo_rd_ptr << ENDL();
 
     if (cq_read_interface.fifo_rd_ptr > cq_read_interface.fifo_limit) {
         cq_read_interface.fifo_rd_ptr -= cq_read_interface.fifo_size;
@@ -1073,5 +1067,4 @@ void cq_pop_front(u32 cmd_size_B) {
     rd_ptr_ptr[0] = rd_ptr;
     noc_async_write(u32(rd_ptr_ptr), pcie_address, 4);
     noc_async_write_barrier();
-    DPRINT << ENDL();
 }

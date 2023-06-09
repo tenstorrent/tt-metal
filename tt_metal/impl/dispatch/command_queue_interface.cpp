@@ -45,14 +45,10 @@ void SystemMemoryWriter::send_write_ptr(Device* device) {
 void SystemMemoryWriter::cq_push_back(Device* device, u32 push_size_B) {
 
     // All data needs to be 32B aligned
-    // tt::log_debug(tt::LogDispatch, "PUSH SIZE B {}", push_size_B);
     u32 push_size_16B = (((push_size_B - 1) | 31) + 1) >> 4; // Terse way to find next multiple of 32 in 16B words
 
 
-    // tt::log_debug(tt::LogDispatch, "PUSH SIZE 16B {}", push_size_16B);
-    // tt::log_debug(tt::LogDispatch, "Write ptr before {}", this->cq_write_interface.fifo_wr_ptr);
     this->cq_write_interface.fifo_wr_ptr += push_size_16B;
-    // tt::log_debug(tt::LogDispatch, "Write ptr after {}", this->cq_write_interface.fifo_wr_ptr);
 
     // Notify dispatch core
     this->send_write_ptr(device);
