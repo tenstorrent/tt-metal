@@ -27,7 +27,7 @@ void kernel_main() {
         // Hardcoded for time being, need to clean this up
         uint64_t src_noc_addr = get_noc_addr(NOC_X(0), NOC_Y(4), cq_read_interface.fifo_rd_ptr << 4);
 
-        noc_async_read(src_noc_addr, u32(command_start_addr), NUM_16B_WORDS_IN_COMMAND_TABLE << 4);
+        noc_async_read(src_noc_addr, u32(command_start_addr), NUM_16B_WORDS_IN_DEVICE_COMMAND << 4);
         noc_async_read_barrier();
 
         // Control data

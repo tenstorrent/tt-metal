@@ -35,7 +35,7 @@ static constexpr u32
 static_assert(DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32) % 32 == 0);
 
 // To stay consistent with the 16B addressing on grayskull, I created this constant
-static constexpr u32 NUM_16B_WORDS_IN_COMMAND_TABLE = (DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32)) / 16;
+static constexpr u32 NUM_16B_WORDS_IN_DEVICE_COMMAND = (DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32)) / 16;
 class DeviceCommand {
    private:
     static constexpr u32 num_4B_words_in_relay_buffer_instruction = 11;
