@@ -8,84 +8,9 @@ namespace tt {
 
 namespace tt_metal {
 
-// This function needs to be up to date with unpad_rm to ensure accurate l1 usage calcaulation
-bool check_unpad_rm_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
-    if (a.layout() == Layout::ROW_MAJOR) {
-        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
-        uint32_t alignment = 32;
+Program unpad_rm(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
-        uint32_t output_shape_3 = output_tensor_end[3] - output_tensor_start[3] + 1;
-
-        uint32_t src_stick_size = a.shape()[3] * a.element_size();
-        uint32_t dst_stick_size = output_shape_3 * a.element_size();
-
-        uint32_t src_buffer_size = alignment + src_stick_size;
-        uint32_t dst_buffer_size = alignment + dst_stick_size;
-        uint32_t cache_buffer_size = alignment * a.device()->num_dram_channels();
-        return max_l1_size >= src_buffer_size + dst_buffer_size + cache_buffer_size;
-    } else {
-        return false;
-    }
-}
-
-// This function needs to be up to date with unpad_tile to ensure accurate l1 usage calcaulation
-bool check_unpad_tile_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
-    if (a.layout() == Layout::TILE) {
-        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
-        uint32_t single_tile_size = a.element_size() * TILE_HW;
-        return max_l1_size >= single_tile_size;
-    } else {
-        return false;
-    }
-}
-
-bool check_unpad_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
-    if (a.layout() == Layout::ROW_MAJOR) {
-        return check_unpad_rm_l1_size(a, output_tensor_start, output_tensor_end);
-    } else if (a.layout() == Layout::TILE) {
-        return check_unpad_tile_l1_size(a, output_tensor_start, output_tensor_end);
-    } else {
-        return false;
-    }
-}
-
-Tensor unpad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
-
-    TT_ASSERT(a.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(not a.on_host(), "Operand to unpad needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
-    TT_ASSERT(
-        (output_tensor_start[0] == 0 && output_tensor_start[1] == 0 && output_tensor_start[2] == 0 && output_tensor_start[3] == 0),
-        "On device unpadding only supports unpadding at end of dims"
-    );
-    TT_ASSERT(output_tensor_start[0] < a.shape()[0]);
-    TT_ASSERT(output_tensor_end[0] < a.shape()[0]);
-    TT_ASSERT(output_tensor_start[1] < a.shape()[1]);
-    TT_ASSERT(output_tensor_end[1] < a.shape()[1]);
-    TT_ASSERT(output_tensor_start[2] < a.shape()[2]);
-    TT_ASSERT(output_tensor_end[2] < a.shape()[2]);
-    TT_ASSERT(output_tensor_start[3] < a.shape()[3]);
-    TT_ASSERT(output_tensor_end[3] < a.shape()[3]);
-
-    // Check if start shape is <= end shape
-    TT_ASSERT(output_tensor_start[0] <= output_tensor_end[0]);
-    TT_ASSERT(output_tensor_start[1] <= output_tensor_end[1]);
-    TT_ASSERT(output_tensor_start[2] <= output_tensor_end[2]);
-    TT_ASSERT(output_tensor_start[3] <= output_tensor_end[3]);
-
-    TT_ASSERT(((output_tensor_end[3] - output_tensor_start[3] + 1) % 2 == 0), "Can only unpad row major tensor to even width");
-
-    const std::array<uint32_t, 4> output_shape = {
-        output_tensor_end[0] - output_tensor_start[0] + 1,
-        output_tensor_end[1] - output_tensor_start[1] + 1,
-        output_tensor_end[2] - output_tensor_start[2] + 1,
-        output_tensor_end[3] - output_tensor_start[3] + 1,
-    };
-
-    if (a.shape() == output_shape) {
-        log_warning("Perf warning: unpadding called on tensor with same shape as target shape.");
-        return a;
-    }
+    const std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -94,10 +19,7 @@ Tensor unpad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_st
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), a.layout(), device);
-
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
-
 
     uint32_t padded_row_size_bytes = a.shape()[3] * a.element_size();
     uint32_t unpadded_row_size_bytes = output_shape[3] * a.element_size();
@@ -189,15 +111,6 @@ Tensor unpad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_st
         program, "tt_metal/kernels/compute/blank.cpp",
         core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CompileProgram(device, program, false);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteRuntimeArgsToDevice(
         device,
         unary_reader_kernel,
@@ -205,52 +118,13 @@ Tensor unpad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_st
         reader_kernel_args
     );
 
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
-Tensor unpad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
-
-    TT_ASSERT(a.layout() == Layout::TILE);
-    TT_ASSERT(not a.on_host(), "Operand to unpad needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
-    TT_ASSERT(
-        (output_tensor_start[0] == 0 && output_tensor_start[1] == 0 && output_tensor_start[2] == 0 && output_tensor_start[3] == 0),
-        "On device unpadding only supports unpadding at end of dims"
-    );
-    TT_ASSERT(a.volume() % TILE_HW == 0);
-    TT_ASSERT(output_tensor_start[0] < a.shape()[0]);
-    TT_ASSERT(output_tensor_end[0] < a.shape()[0]);
-    TT_ASSERT(output_tensor_start[1] < a.shape()[1]);
-    TT_ASSERT(output_tensor_end[1] < a.shape()[1]);
-    TT_ASSERT(output_tensor_start[2] < a.shape()[2]);
-    TT_ASSERT(output_tensor_end[2] < a.shape()[2]);
-    TT_ASSERT(output_tensor_start[3] < a.shape()[3]);
-    TT_ASSERT(output_tensor_end[3] < a.shape()[3]);
-
-    // Check if start shape is <= end shape
-    TT_ASSERT(output_tensor_start[0] <= output_tensor_end[0]);
-    TT_ASSERT(output_tensor_start[1] <= output_tensor_end[1]);
-    TT_ASSERT(output_tensor_start[2] <= output_tensor_end[2]);
-    TT_ASSERT(output_tensor_start[3] <= output_tensor_end[3]);
+Program unpad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
 
-    TT_ASSERT(((output_tensor_end[2] - output_tensor_start[2] + 1) % TILE_HEIGHT == 0), "Can only unpad tilized tensor to full tiles");
-    TT_ASSERT(((output_tensor_end[3] - output_tensor_start[3] + 1) % TILE_WIDTH == 0), "Can only unpad tilized tensor to full tiles");
-
-    const std::array<uint32_t, 4> output_shape = {
-        output_tensor_end[0] - output_tensor_start[0] + 1,
-        output_tensor_end[1] - output_tensor_start[1] + 1,
-        output_tensor_end[2] - output_tensor_start[2] + 1,
-        output_tensor_end[3] - output_tensor_start[3] + 1,
-    };
-
-    if (a.shape() == output_shape) {
-        log_warning("Perf warning: unpadding called on tensor with same shape as target shape.");
-        return a;
-    }
+    const std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -258,8 +132,6 @@ Tensor unpad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), a.layout(), device);
 
     uint32_t single_tile_size = a.element_size() * TILE_HW;
 
@@ -346,15 +218,6 @@ Tensor unpad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_
         program, "tt_metal/kernels/compute/blank.cpp",
         core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CompileProgram(device, program, false);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteRuntimeArgsToDevice(
         device,
         unary_reader_kernel,
@@ -362,20 +225,63 @@ Tensor unpad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_
         reader_kernel_args
     );
 
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
-Tensor unpad (const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
-    if (a.layout() == Layout::ROW_MAJOR) {
-        return unpad_rm(a, output_tensor_start, output_tensor_end);
-    } else if (a.layout() == Layout::TILE) {
-        return unpad_tile(a, output_tensor_start, output_tensor_end);
+
+void Unpad::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR);
+    TT_ASSERT(not input_tensor_a.on_host(), "Operand to unpad needs to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
+    TT_ASSERT(
+        (this->output_tensor_start[0] == 0 && this->output_tensor_start[1] == 0 && output_tensor_start[2] == 0 && output_tensor_start[3] == 0),
+        "On device unpadding only supports unpadding at end of dims"
+    );
+
+    TT_ASSERT(this->output_tensor_start[0] < input_tensor_a.shape()[0]);
+    TT_ASSERT(this->output_tensor_end[0] < input_tensor_a.shape()[0]);
+    TT_ASSERT(this->output_tensor_start[1] < input_tensor_a.shape()[1]);
+    TT_ASSERT(this->output_tensor_end[1] < input_tensor_a.shape()[1]);
+    TT_ASSERT(this->output_tensor_start[2] < input_tensor_a.shape()[2]);
+    TT_ASSERT(this->output_tensor_end[2] < input_tensor_a.shape()[2]);
+    TT_ASSERT(this->output_tensor_start[3] < input_tensor_a.shape()[3]);
+    TT_ASSERT(this->output_tensor_end[3] < input_tensor_a.shape()[3]);
+
+    // Check if start shape is <= end shape
+    TT_ASSERT(this->output_tensor_start[0] <= this->output_tensor_end[0]);
+    TT_ASSERT(this->output_tensor_start[1] <= this->output_tensor_end[1]);
+    TT_ASSERT(this->output_tensor_start[2] <= this->output_tensor_end[2]);
+    TT_ASSERT(this->output_tensor_start[3] <= this->output_tensor_end[3]);
+
+    if (input_tensor_a.layout() == Layout::TILE) {
+        TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
+        TT_ASSERT((this->output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only unpad tilized tensor with full tiles");
+        TT_ASSERT((this->output_tensor_shape[3] % TILE_WIDTH == 0), "Can only unpad tilized tensor with full tiles");
+    } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        TT_ASSERT(this->output_tensor_shape[3] % 2 == 0, "RM unpadding requires output X dim to be a multiple of 2");
+    }
+}
+std::vector<Shape> Unpad::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    return {this->output_tensor_shape};
+}
+std::vector<Tensor> Unpad::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    return detail::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
+}
+
+// TODO: If unpad is called on a tile and output is not tile, we could untilize then unpad, and output is RM
+// Currently calling unpad on a tile requires the output unpad shape to be tile
+Program Unpad::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    auto& output_tensor = output_tensors.at(0);
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        return unpad_rm(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+    } else if (input_tensor_a.layout() == Layout::TILE) {
+        return unpad_tile(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
     } else {
         TT_ASSERT(false, "Unsupported layout for unpad");
-        return a;
+        return tt_metal::Program();
     }
 }
 

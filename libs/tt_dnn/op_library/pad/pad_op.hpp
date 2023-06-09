@@ -6,9 +6,9 @@
 namespace tt {
 
 namespace tt_metal {
+
 Program pad_rm(const Tensor &input_tensor_a, Tensor& output_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value);
 Program pad_tile(const Tensor &input_tensor_a, Tensor& output_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value);
-
 
 struct Pad : Operation {
     const std::array<uint32_t, 4> output_tensor_shape;
