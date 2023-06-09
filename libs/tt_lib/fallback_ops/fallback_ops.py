@@ -73,7 +73,7 @@ def chunk(
 def conv2d(
     input: ttl_tensor.Tensor,
     weight: ttl_tensor.Tensor,
-    bias: Optional[ttl_tensor.Tensor],
+    bias: Optional[ttl_tensor.Tensor] = None,
     stride: Union[int, Tuple] = 1,
     padding: Union[int, str, Tuple] = 0,
     dilation: Union[int, Tuple] = 1,
@@ -224,7 +224,7 @@ def pad(
     +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
     | mode             | Padding mode                                              | sring            | `constant`, `reflect`, `replicate`, or `circular` (default is `constant`) | No       |
     +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
-    | value            | Fill value for `constant` padding                         | int              | default is 0                                                              | No       |
+    | value            | Fill value for `constant` padding                         | int              | default is 0                                                              | No       |
     +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
     """
     return torch.nn.functional.pad(input, pad, mode, value)
@@ -490,7 +490,7 @@ class LayerNorm(torch.nn.Module):
     .. math::
         y = \frac{x - \text{E}[x]}{\sqrt{\text{Var}[x] + \epsilon}} * \gamma + \beta
 
-    ``elementwise_affine`` is a boolean value that when set to `True`, this module has lernable per-element affine parameters initialized to ones (for weights) and zeros (for biases).
+    ``elementwise_affine`` is a boolean value that when set to `True`, this module has learnable per-element affine parameters initialized to ones (for weights) and zeros (for biases).
 
     +--------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
     | Argument           | Description                                                          | Data type         | Valid range       | Required |
@@ -525,6 +525,85 @@ class LayerNorm(torch.nn.Module):
         self.pt_fallback = torch.nn.LayerNorm(normalized_shape, eps, elementwise_affine)
         self.pt_fallback.weight = torch.nn.Parameter(weights.reshape(normalized_shape))
         self.pt_fallback.bias = torch.nn.Parameter(biases.reshape(normalized_shape))
+
+    @convert_tt_tensors_wrapper
+    def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+        return self.pt_fallback(input)
+
+
+class MaxPool2d(torch.nn.Module):
+    r"""
+    Applies a 2D max pooling over an input signal composed of several input planes.
+
+    In the simplest case, the output value of the layer with input size :math:`(N, C, H, W)`,
+    output :math:`(N, C, H_{out}, W_{out})` and :attr:`kernel_size` :math:`(kH, kW)`
+    can be precisely described as:
+
+    .. math::
+        \begin{aligned}
+            out(N_i, C_j, h, w) ={} & \max_{m=0, \ldots, kH-1} \max_{n=0, \ldots, kW-1} \\
+                                    & \text{input}(N_i, C_j, \text{stride[0]} \times h + m,
+                                                   \text{stride[1]} \times w + n)
+        \end{aligned}
+
+    +--------------------+----------------------------------------------------------------------+-------------------+------------------------+----------+
+    | Argument           | Description                                                          | Data type         | Valid range            | Required |
+    +====================+======================================================================+===================+========================+==========+
+    | kernel_size        | The size of the window to take a max over                            | int or Tuple[int] |                        | Yes      |
+    +--------------------+----------------------------------------------------------------------+-------------------+------------------------+----------+
+    | stride             | The stride of the window. Default value is kernel_size               | int or Tuple[int] | default is kernel_size | No       |
+    +--------------------+----------------------------------------------------------------------+-------------------+------------------------+----------+
+    | padding            | Implicit negative infinity padding to be added on both sides         | int or Tuple[int] | default is 0           | No       |
+    +--------------------+----------------------------------------------------------------------+-------------------+------------------------+----------+
+    | dilation           | A parameter that controls the stride of elements in the window       | int or Tuple[int] | default is 1           | No       |
+    +--------------------+----------------------------------------------------------------------+-------------------+------------------------+----------+
+    | return_indices     | If True, will return the max indices along with the outputs.         | bool              | default is `False`     | No       |
+    +--------------------+----------------------------------------------------------------------+-------------------+------------------------+----------+
+    | ceil_mode          | If True, will use ceil instead of floor to compute the output shape  | bool              | default is `False`     | No       |
+    +--------------------+----------------------------------------------------------------------+-------------------+------------------------+----------+
+    """
+
+    @convert_tt_tensors_wrapper
+    def __init__(
+        self,
+        kernel_size: Union[int, Tuple[int, int]],
+        stride: Union[int, Tuple[int, int]] = None,
+        padding: Union[int, Tuple[int, int]] = 0,
+        dilation: Union[int, Tuple[int, int]] = 1,
+        return_indices: bool = False,
+        ceil_mode: bool = False,
+    ):
+        super().__init__()
+        self.pt_fallback = torch.nn.MaxPool2d(
+            kernel_size, stride, padding, dilation, return_indices, ceil_mode
+        )
+
+    @convert_tt_tensors_wrapper
+    def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+        return self.pt_fallback(input)
+
+
+class AdaptiveAvgPool2d(torch.nn.Module):
+    r"""
+    Applies a 2D adaptive average pooling over an input signal composed of several input planes.
+
+    The output is of size H x W, for any input size.
+    The number of output features is equal to the number of input planes.
+
+    +--------------------+----------------------------------------------------------------------+-------------------+----------------------+----------+
+    | Argument           | Description                                                          | Data type         | Valid range          | Required |
+    +====================+======================================================================+===================+======================+==========+
+    | output_size        |  The target output size of the image                                 | int               | int/None or tuple    |          |
+    |                    |                                                                      |                   | of int/None (size 2) | yes      |
+    +--------------------+----------------------------------------------------------------------+-------------------+----------------------+----------+
+    """
+
+    @convert_tt_tensors_wrapper
+    def __init__(
+        self, output_size: Union[int, None, Tuple[Optional[int], Optional[int]]]
+    ):
+        super().__init__()
+        self.pt_fallback = torch.nn.AdaptiveAvgPool2d(output_size)
 
     @convert_tt_tensors_wrapper
     def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
