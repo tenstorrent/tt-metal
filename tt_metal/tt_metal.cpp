@@ -749,25 +749,28 @@ void SetCircularBufferDataFormat(Device *device, const Program &program, Kernel 
 #endif
 
 size_t KernelCompileHash(Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &pcie_slot, bool profile_kernel) {
-    size_t kg_compile_hash = std::hash<tt_hlk_desc>{}(build_options.hlk_desc);
-    tt::utils::hash_combine(kg_compile_hash, kernel->compile_time_args_hash());
-    tt::utils::hash_combine(kg_compile_hash, kernel->define_args_hash());
-    tt::utils::hash_combine(kg_compile_hash, std::hash<std::string>{}(kernel->name()));
-    tt::utils::hash_combine(kg_compile_hash, size_t(profile_kernel));
+    string compile_hash_str = std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc));
+    compile_hash_str += std::to_string(kernel->compile_time_args_hash());
+    compile_hash_str += std::to_string(kernel->define_args_hash());
+    compile_hash_str += std::to_string(std::hash<std::string>{}(kernel->name()));
+    compile_hash_str += std::to_string(size_t(profile_kernel));
 
     if (kernel->kernel_type() == KernelType::DataMovement) {
         auto data_movement_kernel = dynamic_cast<DataMovementKernel *>(kernel);
         TT_ASSERT(data_movement_kernel != nullptr);
-        tt::utils::hash_combine(kg_compile_hash, size_t(data_movement_kernel->noc()));
+        compile_hash_str += std::to_string(size_t(data_movement_kernel->noc()));
     } else {
         auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel);
         TT_ASSERT(compute_kernel != nullptr);
-        tt::utils::hash_combine(kg_compile_hash, std::hash<MathFidelity>{}(compute_kernel->math_fidelity()));
-        tt::utils::hash_combine(kg_compile_hash, size_t(compute_kernel->fp32_dest_acc_en()));
-        tt::utils::hash_combine(kg_compile_hash, size_t(compute_kernel->math_approx_mode()));
+        compile_hash_str += std::to_string(std::hash<MathFidelity>{}(compute_kernel->math_fidelity()));
+        compile_hash_str += std::to_string(size_t(compute_kernel->fp32_dest_acc_en()));
+        compile_hash_str += std::to_string(size_t(compute_kernel->math_approx_mode()));
     }
     // Add the device id into the compile hash to prevent clashes from simultaneous builds during multi-process runs
-    tt::utils::hash_combine(kg_compile_hash, std::hash<int>{}(pcie_slot));
+    compile_hash_str += std::to_string(std::hash<int>{}(pcie_slot));
+
+    size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
+
     #ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
@@ -787,11 +790,12 @@ size_t KernelCompileHash(Kernel *kernel, build_kernel_for_riscv_options_t &build
               << compute_kernel->fp32_dest_acc_en() << " :: "
               << compute_kernel->math_approx_mode() << " :: ";
         }
-        f << kg_compile_hash
+        f << compile_hash_str
+        f << compile_hash
           << std::endl << std::flush;
     }
     #endif
-    return kg_compile_hash;
+    return compile_hash;
 }
 
 struct HashLookup {
