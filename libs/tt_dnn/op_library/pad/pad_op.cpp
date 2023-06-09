@@ -8,65 +8,7 @@ namespace tt {
 
 namespace tt_metal {
 
-// This function needs to be up to date with pad_rm to ensure accurate l1 usage calcaulation
-bool check_pad_rm_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start) {
-    if (a.layout() == Layout::ROW_MAJOR) {
-        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
-        uint32_t alignment = 32;
-
-        uint32_t src_stick_size = a.shape()[3] * a.element_size();
-        uint32_t dst_stick_size = output_tensor_shape[3] * a.element_size();
-
-        uint32_t src_buffer_size = alignment + src_stick_size;
-        uint32_t dst_buffer_size = alignment + dst_stick_size;
-        uint32_t cache_buffer_size = alignment * a.device()->num_dram_channels();
-        return max_l1_size >= src_buffer_size + dst_buffer_size + cache_buffer_size;
-    } else {
-        return false;
-    }
-}
-
-// This function needs to be up to date with pad_tile to ensure accurate l1 usage calcaulation
-bool check_pad_tile_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start) {
-    if (a.layout() == Layout::TILE) {
-        uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
-        uint32_t single_tile_size = a.element_size() * TILE_HW;
-        return max_l1_size >= 2 * single_tile_size;
-    } else {
-        return false;
-    }
-}
-
-bool check_pad_l1_size(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start) {
-    if (a.layout() == Layout::ROW_MAJOR) {
-        return check_pad_rm_l1_size(a, output_tensor_shape, input_tensor_start);
-    } else if (a.layout() == Layout::TILE) {
-        return check_pad_tile_l1_size(a, output_tensor_shape, input_tensor_start);
-    } else {
-        return false;
-    }
-}
-
-Tensor pad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
-
-    TT_ASSERT(a.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(not a.on_host(), "Operand to pad needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
-    TT_ASSERT(
-        (input_tensor_start[0] == 0 && input_tensor_start[1] == 0 && input_tensor_start[2] == 0 && input_tensor_start[3] == 0),
-        "On device padding only supports padding at end of dims"
-    );
-    TT_ASSERT(a.shape()[0] + input_tensor_start[0] <= output_tensor_shape[0], "Output size cannot fit input with offset");
-    TT_ASSERT(a.shape()[1] + input_tensor_start[1] <= output_tensor_shape[1], "Output size cannot fit input with offset");
-    TT_ASSERT(a.shape()[2] + input_tensor_start[2] <= output_tensor_shape[2], "Output size cannot fit input with offset");
-    TT_ASSERT(a.shape()[3] + input_tensor_start[3] <= output_tensor_shape[3], "Output size cannot fit input with offset");
-
-    TT_ASSERT(output_tensor_shape[3] % 2 == 0, "RM tile requires X to be a multiple of 2");
-
-    if (a.shape() == output_tensor_shape) {
-        log_warning("Perf warning: padding called on tensor with same shape as target shape.");
-        return a;
-    }
+Program pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -77,11 +19,7 @@ Tensor pad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shap
 
     auto output_shape = output_tensor_shape;
 
-
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), a.layout(), device);
-
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
-
 
     uint32_t unpadded_row_size_bytes = a.shape()[3] * a.element_size();
     uint32_t padded_row_size_bytes = output_shape[3] * a.element_size();
@@ -176,15 +114,6 @@ Tensor pad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shap
         program, "tt_metal/kernels/compute/blank.cpp",
         core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CompileProgram(device, program, false);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteRuntimeArgsToDevice(
         device,
         unary_reader_kernel,
@@ -192,33 +121,11 @@ Tensor pad_rm(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shap
         reader_kernel_args
     );
 
-    tt_metal::LaunchKernels(device, program);
-
     // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
-Tensor pad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
-
-    TT_ASSERT(a.layout() == Layout::TILE);
-    TT_ASSERT(not a.on_host(), "Operand to pad needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
-    TT_ASSERT(
-        (input_tensor_start[0] == 0 && input_tensor_start[1] == 0 && input_tensor_start[2] == 0 && input_tensor_start[3] == 0),
-        "On device padding only supports padding at end of dims"
-    );
-    TT_ASSERT(a.shape()[0] + input_tensor_start[0] <= output_tensor_shape[0], "Output size cannot fit input with offset");
-    TT_ASSERT(a.shape()[1] + input_tensor_start[1] <= output_tensor_shape[1], "Output size cannot fit input with offset");
-    TT_ASSERT(a.shape()[2] + input_tensor_start[2] <= output_tensor_shape[2], "Output size cannot fit input with offset");
-    TT_ASSERT(a.shape()[3] + input_tensor_start[3] <= output_tensor_shape[3], "Output size cannot fit input with offset");
-
-    TT_ASSERT((output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
-    TT_ASSERT((output_tensor_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
-
-    if (a.shape() == output_tensor_shape) {
-        log_warning("Perf warning: padding called on tensor with same shape as target shape.");
-        return a;
-    }
+Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -228,9 +135,6 @@ Tensor pad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_sh
     tt_metal::Device *device = a.device();
 
     auto output_shape = output_tensor_shape;
-
-
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), a.layout(), device);
 
     uint32_t single_tile_size = a.element_size() * TILE_HW;
 
@@ -332,15 +236,7 @@ Tensor pad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_sh
         program, "tt_metal/kernels/compute/blank.cpp",
         core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CompileProgram(device, program, false);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteRuntimeArgsToDevice(
         device,
         unary_reader_kernel,
@@ -348,20 +244,51 @@ Tensor pad_tile(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_sh
         reader_kernel_args
     );
 
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
-Tensor pad (const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
-    if (a.layout() == Layout::ROW_MAJOR) {
-        return pad_rm(a, output_tensor_shape, input_tensor_start, pad_value);
-    } else if (a.layout() == Layout::TILE) {
-        return pad_tile(a, output_tensor_shape, input_tensor_start, pad_value);
+
+void Pad::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR);
+    TT_ASSERT(not input_tensor_a.on_host(), "Operand to pad needs to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
+    TT_ASSERT(
+        (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),
+        "On device padding only supports padding at end of dims"
+    );
+    TT_ASSERT(input_tensor_a.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
+    TT_ASSERT(input_tensor_a.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
+    TT_ASSERT(input_tensor_a.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
+    TT_ASSERT(input_tensor_a.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
+
+    if (input_tensor_a.layout() == Layout::TILE) {
+        TT_ASSERT((this->output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
+        TT_ASSERT((this->output_tensor_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
+    } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        TT_ASSERT(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
+    }
+}
+std::vector<Shape> Pad::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    return {this->output_tensor_shape};
+}
+std::vector<Tensor> Pad::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    return detail::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
+}
+
+// TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
+// Currently calling pad on a tile requires the output pad shape to be tile
+Program Pad::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    auto& output_tensor = output_tensors.at(0);
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        return pad_rm(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+    } else if (input_tensor_a.layout() == Layout::TILE) {
+        return pad_tile(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
     } else {
         TT_ASSERT(false, "Unsupported layout for pad");
-        return a;
+        return tt_metal::Program();
     }
 }
 
