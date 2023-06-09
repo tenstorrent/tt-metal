@@ -16,6 +16,9 @@ struct TrailingWriteCommand {
     u32 num_receivers;
 };
 
+// The beginning of data section for dispatcher
+static constexpr u32 DEVICE_COMMAND_DATA_ADDR = 150 * 1024;
+
 static constexpr u32 DEVICE_COMMAND_NUM_ENTRIES = 16 + 11 * 104;
 static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 11;
 static constexpr u32 CONTROL_SECTION_NUM_ENTRIES = 16;

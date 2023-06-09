@@ -8,7 +8,6 @@
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/thread_safe_queue.hpp"
-#include "llrt/tt_debug_print_server.hpp"
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/src/firmware/riscv/grayskull/noc/noc_parameters.h"

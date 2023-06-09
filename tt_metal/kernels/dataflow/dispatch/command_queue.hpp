@@ -11,8 +11,6 @@
 // u64 worker_cores_multicast_notify_addr = get_noc_addr(1, 1, DISPATCH_MESSAGE_REMOTE_SENDER_ADDR);
 u32 num_worker_cores = 108;
 
-u32 DATA_ADDR = 150 * 1024;
-
 template <typename T>
 void write_buffer(
     T addr_gen,
@@ -33,7 +31,7 @@ void write_buffer(
 
     u32 id = 0;
     for (u32 j = 0; j < num_bursts; j++) {
-        u32 data_addr = DATA_ADDR;  // UNRESERVED_BASE;
+        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
         u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
 
         noc_async_read(src_noc_addr, data_addr, burst_size);
@@ -51,7 +49,7 @@ void write_buffer(
     }
     // In case where the final burst a different size than the others
     if (remainder_burst_size) {
-        u32 data_addr = DATA_ADDR;  // UNRESERVED_BASE;
+        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
         u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
         noc_async_read(src_noc_addr, data_addr, remainder_burst_size);
         noc_async_read_barrier();
@@ -142,7 +140,7 @@ FORCE_INLINE void read_buffer(
 
     u32 id = 0;
     for (u32 j = 0; j < num_bursts; j++) {
-        u32 data_addr = DATA_ADDR;  // UNRESERVED_BASE;
+        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
         u64 dst_noc_addr = (u64(dst_noc) << 32) | dst_addr;
 
         for (u32 k = 0; k < num_pages_per_burst; k++) {
@@ -153,13 +151,13 @@ FORCE_INLINE void read_buffer(
         }
         noc_async_read_barrier();
 
-        noc_async_write(DATA_ADDR, dst_noc_addr, burst_size);
+        noc_async_write(DEVICE_COMMAND_DATA_ADDR, dst_noc_addr, burst_size);
         dst_addr += burst_size;
         noc_async_write_barrier();
     }
 
     if (remainder_burst_size) {
-        u32 data_addr = DATA_ADDR;  // UNRESERVED_BASE;
+        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
         u64 dst_noc_addr = (u64(dst_noc) << 32) | dst_addr;
 
         for (u32 k = 0; k < num_pages_per_remainder_burst; k++) {
@@ -170,7 +168,7 @@ FORCE_INLINE void read_buffer(
         }
         noc_async_read_barrier();
 
-        noc_async_write(DATA_ADDR, dst_noc_addr, remainder_burst_size);
+        noc_async_write(DEVICE_COMMAND_DATA_ADDR, dst_noc_addr, remainder_burst_size);
         noc_async_write_barrier();
     }
 }
@@ -234,7 +232,7 @@ FORCE_INLINE void write_program_section(
     u32 src, u32 src_noc, u32 transfer_size, u32 num_writes, volatile u32*& command_ptr) {
     // Bring in a program section into L1
 
-    noc_async_read(((u64(src_noc) << 32) | src), DATA_ADDR, transfer_size);
+    noc_async_read(((u64(src_noc) << 32) | src), DEVICE_COMMAND_DATA_ADDR, transfer_size);
     noc_async_read_barrier();
 
     // Write different parts of that program section to different worker cores

@@ -34,7 +34,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         sections.push_back(section);
     };
 
-    u32 start_in_bytes = 150 * 1024;
+    u32 start_in_bytes = DEVICE_COMMAND_DATA_ADDR;
     auto write_program_kernel_transfer = [&](const Kernel* kernel, vector<TransferType> transfer_types) {
         size_t i = 0;
         const vector<ll_api::memory>& kernel_bins = kernel->binaries();
@@ -47,7 +47,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
             u32 num_bytes_so_far = program_vector.size() * sizeof(u32);
             u32 num_new_bytes = kernel_bin.size() * sizeof(u32);
 
-            if (num_bytes_so_far + num_new_bytes > 1024 * 1024 - 150 * 1024) {
+            if (num_bytes_so_far + num_new_bytes > 1024 * 1024 - DEVICE_COMMAND_DATA_ADDR) {
                 current_section_idx++;
                 initialize_section();
             }
@@ -93,7 +93,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         u32 num_bytes_so_far = program_vector.size() * sizeof(u32);
         u32 num_new_bytes = 16;
 
-        if (num_bytes_so_far + num_new_bytes > 1024 * 1024 - 150 * 1024) {
+        if (num_bytes_so_far + num_new_bytes > 1024 * 1024 - DEVICE_COMMAND_DATA_ADDR) {
             current_section_idx++;
             initialize_section();
         }
@@ -204,7 +204,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst) {
     DeviceCommand command;
     command.set_data_size_in_bytes(this->buffer.size());
 
-    u32 available_l1 = 1024 * 1024 - 150 * 1024;
+    u32 available_l1 = 1024 * 1024 - DEVICE_COMMAND_DATA_ADDR;
     u32 potential_burst_size = available_l1;
     u32 num_bursts = this->buffer.size() / (available_l1);
     u32 num_pages_per_burst = potential_burst_size / this->buffer.page_size();
@@ -261,7 +261,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_a
 
     command.set_data_size_in_bytes(this->buffer.size());
 
-    u32 available_l1 = 1024 * 1024 - 150 * 1024;
+    u32 available_l1 = 1024 * 1024 - DEVICE_COMMAND_DATA_ADDR;
     u32 potential_burst_size = available_l1;
     u32 num_bursts = this->buffer.size() / (available_l1);
     u32 num_pages_per_burst = potential_burst_size / this->buffer.page_size();
@@ -368,7 +368,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
     // Deal with runtime args
     u32 data_size_in_bytes = 0;
     vector<TrailingWriteCommand> trailing_write_commands;
-    u32 rt_args_src = 150 * 1024;
+    u32 rt_args_src = DEVICE_COMMAND_DATA_ADDR;
     for (const auto& [core_coord, rt_arg_map] : this->rt_args) {
         // u32 dst_noc = noc_coord_to_u32(core_coord);
         CoreCoord worker_dst_noc = this->device->worker_core_from_logical_core(core_coord);
