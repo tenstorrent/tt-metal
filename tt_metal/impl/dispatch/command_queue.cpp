@@ -10,7 +10,7 @@ ProgramToDeviceMap ConstructProgramToDeviceMap(const Device* device, Program& pr
     // This function retrieves all the required information to group program binaries into sections,
     // such that each section is the largest amount of data that can be read into the dispatch
     // core's L1 at a time. For each section, it also specifies the relay program information,
-    // as described in command.hpp.
+    // as described in device_command.hpp.
     ProgramToDeviceMap program_to_device_map;
     vector<u32>& program_vector = program_to_device_map.program_vector;
     vector<ProgramSection>& sections = program_to_device_map.program_sections;

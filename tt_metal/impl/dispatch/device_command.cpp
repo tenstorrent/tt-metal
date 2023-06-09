@@ -1,4 +1,4 @@
-#include "tt_metal/impl/dispatch/command.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
 
 #include "tt_metal/common/logger.hpp"
 
