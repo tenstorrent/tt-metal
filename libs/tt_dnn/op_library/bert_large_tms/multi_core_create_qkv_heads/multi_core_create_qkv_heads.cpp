@@ -91,7 +91,6 @@ Tensor multi_core_create_qkv_heads(const Tensor &a, const MemoryConfig& mem_conf
             (std::uint32_t) in0_is_dram,
 
             // READER COMPILE TIME ARGS
-            (std::uint32_t) in0_buffer->address(), // in0_tensor_addr
             (std::uint32_t) out_w_tiles, // out_w_tiles
             (std::uint32_t) out_c, // out_c
     };
@@ -101,7 +100,6 @@ Tensor multi_core_create_qkv_heads(const Tensor &a, const MemoryConfig& mem_conf
             (std::uint32_t) out_is_dram,
 
             // WRITER COMPILE TIME ARGS
-            (std::uint32_t) out_buffer->address(), // out_tensor_addr
             (std::uint32_t) out_w_tiles, // out_w_tiles
             (std::uint32_t) out_h_tiles, // out_h_tiles
             (std::uint32_t) out_c, // out_c
@@ -187,9 +185,11 @@ Tensor multi_core_create_qkv_heads(const Tensor &a, const MemoryConfig& mem_conf
             }
 
             std::vector<uint32_t> reader_runtime_args = {
+                (std::uint32_t) in0_buffer->address(), // in0_tensor_addr,
                 (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles, // in0_tensor_tile_id
             };
             std::vector<uint32_t> writer_runtime_args = {
+                (std::uint32_t) out_buffer->address(), // out_tensor_addr
                 out_tensor_tile_id, // out_tensor_tile_id
             };
 

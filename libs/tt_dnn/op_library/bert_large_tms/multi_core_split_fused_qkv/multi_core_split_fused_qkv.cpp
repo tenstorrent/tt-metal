@@ -95,7 +95,6 @@ std::vector<Tensor> multi_core_split_fused_qkv(const Tensor &a, const MemoryConf
             (std::uint32_t) in0_is_dram,
 
             // READER COMPILE TIME ARGS
-            (std::uint32_t) in0_buffer->address(), // in0_tensor_addr
             (std::uint32_t) num_tensors, // out_num_tensors
             (std::uint32_t) num_tiles_per_tensor, // out_num_tiles_per_tensor
     };
@@ -105,9 +104,6 @@ std::vector<Tensor> multi_core_split_fused_qkv(const Tensor &a, const MemoryConf
             (std::uint32_t) out_is_dram,
 
             // WRITER COMPILE TIME ARGS
-            (std::uint32_t) q_buffer->address(), // q_tensor_addr
-            (std::uint32_t) k_buffer->address(), // k_tensor_addr
-            (std::uint32_t) v_buffer->address(), // v_tensor_addr
             (std::uint32_t) num_tensors, // out_num_tensors
             (std::uint32_t) num_tiles_per_tensor, // out_num_tiles_per_tensor
     };
@@ -159,9 +155,13 @@ std::vector<Tensor> multi_core_split_fused_qkv(const Tensor &a, const MemoryConf
             );
 
             std::vector<uint32_t> reader_runtime_args = {
+                (std::uint32_t) in0_buffer->address(),
                 core_id * per_core_tiles,
             };
             std::vector<uint32_t> writer_runtime_args = {
+                (std::uint32_t) q_buffer->address(), // q_tensor_addr
+                (std::uint32_t) k_buffer->address(), // k_tensor_addr
+                (std::uint32_t) v_buffer->address(), // v_tensor_addr
                 core_id * num_tiles_per_tensor,
             };
 

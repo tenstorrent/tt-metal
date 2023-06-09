@@ -3,15 +3,15 @@
 
 void kernel_main() {
     // READER RUNTIME ARGS
-    uint32_t in0_tensor_tile_id                  = get_arg_val<uint32_t>(0);
+    uint32_t in0_tensor_addr                     = get_arg_val<uint32_t>(0);
+    uint32_t in0_tensor_tile_id                  = get_arg_val<uint32_t>(1);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
     constexpr uint32_t in0_is_dram               = get_compile_time_arg_val(1);
     // READER COMPILE TIME ARGS
-    constexpr uint32_t in0_tensor_addr           = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_tensors           = get_compile_time_arg_val(3);
-    constexpr uint32_t out_num_tiles_per_tensor  = get_compile_time_arg_val(4);
+    constexpr uint32_t out_num_tensors           = get_compile_time_arg_val(2);
+    constexpr uint32_t out_num_tiles_per_tensor  = get_compile_time_arg_val(3);
 
 
     constexpr uint32_t cb_id_in0 = 0;

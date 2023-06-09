@@ -132,7 +132,6 @@ tt_metal::Program create_program_mcast_in0_in1(
             (std::uint32_t) in0_is_dram,
 
             // in0 tensor args
-            (std::uint32_t)  in0_buffer->address(), // in0_tensor_addr
             (std::uint32_t)  1, // in0_tensor_stride_w
             (std::uint32_t)  K, // in0_tensor_stride_h
             (std::uint32_t)  in0_block_w, // in0_tensor_next_block_stride
@@ -161,7 +160,6 @@ tt_metal::Program create_program_mcast_in0_in1(
 
             // READER
             // in1 tensor args
-            (std::uint32_t)  in1_buffer->address(), // in1_tensor_addr
             (std::uint32_t)  1, // in1_tensor_stride_w
             (std::uint32_t)  N, // in1_tensor_stride_h
             (std::uint32_t)  in0_block_w * N, //in1_tensor_next_block_stride
@@ -184,7 +182,6 @@ tt_metal::Program create_program_mcast_in0_in1(
 
             // WRITER
             // out tensor args
-            (std::uint32_t)  out_buffer->address(), // out_tensor_addr
             (std::uint32_t)  1, // out_tensor_stride_w
             (std::uint32_t)  N,  // out_tensor_stride_h
             (std::uint32_t)  out_subblock_w, // out_tensor_next_subblock_stride_w
@@ -228,7 +225,6 @@ tt_metal::Program create_program_mcast_in0_in1(
 
             // WRITER
             // out tensor args
-            (std::uint32_t)  out_buffer->address(), // out_tensor_addr
             (std::uint32_t)  1, // out_tensor_stride_w
             (std::uint32_t)  N,  // out_tensor_stride_h
             (std::uint32_t)  out_subblock_w, // out_tensor_next_subblock_stride_w
@@ -479,6 +475,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             if(core_idx_x == 0 and core_idx_y == 0) {
                 std::vector<uint32_t> mm_in0_sender_args =  {
                     // in0 tensor args
+                    (std::uint32_t)  in0_buffer->address(),
                     (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                     // in0 mcast args
                     (std::uint32_t)  right_core_physical.y, // in0_mcast_dest_noc_start_y
@@ -490,6 +487,7 @@ tt_metal::Program create_program_mcast_in0_in1(
                 std::vector<uint32_t> mm_in1_sender_writer_args = {
                     // READER
                     // in1 tensor args
+                    (std::uint32_t)  in1_buffer->address(),
                     (std::uint32_t)  per_core_N * core_idx_x, //in1_tensor_start_tile_id
                     // in1 mcast args
                     (std::uint32_t)  bottom_core_physical.x, // in1_mcast_dest_noc_start_x
@@ -497,6 +495,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
                     // WRITER
                     // out tensor args
+                    (std::uint32_t)  out_buffer->address(),
                     (std::uint32_t)  core_idx_x * per_core_N + core_idx_y * per_core_M * N, // out_tensor_start_tile_id
 
                     // padding args (READER)
@@ -518,6 +517,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             else if (core_idx_x == 0 and core_idx_y != 0) {
                 std::vector<uint32_t> mm_in0_sender_args = {
                     // in0 tensor args
+                    (std::uint32_t)  in0_buffer->address(),
                     (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                     // in0 mcast args
                     (std::uint32_t)  right_core_physical.y, // in0_mcast_dest_noc_start_y
@@ -531,6 +531,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
                     // WRITER
                     // out tensor args
+                    (std::uint32_t)  out_buffer->address(),
                     (std::uint32_t)  core_idx_x * per_core_N + core_idx_y * per_core_M * N // out_tensor_start_tile_id
                 };
 
@@ -572,6 +573,7 @@ tt_metal::Program create_program_mcast_in0_in1(
                 std::vector<uint32_t> mm_in1_sender_writer_args = {
                     // READER
                     // in1 tensor args
+                    (std::uint32_t)  in1_buffer->address(),
                     (std::uint32_t)  per_core_N * core_idx_x, //in1_tensor_start_tile_id
                     // in1 mcast args
                     (std::uint32_t)  bottom_core_physical.x, // in1_mcast_dest_noc_start_x
@@ -579,6 +581,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
                     // WRITER
                     // out tensor args
+                    (std::uint32_t)  out_buffer->address(),
                     (std::uint32_t)  core_idx_x * per_core_N + core_idx_y * per_core_M * N // out_tensor_start_tile_id
                 };
 
@@ -624,6 +627,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
                     // WRITER
                     // out tensor args
+                    (std::uint32_t)  out_buffer->address(), // out_tensor_addr
                     (std::uint32_t)  core_idx_x * per_core_N + core_idx_y * per_core_M * N // out_tensor_start_tile_id
                 };
 
