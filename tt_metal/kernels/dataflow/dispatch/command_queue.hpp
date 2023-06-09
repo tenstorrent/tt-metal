@@ -264,54 +264,40 @@ FORCE_INLINE void write_program(u32 num_program_relays, volatile u32*& command_p
         command_ptr += 4;
         write_program_section(src, src_noc, transfer_size, num_writes, command_ptr);
     }
-
-    // *reinterpret_cast<volatile u32*>(MEM_DEBUG_MAILBOX_ADDRESS) = 13;
-
-    // DPRINT << "NPR: " << num_program_relays << ENDL();
-    // If we had to relay any program data, then we need to deassert the worker cores
-    if (num_program_relays) {
-        // Multicast sender address (so that the worker cores know who to notify)
-        // Don't need a barrier, will just wait for kernels to finish
-
-        // u64 worker_cores_multicast_soft_reset_addr = get_noc_multicast_addr(1, 1, 12, 10, TENSIX_SOFT_RESET_ADDR);
-        // u64 worker_cores_multicast_notify_addr = get_noc_multicast_addr(1, 1, 12, 10,
-        // DISPATCH_MESSAGE_REMOTE_SENDER_ADDR);
-        u64 worker_cores_multicast_soft_reset_addr = get_noc_addr(1, 1, TENSIX_SOFT_RESET_ADDR);
-        u64 worker_cores_multicast_notify_addr = get_noc_addr(1, 1, DISPATCH_MESSAGE_ADDR);
-
-        // Give the worker cores an address we poll to let us know of completion
-        // noc_async_write_multicast(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR, worker_cores_multicast_notify_addr, 8,
-        // num_worker_cores); noc_async_write_barrier();
-
-        // This is only required until PK checks in his changes to separate kernels from firmware
-        // //DPRINT << *reinterpret_cast<volatile u32*>(DEASSERT_RESET_SRC_L1_ADDR) << ENDL();
-
-        // noc_semaphore_set_multicast(DEASSERT_RESET_SRC_L1_ADDR, worker_cores_multicast_soft_reset_addr,
-        // num_worker_cores);
-
-        volatile uint32_t* message_addr_ptr = reinterpret_cast<volatile uint32_t*>(DISPATCH_MESSAGE_ADDR);
-        *message_addr_ptr = 0;
-
-        // Notify the worker core of who sent them data
-        noc_async_write(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR, worker_cores_multicast_notify_addr, 8);
-        noc_async_write_barrier();
-
-        noc_semaphore_set_remote(DEASSERT_RESET_SRC_L1_ADDR, worker_cores_multicast_soft_reset_addr);
-        noc_async_write_barrier();  // Somehow only works when I have this barrier. Why??
-
-        // Wait on worker cores to notify me that they have completed
-        // DPRINT << "WAITING" << ENDL();
-        while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != 1);//num_worker_cores)
-            ;
-        // DPRINT << "DONE" << ENDL();
-
-        // This is only required until PK checks in his changes to separate kernels from firmware
-        noc_semaphore_set_remote(ASSERT_RESET_SRC_L1_ADDR, worker_cores_multicast_soft_reset_addr);
-        noc_async_write_barrier();
-    }
 }
 
-FORCE_INLINE void handle_finish() {
+FORCE_INLINE void launch_program(u32 launch) {
+    if (not launch)
+        return;
+
+    // TODO(agrebenisan): Get proper multicast noc coords. For now hardcoding
+    u64 worker_cores_multicast_soft_reset_addr = get_noc_addr(1, 1, TENSIX_SOFT_RESET_ADDR);
+    u64 worker_cores_multicast_notify_addr = get_noc_addr(1, 1, DISPATCH_MESSAGE_ADDR);
+
+    volatile uint32_t* message_addr_ptr = reinterpret_cast<volatile uint32_t*>(DISPATCH_MESSAGE_ADDR);
+    *message_addr_ptr = 0;
+
+    // Notify the worker core of who sent them data
+    noc_async_write(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR, worker_cores_multicast_notify_addr, 8);
+    noc_async_write_barrier();
+
+    noc_semaphore_set_remote(DEASSERT_RESET_SRC_L1_ADDR, worker_cores_multicast_soft_reset_addr);
+    noc_async_write_barrier();  // Somehow only works when I have this barrier. Why??
+
+    // Wait on worker cores to notify me that they have completed
+    while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != 1)
+        ;  // So far, assuming only one receiver. TODO(agrebenisan): Multi-receiver
+    ;
+
+    // This is only required until PK checks in his changes to separate kernels from firmware
+    noc_semaphore_set_remote(ASSERT_RESET_SRC_L1_ADDR, worker_cores_multicast_soft_reset_addr);
+    noc_async_write_barrier();
+}
+
+FORCE_INLINE void finish_program(u32 finish) {
+    if (not finish)
+        return;
+
     volatile u32* finish_ptr = get_cq_finish_ptr();
     finish_ptr[0] = 1;
     uint64_t finish_noc_addr = get_noc_addr(NOC_X(0), NOC_Y(4), HOST_CQ_FINISH_PTR);

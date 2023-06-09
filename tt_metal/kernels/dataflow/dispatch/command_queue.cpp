@@ -47,8 +47,9 @@ void kernel_main() {
         command_ptr = reinterpret_cast<volatile u32*>(command_start_addr + (16 + 4 * 11) * sizeof(u32));
         write_program(num_program_writes, command_ptr);
 
-        if (finish)
-            handle_finish();
+        launch_program(launch);
+
+        finish_program(finish);
 
         // This tells the dispatch core how to update its read pointer
         cq_pop_front(data_size_in_bytes + DeviceCommand::size_in_bytes());
