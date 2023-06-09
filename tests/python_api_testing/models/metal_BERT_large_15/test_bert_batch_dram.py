@@ -5,6 +5,8 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from tests.python_api_testing.models.conftest import model_location_generator_
 import sys
 from pathlib import Path
+import csv
+import datetime
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../..")
@@ -167,6 +169,8 @@ def run_bert_question_and_answering_inference(
     model_location_generator,
     PERF_CNT,
 ):
+    start_time = time.time()
+
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -351,6 +355,23 @@ def run_bert_question_and_answering_inference(
 
     ttl.device.CloseDevice(device)
     profiler.print()
+
+    whole_test_runtime = time.time() - start_time
+
+    # Dump all profiler keys to csv + entire test runtime
+    output_fields = ["whole_test_runtime"]
+    output_fields.extend(profiler.times.keys())
+    dt_prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    output_csv_path = Path(f"{dt_prefix}_metal_bert_15_perf.csv")
+    with open(output_csv_path, "w", newline="") as output_csv:
+        output_csv_writer = csv.DictWriter(output_csv, fieldnames=output_fields)
+        output_csv_writer.writeheader()
+
+        output = {"whole_test_runtime": whole_test_runtime}
+        for key in profiler.times.keys():
+            output[key] = profiler.get(key)
+
+        output_csv_writer.writerow(output)
 
     # assert profiler.get("whole_model") < 60.0
     assert (
