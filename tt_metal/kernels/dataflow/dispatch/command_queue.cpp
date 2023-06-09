@@ -40,14 +40,6 @@ void kernel_main() {
         u32 num_program_writes =
             command_ptr[5];  // How many relays we need to make for program data (this needs more in depth explanation)
 
-        //DPRINT << 'F' << ':' << ' ' << finish << ENDL();
-        //DPRINT << 'L' << ':' << ' ' << launch << ENDL();
-        //DPRINT << 'D' << ':' << ' ' << data_size_in_bytes << ENDL();
-        //DPRINT << 'R' << ':' << ' ' << num_buffer_reads << ENDL();
-        //DPRINT << 'W' << ':' << ' ' << num_buffer_writes << ENDL();
-        //DPRINT << 'P' << ':' << ' ' << num_program_writes << ENDL();
-        //DPRINT << ENDL();
-
         command_ptr = reinterpret_cast<volatile u32*>(command_start_addr + (16) * sizeof(u32));
         read_buffers(num_buffer_reads, command_ptr, dram_addr_gen, l1_addr_gen);
         write_buffers(num_buffer_writes, command_ptr, dram_addr_gen, l1_addr_gen);

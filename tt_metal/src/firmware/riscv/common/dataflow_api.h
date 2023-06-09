@@ -12,7 +12,6 @@
 #include <stdint.h>
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
-// #include "frameworks/tt_dispatch/impl/command.hpp"
 #include "circular_buffer.h"
 
 #include "debug_print.h"

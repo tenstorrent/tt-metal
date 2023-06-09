@@ -454,7 +454,6 @@ void FinishCommand::process() {
 
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
-
     this->writer.cq_push_back(this->device, cmd_size);
 }
 

@@ -1,4 +1,4 @@
-#include "frameworks/tt_dispatch/impl/command_queue.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/host_api.hpp"
 
 using namespace tt;

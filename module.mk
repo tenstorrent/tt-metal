@@ -91,7 +91,6 @@ LIBS_TO_BUILD = \
 	tt_metal \
 	python_env \
 	libs \
-	frameworks \
 	tools
 
 ifdef TT_METAL_ENV_IS_DEV
@@ -104,7 +103,6 @@ endif
 include $(TT_METAL_HOME)/tt_metal/common/common.mk
 include $(TT_METAL_HOME)/tt_metal/module.mk
 include $(TT_METAL_HOME)/libs/module.mk
-include $(TT_METAL_HOME)/frameworks/module.mk
 
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV

@@ -2,7 +2,7 @@
 
 #include "dataflow_api.h"
 #include "debug_print.h"
-#include "frameworks/tt_dispatch/impl/command.hpp"
+#include "tt_metal/impl/dispatch/command.hpp"
 
 // Dispatch constants
 // u64 worker_cores_multicast_soft_reset_addr = get_noc_multicast_addr(1, 1, 12, 10, TENSIX_SOFT_RESET_ADDR);
