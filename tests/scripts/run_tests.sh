@@ -62,7 +62,6 @@ run_post_commit_pipeline_tests() {
     # Switch to modules only soon
     # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
     ./tests/scripts/run_pre_post_commit_regressions.sh
-
 }
 
 run_frequent_pipeline_tests() {
@@ -91,6 +90,21 @@ run_frequent_pipeline_tests() {
     ./tests/scripts/run_models.sh
 }
 
+run_frequently_hangs_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+
+    ./build_tt_metal.sh
+    make tests
+
+    source build/python_env/bin/activate
+    export PYTHONPATH=$TT_METAL_HOME
+
+    env python tests/scripts/run_build_kernels_for_riscv.py --tt-arch $ARCH_NAME
+
+    env pytest tests/tt_metal/llrt --tt-arch $tt_arch -m $pipeline_type
+}
+
 run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -103,6 +117,8 @@ run_pipeline_tests() {
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "frequent" ]]; then
         run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
+    elif [[ $pipeline_type == "frequently_hangs" ]]; then
+        run_frequently_hangs_pipeline_tests "$tt_arch" "$pipeline_type"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1

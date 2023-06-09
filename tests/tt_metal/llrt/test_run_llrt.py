@@ -49,7 +49,6 @@ LLRT_TEST_ENTRIES = set(
         TestEntry("llrt/tests/test_run_sync", "test_run_sync"),
         TestEntry("llrt/tests/test_run_sync_db", "test_run_sync_db"),
         TestEntry("llrt/tests/test_run_dataflow_cb_test", "test_run_dataflow_cb_test"),
-        # TestEntry("llrt/tests/test_run_test_debug_print", "test_run_test_debug_print"), See https://github.com/tenstorrent-metal/tt-metal/issues/1070
         TestEntry(
             "llrt/tests/test_run_datacopy_switched_riscs",
             "test_run_datacopy_switched_riscs",
@@ -66,11 +65,19 @@ LLRT_TEST_ENTRIES = set(
 SKIP_LLRT_WORMHOLE_ENTRIES = set(
     [
         TestEntry("llrt/tests/test_run_eltwise_sync", "test_run_eltwise_sync"),
-        # TestEntry("llrt/tests/test_run_test_debug_print", "test_run_test_debug_print"),
         TestEntry(
             "llrt/tests/test_run_datacopy_switched_riscs",
             "test_run_datacopy_switched_riscs",
         ),
+    ]
+)
+
+
+FREQUENTLY_HANGS_LLRT_TEST_ENTRIES = set(
+    [
+        TestEntry(
+            "llrt/tests/test_run_test_debug_print", "test_run_test_debug_print"
+        ),  # See https://github.com/tenstorrent-metal/tt-metal/issues/1070
     ]
 )
 
@@ -126,6 +133,16 @@ def test_run_llrt_test_wormhole_b0(
     "llrt_test_entry", LONG_LLRT_TEST_ENTRIES, ids=generate_test_entry_id
 )
 def test_run_llrt_test_long(
+    silicon_arch_name, silicon_arch_grayskull, llrt_test_entry, llrt_fixtures
+):
+    run_single_llrt_test(llrt_test_entry, tt_arch=silicon_arch_name)
+
+
+@pytest.mark.frequently_hangs
+@pytest.mark.parametrize(
+    "llrt_test_entry", FREQUENTLY_HANGS_LLRT_TEST_ENTRIES, ids=generate_test_entry_id
+)
+def test_run_llrt_test_frequently_hangs(
     silicon_arch_name, silicon_arch_grayskull, llrt_test_entry, llrt_fixtures
 ):
     run_single_llrt_test(llrt_test_entry, tt_arch=silicon_arch_name)
