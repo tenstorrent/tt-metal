@@ -250,7 +250,9 @@ def tt2torch_tensor(tt_tensor, tt_host=None):
         host = ttl.device.GetHost()
     else:
         host = tt_host
-    tt_output = tt_tensor.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_output = tt_tensor.to(host)
+    if tt_output.layout() != ttl.tensor.Layout.ROW_MAJOR:
+        tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
     py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
     return py_output
 

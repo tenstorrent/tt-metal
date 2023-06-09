@@ -46,7 +46,9 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
 
 def tt2torch_tensor(tt_tensor):
     host = ttl.device.GetHost()
-    tt_output = tt_tensor.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_output = tt_tensor.to(host)
+    if tt_output.layout() != ttl.tensor.Layout.ROW_MAJOR:
+        tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
     py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
     return py_output
 
