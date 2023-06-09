@@ -26,6 +26,7 @@ env pytest tests/tt_metal/llrt --tt-arch $ARCH_NAME -m post_commit
 
 if [ "$ARCH_NAME" == "grayskull" ]; then
   ./tests/scripts/run_python_api_unit_tests.sh
+  env python tests/scripts/run_tt_metal.py
 else
   echo "Skipping non-Grayskull Python small integration tests..."
 fi

@@ -78,8 +78,6 @@ run_frequent_pipeline_tests() {
 
     run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type"
 
-    env python tests/scripts/run_tt_metal.py
-
     # Tests tensor and tt_dnn op APIs
     ./tests/scripts/run_tt_lib_regressions.sh
 
