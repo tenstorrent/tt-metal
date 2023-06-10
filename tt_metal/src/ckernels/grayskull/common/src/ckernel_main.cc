@@ -25,8 +25,8 @@ volatile uint * const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BAS
 volatile uint * const trisc_l1_mailbox = reinterpret_cast<volatile uint *>(MAILBOX_ADDR);
 }
 
-CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS] = {0};
-CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS] = {0};
+CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
+CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
 
 void kernel_launch()
 {
