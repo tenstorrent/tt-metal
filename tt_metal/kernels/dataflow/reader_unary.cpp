@@ -1,4 +1,5 @@
 #include <stdint.h>
+
 #include "dataflow_api.h"
 
 void kernel_main() {
@@ -19,7 +20,6 @@ void kernel_main() {
 
         cb_reserve_back(cb_id_in0, ublock_size_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-
         noc_async_read(src_noc_addr, l1_write_addr, ublock_size_bytes);
 
         noc_async_read_barrier();

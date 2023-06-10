@@ -9,12 +9,27 @@
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "bfloat16.hpp"
 
-#include "catch.hpp"
+#include "gtest/gtest.h"
 
 using namespace tt;
 
+class SingleCoreDramTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    const int pci_express_slot = 0;
+    device_ = tt_metal::CreateDevice(arch, pci_express_slot);
+    tt_metal::InitializeDevice(device_);
+  }
+
+  void TearDown() override {
+    tt_metal::CloseDevice(device_);
+  }
+  tt_metal::Device* device_;
+};
+
 // Reader reads from 1 DRAM into single core
-bool read_single_dram_to_single_core(
+bool reader_only(
     tt_metal::Device* device,
     const size_t& byte_size,
     const size_t& dram_channel,
@@ -50,7 +65,7 @@ bool read_single_dram_to_single_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    auto inputs = tt::test_utils::generate_uniform_int_random_vector<uint32_t>(0, 100, byte_size);
+    auto inputs = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, byte_size/sizeof(uint32_t));
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
@@ -72,13 +87,13 @@ bool read_single_dram_to_single_core(
     tt_metal::ReadFromDeviceL1(device, reader_core, l1_byte_address, byte_size, dest_core_data);
     pass &= (dest_core_data == inputs);
     if (not pass) {
-        INFO("Mismatch at Core: " << reader_core.str());
+        std::cout << "Mismatch at Core: " << reader_core.str() << std::endl;
     }
     return pass;
 }
 
 // Writer reads from 1 DRAM into single core
-bool write_single_core_to_single_dram(
+bool writer_only(
     tt_metal::Device* device,
     const size_t& byte_size,
     const size_t& dram_channel,
@@ -114,7 +129,7 @@ bool write_single_core_to_single_dram(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    auto inputs = tt::test_utils::generate_uniform_int_random_vector<uint32_t>(0, 100, byte_size);
+    auto inputs = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, byte_size/sizeof(uint32_t));
     tt_metal::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
@@ -136,7 +151,7 @@ bool write_single_core_to_single_dram(
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     pass &= (dest_buffer_data == inputs);
     if (not pass) {
-        INFO("Mismatch at Core: " << writer_core.str());
+        std::cout << "Mismatch at Core: " << writer_core.str() << std::endl;
     }
     return pass;
 }
@@ -145,7 +160,7 @@ bool write_single_core_to_single_dram(
 // DRAM --> (Reader Core CB using reader RISCV)
 // Reader Core --> Datacopy --> Reader Core
 // Reader Core --> Writes to Dram
-bool read_write_single_core_to_single_dram(
+bool reader_datacopy_writer(
     tt_metal::Device* device,
     const size_t& num_tiles,
     const size_t& tile_byte_size,
@@ -229,8 +244,11 @@ bool read_write_single_core_to_single_dram(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
+    tt_metal::StartDebugPrintServer(device);
     std::vector<uint32_t> inputs = create_random_vector_of_bfloat16(
         byte_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> output_l1_data_init(inputs.size(), 1337);
+    tt_metal::WriteToDeviceL1(device, core, local_core_output_byte_address, output_l1_data_init);
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
@@ -258,61 +276,44 @@ bool read_write_single_core_to_single_dram(
     );
     pass &= tt_metal::LaunchKernels(device, program);
 
-
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    tt::test_utils::print_vec(inputs);
-    tt::test_utils::print_vec(dest_buffer_data);
     pass &= inputs == dest_buffer_data;
     return pass;
 }
 
+TEST_F(SingleCoreDramTest, ReaderOnly) {
+    EXPECT_TRUE(
+        reader_only(
+            device_,
+            2*1024,
+            0,
+            0,
+            UNRESERVED_BASE,
+            {.x=0, .y=0}
+        )
+    );
+}
+TEST_F(SingleCoreDramTest, WriterOnly) {
+    EXPECT_TRUE(
+        writer_only(
+            device_,
+            2*1024,
+            0,
+            0,
+            UNRESERVED_BASE,
+            {.x=0, .y=0}
+        )
+    );
+}
 
-TEST_CASE(
-    "single_core_reader", "[dram][single_core][reader]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
-        read_single_dram_to_single_core(
-            device,
-            2*1024,
-            0,
-            0,
-            UNRESERVED_BASE,
-            {.x=0, .y=0}
-        )
-    );
-    tt_metal::CloseDevice(device);
-}
-TEST_CASE(
-    "single_core_writer", "[dram][single_core][writer]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
-        write_single_core_to_single_dram(
-            device,
-            2*1024,
-            0,
-            0,
-            UNRESERVED_BASE,
-            {.x=0, .y=0}
-        )
-    );
-    tt_metal::CloseDevice(device);
-}
-TEST_CASE(
-    "single_core_reader_datacopy_writer", "[dram][single_core][writer][reader]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
-        read_write_single_core_to_single_dram(
-            device,
+// FIXME: We should add two test variants --
+//    1. Single Core Dram Mechanic -- Reader -> CB --> Writer
+//    2. Single Core Compute Datacopy -- WriteToDeviceL1 --> Datacopy (Unpack/Math/Pack) --> ReadFromDeviceL1
+TEST_F(SingleCoreDramTest, ReaderDatacopyWriter) {
+    EXPECT_TRUE(
+        reader_datacopy_writer(
+            device_,
             1,
             2*32*32,
             0,
@@ -326,5 +327,4 @@ TEST_CASE(
             {.x=0, .y=0}
         )
     );
-    tt_metal::CloseDevice(device);
 }

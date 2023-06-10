@@ -8,8 +8,8 @@
 
 namespace ckernel::packer
 {
-   constexpr uint32_t OUTPUT_BASE    = 16;
-   constexpr uint32_t OUTPUT_BASE_ID = 0;
+   constexpr uint32_t OUTPUT_BASE    = 0;
+   constexpr uint32_t OUTPUT_BASE_ID = 16;
    constexpr uint32_t PACK_CNT       = 4;
 
 

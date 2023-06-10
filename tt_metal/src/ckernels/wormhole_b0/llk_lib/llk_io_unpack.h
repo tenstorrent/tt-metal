@@ -6,7 +6,6 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_unpack_common.h"
 
-#include "debug_print.h"
 
 using namespace ckernel;
 
@@ -59,7 +58,6 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
         num_tiles_recv = tiles_received - cb_read_interface[input].tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 
-    //DPRINT << "UNPACKER LLK_W NTR = " << U32(num_tiles_recv) << ENDL();
 }
 
 // Pop N tiles from the incoming stream
@@ -70,8 +68,7 @@ inline void llk_pop_tiles(
     std::uint32_t input = operand;
     volatile std::uint32_t* tiles_acked_ptr =
         (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
-    std::uint32_t num_words;
-
+    std::uint32_t num_words = 0;
     if constexpr (pop_blocks) {
         num_words = num_tiles *
                     ((32 * SCALE_DATUM_SIZE((uint)unpack_src_format[input], block_c_dim)) / 16);  // 32 rows per block

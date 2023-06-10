@@ -57,8 +57,8 @@ inline void llk_pack_mop_config() {
         tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
         tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
         // Write header to l1
-        tmp.set_end_op(TT_OP_STOREIND(
-            1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+        // tmp.set_end_op(TT_OP_STOREIND(
+        //     1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
     } else {
         tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
         tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
@@ -150,6 +150,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         // note: packer is programmed to automatically skip the tile header
         // however, since there is no tile header we need to -1 the pack address (in terms of 16B words) to offset packer's +1
         pack_tile_addr = cb_write_interface[output_id].fifo_wr_ptr + cb_write_interface[output_id].fifo_wr_tile_ptr - 1;
+
         cb_write_interface[output_id].fifo_wr_tile_ptr += GET_L1_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID]);
     }
 

@@ -9,10 +9,37 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "bfloat16.hpp"
 #include "tests/tt_metal/tt_metal/sfpu_helper/sfpu_helper.hpp"
-#include "catch.hpp"
+#include "gtest/gtest.h"
 
 using namespace tt;
 
+// SFPU maps -> relevant kernels, golden functions, comparison functions
+const map<string, string> sfpu_op_to_hlk_op_name = {
+    // TODO(AP): auto-generate inits
+    { "relu", "pack_relu_tile_to_stream(0, CB::c_out0);" },
+    { "exponential", "exp_tile_init(); exp_tile(0); pack_tile(0, CB::c_out0);" },
+    { "reciprocal", "recip_tile_init(); recip_tile(0); pack_tile(0, CB::c_out0);" },
+    { "gelu", "gelu_tile_init(); gelu_tile(0); pack_tile(0, CB::c_out0);" },
+    { "sqrt", "sqrt_tile_init(); sqrt_tile(0); pack_tile(0, CB::c_out0);" },
+    { "sigmoid", "sigmoid_tile_init(); sigmoid_tile(0); pack_tile(0, CB::c_out0);" },
+    { "log", "log_tile_init(); log_tile(0); pack_tile(0, CB::c_out0);" },
+    { "tanh", "tanh_tile_init(); tanh_tile(0); pack_tile(0, CB::c_out0);" },
+};
+
+class BasicSfpuTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    const int pci_express_slot = 0;
+    device_ = tt_metal::CreateDevice(arch, pci_express_slot);
+    tt_metal::InitializeDevice(device_);
+  }
+
+  void TearDown() override {
+    tt_metal::CloseDevice(device_);
+  }
+  tt_metal::Device* device_;
+};
 
 // Reader reads from single dram to core, writer synchronizes with datacopy kernel and writes to dram
 // DRAM --> (Reader Core CB using reader RISCV)
@@ -108,6 +135,7 @@ bool single_core_sfpu(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
+    tt_metal::StartDebugPrintServer(device);
     std::vector<uint32_t> inputs = sfpu_op_to_init_func.at(sfpu_op)(
         byte_size, std::chrono::system_clock::now().time_since_epoch().count());
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
@@ -145,22 +173,16 @@ bool single_core_sfpu(
     return pass;
 }
 
-
-TEST_CASE(
-    "single_core_relu", "[compute][single_core][sfpu]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
+TEST_F(BasicSfpuTest, Relu) {
+    EXPECT_TRUE(
         single_core_sfpu(
-            device,
+            device_,
             1,
             2*32*32,
-            1,
             0,
             0,
-            16*1024,
+            0,
+            16*32*32,
             UNRESERVED_BASE,
             tt::DataFormat::Float16_b,
             UNRESERVED_BASE + 16*32*32,
@@ -169,23 +191,17 @@ TEST_CASE(
             "relu"
         )
     );
-    tt_metal::CloseDevice(device);
 }
-TEST_CASE(
-    "single_core_exponential", "[compute][single_core][sfpu]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
+TEST_F(BasicSfpuTest, Exponential) {
+    EXPECT_TRUE(
         single_core_sfpu(
-            device,
+            device_,
             1,
             2*32*32,
-            1,
             0,
             0,
-            16*1024,
+            0,
+            16*32*32,
             UNRESERVED_BASE,
             tt::DataFormat::Float16_b,
             UNRESERVED_BASE + 16*32*32,
@@ -194,24 +210,22 @@ TEST_CASE(
             "exponential"
         )
     );
-    tt_metal::CloseDevice(device);
 }
 
-TEST_CASE(
-    "single_core_reciprocal", "[compute][single_core][sfpu]") {
+TEST_F(BasicSfpuTest, Reciprocal) {
     const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
     const int pci_express_slot = 0;
     auto device = tt_metal::CreateDevice(arch, pci_express_slot);
     tt_metal::InitializeDevice(device);
-    REQUIRE(
+    EXPECT_TRUE(
         single_core_sfpu(
-            device,
+            device_,
             1,
             2*32*32,
-            1,
             0,
             0,
-            16*1024,
+            0,
+            16*32*32,
             UNRESERVED_BASE,
             tt::DataFormat::Float16_b,
             UNRESERVED_BASE + 16*32*32,
@@ -223,21 +237,16 @@ TEST_CASE(
     tt_metal::CloseDevice(device);
 }
 
-TEST_CASE(
-    "single_core_gelu", "[compute][single_core][sfpu]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
+TEST_F(BasicSfpuTest, Gelu) {
+    EXPECT_TRUE(
         single_core_sfpu(
-            device,
+            device_,
             1,
             2*32*32,
-            1,
             0,
             0,
-            16*1024,
+            0,
+            16*32*32,
             UNRESERVED_BASE,
             tt::DataFormat::Float16_b,
             UNRESERVED_BASE + 16*32*32,
@@ -246,24 +255,18 @@ TEST_CASE(
             "gelu"
         )
     );
-    tt_metal::CloseDevice(device);
 }
 
-TEST_CASE(
-    "single_core_sqrt", "[compute][single_core][sfpu]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
+TEST_F(BasicSfpuTest, Sqrt) {
+    EXPECT_TRUE(
         single_core_sfpu(
-            device,
+            device_,
             1,
             2*32*32,
-            1,
             0,
             0,
-            16*1024,
+            0,
+            16*32*32,
             UNRESERVED_BASE,
             tt::DataFormat::Float16_b,
             UNRESERVED_BASE + 16*32*32,
@@ -272,24 +275,18 @@ TEST_CASE(
             "sqrt"
         )
     );
-    tt_metal::CloseDevice(device);
 }
 
-TEST_CASE(
-    "single_core_sigmoid", "[compute][single_core][sfpu]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
+TEST_F(BasicSfpuTest, Sigmoid) {
+    EXPECT_TRUE(
         single_core_sfpu(
-            device,
+            device_,
             1,
             2*32*32,
-            1,
             0,
             0,
-            16*1024,
+            0,
+            16*32*32,
             UNRESERVED_BASE,
             tt::DataFormat::Float16_b,
             UNRESERVED_BASE + 16*32*32,
@@ -298,24 +295,18 @@ TEST_CASE(
             "sigmoid"
         )
     );
-    tt_metal::CloseDevice(device);
 }
 
-TEST_CASE(
-    "single_core_log", "[compute][single_core][sfpu]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
+TEST_F(BasicSfpuTest, Log) {
+    EXPECT_TRUE(
         single_core_sfpu(
-            device,
+            device_,
             1,
             2*32*32,
-            1,
             0,
             0,
-            16*1024,
+            0,
+            16*32*32,
             UNRESERVED_BASE,
             tt::DataFormat::Float16_b,
             UNRESERVED_BASE + 16*32*32,
@@ -324,24 +315,18 @@ TEST_CASE(
             "log"
         )
     );
-    tt_metal::CloseDevice(device);
 }
 
-TEST_CASE(
-    "single_core_tanh", "[compute][single_core][sfpu]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    REQUIRE(
+TEST_F(BasicSfpuTest, Tanh) {
+    EXPECT_TRUE(
         single_core_sfpu(
-            device,
+            device_,
             1,
             2*32*32,
-            1,
             0,
             0,
-            16*1024,
+            0,
+            16*32*32,
             UNRESERVED_BASE,
             tt::DataFormat::Float16_b,
             UNRESERVED_BASE + 16*32*32,
@@ -350,5 +335,4 @@ TEST_CASE(
             "tanh"
         )
     );
-    tt_metal::CloseDevice(device);
 }

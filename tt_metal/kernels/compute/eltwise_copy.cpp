@@ -5,6 +5,7 @@
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+
     unary_op_init_common(CB::c_in0);
     for(uint32_t b=0;b<per_core_tile_cnt;++b)
     {
@@ -13,7 +14,6 @@ void MAIN {
         // Pop tile after tile, copy to DST and pack
         cb_wait_front(CB::c_in0, 1);
         cb_reserve_back(CB::c_out0, 1);
-
         copy_tile(CB::c_in0, 0, 0);
         pack_tile(0, CB::c_out0);
 

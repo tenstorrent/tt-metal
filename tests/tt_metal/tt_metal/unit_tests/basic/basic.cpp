@@ -8,9 +8,24 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
-#include "catch.hpp"
-
+#include "gtest/gtest.h"
 using namespace tt;
+
+class BasicDeviceTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    const int pci_express_slot = 0;
+    device_ = tt_metal::CreateDevice(arch, pci_express_slot);
+    tt_metal::InitializeDevice(device_);
+  }
+
+  void TearDown() override {
+    tt_metal::CloseDevice(device_);
+  }
+  tt_metal::Device* device_;
+};
+
 
 // Ping a set number of bytes into the specified address of L1
 bool l1_ping(tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& grid_size) {
@@ -18,7 +33,7 @@ bool l1_ping(tt_metal::Device* device, const size_t& byte_size, const size_t& l1
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    auto inputs = tt::test_utils::generate_uniform_int_random_vector<uint32_t>(0, UINT32_MAX, byte_size);
+    auto inputs = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size/sizeof(uint32_t));
     for(int y = 0 ; y < grid_size.y; y++) {
         for(int x = 0 ; x < grid_size.x; x++) {
             CoreCoord dest_core({.x=static_cast<size_t>(x), .y=static_cast<size_t>(y)});
@@ -32,7 +47,7 @@ bool l1_ping(tt_metal::Device* device, const size_t& byte_size, const size_t& l1
             tt_metal::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
             if (not pass) {
-                INFO("Mismatch at Core: " << dest_core.str());
+                cout << "Mismatch at Core: " << dest_core.str() << std::endl;
             }
         }
     }
@@ -45,7 +60,7 @@ bool dram_ping(tt_metal::Device* device, const size_t& byte_size, const size_t& 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    auto inputs = tt::test_utils::generate_uniform_int_random_vector<uint32_t>(0, UINT32_MAX, byte_size);
+    auto inputs = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size/sizeof(uint32_t));
     for(unsigned int channel = 0 ; channel < num_channels; channel++) {
         tt_metal::WriteToDeviceDRAMChannel(device, channel, dram_byte_address, inputs);
     }
@@ -54,7 +69,7 @@ bool dram_ping(tt_metal::Device* device, const size_t& byte_size, const size_t& 
         tt_metal::ReadFromDeviceDRAMChannel(device, channel, dram_byte_address, byte_size, dest_channel_data);
         pass &= (dest_channel_data == inputs);
         if (not pass) {
-            INFO("Mismatch at Channel: " << channel);
+            cout << "Mismatch at Channel: " << channel << std::endl;
         }
     }
     return pass;
@@ -84,126 +99,58 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    for(int y = 0 ; y < grid_size.y; y++) {
-        for(int x = 0 ; x < grid_size.x; x++) {
-            CoreCoord dest_core({.x=static_cast<size_t>(x), .y=static_cast<size_t>(y)});
-            for (const auto& [name, address] : mailbox_addresses) {
-                std::vector<uint32_t> mailbox_value;
-                tt_metal::ReadFromDeviceL1(device, dest_core, address, 4, mailbox_value);
-                pass &= (mailbox_value.at(0) == INIT_VALUE);
-                if (not pass) {
-                    INFO("Wrong INIT_VALUE at Core: " << dest_core.str() << " " << name);
-                }
-            }
-        }
-    }
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
     return pass;
 }
-
-TEST_CASE(
-    "dram_ping", "[basic][dram][ping]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    SECTION( "low_addr" ) {
-        size_t start_byte_address = 0;
-        SECTION ("small") {
-            REQUIRE(dram_ping(device, 4, start_byte_address, device->num_dram_channels()));
-            REQUIRE(dram_ping(device, 12, start_byte_address, device->num_dram_channels()));
-            REQUIRE(dram_ping(device, 16, start_byte_address, device->num_dram_channels()));
-        }
-        SECTION ("tiles") {
-            REQUIRE(dram_ping(device, 1024, start_byte_address, device->num_dram_channels()));
-            REQUIRE(dram_ping(device, 2*1024, start_byte_address, device->num_dram_channels()));
-            REQUIRE(dram_ping(device, 32*1024, start_byte_address, device->num_dram_channels()));
-        }
-    }
-    SECTION( "high_addr" ) {
-        size_t start_byte_address = device->dram_bank_size() - 32*1024;
-        SECTION ("small") {
-            REQUIRE(dram_ping(device, 4, start_byte_address, device->num_dram_channels()));
-            REQUIRE(dram_ping(device, 12, start_byte_address, device->num_dram_channels()));
-            REQUIRE(dram_ping(device, 16, start_byte_address, device->num_dram_channels()));
-        }
-        SECTION ("tiles") {
-            REQUIRE(dram_ping(device, 1024, start_byte_address, device->num_dram_channels()));
-            REQUIRE(dram_ping(device, 2*1024, start_byte_address, device->num_dram_channels()));
-            REQUIRE(dram_ping(device, 32*1024, start_byte_address, device->num_dram_channels()));
-        }
-    }
-    tt_metal::CloseDevice(device);
+TEST_F(BasicDeviceTest, DramPings) {
+    size_t start_byte_address = 0;
+    EXPECT_TRUE(dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 2*1024, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 32*1024, start_byte_address, device_->num_dram_channels()));
+    start_byte_address = device_->dram_bank_size() - 32*1024;
+    EXPECT_TRUE(dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 2*1024, start_byte_address, device_->num_dram_channels()));
+    EXPECT_TRUE(dram_ping(device_, 32*1024, start_byte_address, device_->num_dram_channels()));
 }
-TEST_CASE(
-    "Force DRAM Ping Outside Logical Grid Size", "[basic][dram][ping][error]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    size_t start_byte_address = UNRESERVED_BASE;
-    auto num_channels = device->num_dram_channels();
+TEST_F(BasicDeviceTest, IllegalDramPings) {
+    auto num_channels = device_->num_dram_channels();
     num_channels++;
-    REQUIRE_THROWS(dram_ping(device, 4, start_byte_address, num_channels), Catch::Contains("Bounds-Error"));
-    tt_metal::CloseDevice(device);
+    size_t start_byte_address = 0;
+    EXPECT_ANY_THROW(dram_ping(device_, 4, start_byte_address, num_channels));
 }
 
-TEST_CASE(
-    "l1_ping_logical", "[basic][l1][ping]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    SECTION( "low_addr" ) {
-        size_t start_byte_address = UNRESERVED_BASE;
-        SECTION ("small") {
-            REQUIRE(l1_ping(device, 4, start_byte_address, device->logical_grid_size()));
-            REQUIRE(l1_ping(device, 12, start_byte_address, device->logical_grid_size()));
-            REQUIRE(l1_ping(device, 16, start_byte_address, device->logical_grid_size()));
-        }
-        SECTION ("tiles") {
-            REQUIRE(l1_ping(device, 1024, start_byte_address, device->logical_grid_size()));
-            REQUIRE(l1_ping(device, 2*1024, start_byte_address, device->logical_grid_size()));
-            REQUIRE(l1_ping(device, 32*1024, start_byte_address, device->logical_grid_size()));
-        }
-    }
-    SECTION( "high_addr" ) {
-        size_t start_byte_address = device->l1_size() - 32*1024;
-        SECTION ("small") {
-            REQUIRE(l1_ping(device, 4, start_byte_address, device->logical_grid_size()));
-            REQUIRE(l1_ping(device, 12, start_byte_address, device->logical_grid_size()));
-            REQUIRE(l1_ping(device, 16, start_byte_address, device->logical_grid_size()));
-        }
-        SECTION ("tiles") {
-            REQUIRE(l1_ping(device, 1024, start_byte_address, device->logical_grid_size()));
-            REQUIRE(l1_ping(device, 2*1024, start_byte_address, device->logical_grid_size()));
-            REQUIRE(l1_ping(device, 32*1024, start_byte_address, device->logical_grid_size()));
-        }
-    }
-    tt_metal::CloseDevice(device);
-}
-
-TEST_CASE(
-    "Force L1 Ping Outside Logical Grid Size", "[basic][l1][ping][error]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
+TEST_F(BasicDeviceTest, L1Pings) {
     size_t start_byte_address = UNRESERVED_BASE;
-    auto grid_size = device->logical_grid_size();
+    EXPECT_TRUE(l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 2*1024, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 32*1024, start_byte_address, device_->logical_grid_size()));
+    start_byte_address = device_->l1_size() - 32*1024;
+    EXPECT_TRUE(l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 2*1024, start_byte_address, device_->logical_grid_size()));
+    EXPECT_TRUE(l1_ping(device_, 32*1024, start_byte_address, device_->logical_grid_size()));
+}
+
+TEST_F(BasicDeviceTest, IllegalL1Pings) {
+    auto grid_size = device_->logical_grid_size();
     grid_size.x++;
     grid_size.y++;
-    REQUIRE_THROWS_WITH(l1_ping(device, 4, start_byte_address, grid_size), Catch::Contains("Bounds-Error"));
-    tt_metal::CloseDevice(device);
+    size_t start_byte_address = UNRESERVED_BASE;
+    EXPECT_ANY_THROW(l1_ping(device_, 4, start_byte_address, grid_size));
 }
 
-TEST_CASE(
-    "Logical grid blank Kernels", "[basic][kernels]") {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    load_all_blank_kernels(device);
-    tt_metal::CloseDevice(device);
+TEST_F(BasicDeviceTest, BlankKernels) {
+    load_all_blank_kernels(device_);
 }

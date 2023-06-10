@@ -357,7 +357,7 @@ inline __attribute__((always_inline)) uint32_t get_write_ptr(std::int32_t operan
 inline __attribute__((always_inline)) uint32_t get_read_ptr(std::int32_t operand) {
     std::uint32_t output = operand;
 
-    // return byte address (fifo_wr_ptr is 16B address)
+    // return byte address (fifo_rd_ptr is 16B address)
     std::uint32_t rd_ptr_bytes = cb_read_interface[output].fifo_rd_ptr << 4;
     return rd_ptr_bytes;
 }

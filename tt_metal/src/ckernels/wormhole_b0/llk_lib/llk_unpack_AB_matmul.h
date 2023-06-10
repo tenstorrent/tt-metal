@@ -97,10 +97,13 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t inputB = get_operand_id(operandB);
     std::uint32_t base_address_a = cb_read_interface[inputA].fifo_rd_ptr;
     std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], tile_index_a);
-    std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = cb_read_interface[inputB].fifo_rd_ptr;
     std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], tile_index_b);
-    std::uint32_t address_b = base_address_b + offset_address_b;
+
+    // note: unpacker is programmed to automatically skip the tile header (+1)
+    // since there is no tile header, we need to -1 the address (in terms of 16B words), to offet unpacker's automatic +1
+    std::uint32_t address_a = base_address_a + offset_address_a - 1;
+    std::uint32_t address_b = base_address_b + offset_address_b - 1;
 
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);

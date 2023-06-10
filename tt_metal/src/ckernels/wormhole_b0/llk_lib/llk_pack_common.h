@@ -140,6 +140,10 @@ inline void llk_pack_release_tile(std::uint32_t operand) {
     }
 }
 
+inline void llk_pack_debug_dump(std::uint8_t *data, std::uint32_t byte_size) {
+    debug_dump(data, byte_size);
+}
+
 inline void llk_pack_relu_config(std::uint32_t config) {
     ReluType mode = (config&0xf) == 0 ? ReluType::NO_RELU : ((config&0xf) == 3 ? ReluType::MAX_THRESHOLD_RELU : ReluType::MIN_THRESHOLD_RELU);
     uint32_t threshold = (config>>16) << STACC_RELU_ReluThreshold_SHAMT;
