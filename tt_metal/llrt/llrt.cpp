@@ -182,29 +182,29 @@ ll_api::memory read_mem_from_core(
 }
 
 void program_brisc_startup_addr(tt_cluster* cluster, int chip_id, const CoreCoord &core) {
-     // Options for handling brisc fw not starting at mem[0]:
-        // 1) Program the register for the start address out of reset
-        // 2) Encode a jump in crt0 for mem[0]
-        // 3) Write the jump to mem[0] here
-        // This does #3.  #1 may be best, #2 gets messy (elf files
-        // drop any section before .init, crt0 needs ifdefs, etc)
-        vector<uint32_t> jump_to_fw;
-        constexpr uint32_t jal_opcode = 0x6f;
-        constexpr uint32_t jal_max_offset = 0x0007ffff;
-        uint32_t opcode = jal_opcode;
-        assert(MEM_BRISC_FIRMWARE_BASE < jal_max_offset);
-        // See riscv spec for offset encoding below
-        uint32_t jal_offset_bit_20 = 0;
-        uint32_t jal_offset_bits_10_to_1 = (MEM_BRISC_FIRMWARE_BASE & 0x7fe) << 20;
-        uint32_t jal_offset_bit_11 = (MEM_BRISC_FIRMWARE_BASE & 0x800) << 9;
-        uint32_t jal_offset_bits_19_to_12 = (MEM_BRISC_FIRMWARE_BASE & 0xff000) << 0;
-        uint32_t jal_offset =
-            jal_offset_bit_20 |
-            jal_offset_bits_10_to_1 |
-            jal_offset_bit_11 |
-            jal_offset_bits_19_to_12;
-        jump_to_fw.push_back(jal_offset | opcode);
-        write_hex_vec_to_core(cluster, chip_id, core, jump_to_fw, 0);
+    // Options for handling brisc fw not starting at mem[0]:
+    // 1) Program the register for the start address out of reset
+    // 2) Encode a jump in crt0 for mem[0]
+    // 3) Write the jump to mem[0] here
+    // This does #3.  #1 may be best, #2 gets messy (elf files
+    // drop any section before .init, crt0 needs ifdefs, etc)
+    vector<uint32_t> jump_to_fw;
+    constexpr uint32_t jal_opcode = 0x6f;
+    constexpr uint32_t jal_max_offset = 0x0007ffff;
+    uint32_t opcode = jal_opcode;
+    assert(MEM_BRISC_FIRMWARE_BASE < jal_max_offset);
+    // See riscv spec for offset encoding below
+    uint32_t jal_offset_bit_20 = 0;
+    uint32_t jal_offset_bits_10_to_1 = (MEM_BRISC_FIRMWARE_BASE & 0x7fe) << 20;
+    uint32_t jal_offset_bit_11 = (MEM_BRISC_FIRMWARE_BASE & 0x800) << 9;
+    uint32_t jal_offset_bits_19_to_12 = (MEM_BRISC_FIRMWARE_BASE & 0xff000) << 0;
+    uint32_t jal_offset =
+        jal_offset_bit_20 |
+        jal_offset_bits_10_to_1 |
+        jal_offset_bit_11 |
+        jal_offset_bits_19_to_12;
+    jump_to_fw.push_back(jal_offset | opcode);
+    write_hex_vec_to_core(cluster, chip_id, core, jump_to_fw, 0);
 }
 
 bool test_load_write_read_risc_binary(
