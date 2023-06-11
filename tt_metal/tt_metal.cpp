@@ -987,39 +987,22 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
     std::vector< std::future<void> > events;
-
+    tf::Taskflow taskflow;
     TT_ASSERT(!(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
-    events.emplace_back ( tt::tt_metal::GetExecutor().async( [device] { CompileBlankKernel(device); } ) );
-
-    // auto compileBlankFunc = [device] () { CompileBlankKernel(device ); };
-    // wait_events.push_back ( tt::tt_metal::GetExecutor().async( compileBlankFunc) ); // PROF_BEGIN("CCBLANK") PROF_END("CCBLANK")
-
-    // auto compK = [device, &program, profile_kernel] {
-    //     for (auto kernel : program.kernels()) {
-    //         CompileKernel(device, program, kernel, profile_kernel);
-    //     }
-    // };
-
-    // wait_events.push_back ( tt::tt_metal::GetExecutor().async( compK ) );
+    taskflow.emplace( [device] { CompileBlankKernel(device); }  );
 
     for (auto kernel : program.kernels()) {
-        auto compileKernelFunc = [kernel, device, &program, profile_kernel] { CompileKernel(device, program, kernel, profile_kernel);
-                                                                               };
-
-        events.emplace_back (  tt::tt_metal::GetExecutor().async( compileKernelFunc) );
-        //auto [ kernel_ptr, kernel_path] = kernel_events.back().get();
-        // auto [ kernel_ptr, kernel_path] = f.get();
-        //
+        taskflow.emplace ( [kernel, device, &program, profile_kernel] { CompileKernel(device, program, kernel, profile_kernel);
+                                                                               } );
     }
 
-    events.emplace_back ( tt::tt_metal::GetExecutor().async( [device, &program, profile_kernel ] {
+    taskflow.emplace ( [device, &program, profile_kernel ] {
                                         AddBlankKernels(device, program, profile_kernel);
-                                       } ) );
+                                       } );
 
-    for (auto & f : events)
-        f.wait();
+    GetExecutor().run(taskflow).wait();
 
     compilation_reporter.flush_program_entry(program);
     tt_metal_profiler.markStop("CompileProgram");
