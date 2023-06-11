@@ -837,19 +837,26 @@ struct HashLookup {
         unique_lock<mutex> lock(mutex_);
         return hashes_.find(khash) != hashes_.end();
     }
-    bool add(size_t khash) {
+    template<typename F>
+    bool add(size_t khash, F && f) {
         unique_lock<mutex> lock(mutex_);
         bool ret = false;
         if (hashes_.find(khash) == hashes_.end() ){
-            hashes_.insert(khash);
+            hashes_[khash] = tt::tt_metal::GetExecutor().async(std::forward<F>(f));
             ret = true;
         }
         return ret;
     }
 
+
+    std::shared_future<void> get(size_t khash){
+        unique_lock<mutex> lock(mutex_);
+        return hashes_[khash];
+    }
+
 private:
     std::mutex mutex_;
-    std::unordered_set<size_t> hashes_;
+    std::unordered_map<size_t, std::shared_future<void> > hashes_;
 };
 
 void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &build_options) {
@@ -878,7 +885,7 @@ void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &bui
     }
 }
 
-std::tuple<Kernel*, std::string> CompileKernel(Device *device, Program &program, Kernel *kernel, bool profile_kernel) {
+void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profile_kernel) {
     build_kernel_for_riscv_options_t build_options("kernel_options", kernel->name());
 
     SetBuildKernelOptions(kernel, build_options);
@@ -887,15 +894,17 @@ std::tuple<Kernel*, std::string> CompileKernel(Device *device, Program &program,
     auto kernel_hash = KernelCompileHash(kernel, build_options, device->pcie_slot(), profile_kernel);
     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash);
 
+    auto f = [&] () { GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel); };
     bool cache_hit = true;
-    if (!enable_compile_cache || HashLookup::inst().add(kernel_hash)) {
-        GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
+    if (!enable_compile_cache || HashLookup::inst().add(kernel_hash, f)) {
         cache_hit = false;
     }
 
+    HashLookup::inst().get(kernel_hash).wait();
+
     compilation_reporter.add_kernel_compile_stats(program, kernel, cache_hit, kernel_hash);
 
-    return make_tuple( kernel, kernel_path_suffix);
+    kernel->set_binaries(kernel_path_suffix);
 }
 
 void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
@@ -919,7 +928,6 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
             program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
         CompileKernel(device, program, blank_kernel, profile_kernel);
         blank_kernel->read_binaries();
-
     }
 
     if (not unique_core_ranges_without_ncrisc_kernel.empty()) {
@@ -979,11 +987,11 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
     std::vector< std::future<void> > events;
-    std::vector < std::future< std::tuple <Kernel*, std::string>> > kernel_events;
+
     TT_ASSERT(!(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
-    events.push_back ( tt::tt_metal::GetExecutor().async( [device] { CompileBlankKernel(device); } ) );
+    events.emplace_back ( tt::tt_metal::GetExecutor().async( [device] { CompileBlankKernel(device); } ) );
 
     // auto compileBlankFunc = [device] () { CompileBlankKernel(device ); };
     // wait_events.push_back ( tt::tt_metal::GetExecutor().async( compileBlankFunc) ); // PROF_BEGIN("CCBLANK") PROF_END("CCBLANK")
@@ -997,25 +1005,21 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     // wait_events.push_back ( tt::tt_metal::GetExecutor().async( compK ) );
 
     for (auto kernel : program.kernels()) {
-        auto compileKernelFunc = [kernel, device, &program, profile_kernel] { return CompileKernel(device, program, kernel, profile_kernel);
+        auto compileKernelFunc = [kernel, device, &program, profile_kernel] { CompileKernel(device, program, kernel, profile_kernel);
                                                                                };
-        kernel_events.push_back ( tt::tt_metal::GetExecutor().async( compileKernelFunc) );
+
+        events.emplace_back (  tt::tt_metal::GetExecutor().async( compileKernelFunc) );
+        //auto [ kernel_ptr, kernel_path] = kernel_events.back().get();
+        // auto [ kernel_ptr, kernel_path] = f.get();
+        //
     }
 
-    //AddBlankDataMovementKernel(device, program, profile_kernel);
-    // This can be removed when we load BRISC FW separately from kernel
-    events.push_back ( tt::tt_metal::GetExecutor().async( [device, &program, profile_kernel ] {
+    events.emplace_back ( tt::tt_metal::GetExecutor().async( [device, &program, profile_kernel ] {
                                         AddBlankKernels(device, program, profile_kernel);
                                        } ) );
 
     for (auto & f : events)
         f.wait();
-
-    for ( auto & f: kernel_events){
-        f.wait();
-        auto [ kernel, kernel_path] = f.get();
-        kernel->set_binaries(kernel_path);
-    }
 
     compilation_reporter.flush_program_entry(program);
     tt_metal_profiler.markStop("CompileProgram");
