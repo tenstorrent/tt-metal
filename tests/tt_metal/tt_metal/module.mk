@@ -1,7 +1,5 @@
-# only include these modules if we're in development
-ifdef TT_METAL_ENV_IS_DEV
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests/module.mk
-endif
+
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 TT_METAL_TESTS += \
 		 tests/tt_metal/ops/test_eltwise_binary_op \
@@ -93,7 +91,7 @@ TT_METAL_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.d))
 -include $(TT_METAL_TESTS_DEPS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
-tests/tt_metal: $(TT_METAL_TESTS) programming_examples
+tests/tt_metal: $(TT_METAL_TESTS) programming_examples tests/tt_metal/unit_tests
 tests/tt_metal/all: $(TT_METAL_TESTS)
 tests/tt_metal/%: $(TESTDIR)/tt_metal/% ;
 
