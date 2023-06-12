@@ -69,7 +69,7 @@ Tensor transpose_hc_rm(const Tensor &a) {
 
     // Compile kernels
 
-    bool profile_kernel = true;
+    bool profile_kernel = false;
     tt_metal::CompileProgram(device, program, profile_kernel);
     tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteRuntimeArgsToDevice(
