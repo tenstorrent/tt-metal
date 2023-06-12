@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/pad/pad_op.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -290,6 +291,17 @@ Program Pad::create_program(const std::vector<std::reference_wrapper<const Tenso
         TT_ASSERT(false, "Unsupported layout for pad");
         return tt_metal::Program();
     }
+}
+
+Tensor pad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+    // No-op (Will do a tensor copy)
+    // TODO: We need to run asserts before this
+    if (input_tensor_a.shape() == output_tensor_shape) {
+        log_warning("Perf warning: padding called on tensor with same shape as target shape.");
+        return input_tensor_a;
+    }
+    return detail::run_without_autopad(Pad(output_tensor_shape, input_tensor_start, pad_value), input_tensor_a);
+
 }
 
 }  // namespace tt_metal

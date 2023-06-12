@@ -2,15 +2,9 @@
 
 
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-namespace untilize {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    int32_t per_core_block_cnt; // Number of blocks of size 1xN tiles (1 rows and N cols)
-    int32_t per_core_block_tile_cnt; // Block tile count = (1xN)
-};
-}
 
 using namespace tt::constants;
 
@@ -19,28 +13,17 @@ namespace tt {
 namespace tt_metal {
 
 
-Tensor untilize(const Tensor &a) {
+Program untilize_single_core(const Tensor &a, Tensor& output) {
 
-    if (a.layout() == Layout::ROW_MAJOR) {
-        log_warning("Perf warning: Trying to untilize non-tilized data.");
-        return a;
-    }
-
-    TT_ASSERT(a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     tt_metal::Program program = tt_metal::Program();
 
     CoreCoord core = {0, 0};
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to untilize needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
-
     uint32_t single_tile_size = 2 * TILE_HW; // Assuming bfloat16 dataformat
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
-    TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume() / TILE_HW;
 
     uint32_t num_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
@@ -50,9 +33,18 @@ Tensor untilize(const Tensor &a) {
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
     uint32_t max_tiles = max_l1_size / (2 * single_tile_size); // 2 CBs
-    // Default to 1 tile sized blocks if we exceed L1
-    // TODO: Either support uneven blocks or find greatest divisor that is a multiple of 32 for W that fits in L1
-    uint32_t num_tiles_per_block = num_tiles_in_row > max_tiles ? 1 : num_tiles_in_row;
+    // Currently need the number of tiles in a row to be divisible by tiles in a block
+    uint32_t num_tiles_per_block = 1;
+    if (num_tiles_in_row <= max_tiles) {
+        num_tiles_per_block = num_tiles_in_row;
+    } else {
+        for(uint32_t n_t = max_tiles; n_t > 0; n_t--) {
+            if (num_tiles_in_row % n_t == 0) {
+                num_tiles_per_block = n_t;
+                break;
+            }
+        }
+    }
     uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * a.element_size();
     uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
@@ -63,7 +55,6 @@ Tensor untilize(const Tensor &a) {
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    tt_metal::Tensor output = tt_metal::Tensor(a.shape(), a.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -126,7 +117,7 @@ Tensor untilize(const Tensor &a) {
         tt_metal::NOC::RISCV_0_default);
 
     vector<uint32_t> compute_args = {
-        uint32_t(num_sticks / 32 * num_full_blocks_in_row), // per_core_block_cnt
+        uint32_t(num_tiles / num_tiles_per_block), // per_core_block_cnt
         uint32_t(num_tiles_per_block) // per_core_block_tile_cnt
     };
 
@@ -141,16 +132,6 @@ Tensor untilize(const Tensor &a) {
         fp32_dest_acc_en,
         math_approx_mode
     );
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CompileProgram(device, program, false);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
 
     tt_metal::WriteRuntimeArgsToDevice(
         device,
@@ -169,44 +150,49 @@ Tensor untilize(const Tensor &a) {
         writer_kernel_args
     );
 
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 
-Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
-
-    TT_ASSERT(a.dtype() != DataType::BFLOAT8_B, "Bfloat8_b can only exist as tilized data");
-    TT_ASSERT(a.layout() == Layout::TILE, "Can only untilize tile major data");
+void Untilize::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    TT_ASSERT(input_tensor_a.dtype() != DataType::BFLOAT8_B, "Bfloat8_b can only exist as tilized data");
+    TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to untilize needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
+    TT_ASSERT(not input_tensor_a.on_host(), "Operand to untilize needs to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
 
-    TT_ASSERT(
-        (output_tensor_start[0] == 0 && output_tensor_start[1] == 0 && output_tensor_start[2] == 0 && output_tensor_start[3] == 0),
-        "On device unpadding only supports unpadding at end of dims"
-    );
+    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
+}
 
-    TT_ASSERT(a.volume() % TILE_HW == 0);
-    TT_ASSERT(output_tensor_start[0] < a.shape()[0]);
-    TT_ASSERT(output_tensor_end[0] < a.shape()[0]);
-    TT_ASSERT(output_tensor_start[1] < a.shape()[1]);
-    TT_ASSERT(output_tensor_end[1] < a.shape()[1]);
-    TT_ASSERT(output_tensor_start[2] < a.shape()[2]);
-    TT_ASSERT(output_tensor_end[2] < a.shape()[2]);
-    TT_ASSERT(output_tensor_start[3] < a.shape()[3]);
-    TT_ASSERT(output_tensor_end[3] < a.shape()[3]);
+std::vector<Shape> Untilize::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    return {input_tensor_a.shape()};
+}
 
-    // Check if start shape is <= end shape
-    TT_ASSERT(output_tensor_start[0] <= output_tensor_end[0]);
-    TT_ASSERT(output_tensor_start[1] <= output_tensor_end[1]);
-    TT_ASSERT(output_tensor_start[2] <= output_tensor_end[2]);
-    TT_ASSERT(output_tensor_start[3] <= output_tensor_end[3]);
+std::vector<Tensor> Untilize::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    return detail::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
+}
 
-    TT_ASSERT(((output_tensor_end[3] - output_tensor_start[3] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
+Program Untilize::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    auto& output_tensor = output_tensors.at(0);
+    return untilize_single_core(input_tensor_a, output_tensor);
+}
+
+Tensor untilize(const Tensor &input_tensor_a) {
+    // No-op (Will do a tensor copy)
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        log_warning("Perf warning: Trying to untilize non-tilized data.");
+        return input_tensor_a;
+    }
+    return detail::run_without_autopad(Untilize(), input_tensor_a);
+}
+
+
+Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
     const std::array<uint32_t, 4> output_shape = {
         output_tensor_end[0] - output_tensor_start[0] + 1,
@@ -214,15 +200,6 @@ Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &o
         output_tensor_end[2] - output_tensor_start[2] + 1,
         output_tensor_end[3] - output_tensor_start[3] + 1,
     };
-
-    if (a.layout() != Layout::TILE) {
-        if (a.shape() == output_shape) {
-            log_warning("Perf warning: Untilize with unpadding called on already untilized tensor of target shape");
-            return a;
-        } else {
-            TT_ASSERT(false, "Cannot untilize and unpad input which is not tilized");
-        }
-    }
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -239,8 +216,6 @@ Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &o
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -382,16 +357,6 @@ Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &o
         math_approx_mode
     );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CompileProgram(device, program, false);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
     tt_metal::WriteRuntimeArgsToDevice(
         device,
         unary_reader_kernel,
@@ -409,10 +374,74 @@ Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &o
         writer_kernel_args
     );
 
-    tt_metal::LaunchKernels(device, program);
+    return program;
+}
 
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+void UntilizeWithUnpadding::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    TT_ASSERT(input_tensor_a.dtype() != DataType::BFLOAT8_B, "Bfloat8_b can only exist as tilized data");
+    TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
+
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(not input_tensor_a.on_host(), "Operand to untilize needs to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
+
+    TT_ASSERT(
+        (this->output_tensor_start[0] == 0 && this->output_tensor_start[1] == 0 && this->output_tensor_start[2] == 0 && this->output_tensor_start[3] == 0),
+        "On device unpadding only supports unpadding at end of dims"
+    );
+
+    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
+    TT_ASSERT(this->output_tensor_start[0] < input_tensor_a.shape()[0]);
+    TT_ASSERT(this->output_tensor_end[0] < input_tensor_a.shape()[0]);
+    TT_ASSERT(this->output_tensor_start[1] < input_tensor_a.shape()[1]);
+    TT_ASSERT(this->output_tensor_end[1] < input_tensor_a.shape()[1]);
+    TT_ASSERT(this->output_tensor_start[2] < input_tensor_a.shape()[2]);
+    TT_ASSERT(this->output_tensor_end[2] < input_tensor_a.shape()[2]);
+    TT_ASSERT(this->output_tensor_start[3] < input_tensor_a.shape()[3]);
+    TT_ASSERT(this->output_tensor_end[3] < input_tensor_a.shape()[3]);
+
+    // Check if start shape is <= end shape
+    TT_ASSERT(this->output_tensor_start[0] <= this->output_tensor_end[0]);
+    TT_ASSERT(this->output_tensor_start[1] <= this->output_tensor_end[1]);
+    TT_ASSERT(this->output_tensor_start[2] <= this->output_tensor_end[2]);
+    TT_ASSERT(this->output_tensor_start[3] <= this->output_tensor_end[3]);
+
+    TT_ASSERT(((this->output_tensor_end[3] - this->output_tensor_start[3] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
+
+}
+std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    return {this->output_tensor_shape};
+}
+std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    return detail::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
+}
+
+Program UntilizeWithUnpadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    auto& output_tensor = output_tensors.at(0);
+    return untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+}
+
+Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+    // No-op (Will do a tensor copy)
+    // TODO: We need to run asserts before this
+    const std::array<uint32_t, 4> output_tensor_shape = {
+        output_tensor_end[0] - output_tensor_start[0] + 1,
+        output_tensor_end[1] - output_tensor_start[1] + 1,
+        output_tensor_end[2] - output_tensor_start[2] + 1,
+        output_tensor_end[3] - output_tensor_start[3] + 1,
+    };
+    if (input_tensor_a.layout() != Layout::TILE) {
+        if (input_tensor_a.shape() == output_tensor_shape) {
+            log_warning("Perf warning: Untilize with unpadding called on already untilized tensor of target shape");
+            return input_tensor_a;
+        } else {
+            TT_ASSERT(false, "Cannot untilize and unpad input which is not tilized");
+        }
+    }
+    return detail::run_without_autopad(UntilizeWithUnpadding(output_tensor_start, output_tensor_end), input_tensor_a);
 }
 
 }  // namespace tt_metal

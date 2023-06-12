@@ -105,6 +105,10 @@ def untilize(x, *args, **kwargs):
     return untilize_util(x)
 
 
+def tilize_with_zero_padding(x, *args, **kwargs):
+    return tilize_util(torch.nn.functional.pad(x, (0, 0, 0, nearest_32(x.shape[-2]) - x.shape[-2])))
+
+
 def tilize_with_val_padding(
     x, output_tensor_shape, input_tensor_start, pad_value, *args, **kwargs
 ):

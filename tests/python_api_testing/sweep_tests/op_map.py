@@ -163,6 +163,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.untilize,
         "pytorch_op": pytorch_ops.untilize,
     },
+    "tilize_with_zero_padding": {
+        "tt_lib_op": tt_lib_ops.tilize_with_zero_padding,
+        "pytorch_op": pytorch_ops.tilize_with_zero_padding,
+    },
     "tilize_with_val_padding": {
         "tt_lib_op": tt_lib_ops.tilize_with_val_padding,
         "pytorch_op": pytorch_ops.tilize_with_val_padding,

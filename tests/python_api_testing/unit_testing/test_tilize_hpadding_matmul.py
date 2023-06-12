@@ -65,6 +65,7 @@ def run_tilize_matmul_test(M, K, N):
     print("Passing=", passing_pcc)
     print("Output pcc=", output_pcc)
 
+    del a_t
     del t2
 
     ttl.device.CloseDevice(device)

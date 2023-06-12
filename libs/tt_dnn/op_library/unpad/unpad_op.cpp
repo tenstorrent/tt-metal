@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -283,6 +284,23 @@ Program Unpad::create_program(const std::vector<std::reference_wrapper<const Ten
         TT_ASSERT(false, "Unsupported layout for unpad");
         return tt_metal::Program();
     }
+}
+
+Tensor unpad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+    // No-op (Will do a tensor copy)
+    // TODO: We need to run asserts before this
+    const std::array<uint32_t, 4> output_tensor_shape = {
+        output_tensor_end[0] - output_tensor_start[0] + 1,
+        output_tensor_end[1] - output_tensor_start[1] + 1,
+        output_tensor_end[2] - output_tensor_start[2] + 1,
+        output_tensor_end[3] - output_tensor_start[3] + 1,
+    };
+    if (input_tensor_a.shape() == output_tensor_shape) {
+        log_warning("Perf warning: unpadding called on tensor with same shape as target shape.");
+        return input_tensor_a;
+    }
+    return detail::run_without_autopad(Unpad(output_tensor_start, output_tensor_end), input_tensor_a);
+
 }
 
 }  // namespace tt_metal
