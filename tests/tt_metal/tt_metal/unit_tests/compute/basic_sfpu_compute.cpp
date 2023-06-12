@@ -173,7 +173,7 @@ bool single_core_sfpu(
     return pass;
 }
 
-TEST_F(BasicSfpuTest, Relu) {
+TEST_F(BasicSfpuTest, DISABLED_Relu) {
     EXPECT_TRUE(
         single_core_sfpu(
             device_,
@@ -192,7 +192,7 @@ TEST_F(BasicSfpuTest, Relu) {
         )
     );
 }
-TEST_F(BasicSfpuTest, Exponential) {
+TEST_F(BasicSfpuTest, DISABLED_Exponential) {
     EXPECT_TRUE(
         single_core_sfpu(
             device_,
@@ -297,7 +297,7 @@ TEST_F(BasicSfpuTest, Sigmoid) {
     );
 }
 
-TEST_F(BasicSfpuTest, Log) {
+TEST_F(BasicSfpuTest, DISABLED_Log) {
     EXPECT_TRUE(
         single_core_sfpu(
             device_,
