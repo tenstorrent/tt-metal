@@ -17,7 +17,7 @@ constexpr static std::uint32_t NCRISC_L1_RESULT_BASE = 104 * 1024;
 // this is a total of 32 * 3 * 4 = 384B
 constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_BASE = 105 * 1024;
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
-constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 3;
+constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
 constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_SIZE = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
 // 4 semaphores per core aligned to 32B
