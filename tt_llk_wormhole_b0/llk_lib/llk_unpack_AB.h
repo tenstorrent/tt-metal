@@ -12,7 +12,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_AB_mop_config() {
+inline void llk_unpack_AB_mop_config(const bool transpose_of_faces=false) {
 #if SKIP_UNP0 == 1
     static constexpr uint unpack_srca = TT_OP_NOP;
 #else
@@ -65,50 +65,66 @@ inline void llk_unpack_AB_mop_config() {
             0);
         tmp.program(instrn_buffer);
     } else {
-        ckernel_unpack_template tmp = ckernel_unpack_template(
-            true,   // src B
-            false,  // halo - just used for 4 unpacks
-            unpack_srca,
-            0,
-            0,
-            0,
-            0,
-            unpack_srcb,
-            0);
-        tmp.program(instrn_buffer);
+        if (transpose_of_faces) {
+            static constexpr uint srca_set_z = TT_OP_SETADCZW(0b001, 0, 0, 0, 1, 0b0001); // set z to 1
+            static constexpr uint unpack_srca_skip_z =
+                TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc z by 2
+            ckernel_unpack_template tmp = ckernel_unpack_template(
+                true,   // src B
+                true,  // halo - just used for 4 unpacks
+                unpack_srca_skip_z,
+                unpack_srcb,
+                unpack_srca_skip_z,
+                unpack_srcb,
+                0,
+                srca_set_z,
+                0);
+            tmp.program(instrn_buffer);
+        } else {
+            ckernel_unpack_template tmp = ckernel_unpack_template(
+                true,   // src B
+                false,  // halo - just used for 4 unpacks
+                unpack_srca,
+                0,
+                0,
+                0,
+                0,
+                unpack_srcb,
+                0);
+            tmp.program(instrn_buffer);
+        }    
     }
 }
 
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
-inline void llk_unpack_AB_hw_configure(const llk_unpack_AB_params_t *unpack_AB_params) {
+inline void llk_unpack_AB_hw_configure(const llk_unpack_AB_params_t *unpack_AB_params, const int within_face_16x16_transpose = 0) {
     constexpr bool is_row_pool = false;
-    constexpr bool transpose_xy_srca = false;
     constexpr uint32_t srca_height = 16;
     constexpr uint32_t srcb_height = 16;
     configure_unpack_AB(get_operand_id(unpack_AB_params->unpA_operand), get_operand_id(unpack_AB_params->unpB_operand), 
-                            srca_height, srcb_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en, srnd_fpu_en);
+                            srca_height, srcb_height, is_row_pool, within_face_16x16_transpose, is_fp32_dest_acc_en, srnd_fpu_en);
 }
 
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
 inline void llk_unpack_AB_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
+    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0 ) {
     const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
-    llk_unpack_AB_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_AB_params);
+    llk_unpack_AB_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_AB_params, within_face_16x16_transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(const std::uint32_t transpose=0, const std::uint32_t acc_to_dest=0) {
-    llk_unpack_AB_mop_config<BType>();
+    llk_unpack_AB_mop_config<BType>(transpose>0); // transpose of faces 0,2,1,3
 
     //Need to be able to configure tranpose srca for fused ops
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
 
     TTI_SETADCXX(0b11, FACE_WIDTH*FACE_HEIGHT-1, 0x0);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a, const std::uint32_t tile_index_b) {
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a, const std::uint32_t tile_index_b, const bool transpose_of_faces = 0) {
     std::uint32_t inputA = get_operand_id(operandA);
     std::uint32_t inputB = get_operand_id(operandB);
     std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;
@@ -144,6 +160,8 @@ inline void llk_unpack_AB(
         mop_run(0, 2);
     } else if constexpr (BType == BroadcastType::SCALAR) {
         mop_run(0, 1);
+    } else if (transpose_of_faces) {
+        mop_run(0, 2);
     } else {
         mop_run(0, 4);
     }
