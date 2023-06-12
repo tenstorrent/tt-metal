@@ -5,6 +5,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/auto_pad.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 using namespace tt::constants;
 
@@ -12,23 +13,16 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
-
-    TT_ASSERT(a.layout() == Layout::TILE, "Only tile and row major reshape supported!");
+Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W) {
 
     tt_metal::Program program = tt_metal::Program();
 
     CoreCoord core = {0, 0};
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to eltwise unary needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to eltwise unary needs to be allocated in a buffer on device!");
-
     uint32_t single_tile_size = 2 * TILE_HW;
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
-    TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume() / TILE_HW;
 
     auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
@@ -36,10 +30,7 @@ Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    std::array<uint32_t, 4> output_shape = infer_dims_for_reshape(N, C, H, W, a.volume());
-
-    TT_ASSERT(output_shape[2] % TILE_HEIGHT == 0 && output_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) for reshape!");
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+    std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -102,16 +93,6 @@ Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
         math_approx_mode
     );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
 
     tt_metal::WriteRuntimeArgsToDevice(
         device,
@@ -135,57 +116,39 @@ Tensor reshape_tilized(const Tensor &a, int N, int C, int H, int W) {
         num_tiles }
     );
 
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
-Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
-
-
-    TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
-
-    // Reshape for row major data requires rebanking if and only if the last
-    // dimension is changed. W dictates the stick size in DRAM banks
-
-    TT_ASSERT(N != -1 and C != -1 and H != -1 and W != -1, "-1 reshape not yet supported for rebanking row major reshape");
+Program reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
 
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core = {0, 0};
 
-    TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
-    TT_ASSERT(a.volume() == N*C*H*W, "New shape volume must match old shape volume");
-    TT_ASSERT(a.shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0, "Operand/target width must be a multiple of 32");
-
-    uint32_t num_old_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
-    uint32_t num_new_sticks = N*C*H;
-    TT_ASSERT(num_old_sticks % TILE_HEIGHT == 0 && num_new_sticks % TILE_HEIGHT == 0, "Operand/target number of rows must be a multiple of 32");
-
-     // This should allocate a DRAM buffer on the device
+    // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    std::array<uint32_t, 4> output_shape = {uint32_t(N), uint32_t(C), uint32_t(H), uint32_t(W)};
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::ROW_MAJOR, device);
+    std::array<uint32_t, 4> output_shape = output.shape();
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
 
-    uint32_t old_stick_size = a.shape()[3] * 2; // Assuming bfloat16 data format
-    uint32_t new_stick_size = W * 2; // Assuming bfloat16 data format
+    uint32_t num_old_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
+    uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
 
-    uint32_t single_tile_size = 2 * TILE_HW; // Assuming bfloat16 dataformat
+    uint32_t old_stick_size = a.shape()[3] * 2; // Assuming bfloat16 data format
+    uint32_t new_stick_size = output_shape[3] * 2; // Assuming bfloat16 data format
+
+    uint32_t single_tile_size = a.element_size() * TILE_HW; // Assuming bfloat16 dataformat
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = (a.shape()[1] * a.shape()[2] * a.shape()[3] / TILE_HW);
-    uint32_t num_output_tiles = (C * H * W / TILE_HW);
+    uint32_t num_output_tiles = (output_shape[1] * output_shape[2] * output_shape[3] / TILE_HW);
 
     // Currently added to support Bert large, TODO: Make op more generic, parallelize
-    uint32_t available_l1 = 1024*1024 - UNRESERVED_BASE;
+    uint32_t available_l1 = device->l1_size() - UNRESERVED_BASE;
     if (num_input_tiles * single_tile_size + num_output_tiles * single_tile_size > available_l1) {
         if (old_stick_size >= new_stick_size) {
             if (old_stick_size % new_stick_size == 0) {
                 // Maximize L1 usage. Is this needed or do we just need to double buffer 32 sticks (64)
                 // Evenly divide L1 between input/output
-                uint32_t w_tiles = a.shape()[3] / 32;
+                uint32_t w_tiles = a.shape()[3] / TILE_WIDTH;
                 num_input_tiles = ((available_l1 / 2) / single_tile_size) / w_tiles * w_tiles;
                 num_output_tiles = num_input_tiles;
             } else {
@@ -195,7 +158,7 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
             if (new_stick_size % old_stick_size == 0) {
                 // Maximize L1 usage. Is this needed or do we just need to double buffer 32 sticks (64)
                 // Evenly divide L1 between input/output
-                uint32_t w_tiles = (W / 32);
+                uint32_t w_tiles = (output_shape[3] / TILE_WIDTH);
                 num_output_tiles = ((available_l1 / 2) / single_tile_size) / w_tiles * w_tiles;
                 num_input_tiles = num_output_tiles;
             } else {
@@ -215,11 +178,11 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
         DataFormat::Float16_b
     );
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = 16; // output operands start at index 16
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
         device,
-        ouput_cb_index,
+        output_cb_index,
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
@@ -280,11 +243,6 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
         math_approx_mode
     );
 
-    // Compile kernels
-
-    tt_metal::CompileProgram(device, program);
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
     tt_metal::WriteRuntimeArgsToDevice(
         device,
         unary_reader_kernel,
@@ -299,53 +257,69 @@ Tensor reshape_rm(const Tensor &a, int N, int C, int H, int W) {
         writer_kernel_args
     );
 
-    tt_metal::LaunchKernels(device, program);
-
-    return output;
+    return program;
 }
 
-Tensor reshape_(const Tensor &a, int N, int C, int H, int W) {
-    if (a.layout() == Layout::TILE) {
-        return reshape_tilized(a, N, C, H, W);
-    } else if (a.layout() == Layout::ROW_MAJOR) {
-        return reshape_rm(a, N, C, H, W);
+void Reshape::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
+
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(not input_tensor_a.on_host(), "Operand to reshape needs to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
+
+    auto output_shape = infer_dims_for_reshape(this->N, this->C, this->H, this->W, input_tensor_a.volume());
+    TT_ASSERT(input_tensor_a.volume() == output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3], "New shape volume must match old shape volume");
+
+    if (input_tensor_a.layout() == Layout::TILE) {
+        TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
+        TT_ASSERT(output_shape[2] % TILE_HEIGHT == 0 && output_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) for reshape!");
+    } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        TT_ASSERT(input_tensor_a.shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0, "Operand/target width must be a multiple of 32");
+        uint32_t num_old_sticks = input_tensor_a.shape()[0] * input_tensor_a.shape()[1] * input_tensor_a.shape()[2];
+        uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
+        TT_ASSERT(num_old_sticks % TILE_HEIGHT == 0 && num_new_sticks % TILE_HEIGHT == 0, "Operand/target number of rows must be a multiple of 32");
     } else {
         TT_ASSERT(false, "Unsupported layout for reshape");
     }
-    return a;
 }
 
-Tensor reshape(Tensor &a, int N, int C, int H, int W) {
+std::vector<Shape> Reshape::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    return {infer_dims_for_reshape(this->N, this->C, this->H, this->W, input_tensor_a.volume())};
+}
 
+std::vector<Tensor> Reshape::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    return detail::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
+}
+
+Program Reshape::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    auto& output_tensor = output_tensors.at(0);
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        return reshape_rm_single_core(input_tensor_a, output_tensor, this->N, this->C, this->H, this->W);
+    } else if (input_tensor_a.layout() == Layout::TILE) {
+        return reshape_tile_single_core(input_tensor_a, output_tensor, this->N, this->C, this->H, this->W);
+    } else {
+        TT_ASSERT(false, "Unsupported layout for reshape");
+        return Program();
+    }
+}
+
+Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {
+    // No-op (Will do a tensor copy)
+    auto output_shape = infer_dims_for_reshape(N, C, H, W, input_tensor_a.volume());
     if (
-        ((a.layout() == Layout::TILE or a.layout() == Layout::ROW_MAJOR) && W == a.shape()[3]) ||
-        ((a.layout() == Layout::CHANNELS_LAST) && C == a.shape()[1])
+        ((input_tensor_a.layout() == Layout::TILE or input_tensor_a.layout() == Layout::ROW_MAJOR) && output_shape[3] == input_tensor_a.shape()[3]) ||
+        ((input_tensor_a.layout() == Layout::CHANNELS_LAST) && output_shape[1] == input_tensor_a.shape()[1])
     ) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
-        a.reshape(N, C, H, W);
-        return a;
+        input_tensor_a.reshape(N, C, H, W);
+        return input_tensor_a;
     }
-
-    Device * device;
-
-    // Get the device
-    if (a.on_host()) {
-        device = AutoPad::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = a.device();
-    }
-
-    if (a.on_host()) {
-        auto output = reshape_(a.to(device), N, C, H, W);
-        // Convert tensor back to original
-        AutoPad::format_output_tensor(a, output, infer_dims_for_reshape(N, C, H, W, a.volume()), device);
-        return output;
-    } else {
-        return reshape_(a, N, C, H, W);
-    }
-
+    return detail::run_without_autopad(Reshape(N, C, H, W), input_tensor_a);
 }
 
 } // namespace tt_metal
