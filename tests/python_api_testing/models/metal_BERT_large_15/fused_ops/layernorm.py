@@ -28,8 +28,7 @@ def create_var_scaler(H, W, layer_norm_eps, device):
         device,
     )
 
-    constant = float_to_bits(1 / W)
-    scaler = (constant >> 16) & 0xFFFF
+    scaler = 1 / W
     var_scaler = tensor.fill_rm(1, 1, roundup32(H), 32, H, 1, epsilon_, scaler, 0)
     var_scaler = tensor.tilize(var_scaler)
 

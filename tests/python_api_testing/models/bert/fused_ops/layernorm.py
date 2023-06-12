@@ -117,8 +117,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims 
         var = tensor.mul(x_minus_mean, x_minus_mean) # (x-m)^2
         var_redW = tensor.reduce(var, RSUM, RW, 1.0) # sum[(x-m)^2]
 
-        constant = float_to_bits(1/W)
-        scaler = (constant >> 16) & 0xFFFF
+        scaler = 1/W
         var_scaler_ = tensor.fill_rm(1, 1, roundup32(H), 32, H_, 1, epsilon_, scaler, 0)
         var_scaler_ = tensor.tilize(var_scaler_)
 

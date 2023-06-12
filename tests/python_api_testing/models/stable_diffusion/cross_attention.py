@@ -149,8 +149,6 @@ class TtCrossAttention(nn.Module):
 
         temp = ttl.tensor.bmm(query, t_key)
         # Aaron: TODO: intentionally keeping this here!
-        # _encoded_val = torch.tensor(self.scale, dtype=torch.bfloat16)
-        # _encoded_val = _encoded_val.view(torch.int16).item()
         # scale_tensor = ttl.tensor.fill_rm(temp.shape()[0],
         #                                 temp.shape()[1],
         #                                 temp.shape()[2],
@@ -158,8 +156,8 @@ class TtCrossAttention(nn.Module):
         #                                 0,
         #                                 0,
         #                                 temp,
-        #                                 _encoded_val,
-        #                                 _encoded_val)
+        #                                 self.scale,
+        #                                 self.scale)
 
         scale_tensor = fallback_ops.full(temp.shape(), self.scale)
         attention_scores = ttl.tensor.mul(scale_tensor, temp)

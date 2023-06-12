@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 namespace tt {
 
@@ -17,12 +18,31 @@ namespace tt_metal {
 // H, W are expected to be multiples of 32
 // The 'any' Tensor arg is only used to pass the device and resulting tensor dtype
 // val_hi/lo are expected to be uint16 encodings of bfloat16 numbers, so 0x3f80 for 1.0 etc.
-Tensor fill_rm (int N, int C, int H, int W, int hOnes, int wOnes, const Tensor& any, int val_hi, int val_lo);
+struct FillRM : Operation {
+    uint32_t N, C, H, W, hFill, wFill;
+    float val_hi, val_lo;
+
+
+    FillRM(uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, float val_hi, float val_lo) :
+           N(N), C(C), H(H), W(W), hFill(hFill), wFill(wFill), val_hi(val_hi), val_lo(val_lo) {
+    }
+
+    FillRM(const FillRM&) = delete;
+    FillRM& operator=(const FillRM&) = delete;
+    ~FillRM() {}
+
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+};
+
+Tensor fill_rm (uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const Tensor& any, float val_hi, float val_lo);
 
 inline
-Tensor fill_ones_rm (int N, int C, int H, int W, int hOnes, int wOnes, const Tensor& any) {
+Tensor fill_ones_rm (uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hOnes, uint32_t wOnes, const Tensor& any) {
     // 0x3f80 is 1.0 in BF16
-    return fill_rm(N, C, H, W, hOnes, wOnes, any, 0x3F80, 0);
+    return fill_rm(N, C, H, W, hOnes, wOnes, any, 1.0, 0.0);
 }
 
 }  // namespace ll_buda

@@ -131,7 +131,7 @@ class CausalSelfAttention(nn.Module):
         attention_score_input = self.multiply_by_sqrt_hidden_dim(qkt)
 
         # create a mask out the sequences to a multiple of 32 (at this point W-T)
-        padded_seq_masku = ttm.tensor.fill_rm(N, C, H, W, seq, seq, x, 0x0, 0xc7c3) # 0.0 and -100000 in bf16
+        padded_seq_masku = ttm.tensor.fill_rm(N, C, H, W, seq, seq, x, 0.0, -100,000.0) # 0.0 and -100000 in bf16
         padded_seq_mask = ttm.tensor.tilize(padded_seq_masku)
 
         # add -100000 to mask out the scores
