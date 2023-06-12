@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
 
 
             RuntimeArgs rt_args;
-            map<Riscv, vector<u32>> worker_core_rt_args = {{Riscv::B, writer_args}, {Riscv::N, reader_args}};
+            map<RISCV, vector<u32>> worker_core_rt_args = {{RISCV::BRISC, writer_args}, {RISCV::NCRISC, reader_args}};
             rt_args[core] = worker_core_rt_args;
 
             EnqueueProgram(cq, program, rt_args, false);

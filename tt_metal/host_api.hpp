@@ -704,6 +704,20 @@ bool CompileProgram(
 // - Takes the device out of reset
 bool ConfigureDeviceWithProgram(Device *device, const Program &program);
 
+/**
+ * Set runtime args on program. Program tracks which processor on core receives the runtime args based on the processor that the kernel is targetting. Args are sent to the core during runtime.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program to which runtime args will be written                      | Program &                     |                                    | Yes      |
+ * | kernel       | The kernel that will receive the runtime args                          | Kernel *                      |                                    | Yes      |
+ * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
+ * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> & |                                    | Yes      |
+ */
+void SetRuntimeArgs(Program &program, Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
+
 // Loads all kernel args into L1s of assigned Tensix cores
 bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 

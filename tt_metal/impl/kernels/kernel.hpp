@@ -63,10 +63,6 @@ class Kernel {
 
     std::map<std::string, std::string> defines() const { return defines_; }
 
-    std::vector<uint32_t> runtime_args(const CoreCoord &logical_core) const;
-
-    void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> runtime_args);
-
     virtual bool configure(Device *device, const CoreCoord &logical_core) const = 0;
 
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
@@ -82,7 +78,6 @@ class Kernel {
     KernelType kernel_type_;
     std::vector<ll_api::memory> binaries_;    // DataMovement kernels have one binary each and Compute kernels have three binaries
     std::vector<uint32_t> compile_time_args_;
-    std::map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;
     std::map<std::string, std::string> defines_; // preprocessor defines. this is to be able to generate generic instances.
 
     void set_binaries(const std::string &binary_path);
@@ -157,7 +152,7 @@ class DataMovementKernel : public Kernel {
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
    private:
-    void write_runtime_args_to_device(Device *device, const CoreCoord &logical_core) const;
+    void write_runtime_args_to_device(Device *device, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) const;
 
     friend bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 

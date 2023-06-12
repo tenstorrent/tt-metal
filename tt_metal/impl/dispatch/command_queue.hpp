@@ -19,15 +19,6 @@ using std::shared_ptr;
 using std::tuple;
 using std::unique_ptr;
 
-// Remove immediately, just needed something to represent the RISCV type
-enum class Riscv {
-    B = 0,
-    N = 1,
-    C = 2
-};
-
-typedef map<CoreCoord, map<Riscv, vector<u32>>> RuntimeArgs;
-
 enum class TransferType : u8 {
     // RISCV types
     B = 0,

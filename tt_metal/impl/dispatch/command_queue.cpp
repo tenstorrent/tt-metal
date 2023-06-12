@@ -379,8 +379,8 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
         for (const auto& [riscv, rt_args_for_core] : rt_arg_map) {
             u32 dst;
             switch (riscv) {
-                case Riscv::B: dst = BRISC_L1_ARG_BASE; break;
-                case Riscv::N: dst = NCRISC_L1_ARG_BASE; break;
+                case tt::RISCV::BRISC: dst = BRISC_L1_ARG_BASE; break;
+                case tt::RISCV::NCRISC: dst = NCRISC_L1_ARG_BASE; break;
                 default: TT_THROW("Invalid RISCV for runtime args");
             }
 

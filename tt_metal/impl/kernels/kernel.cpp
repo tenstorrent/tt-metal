@@ -51,17 +51,6 @@ std::vector<ll_api::memory> const &Kernel::binaries() const {
     return this->binaries_;
 }
 
-std::vector<uint32_t> Kernel::runtime_args(const CoreCoord &logical_core) const {
-    if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot access runtime args for " + name() + " because it is not on core " + logical_core.str());
-    }
-    return this->core_to_runtime_args_.at(logical_core);
-}
-
-void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> runtime_args) {
-    this->core_to_runtime_args_.insert_or_assign(logical_core, runtime_args);
-}
-
 size_t Kernel::compile_time_args_hash() const {
     return tt::utils::vector_hash<uint32_t>{}(this->compile_time_args_);
 }
@@ -126,14 +115,15 @@ void init_test_mailbox(Device *device, const CoreCoord &core, uint64_t test_mail
     TT_ASSERT(test_mailbox_init_val_check[0] == INIT_VALUE);
 }
 
-void DataMovementKernel::write_runtime_args_to_device(Device *device, const CoreCoord &logical_core) const {
+void DataMovementKernel::write_runtime_args_to_device(Device *device, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) const {
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
 
-    auto rt_args = this->runtime_args(logical_core);
+    std::vector<uint32_t> rt_args = runtime_args;
     uint32_t core_x = logical_core.x;
     uint32_t core_y = logical_core.y;
+    // dumpDeviceProfiler needs to know core coordinates to know what cores to dump from
     rt_args.push_back(core_x);
     rt_args.push_back(core_y);
     uint32_t runtime_args_size = rt_args.size() * sizeof(uint32_t);

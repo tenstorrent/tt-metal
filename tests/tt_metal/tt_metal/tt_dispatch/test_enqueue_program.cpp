@@ -148,7 +148,7 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         Buffer out(device, NUM_TILES * 2048, 0, 2048, BufferType::DRAM);
 
         RuntimeArgs rt_args;
-        map<Riscv, vector<u32>> worker_core_rt_args = {{Riscv::B, {out.address(), 0, 0, NUM_TILES}}, {Riscv::N, {buf.address(), 0, 0, NUM_TILES}}};
+        map<RISCV, vector<u32>> worker_core_rt_args = {{RISCV::BRISC, {out.address(), 0, 0, NUM_TILES}}, {RISCV::NCRISC, {buf.address(), 0, 0, NUM_TILES}}};
         rt_args[worker_core] = worker_core_rt_args;
 
         EnqueueWriteBuffer(cq, buf, inp, false);

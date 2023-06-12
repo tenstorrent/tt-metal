@@ -1005,10 +1005,33 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     return pass;
 }
 
+RISCV get_riscv_from_kernel(Kernel *kernel) {
+    switch (kernel->kernel_type()) {
+        case KernelType::Compute: return RISCV::COMPUTE;
+        case KernelType::DataMovement: {
+            auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel);
+            TT_ASSERT(dm_kernel != nullptr);
+            switch (dm_kernel->data_movement_processor()) {
+                case DataMovementProcessor::RISCV_0: return RISCV::BRISC;
+                case DataMovementProcessor::RISCV_1: return RISCV::NCRISC;
+                default:
+                    TT_ASSERT(false, "Unsupported data movement processor");
+            }
+        }
+        default:
+            TT_ASSERT(false, "Unsupported kernel type");
+    }
+    return RISCV::BRISC;
+}
+
+void SetRuntimeArgs(Program &program, Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
+    TT_ASSERT(kernel->kernel_type() != KernelType::Compute, "Compute kernels do not support runtime args");
+    program.set_runtime_args(logical_core, get_riscv_from_kernel(kernel), runtime_args);
+}
+
 bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
     bool pass = true;
-    kernel->set_runtime_args(logical_core, runtime_args);
-    kernel->write_runtime_args_to_device(device, logical_core);
+    kernel->write_runtime_args_to_device(device, logical_core, runtime_args);
     return pass;
 }
 
