@@ -100,11 +100,13 @@ Program Reduce::create_program(const std::vector<std::reference_wrapper<const Te
 Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler) {
     auto parallelization_strategy = reduce_op_utils::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
+    float pad_value = reduce_math == ReduceOpMath::MAX ? std::numeric_limits<float>::lowest() : 0;
+    // TODO: For perf for reduce hw, we should autopad the tensor before running reduce w, reduce h, or else we may end up autopadding twice
     if (is_multicore_hw) {
-        const Tensor output_tensor = detail::run_with_autopad(Reduce(reduce_math, ReduceOpDim::W, scaler), input_tensor);
-        return detail::run_with_autopad(Reduce(reduce_math, ReduceOpDim::H, scaler), output_tensor);
+        const Tensor output_tensor = detail::run_with_autopad(Reduce(reduce_math, ReduceOpDim::W, scaler), input_tensor, pad_value);
+        return detail::run_with_autopad(Reduce(reduce_math, ReduceOpDim::H, scaler), output_tensor, pad_value);
     } else {
-        return detail::run_with_autopad(Reduce(reduce_math, reduce_dim, scaler), input_tensor);
+        return detail::run_with_autopad(Reduce(reduce_math, reduce_dim, scaler), input_tensor, pad_value);
     }
 }
 
