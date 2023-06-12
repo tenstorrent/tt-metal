@@ -84,7 +84,7 @@ inline void llk_unpack_AB_hw_configure(const llk_unpack_AB_params_t *unpack_AB_p
 }
 
 inline void llk_unpack_AB_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
+    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0 /*not used*/) {
     const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
     llk_unpack_AB_hw_configure(&unpack_AB_params);
 }
@@ -98,7 +98,7 @@ inline void llk_unpack_AB_init(const std::uint32_t transpose=0, const std::uint3
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
     const std::uint32_t operandA, const std::uint32_t operandB, 
-    const std::uint32_t tile_index_a, const std::uint32_t tile_index_b) {
+    const std::uint32_t tile_index_a, const std::uint32_t tile_index_b, const bool transpose_of_faces = 0 /*not used*/) {
     std::uint32_t inputA = get_operand_id(operandA);
     std::uint32_t inputB = get_operand_id(operandB);
     std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;
