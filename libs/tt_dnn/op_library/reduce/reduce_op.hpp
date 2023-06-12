@@ -28,21 +28,15 @@ Program reduce_single_core(const Tensor &input_tensor, Tensor &output_tensor, Re
 Program reduce_multi_core_h(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
 Program reduce_multi_core_w(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
 
-struct Reduce : Operation {
+struct Reduce {
     const ReduceOpMath::Enum math_op;
     const ReduceOpDim::Enum dim;
     const float scaler;
 
-    Reduce(ReduceOpMath::Enum math_op, ReduceOpDim::Enum dim, float scaler) : math_op{math_op}, dim{dim}, scaler{scaler}  {}
-
-    Reduce(const Reduce&) = delete;
-    Reduce& operator=(const Reduce&) = delete;
-    ~Reduce() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);

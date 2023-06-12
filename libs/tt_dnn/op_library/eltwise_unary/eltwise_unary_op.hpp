@@ -38,31 +38,25 @@ struct UnaryOpParallelizationStrategy {
 Program eltwise_unary_single_core (const Tensor &input_tensor, Tensor &output_tensor, UnaryOpType::Enum op_type);
 Program eltwise_unary_multi_core (const Tensor &input_tensor, Tensor &output_tensor, UnaryOpType::Enum op_type);
 
-struct EltwiseUnary : Operation {
+struct EltwiseUnary {
     const UnaryOpType::Enum op_type;
 
-    EltwiseUnary(UnaryOpType::Enum op_type) : op_type{op_type} {}
-
-    EltwiseUnary(const EltwiseUnary&) = delete;
-    EltwiseUnary& operator=(const EltwiseUnary&) = delete;
-    ~EltwiseUnary() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
-inline Tensor sqrt(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::SQRT), input_tensor); }
-inline Tensor exp(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::EXP), input_tensor); }
-inline Tensor recip(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::RECIP), input_tensor); }
-inline Tensor gelu(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::GELU), input_tensor); }
-inline Tensor relu(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::RELU), input_tensor); }
-inline Tensor sigmoid(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::SIGMOID), input_tensor); }
-inline Tensor log(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::LOG), input_tensor); }
-inline Tensor tanh(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::TANH), input_tensor); }
-inline Tensor log2(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::LOG2), input_tensor); }
-inline Tensor log10(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary(UnaryOpType::LOG10), input_tensor); }
+inline Tensor sqrt(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::SQRT}, input_tensor); }
+inline Tensor exp(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::EXP}, input_tensor); }
+inline Tensor recip(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::RECIP}, input_tensor); }
+inline Tensor gelu(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::GELU}, input_tensor); }
+inline Tensor relu(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::RELU}, input_tensor); }
+inline Tensor sigmoid(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::SIGMOID}, input_tensor); }
+inline Tensor log(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::LOG}, input_tensor); }
+inline Tensor tanh(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::TANH}, input_tensor); }
+inline Tensor log2(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::LOG2}, input_tensor); }
+inline Tensor log10(const Tensor &input_tensor) { return detail::run_with_autopad(EltwiseUnary{UnaryOpType::LOG10}, input_tensor); }
 
 
 }  // namespace tt_metal

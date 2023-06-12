@@ -23,32 +23,26 @@ struct BinaryOpParallelizationStrategy {
 Program eltwise_binary_single_core (const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType::Enum op_type);
 Program eltwise_binary_multi_core (const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType::Enum op_type);
 
-struct EltwiseBinary : Operation {
+struct EltwiseBinary {
     const BinaryOpType::Enum op_type;
 
-    EltwiseBinary(BinaryOpType::Enum op_type) : op_type{op_type} {}
-
-    EltwiseBinary(const EltwiseBinary&) = delete;
-    EltwiseBinary& operator=(const EltwiseBinary&) = delete;
-    ~EltwiseBinary() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 inline Tensor add(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-    return detail::run_with_autopad(EltwiseBinary(BinaryOpType::ADD), input_tensor_a, input_tensor_b);
+    return detail::run_with_autopad(EltwiseBinary{BinaryOpType::ADD}, input_tensor_a, input_tensor_b);
 }
 inline Tensor sub(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-    return detail::run_with_autopad(EltwiseBinary(BinaryOpType::SUB), input_tensor_a, input_tensor_b);
+    return detail::run_with_autopad(EltwiseBinary{BinaryOpType::SUB}, input_tensor_a, input_tensor_b);
 }
 inline Tensor mul(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-    return detail::run_with_autopad(EltwiseBinary(BinaryOpType::MUL), input_tensor_a, input_tensor_b);
+    return detail::run_with_autopad(EltwiseBinary{BinaryOpType::MUL}, input_tensor_a, input_tensor_b);
 }
 
 }  // namespace tt_metal

@@ -17,19 +17,13 @@ struct TransposeOpParallelizationStrategy {
     static const vector<Enum> all() { return { MULTI_CORE_WH, MULTI_CORE_HC, SINGLE_CORE }; }
 };
 
-struct Transpose : Operation {
+struct Transpose {
     const TransposeOpDim::Enum dim;
 
-    Transpose(TransposeOpDim::Enum dim) : dim{dim} {}
-
-    Transpose(const Transpose&) = delete;
-    Transpose& operator=(const Transpose&) = delete;
-    ~Transpose() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 // TODO: Accept parallelization

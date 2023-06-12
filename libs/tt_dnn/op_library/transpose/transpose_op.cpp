@@ -1,5 +1,4 @@
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
-#include "tt_dnn/op_library/operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -106,7 +105,7 @@ Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
             }
     }
 
-    return detail::run_with_autopad(Transpose(transpose_dim), a, 0, transpose_dim == TransposeOpDim::HC);
+    return detail::run_with_autopad(Transpose{transpose_dim}, a, 0, transpose_dim == TransposeOpDim::HC);
 }
 
 }  // namespace tt_metal

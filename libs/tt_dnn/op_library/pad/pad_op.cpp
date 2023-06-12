@@ -1,5 +1,4 @@
 #include "tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_dnn/op_library/operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -304,7 +303,7 @@ Tensor pad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_t
         log_warning("Perf warning: padding called on tensor with same shape as target shape.");
         return input_tensor_a;
     }
-    return detail::run_without_autopad(Pad(output_tensor_shape, input_tensor_start, pad_value), input_tensor_a);
+    return detail::run_without_autopad(Pad{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
 
 }
 

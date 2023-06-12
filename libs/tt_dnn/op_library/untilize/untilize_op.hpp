@@ -9,22 +9,14 @@ namespace tt_metal {
 
 // TODO: Accept parallelization
 
-struct Untilize : Operation {
-
-    Untilize() {
-    }
-
-    Untilize(const Untilize&) = delete;
-    Untilize& operator=(const Untilize&) = delete;
-    ~Untilize() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+struct Untilize {
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
-struct UntilizeWithUnpadding : Operation {
+struct UntilizeWithUnpadding {
     const std::array<uint32_t, 4> output_tensor_start;
     const std::array<uint32_t, 4> output_tensor_end;
     const std::array<uint32_t, 4> output_tensor_shape;
@@ -39,14 +31,10 @@ struct UntilizeWithUnpadding : Operation {
         } {
     }
 
-    UntilizeWithUnpadding(const UntilizeWithUnpadding&) = delete;
-    UntilizeWithUnpadding& operator=(const UntilizeWithUnpadding&) = delete;
-    ~UntilizeWithUnpadding() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 

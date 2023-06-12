@@ -32,20 +32,14 @@ Program bcast_multi_core_h(const Tensor &input_tensor_a, const Tensor &input_ten
 Program bcast_multi_core_w(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
 Program bcast_multi_core_hw(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
 
-struct EltwiseBinaryBroadcast : Operation {
+struct EltwiseBinaryBroadcast {
     const BcastOpMath::Enum math_op;
     const BcastOpDim::Enum dim;
 
-    EltwiseBinaryBroadcast(BcastOpMath::Enum math_op, BcastOpDim::Enum dim) : math_op{math_op}, dim{dim} {}
-
-    EltwiseBinaryBroadcast(const EltwiseBinaryBroadcast&) = delete;
-    EltwiseBinaryBroadcast& operator=(const EltwiseBinaryBroadcast&) = delete;
-    ~EltwiseBinaryBroadcast() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim) {
@@ -55,7 +49,7 @@ inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, 
     else if (bcast_dim == BcastOpDim::H) {
         TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[3]);
     }
-    return detail::run_with_autopad(EltwiseBinaryBroadcast(bcast_op, bcast_dim), input_tensor_a, input_tensor_b);
+    return detail::run_with_autopad(EltwiseBinaryBroadcast{bcast_op, bcast_dim}, input_tensor_a, input_tensor_b);
 }
 
 

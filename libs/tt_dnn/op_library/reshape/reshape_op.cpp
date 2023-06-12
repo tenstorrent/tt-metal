@@ -5,7 +5,6 @@
 #include "tt_metal/common/constants.hpp"
 #include "tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/auto_pad.hpp"
-#include "tt_dnn/op_library/operation.hpp"
 
 using namespace tt::constants;
 
@@ -324,7 +323,7 @@ Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {
         input_tensor_a.reshape(N, C, H, W);
         return input_tensor_a;
     }
-    return detail::run_without_autopad(Reshape(N, C, H, W), input_tensor_a);
+    return detail::run_without_autopad(Reshape{N, C, H, W}, input_tensor_a);
 }
 
 } // namespace tt_metal

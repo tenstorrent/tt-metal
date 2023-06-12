@@ -1,7 +1,7 @@
 #include <math.h>
 
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
-#include "tt_dnn/op_library/operation.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "dtx/dtx.hpp"
@@ -632,7 +632,7 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<ui
     }else {
         TT_ASSERT((input_tensor_a.layout() == Layout::ROW_MAJOR), "Can only tilize row major data");
     }
-    return detail::run_without_autopad(TilizeWithValPadding(output_tensor_shape, input_tensor_start, pad_value), input_tensor_a);
+    return detail::run_without_autopad(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
 
 }
 

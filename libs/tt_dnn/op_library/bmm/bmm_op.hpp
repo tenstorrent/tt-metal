@@ -55,32 +55,19 @@ Program bmm_multi_core_reuse_padding  (const Tensor &input_tensor_a, const Tenso
 Program matmul_multi_core_reuse_mcast_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
 Program bmm_multi_core_reuse_mcast_padding  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
 
-
-struct Matmul : Operation {
-
-    Matmul() {}
-    Matmul(const Matmul&) = delete;
-    Matmul& operator=(const Matmul&) = delete;
-    ~Matmul() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+struct Matmul {
+    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 
-struct BatchedMatmul : Operation {
-
-    BatchedMatmul() {}
-    BatchedMatmul(const BatchedMatmul&) = delete;
-    BatchedMatmul& operator=(const BatchedMatmul&) = delete;
-    ~BatchedMatmul() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+struct BatchedMatmul {
+    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 
@@ -113,39 +100,34 @@ Program matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor &input_t
 Program bmm_multi_core_reuse_optimized_bert_large(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const Shape &ashape, const Shape &bshape, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 
-struct BertLargeMatmul : Operation {
+struct BertLargeMatmul {
     BertLargeMatmulOpType bert_large_matmul_op_type;
     MemoryConfig output_mem_config;
 
-    BertLargeMatmul(BertLargeMatmulOpType bert_large_matmul_op_type, MemoryConfig output_mem_config) : bert_large_matmul_op_type(bert_large_matmul_op_type), output_mem_config(output_mem_config) {}
-    BertLargeMatmul(const BertLargeMatmul&) = delete;
-    BertLargeMatmul& operator=(const BertLargeMatmul&) = delete;
-    ~BertLargeMatmul() {}
-
-    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const override;
-    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 
 inline Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(BertLargeMatmul(BertLargeMatmulOpType::FUSED_QKV, mem_config).run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::FUSED_QKV, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(BertLargeMatmul(BertLargeMatmulOpType::FF1, mem_config).run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::FF1, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(BertLargeMatmul(BertLargeMatmulOpType::FF2, mem_config).run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::FF2, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(BertLargeMatmul(BertLargeMatmulOpType::SELFOUT, mem_config).run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::SELFOUT, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(BertLargeMatmul(BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config).run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 inline Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(BertLargeMatmul(BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config).run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+    return std::move(detail::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
 
 
