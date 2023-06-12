@@ -49,7 +49,7 @@ static Tensor run_without_autopad(const Operation &op, const Tensor &input_tenso
 }
 
 template<typename Operation>
-static Tensor run_with_autopad(const Operation &op, const Tensor &input_tensor, float pad_value = 0) {
+static Tensor run_with_autopad(const Operation &op, const Tensor &input_tensor, float pad_value = 0, bool pad_c=false) {
     Device* device;
     if (input_tensor.on_host()) {
         device = AutoPad::GetDefaultDevice();
@@ -58,7 +58,7 @@ static Tensor run_with_autopad(const Operation &op, const Tensor &input_tensor, 
         device = input_tensor.device();
     }
 
-    auto padded_input_shape = AutoPad::pad_to_tile_shape(input_tensor.shape());
+    auto padded_input_shape = AutoPad::pad_to_tile_shape(input_tensor.shape(), pad_c);
     auto output_shape = op.compute_output_shapes({std::cref(input_tensor)}).at(0);
     if (AutoPad::check_input_tensor_format(input_tensor, padded_input_shape)) {
         return std::move(op.run({std::cref(input_tensor)}).at(0));

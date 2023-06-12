@@ -10,13 +10,12 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor transpose_wh_single_core(const Tensor &a) {
+Program transpose_wh_single_core(const Tensor &a, Tensor& output) {
 
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     u32 HW = H*W;
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && NC > 0);
+
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
@@ -26,14 +25,10 @@ Tensor transpose_wh_single_core(const Tensor &a) {
 
     CoreCoord core = {0, 0};
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
-
-    uint32_t single_tile_size = 2 * 1024;
+    uint32_t single_tile_size = a.element_size() * TILE_HW;
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
-    TT_ASSERT(a.volume() % TILE_HW == 0);
     int32_t num_tiles = a.volume()/TILE_HW;
 
     auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
@@ -42,8 +37,7 @@ Tensor transpose_wh_single_core(const Tensor &a) {
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    std::array<uint32_t, 4> output_shape = {shape[0], shape[1], W, H};
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+    std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -103,59 +97,40 @@ Tensor transpose_wh_single_core(const Tensor &a) {
         math_approx_mode
     );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        reader_kernel,
+        core,
+        {
+            src0_dram_buffer->address(),
+            (std::uint32_t)dram_src0_noc_xy.x,
+            (std::uint32_t)dram_src0_noc_xy.y,
+            num_tensor_tiles, NC, Ht, Wt, Ht*Wt,
+            0 /*scaler*/
+        }
+    );
 
-    tt_metal::CompileProgram(device, program);
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        writer_kernel,
+        core,
+        {
+            dst_dram_buffer->address(),
+            (std::uint32_t)dram_dst_noc_xy.x,
+            (std::uint32_t)dram_dst_noc_xy.y,
+            num_tensor_tiles
+        }
+    );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            reader_kernel,
-            core,
-            {
-                src0_dram_buffer->address(),
-                (std::uint32_t)dram_src0_noc_xy.x,
-                (std::uint32_t)dram_src0_noc_xy.y,
-                num_tensor_tiles, NC, Ht, Wt, Ht*Wt,
-                0 /*scaler*/
-            }
-        );
-
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            writer_kernel,
-            core,
-            {
-                dst_dram_buffer->address(),
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
-                num_tensor_tiles
-            }
-        );
-
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-
-    return output;
+    return program;
 }
 
-Tensor transpose_hc_single_core(const Tensor &a) {
+Program transpose_hc_single_core(const Tensor &a, Tensor &output) {
 
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     u32 HW = H*W;
     u32 CHW = C*H*W;
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(C % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && N > 0 && C > 0);
-    TT_ASSERT(TILE_WIDTH == TILE_HEIGHT && "Tile width and height must match for this kernel!");
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
@@ -167,10 +142,8 @@ Tensor transpose_hc_single_core(const Tensor &a) {
 
     CoreCoord core = {0, 0};
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
 
-    uint32_t single_tile_size = 2 * 1024;
+    uint32_t single_tile_size = a.element_size() * TILE_HW;
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
@@ -179,8 +152,7 @@ Tensor transpose_hc_single_core(const Tensor &a) {
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    std::array<uint32_t, 4> output_shape = {N, H, C, W};
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+    std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -240,58 +212,37 @@ Tensor transpose_hc_single_core(const Tensor &a) {
         math_approx_mode
     );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        reader_kernel,
+        core,
+        {
+            src0_dram_buffer->address(),
+            (std::uint32_t)dram_src0_noc_xy.x,
+            (std::uint32_t)dram_src0_noc_xy.y,
+            W, H, C, HW, N, CHW
+        }
+    );
 
-    tt_metal::CompileProgram(device, program);
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        writer_kernel,
+        core,
+        {
+            dst_dram_buffer->address(),
+            (std::uint32_t)dram_dst_noc_xy.x,
+            (std::uint32_t)dram_dst_noc_xy.y,
+            num_tensor_tiles
+        }
+    );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            reader_kernel,
-            core,
-            {
-                src0_dram_buffer->address(),
-                (std::uint32_t)dram_src0_noc_xy.x,
-                (std::uint32_t)dram_src0_noc_xy.y,
-                W, H, C, HW, N, CHW
-            }
-        );
-
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            writer_kernel,
-            core,
-            {
-                dst_dram_buffer->address(),
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
-                num_tensor_tiles
-            }
-        );
-
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-
-    return output;
+    return program;
 }
 
-Tensor transpose_cn_single_core(const Tensor &a) {
+Program transpose_cn_single_core(const Tensor &a, Tensor &output) {
 
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
-    if (N == 1 && C == 1) { // NOOP
-        return a;
-    }
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && N > 0 && C > 0);
-    TT_ASSERT(TILE_WIDTH == TILE_HEIGHT && "Tile width and height must match for this kernel!");
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
@@ -305,10 +256,7 @@ Tensor transpose_cn_single_core(const Tensor &a) {
 
     CoreCoord core = {0, 0};
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.device() != nullptr, "Operand to transpose_cn op needs to be on device!");
-
-    uint32_t single_tile_size = 2 * 1024;
+    uint32_t single_tile_size = a.element_size() * TILE_HW;
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
@@ -317,8 +265,7 @@ Tensor transpose_cn_single_core(const Tensor &a) {
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    std::array<uint32_t, 4> output_shape = {C, N, H, W};
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+    std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -378,57 +325,42 @@ Tensor transpose_cn_single_core(const Tensor &a) {
         math_approx_mode
     );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        reader_kernel,
+        core,
+        {
+            src0_dram_buffer->address(),
+            N, C, Ht, Wt, HtWt, CHtWt, NCHtWt
+        }
+    );
 
-    tt_metal::CompileProgram(device, program);
+    tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        writer_kernel,
+        core,
+        {
+            dst_dram_buffer->address(),
+            (std::uint32_t)dram_dst_noc_xy.x,
+            (std::uint32_t)dram_dst_noc_xy.y,
+            num_tensor_tiles
+        }
+    );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            reader_kernel,
-            core,
-            {
-                src0_dram_buffer->address(),
-                N, C, Ht, Wt, HtWt, CHtWt, NCHtWt
-            }
-        );
-
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
-            writer_kernel,
-            core,
-            {
-                dst_dram_buffer->address(),
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
-                num_tensor_tiles
-            }
-        );
-
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-
-    return output;
+    return program;
 }
 
 
-Tensor transpose_single_core(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
+Program transpose_single_core(const Tensor &a, Tensor &output, TransposeOpDim::Enum transpose_dim) {
     if (transpose_dim == TransposeOpDim::WH){
-        return transpose_wh_single_core(a);
+        return transpose_wh_single_core(a, output);
     } else if (transpose_dim == TransposeOpDim::HC) {
-        return transpose_hc_single_core(a);
+        return transpose_hc_single_core(a, output);
     } else if (transpose_dim == TransposeOpDim::CN) {
-        return transpose_cn_single_core(a);
+        return transpose_cn_single_core(a, output);
     } else {
         TT_ASSERT(false, "Unsupported Transpose Op Dim");
-        return a;
+        return Program();
     }
 }
 

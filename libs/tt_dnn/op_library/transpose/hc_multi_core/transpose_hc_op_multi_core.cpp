@@ -10,16 +10,12 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor transpose_hc_multi_core(const Tensor &a) {
+Program transpose_hc_multi_core(const Tensor &a, Tensor &output) {
 
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     u32 HW = H*W;
     u32 CHW = C*H*W;
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(C % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && N > 0 && C > 0);
-    TT_ASSERT(TILE_WIDTH == TILE_HEIGHT && "Tile width and height must match for this kernel!");
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
@@ -29,10 +25,7 @@ Tensor transpose_hc_multi_core(const Tensor &a) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
-
-    uint32_t single_tile_size = 2 * 1024;
+    uint32_t single_tile_size = a.element_size() * TILE_HW;
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
@@ -50,8 +43,7 @@ Tensor transpose_hc_multi_core(const Tensor &a) {
         num_tiles_per_core[i]++;
     }
 
-    std::array<uint32_t, 4> output_shape = {N, H, C, W};
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device);
+    std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -128,17 +120,6 @@ Tensor transpose_hc_multi_core(const Tensor &a) {
         );
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-
     for(uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         tt_metal::WriteRuntimeArgsToDevice(
@@ -168,11 +149,7 @@ Tensor transpose_hc_multi_core(const Tensor &a) {
         num_tiles_read += num_tiles_per_core[i];
     }
 
-    tt_metal::LaunchKernels(device, program);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-
-    return output;
+    return program;
 }
 
 

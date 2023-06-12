@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
 
-        tt_metal::Tensor c = tt_metal::transpose_wh_multi_core(a);
+        tt_metal::Tensor c = tt_metal::transpose_wh(a);
 
         tt_metal::Tensor d = c.to(host);
 

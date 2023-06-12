@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 namespace tt {
 
@@ -16,16 +17,33 @@ struct TransposeOpParallelizationStrategy {
     static const vector<Enum> all() { return { MULTI_CORE_WH, MULTI_CORE_HC, SINGLE_CORE }; }
 };
 
+struct Transpose : Operation {
+    const TransposeOpDim::Enum dim;
+
+    Transpose(TransposeOpDim::Enum dim) : dim{dim} {}
+
+    Transpose(const Transpose&) = delete;
+    Transpose& operator=(const Transpose&) = delete;
+    ~Transpose() {}
+
+    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override;
+    Program create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const override;
+};
+
 // TODO: Accept parallelization
 Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim=TransposeOpDim::WH);
+// TODO: Don't bind transpose as transpose_wh, should explicitly bind like the others
+// Alternatively, bind only 1 transpose function and take 2 dims to transpose
 inline Tensor transpose(const Tensor &a) { return transpose_(a, TransposeOpDim::WH); }
 inline Tensor transpose_wh(const Tensor &a) { return transpose_(a, TransposeOpDim::WH); }
 inline Tensor transpose_hc(const Tensor &a) { return transpose_(a, TransposeOpDim::HC); }
 inline Tensor transpose_cn(const Tensor &a) { return transpose_(a, TransposeOpDim::CN); }
 
-Tensor transpose_single_core(const Tensor &a, TransposeOpDim::Enum transpose_dim);
-Tensor transpose_wh_multi_core(const Tensor &a);
-Tensor transpose_hc_multi_core(const Tensor &a);
+Program transpose_single_core(const Tensor &a, Tensor &output, TransposeOpDim::Enum transpose_dim);
+Program transpose_wh_multi_core(const Tensor &a, Tensor &output);
+Program transpose_hc_multi_core(const Tensor &a, Tensor &output);
 
 }  // namespace tt_metal
 

@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -29,59 +30,84 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor transpose__(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
-    switch (transpose_op_utils::get_parallelization_strategy(a, transpose_dim)){
-        case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
-            return transpose_wh_multi_core(a);
-            break;
-        case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
-            return transpose_hc_multi_core(a);
-            break;
-        case TransposeOpParallelizationStrategy::SINGLE_CORE:
-        default:
-            return transpose_single_core(a, transpose_dim);
+void Transpose::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto shape = input_tensor_a.shape();
+    u32 W = shape[3], H = shape[2], C = shape[3], NC = shape[1]*shape[0];
+    u32 HW = H*W;
+    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
+    TT_ASSERT(H > 0 && W > 0 && NC > 0);
+    TT_ASSERT(input_tensor_a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
+    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
+    if (this->dim == TransposeOpDim::HC) {
+        TT_ASSERT(C % TILE_HEIGHT == 0);
     }
 }
 
 
-Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
-
-    Device * device;
-
-    // Get the device
-    if (a.on_host()) {
-        device = AutoPad::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = a.device();
-    }
-
-    // Convert tensor back to original
-    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape(), transpose_dim == TransposeOpDim::HC);
-    auto out_shape = a.shape();
-    switch (transpose_dim){
+std::vector<Shape> Transpose::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    auto out_shape = input_tensor_a.shape();
+    switch (this->dim){
         case TransposeOpDim::CN:
-            out_shape[0] = a.shape()[1];
-            out_shape[1] = a.shape()[0];
+            out_shape[0] = input_tensor_a.shape()[1];
+            out_shape[1] = input_tensor_a.shape()[0];
             break;
         case TransposeOpDim::HC:
-            out_shape[1] = a.shape()[2];
-            out_shape[2] = a.shape()[1];
+            out_shape[1] = input_tensor_a.shape()[2];
+            out_shape[2] = input_tensor_a.shape()[1];
             break;
         case TransposeOpDim::WH:
-            out_shape[2] = a.shape()[3];
-            out_shape[3] = a.shape()[2];
+            out_shape[2] = input_tensor_a.shape()[3];
+            out_shape[3] = input_tensor_a.shape()[2];
             break;
     }
+    return {out_shape};
+}
 
-    if (AutoPad::check_input_tensor_format(a, a_pad_shape)) {
-        return transpose__(a, transpose_dim);
-    } else {
-        auto output = transpose__(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), transpose_dim);
-        AutoPad::format_output_tensor(a, output, out_shape, device);
-        return output;
 
+std::vector<Tensor> Transpose::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    return detail::generic_create_output_tensors(*this, input_tensors);
+}
+
+Program Transpose::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    auto& output_tensor = output_tensors.at(0);
+
+    switch (transpose_op_utils::get_parallelization_strategy(input_tensor_a, this->dim)) {
+        case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
+            return transpose_wh_multi_core(input_tensor_a, output_tensor);
+            break;
+        case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
+            return transpose_hc_multi_core(input_tensor_a, output_tensor);
+            break;
+        default:
+            return transpose_single_core(input_tensor_a, output_tensor, this->dim);
     }
+}
+
+Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
+
+    // No-op (Will do a tensor copy)
+    // TODO: We need to run asserts before this
+    switch (transpose_dim) {
+        case TransposeOpDim::CN:
+            if (a.shape()[0] == 1 && a.shape()[1] == 1) {
+                return a;
+            }
+            break;
+        case TransposeOpDim::HC:
+            if (a.shape()[1] == 1 && a.shape()[2] == 1) {
+                return a;
+            }
+            break;
+        case TransposeOpDim::WH:
+            if (a.shape()[2] == 1 && a.shape()[3] == 1) {
+                return a;
+            }
+    }
+
+    return detail::run_with_autopad(Transpose(transpose_dim), a, 0, transpose_dim == TransposeOpDim::HC);
 }
 
 }  // namespace tt_metal
