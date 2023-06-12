@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "tools/profiler/kernel_profiler.hpp"
 
 #include "noc_parameters.h"
 
@@ -58,13 +59,17 @@ inline __attribute__((section("code_l1"))) uint32_t NOC_STATUS_READ_REG_L1(uint3
 
 
 inline void ncrisc_noc_fast_read(uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
+  kernel_profiler::mark_time(15);
   if (len_bytes > 0) {
+  kernel_profiler::mark_time(16);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, src_addr >> 32);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+  kernel_profiler::mark_time(17);
     noc_reads_num_issued[noc] += 1;
+  kernel_profiler::mark_time(18);
   }
 }
 
@@ -96,7 +101,9 @@ inline __attribute__((always_inline)) __attribute__((section("code_l1"))) bool n
 }
 
 inline void ncrisc_noc_fast_write(uint32_t noc, uint32_t cmd_buf, uint32_t src_addr, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, bool mcast, bool linked, uint32_t num_dests) {
+  // kernel_profiler::mark_time(10);
   if (len_bytes > 0) {
+    // kernel_profiler::mark_time(11);
     uint32_t noc_cmd_field =
       NOC_CMD_CPY | NOC_CMD_WR |
       NOC_CMD_VC_STATIC  |
@@ -105,14 +112,17 @@ inline void ncrisc_noc_fast_write(uint32_t noc, uint32_t cmd_buf, uint32_t src_a
       (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
       NOC_CMD_RESP_MARKED;
 
+    // kernel_profiler::mark_time(12);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, dest_addr >> 32);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    // kernel_profiler::mark_time(13);
     noc_nonposted_writes_num_issued[noc] += 1;
     noc_nonposted_writes_acked[noc] += num_dests;
+    // kernel_profiler::mark_time(14);
   }
 }
 
@@ -225,6 +235,7 @@ inline void noc_init(int noc) {
 
 
 inline void ncrisc_noc_fast_read_any_len(uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
+  kernel_profiler::mark_time(11);
   while (len_bytes > NOC_MAX_BURST_SIZE) {
     while (!ncrisc_noc_fast_read_ok(noc, cmd_buf));
     ncrisc_noc_fast_read(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE);
@@ -232,8 +243,11 @@ inline void ncrisc_noc_fast_read_any_len(uint32_t noc, uint32_t cmd_buf, uint64_
     dest_addr += NOC_MAX_BURST_SIZE;
     len_bytes -= NOC_MAX_BURST_SIZE;
   }
+  kernel_profiler::mark_time(12);
   while (!ncrisc_noc_fast_read_ok(noc, cmd_buf));
+  kernel_profiler::mark_time(13);
   ncrisc_noc_fast_read(noc, cmd_buf, src_addr, dest_addr, len_bytes);
+  // kernel_profiler::mark_time(14);
 }
 
 
@@ -251,6 +265,7 @@ inline __attribute__((always_inline)) __attribute__((section("code_l1"))) void n
 
 
 inline void ncrisc_noc_fast_write_any_len(uint32_t noc, uint32_t cmd_buf, uint32_t src_addr, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, bool mcast, bool linked, uint32_t num_dests) {
+  // kernel_profiler::mark_time(5);
   while (len_bytes > NOC_MAX_BURST_SIZE) {
     while (!ncrisc_noc_fast_write_ok(noc, cmd_buf));
     ncrisc_noc_fast_write(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, vc, mcast, linked, num_dests);
@@ -258,8 +273,11 @@ inline void ncrisc_noc_fast_write_any_len(uint32_t noc, uint32_t cmd_buf, uint32
     dest_addr += NOC_MAX_BURST_SIZE;
     len_bytes -= NOC_MAX_BURST_SIZE;
   }
+  // kernel_profiler::mark_time(6);
   while (!ncrisc_noc_fast_write_ok(noc, cmd_buf));
+  // kernel_profiler::mark_time(7);
   ncrisc_noc_fast_write(noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests);
+  // kernel_profiler::mark_time(10);
 }
 
 inline void ncrisc_noc_fast_write_any_len_loopback_src(uint32_t noc, uint32_t cmd_buf, uint32_t src_addr, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, bool mcast, bool linked, uint32_t num_dests) {

@@ -80,6 +80,8 @@ int main(int argc, char **argv) {
             l1_buffer.size()
         };
 
+        std::cout << "size: " << l1_buffer.size() << std::endl;
+
         pass &= WriteRuntimeArgsToDevice(
             device,
             dram_copy_kernel,

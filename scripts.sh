@@ -25,9 +25,13 @@
 # python3 tt_metal/tools/profiler/custom_profile.py tt_metal/tools/profiler/logs/profile_log_device.csv
 # done
 
-make programming_examples/eltwise_binary
-# ./build/programming_examples/eltwise_binary 1
-LOGGER_LEVEL=Debug ./build/programming_examples/eltwise_binary 1
+# make programming_examples/loopback
+# ./build/programming_examples/loopback 1
+# python3 tt_metal/tools/profiler/custom_profile.py tt_metal/tools/profiler/logs/profile_log_device.csv > noc_async_read_profiling.log
+
+~/tt-metal/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objdump -S ~/tt-metal/built_kernels/loopback_dram_copy_blank/14484643849779851437/brisc/brisc.elf > ~/tt-metal/built_kernels/loopback_dram_copy_blank/14484643849779851437/brisc/brisc.asm
+
+# LOGGER_LEVEL=Debug ./build/programming_examples/eltwise_binary 1
 
 # # All tests
 # make tests -j

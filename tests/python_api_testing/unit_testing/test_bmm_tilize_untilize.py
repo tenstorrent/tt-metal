@@ -22,15 +22,18 @@ TILE_HEIGHT = TILE_WIDTH = 32
 
 ## parameters
 # matrix sizes as number of blocks along h and w:
-a_height_nblocks = [1, 5, 8]  ## various
-a_width_nblocks = [1, 8]   ## various
-b_width_nblocks = [1, 8]   ## various
+# a_height_nblocks = [1, 5, 8]  ## various
+# a_width_nblocks = [1, 8]   ## various
+# b_width_nblocks = [1, 8]   ## various
+a_height_nblocks = [2]  ## various
+a_width_nblocks = [1]   ## various
+b_width_nblocks = [2]   ## various
 # block sizes as number of tiles along h and w:
 a_block_height_ntiles = [4] ## various
 a_block_width_ntiles = [4]  ## various
-b_block_width_ntiles = [16]  ## various
+b_block_width_ntiles = [4]  ## various
 # output sublobcking per block:
-out_subblock_height_ntiles = [4]    ## == a_block_height_ntiles, <= 8 (various)
+out_subblock_height_ntiles = [2]    ## == a_block_height_ntiles, <= 8 (various)
 out_subblock_width_ntiles = [2]     ## == b_block_width_ntiles, <= 8 (various)
 
 
@@ -62,6 +65,9 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     a_shape = [a_batch, a_channel, a_height, a_width]
     b_shape = [b_batch, b_channel, a_width, b_width]
     out_shape = [a_batch, a_channel, a_height, b_width]
+
+    print("a_shape ", a_shape, "b_shape ", b_shape, "out_shape ", out_shape)
+    print("out_subblock_height_ntiles: ", out_subblock_height_ntiles, "\nout_subblock_width_ntiles: ", out_subblock_width_ntiles)
 
     torch.manual_seed(0)
     a = torch.randn(a_shape, dtype=torch.bfloat16).float()

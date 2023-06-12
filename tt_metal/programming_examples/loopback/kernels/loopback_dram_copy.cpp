@@ -13,11 +13,20 @@ void kernel_main() {
 
     std::uint32_t dram_buffer_size      = get_arg_val<uint32_t>(7);
 
+    // int k = 0;
+    // for (k=5;k<17;k++) kernel_profiler::mark_time(k);
+
+    kernel_profiler::mark_time(5);
     std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+    kernel_profiler::mark_time(6);
     noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, dram_buffer_size);
+    kernel_profiler::mark_time(7);
     noc_async_read_barrier();
 
+    // kernel_profiler::mark_time(8);
     std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
+    // kernel_profiler::mark_time(9);
     noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
+    // kernel_profiler::mark_time(10);
     noc_async_write_barrier();
 }

@@ -29,6 +29,25 @@ void kernel_main() {
 
     uint32_t in0_block_w = in1_block_h;
 
+    DPRINT << "in0_addr (in0_dram_addr): " << in0_addr << ENDL();
+    DPRINT << "in0_block_h (num_tiles): " << in0_block_h << ENDL();
+    DPRINT << "in0_num_blocks_h: " << in0_num_blocks_h << ENDL();
+    DPRINT << "in0_num_blocks_w: " << in0_num_blocks_w << ENDL();
+    DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
+    DPRINT << "in0_block_nrows: " << in0_block_nrows << ENDL();
+    DPRINT << "in0_start_row_id: " << in0_start_row_id << ENDL();
+    DPRINT << "in0_row_size_bytes (in0_width * dtype_nbyte): " << in0_row_size_bytes << ENDL();
+    DPRINT << "in0_read_row_size_bytes (in0_block_w * TILE_WIDTH * dtype_nbytes): " << in0_read_row_size_bytes << ENDL();
+    DPRINT << "in1_addr (in1_dram_addr): " << in1_addr << ENDL();
+    DPRINT << "in1_block_h (num_tiles): " << in1_block_h << ENDL();
+    DPRINT << "in1_block_w (num_tiles): " << in1_block_w << ENDL();
+    DPRINT << "in1_num_blocks_w: " << in1_num_blocks_w << ENDL();
+    DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL();
+    DPRINT << "in1_stride_h (in1_width_ntiles = in1_num_blocks_w * in1_block_w): " << in1_stride_h << ENDL();
+    DPRINT << "in1_next_block_stride_h: (in1_width_ntiles * in1_block_h)" << in1_next_block_stride_h << ENDL();
+    DPRINT << "in1_next_block_stride_w (in1_block_w): " << in1_next_block_stride_w << ENDL();
+
+
     constexpr uint32_t in0_cb_id = tt::CB::c_in0;
     constexpr uint32_t in1_cb_id = tt::CB::c_in1;
 
@@ -36,6 +55,8 @@ void kernel_main() {
     constexpr uint32_t TILE_HEIGHT = 32;                            // TODO: use a common source of truth
     constexpr uint32_t TILE_WIDTH = 32;                             // TODO: use a common source of truth
     const uint32_t tile_size_bytes = get_tile_size(in0_cb_id);      // == get_tile_size(in1_cb_id)
+
+    DPRINT << "tile_size_bytes: " << tile_size_bytes << ENDL();
 
     const InterleavedAddrGen<true> s0 = {
         .bank_base_address = in0_addr,
@@ -49,6 +70,7 @@ void kernel_main() {
     };
 
     // DPRINT << FIXP() << SETW(32) << SETP(2);
+
 
     uint32_t in0_curr_block_start_row_id = in0_start_row_id;
     // loop over in0 blocks along h

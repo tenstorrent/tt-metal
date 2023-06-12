@@ -110,6 +110,12 @@ void MAIN {
 
     // MATH((DPRINT << "C: START" << ENDL()));
 
+    MATH(( DPRINT << "in0_num_subblocks (in0_block_h/out_subblock_height_ntiles): " << in0_num_subblocks << ENDL()));
+    MATH(( DPRINT << "in1_num_subblocks (in1_block_w/out_subblock_width_ntiles): " << in1_num_subblocks << ENDL()));
+    MATH(( DPRINT << "out_subblock_h : " << out_subblock_h << ENDL()));
+    MATH(( DPRINT << "out_subblock_w : " << out_subblock_w << ENDL()));
+
+
     mm_init();
     for(uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
         // MATH((DPRINT << "C: IN0_H" << ENDL()));

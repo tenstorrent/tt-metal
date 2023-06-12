@@ -12,6 +12,7 @@
 #include "hostdevcommon/bank_to_noc_coord_mapping.h"
 // #include "frameworks/tt_dispatch/impl/command.hpp"
 #include "circular_buffer.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 #include "debug_print.h"
 /*
