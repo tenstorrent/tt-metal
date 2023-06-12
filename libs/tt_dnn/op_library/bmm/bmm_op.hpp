@@ -99,11 +99,13 @@ enum class BertLargeMatmulOpType {
     FUSED_QKV = 0,
     FF1 = 1,
     FF2 = 2,
-    SELFOUT = 3
+    SELFOUT = 3,
+    PRE_SOFTMAX_BMM = 4,
+    POST_SOFTMAX_BMM = 5,
 };
 
 Program matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
-Tensor bmm_multi_core_reuse_optimized_bert_large(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::array<uint32_t, 4> &ashape, const std::array<uint32_t, 4> &bshape, const std::array<uint32_t, 4> &cshape, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+Program bmm_multi_core_reuse_optimized_bert_large(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const Shape &ashape, const Shape &bshape, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 
 struct BertLargeMatmul : Operation {
@@ -134,8 +136,12 @@ inline Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &
 inline Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
     return std::move(BertLargeMatmul(BertLargeMatmulOpType::SELFOUT, mem_config).run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
 }
-Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config);
-Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config);
+inline Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
+    return std::move(BertLargeMatmul(BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config).run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+}
+inline Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
+    return std::move(BertLargeMatmul(BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config).run({std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+}
 
 
 // TODO: Refactor and uplift these bmms
