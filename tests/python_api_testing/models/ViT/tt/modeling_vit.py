@@ -2,10 +2,12 @@ from pathlib import Path
 import sys
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../tt")
 sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
+sys.path.append(f"{f}/../../../../../..")
 
 from typing import Union, Optional, Tuple, Dict, Set, List
 import math
@@ -15,9 +17,10 @@ import torch
 from torch import nn
 
 import tt_lib
+from tt_lib import tensor
 import tt_lib.fallback_ops as fallback_ops
-from tt_lib.fused_ops.linear import linear as linear
-from utility_functions import torch_to_tt_tensor
+
+from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
 from tt_utils import find_pruneable_heads_and_indices, prune_linear_layer
 from configuration_vit import ViTConfig
 from activations import ACT2FN
@@ -25,33 +28,57 @@ from activations import ACT2FN
 tt_tensor = tt_lib.tensor.Tensor
 
 
+def linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Optional[tensor.Tensor] = None):
+    """
+    Returns a function that performs a Linear operation with optional bias.
+
+    ``weight`` must be tt_tensor.
+    """
+    assert weight.shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
+
+    if bias is not None:
+        assert bias.shape()[-1] == out_features, "bias does not have the expected shape"
+
+    weight = weight
+    bias = bias
+    weight_T = tensor.transpose(weight)
+
+    def linear_(activation):
+        assert activation.shape()[-1] == in_features, "activation tensor do not have the expected shape"
+        output = tensor.matmul(activation, weight_T)
+
+        if bias is not None:
+            output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
+            return output_plus_bias
+
+        return output
+
+    return linear_
+
 def make_address(base_address, op_name):
     return op_name if base_address == "" else f"{base_address}.{op_name}"
 
 def make_linear(in_feature, out_feature, op_name, state_dict, base_address, device):
             q_weight = state_dict[make_address(base_address, f"{op_name}.weight")]
-            q_weight = torch_to_tt_tensor(q_weight, device)
+            q_weight = torch_to_tt_tensor_rm(q_weight, device)
             if make_address(base_address, f"{op_name}.bias") in state_dict:
                 q_bias = state_dict[make_address(base_address, f"{op_name}.bias")]
-                q_bias = torch_to_tt_tensor(q_bias, device)
+                q_bias = torch_to_tt_tensor_rm(q_bias, device)
             else:
                 q_bias = None
             return linear(in_feature, out_feature, weight=q_weight, bias=q_bias)
 
-class ViTOutput(nn.Module):
-    def __init__(self, config: ViTConfig, base_address, state_dict) -> None:
+class TtViTOutput(nn.Module):
+    def __init__(self, config: ViTConfig, base_address, state_dict, device) -> None:
         super().__init__()
-        self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
-        self.dense = make_linear(config.intermediate_size, config.hidden_size, "dense", state_dict, base_address)
-
+        self.dense = make_linear(config.intermediate_size, config.hidden_size, "dense", state_dict, base_address, device)
 
     def forward(self, hidden_states: tt_lib.tensor.Tensor, input_tensor: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = tt_lib.tensor.add(hidden_states, input_tensor)
         return hidden_states
 
-
-class ViTSelfAttention(nn.Module):
+class TtViTSelfAttention(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
         self.device = device
@@ -64,16 +91,16 @@ class ViTSelfAttention(nn.Module):
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.recip_sqrt_attention_head_size_tensor = torch.full((1, 1, 32, 32), 1/math.sqrt(self.attention_head_size))
-        self.recip_sqrt_attention_head_size_tensor = torch_to_tt_tensor(self.recip_sqrt_attention_head_size_tensor)
+        self.recip_sqrt_attention_head_size_tensor = torch_to_tt_tensor(self.recip_sqrt_attention_head_size_tensor, device)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query = make_linear(config.hidden_size, self.all_head_size, "query", state_dict, base_address)
-        self.key = make_linear(config.hidden_size, self.all_head_size, "key", state_dict, base_address)
-        self.value = make_linear(config.hidden_size, self.all_head_size, "value", state_dict, base_address)
+        self.query = make_linear(config.hidden_size, self.all_head_size, "query", state_dict, base_address, device)
+        self.key = make_linear(config.hidden_size, self.all_head_size, "key", state_dict, base_address, device)
+        self.value = make_linear(config.hidden_size, self.all_head_size, "value", state_dict, base_address, device)
 
     def transpose_for_scores(self, x: tt_tensor) -> tt_tensor:
-        new_x_shape = x.shape()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        x = tt_lib.tensor.reshape(x, *new_x_shape)
+        new_x_shape = (x.shape()[0], x.shape()[2]) + (self.num_attention_heads, self.attention_head_size)
+        x = tt_lib.fallback_ops.reshape(x, *new_x_shape)
         return tt_lib.tensor.permute(x, 0, 2, 1, 3)
 
     def forward(
@@ -86,8 +113,8 @@ class ViTSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_T = tt_lib.tensor.tranpose(key_layer)
-        attention_scores = tt_lib.tensor.matmul(query_layer, key_layer_T)
+        key_layer_T = tt_lib.tensor.transpose(key_layer)
+        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_T)
 
         attention_scores = tt_lib.tensor.bcast(attention_scores, self.recip_sqrt_attention_head_size_tensor,
                                                 tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
@@ -99,26 +126,33 @@ class ViTSelfAttention(nn.Module):
         if head_mask is not None:
             attention_probs = tt_lib.tensor.mul(attention_probs, head_mask)
 
-        context_layer = tt_lib.tensor.matmul(attention_probs, value_layer)
+        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
 
         context_layer = tt_lib.tensor.permute(context_layer, 0, 2, 1, 3)
-        new_context_layer_shape = context_layer.shape()[:-2] + (self.all_head_size,)
-        context_layer = tt_lib.tensor.reshape(context_layer, *new_context_layer_shape)
+        new_context_layer_shape = (1, ) + tuple(context_layer.shape()[:-2]) + (self.all_head_size,)
+        context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
         return outputs
 
 
-class ViTSelfOutput(nn.Module):
+class TtViTSelfOutput(nn.Module):
     """
     The residual connection is defined in ViTLayer instead of here (as is the case with other models), due to the
     layernorm applied before each block.
     """
 
-    def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict) -> None:
+    def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
-        self.dense = make_linear(config.hidden_size, config.hidden_size, "dense", state_dict, base_address)
+        self.dense = make_linear(
+                            config.hidden_size,
+                            config.hidden_size,
+                            "dense",
+                            state_dict=state_dict,
+                            base_address=base_address,
+                            device=device
+                            )
 
 
     def forward(self, hidden_states: tt_tensor, input_tensor: tt_tensor) -> tt_tensor:
@@ -127,11 +161,11 @@ class ViTSelfOutput(nn.Module):
         return hidden_states
 
 
-class ViTAttention(nn.Module):
+class TtViTAttention(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
-        self.attention = ViTSelfAttention(config, base_address, state_dict, device)
-        self.output = ViTSelfOutput(config, base_address, state_dict)
+        self.attention = TtViTSelfAttention(config, f"{base_address}.attention", state_dict, device)
+        self.output = TtViTSelfOutput(config, f"{base_address}.output", state_dict, device)
         self.pruned_heads = set()
 
     def prune_heads(self, heads: Set[int]) -> None:
@@ -166,10 +200,10 @@ class ViTAttention(nn.Module):
         return outputs
 
 
-class ViTIntermediate(nn.Module):
+class TtViTIntermediate(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
-        self.dense = make_linear(config.hidden_size, config.intermediate_size, "dense", state_dict, base_address)
+        self.dense = make_linear(config.hidden_size, config.intermediate_size, "dense", state_dict, base_address, device)
         # self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
@@ -183,25 +217,25 @@ class ViTIntermediate(nn.Module):
         return hidden_states
 
 
-class ViTLayer(nn.Module):
+class TtViTLayer(nn.Module):
     """This corresponds to the Block class in the timm implementation."""
 
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.attention = ViTAttention(config, base_address, state_dict, device)
-        self.intermediate = ViTIntermediate(config, base_address, state_dict, device)
-        self.output = ViTOutput(config, base_address, state_dict, device)
+        self.attention = TtViTAttention(config, f"{base_address}.attention", state_dict, device)
+        self.intermediate = TtViTIntermediate(config, f"{base_address}.intermediate", state_dict, device)
+        self.output = TtViTOutput(config, f"{base_address}.output", state_dict, device)
 
         lbw = state_dict[make_address(base_address, "layernorm_before.weight")]
         lbb = state_dict[make_address(base_address, "layernorm_before.bias")]
-        self.layernorm_before = fallback_ops.layernorm_before(normalized_shape=config.hidden_size, weights=lbw, biases=lbb, eps=config.layer_norm_eps)
+        self.layernorm_before = fallback_ops.LayerNorm(normalized_shape=config.hidden_size, weights=lbw, biases=lbb, eps=config.layer_norm_eps)
         # self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
         law = state_dict[make_address(base_address, "layernorm_after.weight")]
         lab = state_dict[make_address(base_address, "layernorm_after.bias")]
-        self.layernorm_after = fallback_ops.layernorm_before(normalized_shape=config.hidden_size, weights=law, biases=lab, eps=config.layer_norm_eps)
+        self.layernorm_after = fallback_ops.LayerNorm(normalized_shape=config.hidden_size, weights=law, biases=lab, eps=config.layer_norm_eps)
         # self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
     def forward(
@@ -219,7 +253,7 @@ class ViTLayer(nn.Module):
         outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
         # first residual connection
-        hidden_states = attention_output + hidden_states
+        hidden_states = tt_lib.tensor.add(attention_output, hidden_states)
 
         # in ViT, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)
@@ -233,11 +267,11 @@ class ViTLayer(nn.Module):
         return outputs
 
 
-class ViTEncoder(nn.Module):
+class TtViTEncoder(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([ViTLayer(config, base_address, state_dict, device) for _ in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList([TtViTLayer(config, f"{base_address}.layer.{_}", state_dict, device) for _ in range(config.num_hidden_layers)])
         self.gradient_checkpointing = False
 
     def forward(
@@ -258,7 +292,7 @@ class ViTEncoder(nn.Module):
             layer_head_mask = head_mask[i] if head_mask is not None else None
 
             if self.gradient_checkpointing and self.training:
-
+                assert False, "we should never get here!"
                 def create_custom_forward(module):
                     def custom_forward(*inputs):
                         return module(*inputs, output_attentions)
@@ -285,7 +319,45 @@ class ViTEncoder(nn.Module):
             return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
 
 
-class ViTPatchEmbeddings(nn.Module):
+class CPUViTPatchEmbeddings(nn.Module):
+    """
+    This class turns `pixel_values` of shape `(batch_size, num_channels, height, width)` into the initial
+    `hidden_states` (patch embeddings) of shape `(batch_size, seq_length, hidden_size)` to be consumed by a
+    Transformer.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        image_size, patch_size = config.image_size, config.patch_size
+        num_channels, hidden_size = config.num_channels, config.hidden_size
+
+        image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
+        patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
+        num_patches = (image_size[1] // patch_size[1]) * (image_size[0] // patch_size[0])
+        self.image_size = image_size
+        self.patch_size = patch_size
+        self.num_channels = num_channels
+        self.num_patches = num_patches
+
+        self.projection = nn.Conv2d(num_channels, hidden_size, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, pixel_values: torch.Tensor, interpolate_pos_encoding: bool = False) -> torch.Tensor:
+        batch_size, num_channels, height, width = pixel_values.shape
+        if num_channels != self.num_channels:
+            raise ValueError(
+                "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
+                f" Expected {self.num_channels} but got {num_channels}."
+            )
+        if not interpolate_pos_encoding:
+            if height != self.image_size[0] or width != self.image_size[1]:
+                raise ValueError(
+                    f"Input image size ({height}*{width}) doesn't match model"
+                    f" ({self.image_size[0]}*{self.image_size[1]})."
+                )
+        embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
+        return embeddings
+
+class TtViTPatchEmbeddings(nn.Module):
     """
     This class turns `pixel_values` of shape `(batch_size, num_channels, height, width)` into the initial
     `hidden_states` (patch embeddings) of shape `(batch_size, seq_length, hidden_size)` to be consumed by a
@@ -333,7 +405,7 @@ class ViTPatchEmbeddings(nn.Module):
         return embeddings
 
 # candidate for CPU
-class ViTEmbeddings(nn.Module):
+class CPUViTEmbeddings(nn.Module):
     """
     Construct the CLS token, position and patch embeddings. Optionally, also the mask token.
     """
@@ -343,7 +415,7 @@ class ViTEmbeddings(nn.Module):
 
         self.cls_token = nn.Parameter(torch.randn(1, 1, config.hidden_size))
         self.mask_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size)) if use_mask_token else None
-        self.patch_embeddings = ViTPatchEmbeddings(config)
+        self.patch_embeddings = CPUViTPatchEmbeddings(config)
         num_patches = self.patch_embeddings.num_patches
         self.position_embeddings = nn.Parameter(torch.randn(1, num_patches + 1, config.hidden_size))
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -413,9 +485,10 @@ class ViTEmbeddings(nn.Module):
         return embeddings
 
 
-class ViTPooler(nn.Module):
+class TtViTPooler(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
+        assert False, "ViTPooler is not implemented!"
         self.dense = make_linear(config.hidden_size, config.hidden_size, "dense", state_dict, base_address, device)
         self.activation = tt_lib.tensor.tanh
 
@@ -428,7 +501,7 @@ class ViTPooler(nn.Module):
         return pooled_output
 
 
-class ViTModel(nn.Module):
+class TtViTModel(nn.Module):
     def __init__(self,
                 config: ViTConfig,
                 base_address: str,
@@ -438,9 +511,9 @@ class ViTModel(nn.Module):
                 use_mask_token: bool = False) -> None:
         super().__init__()
         self.config = config
-
-        self.embeddings = ViTEmbeddings(config, use_mask_token=use_mask_token)
-        self.encoder = ViTEncoder(config, base_address=base_address, state_dict=state_dict, device=device)
+        self.device = device
+        self.embeddings = CPUViTEmbeddings(config, use_mask_token=use_mask_token)
+        self.encoder = TtViTEncoder(config, base_address=f"{base_address}.encoder", state_dict=state_dict, device=device)
 
         wln = state_dict[make_address(base_address, "layernorm.weight")]
         bln = state_dict[make_address(base_address, "layernorm.bias")]
@@ -449,11 +522,11 @@ class ViTModel(nn.Module):
                                     eps=config.layer_norm_eps,
                                     weights=wln,
                                     biases=bln)
-        self.pooler = ViTPooler(config, base_address=base_address, state_dict=state_dict, device=device) if add_pooling_layer else None
+        self.pooler = TtViTPooler(config, base_address=f"{base_address}.pooler", state_dict=state_dict, device=device) if add_pooling_layer else None
 
         # Initialize weights and apply final processing
 
-    def get_input_embeddings(self) -> ViTPatchEmbeddings:
+    def get_input_embeddings(self) -> CPUViTPatchEmbeddings:
         return self.embeddings.patch_embeddings
 
     def _prune_heads(self, heads_to_prune: Dict[int, List[int]]) -> None:
@@ -494,14 +567,20 @@ class ViTModel(nn.Module):
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
+        # put things on cpu
+        # get host
+        pixel_values = tt_to_torch_tensor(pixel_values, tt_lib.device.GetHost())
         # TODO: maybe have a cleaner way to cast the input (from `ImageProcessor` side?)
         expected_dtype = self.embeddings.patch_embeddings.projection.weight.dtype
         if pixel_values.dtype != expected_dtype:
             pixel_values = pixel_values.to(expected_dtype)
 
+
         embedding_output = self.embeddings(
             pixel_values, bool_masked_pos=bool_masked_pos, interpolate_pos_encoding=interpolate_pos_encoding
         )
+        embedding_output = torch_to_tt_tensor_rm(embedding_output, self.device)
+        # PUT THEM BACK ON DEVICE
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -528,7 +607,7 @@ class ViTForImageClassification(nn.Module):
         super().__init__()
         self.config = config
         self.num_labels = config.num_labels
-        self.vit = ViTModel(
+        self.vit = TtViTModel(
                     config,
                     base_address=base_address,
                     state_dict=state_dict,
