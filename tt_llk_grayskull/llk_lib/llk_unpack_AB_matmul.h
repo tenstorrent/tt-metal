@@ -62,23 +62,28 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose) {
 }
 
 inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
+    // Todo: do something with tile_dims
     configure_unpack_AB(
         get_operand_id(unpack_AB_params->unpB_operand), get_operand_id(unpack_AB_params->unpA_operand), 16, 16);
 }
 
 inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0) {
+    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims) {
     const llk_unpack_AB_matmul_params_t unpack_AB_matmul_params = {
-        .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca};
+        .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca, .in0_tile_dims = {in0_tile_dims[0], in0_tile_dims[1]}, .in1_tile_dims = {in1_tile_dims[0], in1_tile_dims[1]}};
     llk_unpack_AB_matmul_hw_configure(&unpack_AB_matmul_params);
 }
 
-inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) { llk_unpack_AB_matmul_mop_config(transpose>0); }
+inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {  /* TODO: do something with tile dim flags */ llk_unpack_AB_matmul_mop_config(transpose>0); }
 
 inline void llk_unpack_AB_matmul(
-    const std::uint32_t operandA, const std::uint32_t operandB, 
-    const std::uint32_t tile_index_a, const std::uint32_t tile_index_b, 
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims,
     const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+
+
+    // Todo: do something with tile dim flags
+
     std::uint32_t inputA = get_operand_id(operandA);
     std::uint32_t inputB = get_operand_id(operandB);
 

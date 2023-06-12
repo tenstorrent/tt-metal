@@ -18,7 +18,10 @@ inline void matmul_configure_addrmod();
 inline void matmul_configure_mop();
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul(uint dst_index, bool transpose = false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+inline void llk_math_matmul(uint dst_index, bool transpose = false, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+
+    // Todo: do something with input tile dims
+
     for (std::uint32_t rt=0; rt<rt_dim; rt++) {
         for (std::uint32_t ct=0; ct<ct_dim; ct++) {
             math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index+rt*ct_dim+ct);
@@ -216,7 +219,10 @@ inline void matmul_configure_mop(bool transpose) {
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_init(std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
+inline void llk_math_matmul_init(std::uint32_t transpose=0, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
+
+    // Todo: do stuff init params
+
     matmul_configure_addrmod<NUM_FIDELITY_PHASES, FaceLayout>();
     matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0);
     math::reset_counters(p_setrwc::SET_ABD_F);
