@@ -20,7 +20,7 @@ namespace tt_metal {
 
 static Profiler tt_metal_profiler = Profiler();
 
-bool enable_compile_cache = true;
+bool enable_compile_cache = false;
 void EnableCompileCache() { enable_compile_cache = true; }
 void DisableCompileCache() { enable_compile_cache = false; }
 bool GetCompileCacheEnabled() { return enable_compile_cache; }
@@ -889,8 +889,10 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash);
 
     bool cache_hit = true;
-
-    if (!enable_compile_cache || HashLookup::inst().add(kernel_hash)) {
+    bool path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix);
+    if ( enable_compile_cache && path_exists ){
+        HashLookup::inst().add(kernel_hash);
+    } else if ( HashLookup::inst().add(kernel_hash) ) {
         cache_hit = false;
         GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
     }
