@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
 
     Program programs[] = {tt_metal::Program(), tt_metal::Program(), tt_metal::Program()};
 
-    auto ops = {EltwiseOp::Enum::ADD,  EltwiseOp::Enum::MUL};//, // EltwiseOp::Enum::MUL};  //EltwiseOp::all();
+    auto ops = EltwiseOp::all();
     for (auto eltwise_op : ops) {
         log_info(LogTest, "====================================================================");
         log_info(LogTest, "======= Running eltwise_binary test for op={}", op_id_to_op_name[eltwise_op]);
