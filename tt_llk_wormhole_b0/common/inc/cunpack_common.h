@@ -304,6 +304,14 @@ namespace ckernel::unpacker
 
       TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4);
 
+      /*
+      // Workaround for HW bug (fp32 dest and movd2a/b is used with srcA/B configured with 5-bit exponent)
+      if (is_fp32_dest_acc_en && (exp_width == 0)) {
+          reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1<<11); // Set debug feature disable bit 11 
+                                                                 // workaround for bug tenstorrent/budabackend#1372
+      }
+      */
+
       // Clear context ID
       reset_config_context();
    }

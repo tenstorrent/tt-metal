@@ -49,6 +49,15 @@ inline void llk_math_reduce(uint dst_index) {
         // Move back to B and transpose
         // we avoid clobbering weights in src B by moving to rows 16 - 31
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+        /*
+        if constexpr (is_fp32_dest_acc_en) {
+            if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                TTI_SFPLOAD(0, 0, 3, 0);
+                TTI_SFP_STOCH_RND(0,0,0,0,0,8);
+                TTI_SFPSTORE(0,1,3,0);
+            }
+        }
+        */
         TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movd2b::MOV_1_ROW, 0);
         TTI_GATESRCRST(0b1,0b1);
         // Note: transpose on src B on works on rows 16 - 31
@@ -102,6 +111,15 @@ inline void llk_math_reduce(uint dst_index) {
 
         // Move back to B and transpose
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+        /*
+        if constexpr (is_fp32_dest_acc_en) {
+            if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                TTI_SFPLOAD(0, 0, 3, 0);
+                TTI_SFP_STOCH_RND(0,0,0,0,0,8);
+                TTI_SFPSTORE(0,1,3,0);
+            }
+        }
+        */
         TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movd2b::MOV_1_ROW, 0);
         TTI_GATESRCRST(0b1,0b1);
         // Note: transpose on src B on works on rows 16 - 31

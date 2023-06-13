@@ -197,6 +197,8 @@ int main(int argc, char *argv[])
     if ((uint) __firmware_start == (uint)l1_mem::address_map::TRISC0_BASE) {
         reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable in case it was set by previous kernel on TRISC0
                                                              // e.g workaround for bug tenstorrent/budabackend#1372
+        regfile[p_gpr_unpack::L1_BUFFER_ADDR] = (((uint)l1_buffer) >> 4) - 1; //Store L1 buffer address for reduce input 1
+        sync_regfile_write(p_gpr_unpack::L1_BUFFER_ADDR);
     }    
 
 #ifdef PERF_DUMP

@@ -79,19 +79,11 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
     llk_unpack_reduce_mop_config<type, dim>();
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    // Set first 32 bites of tile descriptor, only need data format change
-    unpack_tile_descriptor_u tile_descriptor = {0};
+    uint unpack_src_df  = (uint) DataFormat::Float32;
 
-    tile_descriptor.f.in_data_format  = (uint) DataFormat::Float32;
-    tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
-    tile_descriptor.f.x_dim        = 256; 
+    uint unpack_dst_df = (((uint)unpack_dst_format[0]>>2)&0x1) ? (uint) DataFormat::Float16_b : (uint) DataFormat::Float16;
 
-
-    unpack_config_u config1 = {0};
-    config1.f.out_data_format = (((uint)unpack_dst_format[0]>>2)&0x1) ? (uint) DataFormat::Float16_b : (uint) DataFormat::Float16;
-    config1.f.throttle_mode = 2;
-
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(config1.f.out_data_format);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(unpack_dst_df);
 
     //Need to enable transpose src A for reduce
     if (ReduceDim::REDUCE_ROW == dim) {
@@ -100,13 +92,12 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
 
     TTI_SETADCXX(0b11, FACE_WIDTH*FACE_HEIGHT-1, 0x0);
 
-    wait_for_idle();
+    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpack_src_df);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_df);
 
-    cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32] = tile_descriptor.val[0];
-    cfg[THCON_SEC1_REG2_Out_data_format_ADDR32] = config1.val[0];
-
-    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = (((uint)l1_buffer) >> 4) - 1;        // Set l1 buffer address
-    cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = (((uint)l1_buffer) >> 4) - 1;  // Set l1 buffer address
+    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_address_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+    TTI_NOP; TTI_NOP;
 }
 
 template <PoolType type, ReduceDim dim>
