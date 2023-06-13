@@ -159,8 +159,6 @@ base operations together.
 Other Operations
 ----------------
 
-.. autofunction:: tt_lib.tensor.transpose_hc_rm
-
 .. autofunction:: tt_lib.tensor.tilize
 
 .. autofunction:: tt_lib.tensor.untilize
@@ -176,8 +174,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.fill_rm
 
 .. autofunction:: tt_lib.tensor.fill_ones_rm
-
-.. autofunction:: tt_lib.tensor.pad_h_rm
 
 .. autofunction:: tt_lib.tensor.large_bmm
 

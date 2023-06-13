@@ -55,7 +55,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             reshaped_unt = ttl.tensor.reshape(untilized_x, x.shape()[0], x.shape()[2], num_heads, x.shape()[3] // num_heads)
 
             # N, 128, 2, 64
-            transposed = ttl.tensor.transpose_hc_rm(reshaped_unt)
+            transposed = ttl.tensor.transpose_hc(reshaped_unt)
             # N, 2, 128, 64
             retilized = ttl.tensor.tilize(transposed)
             return retilized
@@ -72,8 +72,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
             outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
             """
-            untilized_x = ttl.tensor.untilize(x)
-            ctx = ttl.tensor.transpose_hc_rm(untilized_x)
+            ctx = ttl.tensor.transpose_hc(x)
             ushape = ctx.shape()
             reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2]*ushape[3])
             retval = ttl.tensor.tilize(reshaped)

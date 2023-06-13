@@ -3,14 +3,12 @@
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/conv/conv_op.hpp"
-#include "tt_dnn/op_library/pad_h_rm/pad_h_rm_op.hpp"
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
-#include "tt_dnn/op_library/transpose_rm/transpose_rm_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
@@ -1079,15 +1077,6 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** experimental operations ***
-    m_tensor.def("transpose_hc_rm", &transpose_hc_rm, R"doc(
-        Transposes a given tensor's H and C dimensions, row-major wise.
-
-        +----------+----------------------+-----------+-------------+----------+
-        | Argument | Description          | Data type | Valid range | Required |
-        +==========+======================+===========+=============+==========+
-        | a        | Input tensor         | Tensor    |             | Yes      |
-        +----------+----------------------+-----------+-------------+----------+
-    )doc");
     m_tensor.def("tilize", &tilize, R"doc(
         Changes data layout of input tensor to TILE.
 
@@ -1196,18 +1185,6 @@ void TensorModule(py::module &m_tensor) {
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
         | any      | Any input tensor with desired device and data types for output tensor | tt_lib.tensor.Tensor  |                        | Yes      |
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-    )doc");
-    m_tensor.def("pad_h_rm", &pad_h_rm, R"doc(
-        Pads a given tensor's on the H dimension (2nd dimension from lowest)
-        with 0s until the H reaches dimension ``paddedH``.
-
-        +----------+----------------------+-----------+--------------+----------+
-        | Argument | Description          | Data type | Valid range  | Required |
-        +==========+======================+===========+==============+==========+
-        | a        | Tensor to pad        | Tensor    |              | Yes      |
-        +----------+----------------------+-----------+--------------+----------+
-        | paddedH  | New H dim            | int       | >= current H | Yes      |
-        +----------+----------------------+-----------+--------------+----------+
     )doc");
     m_tensor.def("pad", &pad, R"doc(
         Pad TT Tensor with given pad value ``arg2``.

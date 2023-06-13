@@ -76,8 +76,6 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"),
     TestEntry("tt_metal/tests/ops/test_transpose_wh_single_core", "ops/test_transpose_wh_single_core"),
     TestEntry("tt_metal/tests/ops/test_transpose_wh_multi_core", "ops/test_transpose_wh_multi_core"),
-    TestEntry("tt_metal/tests/ops/test_transpose_hc_rm_8bank_single_core", "ops/test_transpose_hc_rm_8bank_single_core"),
-    TestEntry("tt_metal/tests/ops/test_transpose_hc_rm_8bank_multi_core", "ops/test_transpose_hc_rm_8bank_multi_core"),
     TestEntry("tt_metal/tests/ops/test_tilize_op", "ops/test_tilize_op"),
     TestEntry("tt_metal/tests/ops/test_tilize_op_channels_last", "ops/test_tilize_op_channels_last"),
     TestEntry("tt_metal/tests/ops/test_tilize_zero_padding", "ops/test_tilize_zero_padding"),

@@ -47,39 +47,3 @@ def test_transpose_hc():
     del xtt
 
     ttl.device.CloseDevice(device)
-
-
-def test_transpose_hc_rm():
-    torch.manual_seed(123)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
-
-    N = 3
-    C = 128  # 2
-    H = 2  # 128
-    W = 64
-    x = torch.randn((N, C, H, W)).bfloat16().float()
-
-    xt = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        [N, C, H, W],
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        device,
-    )
-
-    # apply  h-padding
-    xtp = ttl.tensor.transpose_hc_rm(xt)
-    assert xtp.shape() == [N, H, C, W]
-    xtp_data = xtp.to(host).data()
-    tt_got_back = torch.Tensor(xtp_data).reshape(xtp.shape())
-
-    print("pad_h_rm() max absdiff=")
-    hc_ref = x.permute(0, 2, 1, 3)
-    print_diff_argmax(tt_got_back, hc_ref)
-    assert torch.equal(tt_got_back, hc_ref)
-
-    del xtp_data
-
-    ttl.device.CloseDevice(device)

@@ -13,8 +13,6 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/ops/test_transpose_op \
 		 tests/tt_metal/ops/test_transpose_wh_single_core \
 		 tests/tt_metal/ops/test_transpose_wh_multi_core \
-		 tests/tt_metal/ops/test_transpose_hc_rm_8bank_single_core \
-		 tests/tt_metal/ops/test_transpose_hc_rm_8bank_multi_core \
 		 tests/tt_metal/ops/test_reduce_op \
 		 tests/tt_metal/ops/test_bcast_op \
 		 tests/tt_metal/ops/test_bmm_op \

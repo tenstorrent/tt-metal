@@ -6,7 +6,6 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.cpp \
 	libs/tt_dnn/op_library/eltwise_unary/single_core/eltwise_unary_op_single_core.cpp \
 	libs/tt_dnn/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp \
-	libs/tt_dnn/op_library/pad_h_rm/pad_h_rm_op.cpp \
 	libs/tt_dnn/op_library/pad/pad_op.cpp \
 	libs/tt_dnn/op_library/unpad/unpad_op.cpp \
 	libs/tt_dnn/op_library/fill_rm/fill_rm_op.cpp \
@@ -14,7 +13,6 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/transpose/wh_multi_core/transpose_wh_op_multi_core.cpp \
 	libs/tt_dnn/op_library/transpose/hc_multi_core/transpose_hc_op_multi_core.cpp \
 	libs/tt_dnn/op_library/transpose/single_core/transpose_op_single_core.cpp \
-	libs/tt_dnn/op_library/transpose_rm/transpose_rm_op.cpp \
 	libs/tt_dnn/op_library/reduce/reduce_op.cpp \
 	libs/tt_dnn/op_library/reduce/single_core/reduce_op_single_core.cpp \
 	libs/tt_dnn/op_library/reduce/multi_core_h/reduce_op_multi_core_h.cpp \

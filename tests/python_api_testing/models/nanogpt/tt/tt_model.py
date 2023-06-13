@@ -84,13 +84,12 @@ class CausalSelfAttention(nn.Module):
     def make_heads(self, x, num_heads):
         untilized_x = ttm.tensor.untilize(x)
         reshaped_unt = ttm.tensor.reshape(untilized_x, x.shape()[0], x.shape()[2], num_heads, x.shape()[3] // num_heads)
-        transposed = ttm.tensor.transpose_hc_rm(reshaped_unt)
+        transposed = ttm.tensor.transpose_hc(reshaped_unt)
         retilized = ttm.tensor.tilize(transposed)
         return retilized
 
     def unmake_heads(self, x):
-        untilized_x = ttm.tensor.untilize(x)
-        ctx = ttm.tensor.transpose_hc_rm(untilized_x)
+        ctx = ttm.tensor.transpose_hc(x)
         ushape = ctx.shape()
         reshaped = ttm.tensor.reshape(ctx, 1, ushape[0], ushape[1], ushape[2]*ushape[3])
         #set_FR(1)
