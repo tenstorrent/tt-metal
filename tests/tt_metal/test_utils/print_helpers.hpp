@@ -5,6 +5,9 @@ namespace tt
 {
 namespace test_utils
 {
+    /// @brief generic vector printer
+    /// @tparam T
+    /// @param const std::vector<T>& vec
     template <typename T>
     void print_vec(const std::vector<T>& vec) {
         int idx = 0;

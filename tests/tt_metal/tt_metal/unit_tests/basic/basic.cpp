@@ -120,8 +120,7 @@ TEST_F(BasicDeviceTest, DramPings) {
     EXPECT_TRUE(dram_ping(device_, 32*1024, start_byte_address, device_->num_dram_channels()));
 }
 TEST_F(BasicDeviceTest, IllegalDramPings) {
-    auto num_channels = device_->num_dram_channels();
-    num_channels++;
+    auto num_channels = device_->num_dram_channels() + 1;
     size_t start_byte_address = 0;
     EXPECT_ANY_THROW(dram_ping(device_, 4, start_byte_address, num_channels));
 }
