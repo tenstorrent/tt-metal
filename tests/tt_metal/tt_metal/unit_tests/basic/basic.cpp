@@ -2,7 +2,8 @@
 #include <functional>
 #include <random>
 
-#include "gtest/gtest.h"
+#include "basic_device_fixture.hpp"
+#include "doctest/doctest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -10,19 +11,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 using namespace tt;
 
-class BasicDeviceTest : public ::testing::Test {
-   protected:
-    void SetUp() override {
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-        const int pci_express_slot = 0;
-        device_ = tt_metal::CreateDevice(arch, pci_express_slot);
-        tt_metal::InitializeDevice(device_);
-    }
-
-    void TearDown() override { tt_metal::CloseDevice(device_); }
-    tt_metal::Device* device_;
-};
-
+namespace unit_tests::basic {
 // Ping a set number of bytes into the specified address of L1
 bool l1_ping(
     tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& grid_size) {
@@ -104,51 +93,71 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
     pass &= tt_metal::LaunchKernels(device, program);
     return pass;
 }
-TEST_F(BasicDeviceTest, DramPings) {
-    size_t start_byte_address = 0;
-    EXPECT_TRUE(dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
-    start_byte_address = device_->dram_bank_size() - 32 * 1024;
-    EXPECT_TRUE(dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-    EXPECT_TRUE(dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
-}
-TEST_F(BasicDeviceTest, IllegalDramPings) {
-    auto num_channels = device_->num_dram_channels() + 1;
-    size_t start_byte_address = 0;
-    EXPECT_ANY_THROW(dram_ping(device_, 4, start_byte_address, num_channels));
-}
+}  // namespace unit_tests::basic
+TEST_SUITE(
+    "BasicDeviceTest" *
+    doctest::description("Basic device tests should just test simple APIs and shouldn't take more than 1s") *
+    doctest::timeout(1)) {
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Load and Teardown device") {}
 
-TEST_F(BasicDeviceTest, L1Pings) {
-    size_t start_byte_address = UNRESERVED_BASE;
-    EXPECT_TRUE(l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
-    start_byte_address = device_->l1_size() - 32 * 1024;
-    EXPECT_TRUE(l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-    EXPECT_TRUE(l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
-}
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Load Blank Kernels and Teardown device") {
+        unit_tests::basic::load_all_blank_kernels(device_);
+    }
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Ping all legal dram channels") {
+        SUBCASE("Low Address Dram") {
+            size_t start_byte_address = 0;
+            REQUIRE(unit_tests::basic::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
+        }
+        SUBCASE("High Address Dram") {
+            size_t start_byte_address = device_->dram_bank_size() - 32 * 1024;
+            REQUIRE(unit_tests::basic::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
+            REQUIRE(unit_tests::basic::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
+        }
+    }
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Ping all legal dram channels + illegal channel") {
+        auto num_channels = device_->num_dram_channels() + 1;
+        size_t start_byte_address = 0;
+        REQUIRE_THROWS_WITH(
+            unit_tests::basic::dram_ping(device_, 4, start_byte_address, num_channels),
+            doctest::Contains("Bounds-Error"));
+    }
 
-TEST_F(BasicDeviceTest, IllegalL1Pings) {
-    auto grid_size = device_->logical_grid_size();
-    grid_size.x++;
-    grid_size.y++;
-    size_t start_byte_address = UNRESERVED_BASE;
-    EXPECT_ANY_THROW(l1_ping(device_, 4, start_byte_address, grid_size));
-}
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Ping all legal l1 cores") {
+        SUBCASE("Low Address L1") {
+            size_t start_byte_address = UNRESERVED_BASE;
+            REQUIRE(unit_tests::basic::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
+        }
+        SUBCASE("High Address L1") {
+            size_t start_byte_address = device_->l1_size() - 32 * 1024;
+            REQUIRE(unit_tests::basic::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
+            REQUIRE(unit_tests::basic::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
+        }
+    }
 
-TEST_F(BasicDeviceTest, BlankKernels) { load_all_blank_kernels(device_); }
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Ping all legal l1 + illegal cores") {
+        auto grid_size = device_->logical_grid_size();
+        grid_size.x++;
+        grid_size.y++;
+        size_t start_byte_address = UNRESERVED_BASE;
+        REQUIRE_THROWS_WITH(
+            unit_tests::basic::l1_ping(device_, 4, start_byte_address, grid_size), doctest::Contains("Bounds-Error"));
+    }
+}

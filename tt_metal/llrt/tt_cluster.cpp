@@ -836,7 +836,12 @@ void tt_cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
     tt_SocDescriptor& desc_to_use = get_soc_desc(chip_id);
-    TT_ASSERT(d_chan < desc_to_use.dram_cores.size(), "Trying to address dram channel that doesnt exist in the device descriptor");
+    tt::log_assert(
+        d_chan < desc_to_use.dram_cores.size(),
+        "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
+        d_chan,
+        desc_to_use.dram_cores.size()
+    );
     TT_ASSERT(d_subchannel < desc_to_use.dram_cores.at(d_chan).size(), "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
     size_t offset = desc_to_use.get_address_offset(d_chan);
@@ -848,7 +853,12 @@ void tt_cluster::read_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint6
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
     tt_SocDescriptor& desc_to_use = get_soc_desc(chip_id);
-    TT_ASSERT(d_chan < desc_to_use.dram_cores.size(), "Trying to address dram channel that doesnt exist in the device descriptor");
+    tt::log_assert(
+        d_chan < desc_to_use.dram_cores.size(),
+        "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
+        d_chan,
+        desc_to_use.dram_cores.size()
+    );
     TT_ASSERT(d_subchannel < desc_to_use.dram_cores.at(d_chan).size(), "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
     size_t offset = desc_to_use.get_address_offset(d_chan);

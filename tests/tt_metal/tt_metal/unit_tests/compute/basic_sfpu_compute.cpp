@@ -2,8 +2,9 @@
 #include <functional>
 #include <random>
 
+#include "basic_device_fixture.hpp"
 #include "bfloat16.hpp"
-#include "gtest/gtest.h"
+#include "doctest/doctest.h"
 #include "tests/tt_metal/tt_metal/sfpu_helper/sfpu_helper.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
@@ -13,6 +14,7 @@
 
 using namespace tt;
 
+namespace unit_tests::basic_sfpu_compute {
 // SFPU maps -> relevant kernels, golden functions, comparison functions
 const map<string, string> sfpu_op_to_hlk_op_name = {
     // TODO(AP): auto-generate inits
@@ -25,85 +27,98 @@ const map<string, string> sfpu_op_to_hlk_op_name = {
     {"log", "log_tile_init(); log_tile(0); pack_tile(0, CB::c_out0);"},
     {"tanh", "tanh_tile_init(); tanh_tile(0); pack_tile(0, CB::c_out0);"},
 };
-class BasicSfpuTest : public ::testing::Test {
-   protected:
-    void SetUp() override {
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-        const int pci_express_slot = 0;
-        device_ = tt_metal::CreateDevice(arch, pci_express_slot);
-        tt_metal::InitializeDevice(device_);
-    }
-
-    void TearDown() override { tt_metal::CloseDevice(device_); }
-    tt_metal::Device* device_;
-};
-
 // Reader reads from single dram to core, writer synchronizes with datacopy kernel and writes to dram
 // DRAM --> (Reader Core CB using reader RISCV)
 // Reader Core --> Datacopy --> Reader Core
 // Reader Core --> Writes to Dram
-bool single_core_sfpu(
-    tt_metal::Device* device,
-    const size_t& num_tiles,
-    const size_t& tile_byte_size,
-    const size_t& output_dram_channel,
-    const size_t& output_dram_byte_address,
-    const size_t& input_dram_channel,
-    const size_t& input_dram_byte_address,
-    const size_t& local_core_input_byte_address,
-    const tt::DataFormat& local_core_input_data_format,
-    const size_t& local_core_output_byte_address,
-    const tt::DataFormat& local_core_output_data_format,
-    const CoreCoord& core,
-    const string& sfpu_op) {
+struct SingleCoreSfpuConfig {
+    size_t num_tiles = 0;
+    size_t tile_byte_size = 0;
+    size_t output_dram_channel = 0;
+    size_t output_dram_byte_address = 0;
+    size_t input_dram_channel = 0;
+    size_t input_dram_byte_address = 0;
+    size_t l1_input_byte_address = 0;
+    tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
+    size_t l1_output_byte_address = 0;
+    tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
+    CoreCoord core = {};
+    std::string sfpu_op = "";
+};
+
+bool single_core_sfpu(tt_metal::Device* device, const SingleCoreSfpuConfig& test_config) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    const size_t byte_size = num_tiles * tile_byte_size;
+    const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
     auto input_dram_buffer = tt_metal::Buffer(
-        device, byte_size, input_dram_byte_address, input_dram_channel, byte_size, tt_metal::BufferType::DRAM);
+        device,
+        byte_size,
+        test_config.input_dram_byte_address,
+        test_config.input_dram_channel,
+        byte_size,
+        tt_metal::BufferType::DRAM);
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
     auto output_dram_buffer = tt_metal::Buffer(
-        device, byte_size, output_dram_byte_address, output_dram_channel, byte_size, tt_metal::BufferType::DRAM);
+        device,
+        byte_size,
+        test_config.output_dram_byte_address,
+        test_config.output_dram_channel,
+        byte_size,
+        tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input_cb = tt_metal::CreateCircularBuffer(
-        program, device, 0, core, num_tiles, byte_size, local_core_input_byte_address, local_core_input_data_format);
+        program,
+        device,
+        0,
+        test_config.core,
+        test_config.num_tiles,
+        byte_size,
+        test_config.l1_input_byte_address,
+        test_config.l1_input_data_format);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(
-        program, device, 16, core, num_tiles, byte_size, local_core_output_byte_address, local_core_output_data_format);
+        program,
+        device,
+        16,
+        test_config.core,
+        test_config.num_tiles,
+        byte_size,
+        test_config.l1_output_byte_address,
+        test_config.l1_output_data_format);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary.cpp",
-        core,
+        test_config.core,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
-        core,
+        test_config.core,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
     vector<uint32_t> compute_kernel_args = {
-        uint32_t(num_tiles),  // per_core_block_cnt
-        1                     // per_core_block_cnt
+        uint32_t(test_config.num_tiles),  // per_core_block_cnt
+        1                                 // per_core_block_cnt
     };
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
     auto sfpu_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-        core,
+        test_config.core,
         compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode);
-    sfpu_kernel->add_define("SFPU_OP_AND_PACK", sfpu_op_to_hlk_op_name.at(sfpu_op));
-    bool is_relu = (sfpu_op == "relu");
+    sfpu_kernel->add_define("SFPU_OP_AND_PACK", sfpu_op_to_hlk_op_name.at(test_config.sfpu_op));
+    bool is_relu = (test_config.sfpu_op == "relu");
     sfpu_kernel->add_define("INIT_RELU", is_relu ? "pack_relu_config(1);" : "");
     sfpu_kernel->add_define("DEINIT_RELU", is_relu ? "pack_relu_config(0);" : "");
     ////////////////////////////////////////////////////////////////////////////
@@ -114,316 +129,160 @@ bool single_core_sfpu(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> inputs =
-        sfpu_op_to_init_func.at(sfpu_op)(byte_size, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> inputs = sfpu_op_to_init_func.at(test_config.sfpu_op)(
+        byte_size, std::chrono::system_clock::now().time_since_epoch().count());
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::WriteRuntimeArgsToDevice(
         device,
         reader_kernel,
-        core,
+        test_config.core,
         {
-            (uint32_t)input_dram_byte_address,
+            (uint32_t)test_config.input_dram_byte_address,
             (uint32_t)input_dram_noc_xy.x,
             (uint32_t)input_dram_noc_xy.y,
-            (uint32_t)num_tiles,
+            (uint32_t)test_config.num_tiles,
         });
     pass &= tt_metal::WriteRuntimeArgsToDevice(
         device,
         writer_kernel,
-        core,
+        test_config.core,
         {
-            (uint32_t)output_dram_byte_address,
+            (uint32_t)test_config.output_dram_byte_address,
             (uint32_t)output_dram_noc_xy.x,
             (uint32_t)output_dram_noc_xy.y,
-            (uint32_t)num_tiles,
+            (uint32_t)test_config.num_tiles,
         });
     pass &= tt_metal::LaunchKernels(device, program);
 
-    std::vector<uint32_t> golden = sfpu(inputs, sfpu_op_to_function.at(sfpu_op));
+    std::vector<uint32_t> golden = sfpu(inputs, sfpu_op_to_function.at(test_config.sfpu_op));
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    pass &= packed_uint32_t_vector_comparison(dest_buffer_data, golden, sfpu_op_to_comparison_function.at(sfpu_op));
+    pass &= packed_uint32_t_vector_comparison(
+        dest_buffer_data, golden, sfpu_op_to_comparison_function.at(test_config.sfpu_op));
     return pass;
 }
+}  // namespace unit_tests::basic_sfpu_compute
 
-TEST_F(BasicSfpuTest, DISABLED_SingleTileRelu) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "relu"));
-}
-TEST_F(BasicSfpuTest, DISABLED_SingleTileExponential) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "exponential"));
-}
+TEST_SUITE("BasicSfpuCompute") {
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "SingleTile") {
+        unit_tests::basic_sfpu_compute::SingleCoreSfpuConfig test_config = {
+            .num_tiles = 1,
+            .tile_byte_size = 2 * 32 * 32,
+            .output_dram_channel = 0,
+            .output_dram_byte_address = 0,
+            .input_dram_channel = 0,
+            .input_dram_byte_address = 16 * 32 * 32,
+            .l1_input_byte_address = UNRESERVED_BASE,
+            .l1_input_data_format = tt::DataFormat::Float16_b,
+            .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
+            .l1_output_data_format = tt::DataFormat::Float16_b,
+            .core = {.x = 0, .y = 0},
+            .sfpu_op = "relu"};
 
-TEST_F(BasicSfpuTest, SingleTileReciprocal) {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        1,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "reciprocal"));
-    tt_metal::CloseDevice(device);
-}
-
-TEST_F(BasicSfpuTest, SingleTileGelu) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        1,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "gelu"));
-}
-
-TEST_F(BasicSfpuTest, SingleTileSqrt) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        1,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "sqrt"));
-}
-
-TEST_F(BasicSfpuTest, SingleTileSigmoid) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        1,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "sigmoid"));
-}
-
-TEST_F(BasicSfpuTest, DISABLED_SingleTileLog) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        1,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "log"));
-}
-
-TEST_F(BasicSfpuTest, SingleTileTanh) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        1,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "tanh"));
-}
-
-TEST_F(BasicSfpuTest, DISABLED_MultiTileRelu) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "relu"));
-}
-TEST_F(BasicSfpuTest, DISABLED_MultiTileExponential) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "exponential"));
-}
-
-TEST_F(BasicSfpuTest, MultiTileReciprocal) {
-    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    const int pci_express_slot = 0;
-    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
-    tt_metal::InitializeDevice(device);
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "reciprocal"));
-    tt_metal::CloseDevice(device);
-}
-
-TEST_F(BasicSfpuTest, MultiTileGelu) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "gelu"));
-}
-
-TEST_F(BasicSfpuTest, MultiTileSqrt) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "sqrt"));
-}
-
-TEST_F(BasicSfpuTest, MultiTileSigmoid) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "sigmoid"));
-}
-
-TEST_F(BasicSfpuTest, DISABLED_MultiTileLog) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "log"));
-}
-
-TEST_F(BasicSfpuTest, MultiTileTanh) {
-    EXPECT_TRUE(single_core_sfpu(
-        device_,
-        4,
-        2 * 32 * 32,
-        0,
-        0,
-        0,
-        16 * 32 * 32,
-        UNRESERVED_BASE,
-        tt::DataFormat::Float16_b,
-        UNRESERVED_BASE + 16 * 32 * 32,
-        tt::DataFormat::Float16_b,
-        {.x = 0, .y = 0},
-        "tanh"));
+        SUBCASE("relu") {
+            test_config.sfpu_op = "relu";
+            if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                WARN(single_core_sfpu(device_, test_config));
+            } else {
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+        }
+        SUBCASE("exponential") {
+            test_config.sfpu_op = "exponential";
+            if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                WARN(single_core_sfpu(device_, test_config));
+            } else {
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+        }
+        SUBCASE("reciprocal") {
+            test_config.sfpu_op = "reciprocal";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+        SUBCASE("gelu") {
+            test_config.sfpu_op = "gelu";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+        SUBCASE("sqrt") {
+            test_config.sfpu_op = "sqrt";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+        SUBCASE("sigmoid") {
+            test_config.sfpu_op = "sigmoid";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+        SUBCASE("log") {
+            test_config.sfpu_op = "log";
+            if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                WARN(single_core_sfpu(device_, test_config));
+            } else {
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+        }
+        SUBCASE("tanh") {
+            test_config.sfpu_op = "tanh";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+    }
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "MultiTile") {
+        unit_tests::basic_sfpu_compute::SingleCoreSfpuConfig test_config = {
+            .num_tiles = 4,
+            .tile_byte_size = 2 * 32 * 32,
+            .output_dram_channel = 0,
+            .output_dram_byte_address = 0,
+            .input_dram_channel = 0,
+            .input_dram_byte_address = 16 * 32 * 32,
+            .l1_input_byte_address = UNRESERVED_BASE,
+            .l1_input_data_format = tt::DataFormat::Float16_b,
+            .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
+            .l1_output_data_format = tt::DataFormat::Float16_b,
+            .core = {.x = 0, .y = 0},
+            .sfpu_op = "relu"};
+        SUBCASE("relu") {
+            test_config.sfpu_op = "relu";
+            if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                WARN(single_core_sfpu(device_, test_config));
+            } else {
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+        }
+        SUBCASE("exponential") {
+            test_config.sfpu_op = "exponential";
+            if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                WARN(single_core_sfpu(device_, test_config));
+            } else {
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+        }
+        SUBCASE("reciprocal") {
+            test_config.sfpu_op = "reciprocal";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+        SUBCASE("gelu") {
+            test_config.sfpu_op = "gelu";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+        SUBCASE("sqrt") {
+            test_config.sfpu_op = "sqrt";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+        SUBCASE("sigmoid") {
+            test_config.sfpu_op = "sigmoid";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+        SUBCASE("log") {
+            test_config.sfpu_op = "log";
+            if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                WARN(single_core_sfpu(device_, test_config));
+            } else {
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+        }
+        SUBCASE("tanh") {
+            test_config.sfpu_op = "tanh";
+            REQUIRE(single_core_sfpu(device_, test_config));
+        }
+    }
 }
