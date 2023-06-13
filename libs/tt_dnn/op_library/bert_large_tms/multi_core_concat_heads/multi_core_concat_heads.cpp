@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor multi_core_concat_heads(const Tensor &a, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size) {
+Program multi_core_concat_heads(const Tensor &a, Tensor& output, CoreCoord compute_and_storage_grid_size) {
 
     const auto& ashape = a.shape();
 
@@ -57,9 +57,6 @@ Tensor multi_core_concat_heads(const Tensor &a, const MemoryConfig& mem_config, 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    std::array<uint32_t, 4> output_shape = {ashape[0], 1, ashape[2], ashape[1] * ashape[3]};
-
-    tt_metal::Tensor output = tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device, mem_config);
     tt_metal::Buffer *out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -162,24 +159,7 @@ Tensor multi_core_concat_heads(const Tensor &a, const MemoryConfig& mem_config, 
         }
     }
 
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    bool pass = true;
-    pass &= tt_metal::CompileProgram(device, program);
-
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    pass &= tt_metal::LaunchKernels(device, program);
-
-    TT_ASSERT(pass);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 } // namespace tt_metal

@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-std::vector<Tensor> multi_core_split_fused_qkv(const Tensor &a, const MemoryConfig& mem_config, CoreCoord compute_and_storage_grid_size) {
+Program multi_core_split_fused_qkv(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_and_storage_grid_size) {
 
     const auto& ashape = a.shape();
 
@@ -50,15 +50,7 @@ std::vector<Tensor> multi_core_split_fused_qkv(const Tensor &a, const MemoryConf
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    std::array<uint32_t, 4> output_shape{ashape[0], ashape[1], ashape[2], ashape[3] / num_tensors}; // Split into num_tensors along last dim
-
-    // HACK to avoid copy constructors when using vectors
-    // TODO: If we have default initializers for Tensor, we can do: std::vector<Tensor> output(num_tensors);
-    std::vector<tt_metal::Tensor> output;
-    output.reserve(num_tensors);
-    for (size_t i = 0; i < num_tensors; i++) {
-        output.push_back(tt_metal::Tensor(output_shape, a.dtype(), tt::tt_metal::Layout::TILE, device, mem_config));
-    }
+    TT_ASSERT((output.size() == 3), "Output vector must be size 3 for split fused qkv!");
     tt_metal::Tensor& q = output[0];
     tt_metal::Tensor& k = output[1];
     tt_metal::Tensor& v = output[2];
@@ -170,24 +162,7 @@ std::vector<Tensor> multi_core_split_fused_qkv(const Tensor &a, const MemoryConf
         }
     }
 
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    bool pass = true;
-    pass &= tt_metal::CompileProgram(device, program);
-
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    pass &= tt_metal::LaunchKernels(device, program);
-
-    TT_ASSERT(pass);
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return output;
+    return program;
 }
 
 } // namespace tt_metal

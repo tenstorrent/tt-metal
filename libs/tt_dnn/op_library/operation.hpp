@@ -22,8 +22,13 @@ static Device* get_device(const std::vector<std::reference_wrapper<const Tensor>
 template<typename Operation>
 static std::vector<Tensor> generic_create_output_tensors(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, Layout output_layout = tt::tt_metal::Layout::TILE, const MemoryConfig &output_mem_config = MemoryConfig{.interleaved = true}) {
     const auto& input_tensor = input_tensors.at(0).get();
+    const auto& output_shapes = op.compute_output_shapes(input_tensors);
+
+    // HACK to avoid copy constructors when using vectors
+    // TODO: If we have default initializers for Tensor, we can do: std::vector<Tensor> output(num_tensors);
     std::vector<Tensor> output_tensors;
-    for (const auto& output_shape : op.compute_output_shapes(input_tensors)) {
+    output_tensors.reserve(output_shapes.size());
+    for (const auto& output_shape : output_shapes) {
         output_tensors.emplace_back(tt_metal::Tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), output_mem_config));
     }
     return output_tensors;
