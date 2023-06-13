@@ -31,6 +31,8 @@ else
   echo "Skipping non-Grayskull Python small integration tests..."
 fi
 
+./build/test/tt_metal/unit_tests
+
 echo "Checking docs build..."
 
 cd $TT_METAL_HOME/docs

@@ -3,6 +3,7 @@ TT_METAL_UNIT_TESTS += \
 	tests_main.cpp \
 	basic/basic.cpp \
 	compute/basic_sfpu_compute.cpp \
+	compute/basic_binary_compute.cpp \
 	dram/single_core_dram.cpp
 
 
