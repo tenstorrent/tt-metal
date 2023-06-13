@@ -231,6 +231,22 @@ def pad(
 
 
 @convert_tt_tensors_wrapper
+def repeat(input: ttl_tensor.Tensor, sizes: List[int]) -> ttl_tensor.Tensor:
+    r"""
+    Returns the input tensor ``input`` repeated along the specified dims.
+
+    +------------------+-------------------------------------------------------------+------------------+--------------+----------+
+    | Argument         | Description                                                 | Data type        | Valid range  | Required |
+    +==================+=============================================================+==================+==============+==========+
+    | input            | Input tensor                                                | Tensor           |              | Yes      |
+    +------------------+-------------------------------------------------------------+------------------+--------------+----------+
+    | sizes            | The number of times to repeat the tensor along each dim     | int              |              | Yes      |
+    +------------------+-------------------------------------------------------------+------------------+--------------+----------+
+    """
+    return input.repeat(sizes)
+
+
+@convert_tt_tensors_wrapper
 def repeat_interleave(
     input: ttl_tensor.Tensor,
     repeats: Union[ttl_tensor.Tensor, int],

@@ -10,19 +10,18 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "input_shape", [torch.Size([6, 12, 6, 24]), torch.Size([24, 30, 6, 6])]
+    "input_shape", [torch.Size([6, 12, 6, 24]), torch.Size([24, 30, 6, 6]), torch.Size([1, 2, 1, 2])]
 )
-@pytest.mark.parametrize("chunks", [1, 2, 3])
-@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+@pytest.mark.parametrize("sizes", [[1, 2, 3, 4], [2, 2, 2, 2]])
 @pytest.mark.parametrize("on_device", [False, True])
-def test_chunk_fallback(input_shape, chunks, dim, on_device):
+def test_repeat_fallback(input_shape, sizes, on_device):
     torch.manual_seed(1234)
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
-    pt_out = torch.chunk(x, chunks, dim)
+    pt_out = x.repeat(sizes)
 
     # Test on host RM
     t0 = ttl.tensor.Tensor(
@@ -34,18 +33,16 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device):
     if on_device:
         t0 = t0.to(device)
 
-    tt_out = fallback_ops.chunk(t0, chunks, dim)
+    t1 = fallback_ops.repeat(t0, sizes)
 
-    for i in range(len(pt_out)):
-        pt_output = pt_out[i]
-        tt_output = torch.Tensor(
-            tt_out[i].to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(tt_out[i].shape())
-        comp_pass, _ = comp_pcc(pt_output, tt_output, 0.9999)
-        _, comp_out = comp_allclose_and_pcc(pt_output, tt_output)
-        logger.info(comp_out)
-        assert comp_pass
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+    comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
+    _, comp_out = comp_allclose_and_pcc(pt_out, output)
+    logger.info(comp_out)
+    assert comp_pass
 
-    del tt_out
+    del t1
 
     ttl.device.CloseDevice(device)

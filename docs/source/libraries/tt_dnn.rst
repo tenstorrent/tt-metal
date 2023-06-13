@@ -119,6 +119,8 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autofunction:: tt_lib.fallback_ops.fallback_ops.pad
 
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.repeat
+
 .. autofunction:: tt_lib.fallback_ops.fallback_ops.repeat_interleave
 
 .. autofunction:: tt_lib.fallback_ops.fallback_ops.concat
