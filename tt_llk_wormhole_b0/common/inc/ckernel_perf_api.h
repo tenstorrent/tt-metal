@@ -74,8 +74,6 @@ inline void set_perf_dump_flag_for_input(int input_idx) {
 
 inline void record_pack_input_init_timestamp() {
    if (record_perf_events) {
-      t6_semaphore_post(semaphore::PACK_DONE);
-      while (semaphore_read(semaphore::PACK_DONE) == 0) {}
       uint32_t event_id = perf::get_event_id(0, 0, perf::EventType::PACK_EACH_INPUT, current_outer_loop_iter);
       record_timestamp_64b(event_id);
    }
@@ -83,8 +81,6 @@ inline void record_pack_input_init_timestamp() {
 
 inline void record_pack_input_end_timestamp() {
    if (record_perf_events) {
-      t6_semaphore_get<p_stall::PACK>(semaphore::PACK_DONE);
-      while (semaphore_read(semaphore::PACK_DONE) > 0) {}
       uint32_t event_id = perf::get_event_id(0, 0, perf::EventType::PACK_EACH_INPUT, current_outer_loop_iter);
       record_timestamp_64b(event_id);      
    }

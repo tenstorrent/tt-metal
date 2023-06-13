@@ -36,15 +36,19 @@
 #include "kernel_slowdown_config.h"
 #endif
 
-#ifndef INSERT_INPUT_DELAY
-#define INSERT_INPUT_DELAY 0
+#ifndef INSERT_UNPACK_DELAY
+#define INSERT_UNPACK_DELAY 0
 #endif
 
-#ifndef INSERT_OUTPUT_DELAY
-#define INSERT_OUTPUT_DELAY 0
+#ifndef INSERT_MATH_DELAY
+#define INSERT_MATH_DELAY 0
 #endif
 
-#define DELAY_EN (INSERT_INPUT_DELAY || INSERT_OUTPUT_DELAY)
+#ifndef INSERT_PACK_DELAY
+#define INSERT_PACK_DELAY 0
+#endif
+
+#define DELAY_EN (INSERT_UNPACK_DELAY || INSERT_PACK_DELAY || INSERT_MATH_DELAY)
 
 #include <cstdint>
 
@@ -434,6 +438,70 @@ inline void stall_kernel(uint32_t num_cycles) {
         }
     }
 }
+#endif
+
+#if defined(PERF_DUMP) || DELAY_EN > 0
+
+extern bool record_perf_events;
+
+// This api is inserted in the beginning of each input loop
+// Wait for all instructions of previous loop to finish before starting the next loop
+// If PERF_DUMP is enabled, always wait but only for the inputs that perf dump is enabled for
+// If PERF_DUMP is enabled, and delay is not, no need to insert these apis for unpack and math
+template<int thread_id>
+inline void serialize_input_loop_start() {
+    if constexpr (thread_id == 0) {
+#if DELAY_EN > 0
+        t6_semaphore_post(semaphore::UNPACK_MATH_DONE);
+        while (semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
+#endif
+
+    } else if (thread_id == 1) {
+#if DELAY_EN > 0
+        t6_semaphore_post(semaphore::UNPACK_MATH_DONE);
+        while (semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
+#endif
+
+    } else if (thread_id == 2) {
+#if DELAY_EN == 0
+        if (record_perf_events) {
+#endif
+        t6_semaphore_post(semaphore::PACK_DONE);
+        while (semaphore_read(semaphore::PACK_DONE) == 0) {}
+#if DELAY_EN == 0
+        }
+#endif
+    }
+}
+
+template<int thread_id>
+inline void serialize_input_loop_end() {
+
+    if constexpr (thread_id == 0) {
+#if DELAY_EN > 0
+        t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_MATH_DONE);
+        while (semaphore_read(semaphore::UNPACK_MATH_DONE) > 0) {}
+#endif
+
+    } else if (thread_id == 1) {
+#if DELAY_EN > 0
+        t6_semaphore_get<p_stall::MATH>(semaphore::UNPACK_MATH_DONE);
+        while (semaphore_read(semaphore::UNPACK_MATH_DONE) > 0) {}
+#endif
+
+    } else if (thread_id == 2) {
+#if DELAY_EN == 0
+        if (record_perf_events) {
+#endif
+        t6_semaphore_get<p_stall::PACK>(semaphore::PACK_DONE);
+        while (semaphore_read(semaphore::PACK_DONE) > 0) {}
+#if DELAY_EN == 0
+        }
+#endif
+    }
+
+}
+
 #endif
 
 }
