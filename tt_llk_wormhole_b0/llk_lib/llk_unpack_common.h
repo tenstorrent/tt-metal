@@ -117,3 +117,8 @@ inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_old_operand
     llk_unpack_reconfig_data_format_srca(srca_old_operand, srca_new_operand);
     llk_unpack_reconfig_data_format_srcb(srcb_old_operand, srcb_new_operand);
 }
+
+inline void llk_unpack_dbg_feature_disable(){
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1<<11); // Clear debug feature disable in case it was set by previous kernel
+                                                             // e.g workaround for bug tenstorrent/budabackend#1372
+}

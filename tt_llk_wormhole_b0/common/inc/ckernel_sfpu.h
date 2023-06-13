@@ -1206,10 +1206,11 @@ inline void cast_fp32_to_fp16a()
     #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        vFloat in = dst_reg[0];
-        float_to_fp16a(in);
-        dst_reg[0] = in;
-
+        //vFloat val = dst_reg[0];
+        //dst_reg[0] = float_to_fp16a(val, 0);
+        TTI_SFPLOAD(0, 0, 3, 0);
+        TTI_SFP_STOCH_RND(0,0,0,0,0,8);
+        TTI_SFPSTORE(0,1,3,0);
         dst_reg++;
     }
 }
@@ -1297,7 +1298,7 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
         relu_max<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::cast_fp32_to_fp16a) {
-        cast_fp32_to_fp16a<APPROXIMATION_MODE, ITERATIONS>(param0);
+        cast_fp32_to_fp16a<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 
