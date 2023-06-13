@@ -11,6 +11,9 @@ namespace tt_metal {
 
 Program unpad_rm(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
+    TT_ASSERT(not a.on_host(), "Operand to unpad needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
+
     const std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
@@ -124,6 +127,8 @@ Program unpad_rm(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> 
 
 Program unpad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
+    TT_ASSERT(not a.on_host(), "Operand to unpad needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
 
     const std::array<uint32_t, 4> output_shape = output.shape();
 
@@ -233,8 +238,7 @@ Program unpad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4
 void Unpad::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(not input_tensor_a.on_host(), "Operand to unpad needs to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
+
     TT_ASSERT(
         (this->output_tensor_start[0] == 0 && this->output_tensor_start[1] == 0 && output_tensor_start[2] == 0 && output_tensor_start[3] == 0),
         "On device unpadding only supports unpadding at end of dims"

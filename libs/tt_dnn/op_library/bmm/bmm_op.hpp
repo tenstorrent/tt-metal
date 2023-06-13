@@ -85,9 +85,14 @@ struct BatchedMatmul : Operation {
 
 
 inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_ASSERT(input_tensor_b.shape()[0]*input_tensor_b.shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     return detail::run_with_autopad(Matmul(), input_tensor_a, input_tensor_b);
 }
 inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_ASSERT(input_tensor_a.shape()[1] == input_tensor_b.shape()[1] && input_tensor_a.shape()[0] == input_tensor_b.shape()[0]
+        && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     return detail::run_with_autopad(BatchedMatmul(), input_tensor_a, input_tensor_b);
 }
 

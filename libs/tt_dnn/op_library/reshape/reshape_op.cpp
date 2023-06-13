@@ -15,6 +15,11 @@ namespace tt_metal {
 
 Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W) {
 
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
+
+
     tt_metal::Program program = tt_metal::Program();
 
     CoreCoord core = {0, 0};
@@ -120,6 +125,10 @@ Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, 
 }
 
 Program reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
+
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
 
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core = {0, 0};
@@ -263,10 +272,6 @@ Program reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, in
 void Reshape::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
-
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not input_tensor_a.on_host(), "Operand to reshape needs to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
 
     auto output_shape = infer_dims_for_reshape(this->N, this->C, this->H, this->W, input_tensor_a.volume());
     TT_ASSERT(input_tensor_a.volume() == output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3], "New shape volume must match old shape volume");

@@ -66,7 +66,7 @@ Program fill_rm_single_core(const Tensor& any, Tensor &output, uint32_t N, uint3
 }
 
 void FillRM::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    TT_ASSERT((this->N > 0 && this -> C > 0 && this-> H > 0 && this-> W > 0));
+    TT_ASSERT((this->N > 0 && this->C > 0 && this-> H > 0 && this-> W > 0));
     TT_ASSERT((this->hFill <= this->H && this->wFill <= this->W));
 }
 

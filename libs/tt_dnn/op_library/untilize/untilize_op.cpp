@@ -15,6 +15,8 @@ namespace tt_metal {
 
 Program untilize_single_core(const Tensor &a, Tensor& output) {
 
+    TT_ASSERT(not a.on_host(), "Operand to untilize needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -159,10 +161,6 @@ void Untilize::validate(const std::vector<std::reference_wrapper<const Tensor>> 
     TT_ASSERT(input_tensor_a.dtype() != DataType::BFLOAT8_B, "Bfloat8_b can only exist as tilized data");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not input_tensor_a.on_host(), "Operand to untilize needs to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
-
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
 }
 
@@ -194,12 +192,10 @@ Tensor untilize(const Tensor &input_tensor_a) {
 
 Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
-    const std::array<uint32_t, 4> output_shape = {
-        output_tensor_end[0] - output_tensor_start[0] + 1,
-        output_tensor_end[1] - output_tensor_start[1] + 1,
-        output_tensor_end[2] - output_tensor_start[2] + 1,
-        output_tensor_end[3] - output_tensor_start[3] + 1,
-    };
+    TT_ASSERT(not a.on_host(), "Operand to untilize needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
+
+    const std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -381,10 +377,6 @@ void UntilizeWithUnpadding::validate(const std::vector<std::reference_wrapper<co
     const auto& input_tensor_a = input_tensors.at(0).get();
     TT_ASSERT(input_tensor_a.dtype() != DataType::BFLOAT8_B, "Bfloat8_b can only exist as tilized data");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
-
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not input_tensor_a.on_host(), "Operand to untilize needs to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
 
     TT_ASSERT(
         (this->output_tensor_start[0] == 0 && this->output_tensor_start[1] == 0 && this->output_tensor_start[2] == 0 && this->output_tensor_start[3] == 0),

@@ -37,7 +37,6 @@ void Transpose::validate(const std::vector<std::reference_wrapper<const Tensor>>
     u32 HW = H*W;
     TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
-    TT_ASSERT(input_tensor_a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
     if (this->dim == TransposeOpDim::HC) {
         TT_ASSERT(C % TILE_HEIGHT == 0);

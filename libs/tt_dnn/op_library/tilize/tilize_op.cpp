@@ -15,6 +15,10 @@ namespace tt_metal {
 
 Program tilize_single_core(const Tensor &a, Tensor& output) {
 
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
+
     tt_metal::Program program = tt_metal::Program();
 
     CoreCoord core = {0, 0};
@@ -166,10 +170,6 @@ void Tilize::validate(const std::vector<std::reference_wrapper<const Tensor>> &i
     const auto& input_tensor_a = input_tensors.at(0).get();
     TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR or input_tensor_a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not input_tensor_a.on_host(), "Operand to untilize needs to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
-
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
 
     uint32_t stick_s =  input_tensor_a.layout() == Layout::ROW_MAJOR ? input_tensor_a.shape()[3] : input_tensor_a.shape()[1];
@@ -210,6 +210,10 @@ Tensor tilize(const Tensor &input_tensor_a) {
 }
 
 Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
+
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -348,10 +352,6 @@ void TilizeWithZeroPadding::validate(const std::vector<std::reference_wrapper<co
     const auto& input_tensor_a = input_tensors.at(0).get();
     TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR or input_tensor_a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not input_tensor_a.on_host(), "Operand to untilize needs to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
-
     uint32_t stick_s =  input_tensor_a.layout() == Layout::ROW_MAJOR ? input_tensor_a.shape()[3] : input_tensor_a.shape()[1];
     TT_ASSERT(stick_s % TILE_WIDTH == 0);
     uint32_t num_sticks = input_tensor_a.layout() == Layout::ROW_MAJOR ? input_tensor_a.volume() / input_tensor_a.shape()[3] : input_tensor_a.volume() / input_tensor_a.shape()[1];
@@ -393,6 +393,10 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a) {
 }
 
 Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+
+    // TODO: Build some sort of dispatcher based on location of op operands
+    TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
 
     auto output_shape = output.shape();
 
@@ -590,15 +594,11 @@ void TilizeWithValPadding::validate(const std::vector<std::reference_wrapper<con
     const auto& input_tensor_a = input_tensors.at(0).get();
     TT_ASSERT((input_tensor_a.layout() == Layout::ROW_MAJOR), "Can only tilize row major data");
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not input_tensor_a.on_host(), "Operand to tilize needs to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
     TT_ASSERT(input_tensor_a.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0]);
     TT_ASSERT(input_tensor_a.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1]);
     TT_ASSERT(input_tensor_a.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2]);
     TT_ASSERT(input_tensor_a.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3]);
     TT_ASSERT((this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0), "On device padding only supports padding at end of dims");
-
 
     TT_ASSERT(this->output_tensor_shape[2] % TILE_HEIGHT == 0, "Output shape must be tilizable");
     TT_ASSERT(this->output_tensor_shape[3] % TILE_WIDTH == 0, "Output shape must be tilizable");

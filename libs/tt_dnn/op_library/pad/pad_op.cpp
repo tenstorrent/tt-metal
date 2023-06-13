@@ -11,6 +11,9 @@ namespace tt_metal {
 
 Program pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
 
+    TT_ASSERT(not a.on_host(), "Operand to pad needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
+
     tt_metal::Program program = tt_metal::Program();
 
     CoreCoord core = {0, 0};
@@ -127,6 +130,9 @@ Program pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &o
 }
 
 Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+
+    TT_ASSERT(not a.on_host(), "Operand to pad needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -252,8 +258,6 @@ Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> 
 void Pad::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(not input_tensor_a.on_host(), "Operand to pad needs to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
     TT_ASSERT(
         (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),
         "On device padding only supports padding at end of dims"
