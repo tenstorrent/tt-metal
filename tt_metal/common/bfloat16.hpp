@@ -14,6 +14,7 @@ class bfloat16 {
     uint16_t uint16_data;
 
  public:
+    static const size_t SIZEOF = 2;
     bfloat16() {
     }
 
@@ -50,7 +51,9 @@ class bfloat16 {
         // return 32 bits as float
         return *reinterpret_cast<float*>(&uint32_data);
     }
-
+    uint16_t to_packed() const {
+        return uint16_data;
+    }
     uint16_t to_uint16() const {
         return uint16_data;
     }

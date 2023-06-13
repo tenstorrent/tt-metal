@@ -148,7 +148,7 @@ bool single_core_sfpu(
     return pass;
 }
 
-TEST_F(BasicSfpuTest, DISABLED_Relu) {
+TEST_F(BasicSfpuTest, DISABLED_SingleTileRelu) {
     EXPECT_TRUE(single_core_sfpu(
         device_,
         4,
@@ -164,7 +164,7 @@ TEST_F(BasicSfpuTest, DISABLED_Relu) {
         {.x = 0, .y = 0},
         "relu"));
 }
-TEST_F(BasicSfpuTest, DISABLED_Exponential) {
+TEST_F(BasicSfpuTest, DISABLED_SingleTileExponential) {
     EXPECT_TRUE(single_core_sfpu(
         device_,
         4,
@@ -181,7 +181,147 @@ TEST_F(BasicSfpuTest, DISABLED_Exponential) {
         "exponential"));
 }
 
-TEST_F(BasicSfpuTest, Reciprocal) {
+TEST_F(BasicSfpuTest, SingleTileReciprocal) {
+    const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    const int pci_express_slot = 0;
+    auto device = tt_metal::CreateDevice(arch, pci_express_slot);
+    tt_metal::InitializeDevice(device);
+    EXPECT_TRUE(single_core_sfpu(
+        device_,
+        1,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        16 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 16 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "reciprocal"));
+    tt_metal::CloseDevice(device);
+}
+
+TEST_F(BasicSfpuTest, SingleTileGelu) {
+    EXPECT_TRUE(single_core_sfpu(
+        device_,
+        1,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        16 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 16 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "gelu"));
+}
+
+TEST_F(BasicSfpuTest, SingleTileSqrt) {
+    EXPECT_TRUE(single_core_sfpu(
+        device_,
+        1,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        16 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 16 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "sqrt"));
+}
+
+TEST_F(BasicSfpuTest, SingleTileSigmoid) {
+    EXPECT_TRUE(single_core_sfpu(
+        device_,
+        1,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        16 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 16 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "sigmoid"));
+}
+
+TEST_F(BasicSfpuTest, DISABLED_SingleTileLog) {
+    EXPECT_TRUE(single_core_sfpu(
+        device_,
+        1,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        16 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 16 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "log"));
+}
+
+TEST_F(BasicSfpuTest, SingleTileTanh) {
+    EXPECT_TRUE(single_core_sfpu(
+        device_,
+        1,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        16 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 16 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "tanh"));
+}
+
+TEST_F(BasicSfpuTest, DISABLED_MultiTileRelu) {
+    EXPECT_TRUE(single_core_sfpu(
+        device_,
+        4,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        16 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 16 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "relu"));
+}
+TEST_F(BasicSfpuTest, DISABLED_MultiTileExponential) {
+    EXPECT_TRUE(single_core_sfpu(
+        device_,
+        4,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        16 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 16 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "exponential"));
+}
+
+TEST_F(BasicSfpuTest, MultiTileReciprocal) {
     const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
     const int pci_express_slot = 0;
     auto device = tt_metal::CreateDevice(arch, pci_express_slot);
@@ -203,7 +343,7 @@ TEST_F(BasicSfpuTest, Reciprocal) {
     tt_metal::CloseDevice(device);
 }
 
-TEST_F(BasicSfpuTest, Gelu) {
+TEST_F(BasicSfpuTest, MultiTileGelu) {
     EXPECT_TRUE(single_core_sfpu(
         device_,
         4,
@@ -220,7 +360,7 @@ TEST_F(BasicSfpuTest, Gelu) {
         "gelu"));
 }
 
-TEST_F(BasicSfpuTest, Sqrt) {
+TEST_F(BasicSfpuTest, MultiTileSqrt) {
     EXPECT_TRUE(single_core_sfpu(
         device_,
         4,
@@ -237,7 +377,7 @@ TEST_F(BasicSfpuTest, Sqrt) {
         "sqrt"));
 }
 
-TEST_F(BasicSfpuTest, Sigmoid) {
+TEST_F(BasicSfpuTest, MultiTileSigmoid) {
     EXPECT_TRUE(single_core_sfpu(
         device_,
         4,
@@ -254,7 +394,7 @@ TEST_F(BasicSfpuTest, Sigmoid) {
         "sigmoid"));
 }
 
-TEST_F(BasicSfpuTest, DISABLED_Log) {
+TEST_F(BasicSfpuTest, DISABLED_MultiTileLog) {
     EXPECT_TRUE(single_core_sfpu(
         device_,
         4,
@@ -271,7 +411,7 @@ TEST_F(BasicSfpuTest, DISABLED_Log) {
         "log"));
 }
 
-TEST_F(BasicSfpuTest, Tanh) {
+TEST_F(BasicSfpuTest, MultiTileTanh) {
     EXPECT_TRUE(single_core_sfpu(
         device_,
         4,

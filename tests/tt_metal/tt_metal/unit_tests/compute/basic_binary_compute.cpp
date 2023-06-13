@@ -126,10 +126,12 @@ bool single_core_binary(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> input0 = create_random_vector_of_bfloat16_1_1 (byte_size, std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> input1 = create_random_vector_of_bfloat16 (byte_size,  2.0f, std::chrono::system_clock::now().time_since_epoch().count(), 0.01f);
-    tt_metal::WriteToBuffer(input0_dram_buffer, input0);
-    tt_metal::WriteToBuffer(input1_dram_buffer, input1);
+    std::vector<uint32_t> packed_input0 = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> packed_input1 = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        0.1f, 2.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
+    tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::WriteRuntimeArgsToDevice(
@@ -157,14 +159,33 @@ bool single_core_binary(
         });
     pass &= tt_metal::LaunchKernels(device, program);
 
-    std::vector<uint32_t> golden = input0;
+    auto input0 = tt::test_utils::unpack_vector<bfloat16, uint32_t>(packed_input0);
+    auto input1 = tt::test_utils::unpack_vector<bfloat16, uint32_t>(packed_input1);
+    std::vector<bfloat16> golden(input0.size());
+    std::transform(
+        input0.begin(), input0.end(), input1.begin(), golden.begin(), [&](const bfloat16& lhs, const bfloat16& rhs) {
+            if (binary_op == "add") {
+                return (lhs.to_float() + rhs.to_float());
+            } else if (binary_op == "sub") {
+                return (lhs.to_float() - rhs.to_float());
+            } else if (binary_op == "mul") {
+                return (lhs.to_float() * rhs.to_float());
+            } else {
+                log_fatal("Unsupported binary_op={}", binary_op);
+                return 0.0f;
+            }
+        });
+    log_info("pack golden");
+    auto packed_golden = tt::test_utils::pack_vector<uint32_t, bfloat16>(golden);
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    pass &= dest_buffer_data == golden;
+    log_info("compare golden==dest_buffer");
+    pass &= packed_uint32_t_vector_comparison(
+        dest_buffer_data, packed_golden, [&](const float& a, const float& b) { return is_close(a, b, 0.015f); });
     return pass;
 }
 
-TEST_F(BasicBinaryTest, DISABLED_Add) {
+TEST_F(BasicBinaryTest, SingleTileAdd) {
     EXPECT_TRUE(single_core_binary(
         device_,
         1,
@@ -179,4 +200,85 @@ TEST_F(BasicBinaryTest, DISABLED_Add) {
         tt::DataFormat::Float16_b,
         {.x = 0, .y = 0},
         "add"));
+}
+TEST_F(BasicBinaryTest, SingleTileSub) {
+    EXPECT_TRUE(single_core_binary(
+        device_,
+        1,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        32 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 32 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "sub"));
+}
+TEST_F(BasicBinaryTest, SingleTileMul) {
+    EXPECT_TRUE(single_core_binary(
+        device_,
+        1,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        32 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 32 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "mul"));
+}
+
+TEST_F(BasicBinaryTest, MultiTileAdd) {
+    EXPECT_TRUE(single_core_binary(
+        device_,
+        4,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        32 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 32 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "add"));
+}
+TEST_F(BasicBinaryTest, MultiTileSub) {
+    EXPECT_TRUE(single_core_binary(
+        device_,
+        4,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        32 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 32 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "sub"));
+}
+TEST_F(BasicBinaryTest, MultiTileMul) {
+    EXPECT_TRUE(single_core_binary(
+        device_,
+        4,
+        2 * 32 * 32,
+        0,
+        0,
+        0,
+        32 * 32 * 32,
+        UNRESERVED_BASE,
+        tt::DataFormat::Float16_b,
+        UNRESERVED_BASE + 32 * 32 * 32,
+        tt::DataFormat::Float16_b,
+        {.x = 0, .y = 0},
+        "mul"));
 }
