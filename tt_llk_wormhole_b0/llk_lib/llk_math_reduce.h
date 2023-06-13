@@ -273,6 +273,8 @@ inline void llk_math_reduce_init(const std::uint32_t within_face_16x16_transpose
     if constexpr (high_fidelity) {
         reduce_configure_mop<dim, num_fidelity_phases>();
     }
+
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0); 
     
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

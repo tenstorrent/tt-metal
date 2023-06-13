@@ -134,9 +134,13 @@ inline void llk_unpack_AB_matmul(
     for (uint t = 0; t < t_dim; t++) {
 
         std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], (tile_index_a + (reuse_a ? (t*kt_dim) : (0))));
+        std::uint32_t next_offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], (tile_index_a + (reuse_a ? ((t+1)*kt_dim) : (0))));
         std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], (tile_index_b + (reuse_a ? (0       ) : (t))));
+        std::uint32_t next_offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], (tile_index_b + (reuse_a ? (0       ) : (t+1))));
         std::uint32_t address_a = base_address_a + offset_address_a;
+        std::uint32_t next_address_a = base_address_a + next_offset_address_a;
         std::uint32_t address_b = base_address_b + offset_address_b;
+        std::uint32_t next_address_b = base_address_b + next_offset_address_b;
 
         // Wait for free context
         wait_for_next_context(2);
@@ -157,12 +161,38 @@ inline void llk_unpack_AB_matmul(
                 TTI_NOP;
             #else
                 TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                if (((t<(t_dim-1)) && (t_dim>1))) {
+                    // Let's load one more tile into srcB
+                    TT_SETDMAREG(0, LOWER_HALFWORD(next_address_a), 0, LO_16(p_gpr_unpack::TMP0));
+                    TT_SETDMAREG(0, UPPER_HALFWORD(next_address_a), 0, HI_16(p_gpr_unpack::TMP0));
+                    if (0 == unp_cfg_context) {
+                        TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
+                    } else {
+                        TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
+                    }    
+                    TTI_DMANOP;
+                    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    t++;
+                }
             #endif    
         } else {
             #if SKIP_UNP0 == 1
                 TTI_NOP;
             #else
                 TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                if (((t<(t_dim-1)) && (t_dim>1))) {
+                    // Let's load one more tile into srcB
+                    TT_SETDMAREG(0, LOWER_HALFWORD(next_address_b), 0, LO_16(p_gpr_unpack::TMP0));
+                    TT_SETDMAREG(0, UPPER_HALFWORD(next_address_b), 0, HI_16(p_gpr_unpack::TMP0));
+                    if (0 == unp_cfg_context) {
+                        TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
+                    } else {
+                        TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
+                    }    
+                    TTI_DMANOP;
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    t++;
+                }
             #endif    
         }    
 

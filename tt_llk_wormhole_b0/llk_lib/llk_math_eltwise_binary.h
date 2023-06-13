@@ -334,5 +334,7 @@ inline void llk_math_eltwise_binary_init(const std::uint32_t transpose=0, const 
         FWASSERT("Unsupported op!", false);
     }
 
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0); 
+
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
