@@ -273,13 +273,9 @@ def run_bert_question_and_answering_inference(
     print(f"Running BERT model once to fill caches -> disable profiler")
     profiler.disable()
 
+    run_to_fill_cache_start = time.time()
     tt_out_list = tt_bert_model(1, **bert_input)
-
-    # the first inference pass
-    tt_out = tt_out_list[0].to(host)
-    tt_untilized_output = torch.Tensor(
-        tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()
-    ).reshape(batch, 1, seq_len, -1)
+    model_runtime_to_fill_cache = time.time() - run_to_fill_cache_start
 
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
@@ -359,7 +355,7 @@ def run_bert_question_and_answering_inference(
     whole_test_runtime = time.time() - start_time
 
     # Dump all profiler keys to csv + entire test runtime
-    output_fields = ["whole_test_runtime"]
+    output_fields = ["whole_test_runtime", "model_runtime_to_fill_cache"]
     output_fields.extend(profiler.times.keys())
     dt_prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     output_csv_path = Path(f"{dt_prefix}_metal_bert_15_perf.csv")
@@ -367,7 +363,10 @@ def run_bert_question_and_answering_inference(
         output_csv_writer = csv.DictWriter(output_csv, fieldnames=output_fields)
         output_csv_writer.writeheader()
 
-        output = {"whole_test_runtime": whole_test_runtime}
+        output = {
+            "whole_test_runtime": whole_test_runtime,
+            "model_runtime_to_fill_cache": model_runtime_to_fill_cache,
+        }
         for key in profiler.times.keys():
             output[key] = profiler.get(key)
 
@@ -400,6 +399,7 @@ def test_bert_batch_dram(
     PERF_CNT = 1
 
     disable_compile_cache()
+    enable_compilation_reports()
 
     run_bert_question_and_answering_inference(
         model_version,
