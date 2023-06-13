@@ -67,9 +67,9 @@ class Device {
     std::vector<uint32_t> bank_ids_from_dram_channel(uint32_t dram_channel) const;
 
     std::vector<uint32_t> bank_ids_from_logical_core(const CoreCoord &logical_core) const;
+    bool cluster_is_initialized() const { return cluster_ != nullptr; }
 
    private:
-    bool cluster_is_initialized() const { return cluster_ != nullptr; }
     void check_allocator_is_initialized() const;
 
     // Checks that the given arch is on the given pci_slot and that it's responding

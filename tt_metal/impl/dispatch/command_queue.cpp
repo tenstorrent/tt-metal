@@ -78,6 +78,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                                              uint32_t len) {
                     u32 transfer_size_in_bytes = len * sizeof(u32);
 
+
                     sections.at(current_section_idx)
                         .at(transfer_type)
                         .push_back(std::make_tuple(
@@ -119,7 +120,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
             sections.at(current_section_idx)
                 .at(TransferType::CB)
                 .push_back(std::make_tuple(
-                    CIRCULAR_BUFFER_CONFIG_BASE + cb->buffer_index() * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG,
+                    CIRCULAR_BUFFER_CONFIG_BASE + cb->buffer_index() * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32),
                     start_in_bytes,
                     12,  // Only 3 of the UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG actually represent CB config data, the
                          // last one just used for 16B alignment... need some constant for this somewhere
@@ -495,16 +496,19 @@ void send_dispatch_kernel_to_device(Device* device) {
 
 // CommandQueue section
 CommandQueue::CommandQueue(Device* device) {
+
+    // Zeroing out the read/write pointers
+    vector<u32> zeros(96 / sizeof(u32), 0);
+    device->cluster()->write_sysmem_vec(zeros, 0, 0);
+
     send_dispatch_kernel_to_device(device);
     this->device = device;
 }
 
 CommandQueue::~CommandQueue() {
-    this->finish();
-
-    // For time being, asserting reset of the whole board. Will need
-    // to rethink once we get to multiple command queues
-    tt::llrt::assert_reset_for_all_chips(this->device->cluster());
+    if (this->device->cluster_is_initialized()) {
+        this->finish();
+    }
 }
 
 void CommandQueue::enqueue_command(shared_ptr<Command> command, bool blocking) {
@@ -552,17 +556,18 @@ void CommandQueue::enqueue_program(Program& program, const RuntimeArgs& runtime_
         vector<u32>& program_vector = program_to_device_map.program_vector;
         u32 program_data_size_in_bytes = program_vector.size() * sizeof(u32);
 
-        unique_ptr<Buffer> program_buffer = std::make_unique<Buffer>(
-            this->device, program_data_size_in_bytes, channel_id, program_data_size_in_bytes, BufferType::DRAM);
+        this->program_to_buffer.emplace(&program, std::make_unique<Buffer>(
+            this->device, program_data_size_in_bytes, channel_id, program_data_size_in_bytes, BufferType::DRAM));
 
-        this->enqueue_write_buffer(*program_buffer, program_vector, blocking);
-        channel_id =
-            (channel_id + 1) % this->device->cluster()
-                                   ->get_soc_desc(0)
-                                   .dram_cores.size();  // TODO(agrebenisan): Pull in num DRAM banks from SOC descriptor
+        this->enqueue_write_buffer(*this->program_to_buffer.at(&program), program_vector, blocking);
 
-        // We need to hold onto this buffer so that the program doesn't get de-allocated
-        this->program_to_buffer.emplace(&program, std::move(program_buffer));
+        // TODO(agrebenisan): Right now, write/read buffer device APIs assume we start at bank 0,
+        // need to add support to start at a non-0-starting buffer
+        // channel_id =
+        //     (channel_id + 1) % this->device->cluster()
+        //                            ->get_soc_desc(0)
+        //                            .dram_cores.size();  // TODO(agrebenisan): Pull in num DRAM banks from SOC descriptor
+
         this->program_to_dev_map.emplace(&program, std::move(program_to_device_map));
     }
 
