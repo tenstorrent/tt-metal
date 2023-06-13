@@ -837,26 +837,20 @@ struct HashLookup {
         unique_lock<mutex> lock(mutex_);
         return hashes_.find(khash) != hashes_.end();
     }
-    template<typename F>
-    bool add(size_t khash, F && f) {
+    bool add(size_t khash) {
         unique_lock<mutex> lock(mutex_);
         bool ret = false;
         if (hashes_.find(khash) == hashes_.end() ){
-            hashes_[khash] = tt::tt_metal::GetExecutor().async(std::forward<F>(f));
+            hashes_.insert(khash);
             ret = true;
         }
         return ret;
     }
 
 
-    std::shared_future<void> get(size_t khash){
-        unique_lock<mutex> lock(mutex_);
-        return hashes_[khash];
-    }
-
 private:
     std::mutex mutex_;
-    std::unordered_map<size_t, std::shared_future<void> > hashes_;
+    std::unordered_set<size_t > hashes_;
 };
 
 void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &build_options) {
@@ -894,13 +888,30 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
     auto kernel_hash = KernelCompileHash(kernel, build_options, device->pcie_slot(), profile_kernel);
     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash);
 
-    auto f = [&] () { GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel); };
     bool cache_hit = true;
-    if (!enable_compile_cache || HashLookup::inst().add(kernel_hash, f)) {
+    static std::mutex khash_state_mutex;
+    static std::unordered_set<size_t> khash_state;
+    if (!enable_compile_cache || HashLookup::inst().add(kernel_hash)) {
         cache_hit = false;
-    }
+        GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
+        {
+            unique_lock<mutex> lock(khash_state_mutex);
+            khash_state.insert(kernel_hash);
+        }
+    } else{
+        bool khash_done = false;
+        while (!khash_done){
+            // std::cout << "Waiting on " << kernel_hash << " to finish compiling ... " << std::endl;
 
-    HashLookup::inst().get(kernel_hash).wait();
+            {
+                unique_lock<mutex> lock(khash_state_mutex);
+                if (khash_state.find ( kernel_hash) != khash_state.end() ){
+                    khash_done = true;
+                    // std::cout << kernel_hash << " done compiling!!!" << std::endl;
+                }
+            }
+        }
+    }
 
     compilation_reporter.add_kernel_compile_stats(program, kernel, cache_hit, kernel_hash);
 
