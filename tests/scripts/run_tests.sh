@@ -68,6 +68,11 @@ run_frequent_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
 
+    if [[ $module != "grayskull" ]]; then
+        echo "Full frequent pipeline only available for grayskull right now"
+        exit 1
+    fi
+
     # Switch to modules only soon
     ./build_tt_metal.sh
     make tests
@@ -87,6 +92,23 @@ run_frequent_pipeline_tests() {
     # Please put model runs in here from now on - thank you
     ./tests/scripts/run_models.sh
 }
+
+run_frequent_pipeline_tests_single_threaded() {
+    local tt_arch=$1
+    local pipeline_type=$2
+
+    export TT_METAL_THREADCOUNT=1
+
+    run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
+}
+
+run_frequent_pipeline_tests_multi_threaded() {
+    local tt_arch=$1
+    local pipeline_type=$2
+
+    run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
+}
+
 
 run_frequently_hangs_pipeline_tests() {
     local tt_arch=$1
@@ -114,7 +136,9 @@ run_pipeline_tests() {
     if [[ $pipeline_type == "post_commit" ]]; then
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "frequent" ]]; then
-        run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
+        run_frequent_pipeline_tests_single_threaded "$tt_arch" "$pipeline_type"
+    elif [[ $pipeline_type == "frequent_multi_threaded" ]]; then
+        run_frequent_pipeline_tests_multi_threaded "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "frequently_hangs" ]]; then
         run_frequently_hangs_pipeline_tests "$tt_arch" "$pipeline_type"
     else
