@@ -165,3 +165,7 @@ inline void llk_unpack_reconfig_data_format(
 inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     llk_unpack_reconfig_data_format_impl(get_operand_id(srca_new_operand), get_operand_id(srcb_new_operand));
 }
+
+inline void llk_unpack_dbg_feature_disable(){
+     //TBD
+}
