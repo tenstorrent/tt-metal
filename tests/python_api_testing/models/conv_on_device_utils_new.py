@@ -16,6 +16,19 @@ def is_conv_supported_on_device(conv_params):
 
     return True
 
+def can_run_conv_on_device(act_shape, conv_params):
+    #return False
+    K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
+    [N,C,H,W] = act_shape
+
+    logger.info("Conv with following parameters -")
+    logger.info("K="+str(K)+" C="+str(C)+" H="+str(H)+" W="+str(W)+" R="+str(R)+" S="+str(S)+" U="+str(U)+" V="+str(V)+" PH="+str(P_H)+" PW="+str(P_W)+" dilation="+str(dilation)+" groups="+str(groups))
+
+    if (C % 32 != 0 or K%32 != 0 or dilation != 1 or groups != 1):
+        return False
+
+    return True
+
 def run_conv_on_tt_device(x: torch.Tensor, conv_on_tt, conv_params, device, host):
     K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
     [N,C,H,W] = x.shape
