@@ -77,10 +77,14 @@ class Kernel {
     void add_define(const std::string& name, const std::string& value) { defines_[name] = value; }
     void add_define(const std::string& name, int value) { defines_[name] = std::to_string(value); }
     size_t define_args_hash() const;
+    void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
+    void read_binaries();
+
    protected:
     std::string kernel_path_file_name_;                 // Full kernel path and file name
     CoreRangeSet core_range_set_;
     KernelType kernel_type_;
+    std::string binary_path_;
     std::vector<ll_api::memory> binaries_;    // DataMovement kernels have one binary each and Compute kernels have three binaries
     std::vector<uint32_t> compile_time_args_;
     std::map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;

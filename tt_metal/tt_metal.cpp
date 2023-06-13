@@ -889,33 +889,15 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash);
 
     bool cache_hit = true;
-    static std::mutex khash_state_mutex;
-    static std::unordered_set<size_t> khash_state;
+
     if (!enable_compile_cache || HashLookup::inst().add(kernel_hash)) {
         cache_hit = false;
         GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
-        {
-            unique_lock<mutex> lock(khash_state_mutex);
-            khash_state.insert(kernel_hash);
-        }
-    } else{
-        bool khash_done = false;
-        while (!khash_done){
-            // std::cout << "Waiting on " << kernel_hash << " to finish compiling ... " << std::endl;
-
-            {
-                unique_lock<mutex> lock(khash_state_mutex);
-                if (khash_state.find ( kernel_hash) != khash_state.end() ){
-                    khash_done = true;
-                    // std::cout << kernel_hash << " done compiling!!!" << std::endl;
-                }
-            }
-        }
     }
 
     compilation_reporter.add_kernel_compile_stats(program, kernel, cache_hit, kernel_hash);
 
-    kernel->set_binaries(kernel_path_suffix);
+    kernel->set_binary_path(kernel_path_suffix);
 }
 
 void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
@@ -998,23 +980,34 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
     std::vector< std::future<void> > events;
-    tf::Taskflow taskflow;
     TT_ASSERT(!(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
-    taskflow.emplace( [device] { CompileBlankKernel(device); }  );
+    {
+        tf::Taskflow tf;
+        // This can be removed when we load BRISC FW separately from kernel
+        tf.emplace ( [device, &program, profile_kernel ] {
+                                            CompileBlankKernel(device);
+                                            AddBlankDataMovementKernel(device, program, profile_kernel);
+                                        } );
 
-    for (auto kernel : program.kernels()) {
-        taskflow.emplace ( [kernel, device, &program, profile_kernel] { CompileKernel(device, program, kernel, profile_kernel);
-                                                                               } );
+
+        for (auto kernel : program.kernels()) {
+            tf.emplace ( [kernel, device, &program, profile_kernel] { CompileKernel(device, program, kernel, profile_kernel);
+                                                                                } );
+
+        }
+
+        // This can be removed when we load BRISC FW separately from kernel
+        taskflow.emplace ( [device, &program, profile_kernel ] {
+                                            AddBlankDataMovementKernel(device, program, profile_kernel);
+                                        } );
+
+        for (auto kernel : program.kernels()) {
+            tf.emplace ( [kernel] { kernel->read_binaries(); });
+        }
+        GetExecutor().run(tf).wait();
     }
-
-    taskflow.emplace ( [device, &program, profile_kernel ] {
-                                        AddBlankKernels(device, program, profile_kernel);
-                                       } );
-
-    GetExecutor().run(taskflow).wait();
-
     compilation_reporter.flush_program_entry(program);
     tt_metal_profiler.markStop("CompileProgram");
     return pass;
