@@ -57,7 +57,7 @@ tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
 
 # eager - dtx
 **/dtx/ @tt-nshanker
-tests/python_api_testing/conv/ @tt-nshanker
+**/dtx/**/module.mk @tt-rkim @tt-nshanker
 
 # eager - tensor
 **/tensor/ @TT-BrianLiu @tt-aho @arakhmati
@@ -89,4 +89,5 @@ docs/source/apis/kernel_apis.rst @davorchap @DrJessop @kkwong10 @pgkeller @tt-rk
 tests/**/dtx/ @tt-nshanker
 tests/**/*test*conv*.py @tt-nshanker
 tests/**/module.mk @tenstorrent-metal/developers
+tests/python_api_testing/conv/ @tt-nshanker
 third_party/ @tt-rkim @TT-billteng @kkwong10
