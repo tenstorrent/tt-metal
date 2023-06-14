@@ -404,7 +404,6 @@ uint32_t get_semaphore_address(const Program &program, const CoreRange &core_ran
     uint32_t address = -1;
     auto start_core = core_range.start;
     auto end_core = core_range.end;
-    auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
             auto logical_core = CoreCoord{x, y};
@@ -412,7 +411,7 @@ uint32_t get_semaphore_address(const Program &program, const CoreRange &core_ran
             if (semaphores_on_core.size() == NUM_SEMAPHORES) {
                 TT_THROW("Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" + std::to_string(NUM_SEMAPHORES) + ") reached!");
             }
-            uint32_t addr = semaphores_on_core.empty() ? SEMAPHORE_BASE : semaphores_on_core.back()->address() + size_per_semaphore;
+            uint32_t addr = semaphores_on_core.empty() ? SEMAPHORE_BASE : semaphores_on_core.back()->address() + ALIGNED_SIZE_PER_SEMAPHORE;
             if (address == -1) {
                 address = addr;
             } else if (addr != address) {
@@ -434,7 +433,6 @@ Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &co
 }
 
 Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_range_set, uint32_t initial_value) {
-    auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
     uint32_t address = -1;
     for (auto core_range : core_range_set.ranges()) {
         auto addr = get_semaphore_address(program, core_range);

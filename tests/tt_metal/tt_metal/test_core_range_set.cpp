@@ -44,7 +44,12 @@ void check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeS
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
                 tt_metal::ReadFromDeviceL1(device, logical_core, SEMAPHORE_BASE, SEMAPHORE_SIZE, res);
-                TT_ASSERT(res == golden_sem_values);
+                std::vector<uint32_t> filtered_res;
+                constexpr static uint32_t num_u32_to_skip = UINT32_WORDS_PER_SEMAPHORE * sizeof(uint32_t);
+                for (int i = 0; i < res.size(); i+=num_u32_to_skip) {
+                    filtered_res.push_back(res.at(i));
+                }
+                TT_ASSERT(filtered_res == golden_sem_values);
             }
         }
     }
