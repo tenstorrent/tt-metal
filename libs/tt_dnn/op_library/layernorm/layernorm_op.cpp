@@ -126,16 +126,17 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
     // TODO: Refactor by calling utility function?
     uint32_t num_full_rows = num_cores / grid.x_;
     uint32_t last_row_cores = num_cores % grid.x_;
-    CoreRange full_rows{
-        .start={0, 0},
-        .end={grid.x_ - 1, num_full_rows - 1}};
-    CoreRange last_row{
-        .start={0, num_full_rows},
-        .end={last_row_cores - 1, num_full_rows}};
 
-    std::set<CoreRange> all_cores_set{full_rows};
+    std::set<CoreRange> all_cores_set;
+    if (num_full_rows) {
+        all_cores_set.insert((CoreRange) {
+            .start={0, 0}, .end={grid.x_ - 1, num_full_rows - 1}
+        });
+    }
     if (last_row_cores) {
-        all_cores_set.insert(last_row);
+        all_cores_set.insert((CoreRange) {
+            .start={0, num_full_rows}, .end={last_row_cores - 1, num_full_rows}
+        });
     }
     CoreRangeSet all_cores(all_cores_set);
 
