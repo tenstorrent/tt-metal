@@ -5,16 +5,21 @@
 
 infra/ @tt-rkim
 
-conftest.py @tt-rkim
-
 CONTRIBUTING.md @tt-rkim
 
 CODEOWNERS @tt-rkim
 
-setup.py @tt-rkim
+# Build stuff
+
+MANIFEST.in @tt-rkim @tt-aho
+setup.py @tt-rkim @tt-aho
 
 Makefile @tt-rkim
 module.mk @tt-rkim
+
+# Testing scripts and infra
+
+conftest.py @tt-rkim
 
 tests/scripts/run_pre_post_commit_regressions.sh @tt-rkim
 tests/scripts/run_tests.sh @tt-rkim
