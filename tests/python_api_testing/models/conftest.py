@@ -36,3 +36,11 @@ def imagenet_sample_input(model_location_generator):
     im = Image.open(path)
     im = im.resize((224, 224))
     return transforms.ToTensor()(im).unsqueeze(0)
+
+
+@pytest.fixture
+def mnist_sample_input(model_location_generator):
+    sample_path = "/mnt/MLPerf/tt_dnn-models/samples/torchvision_mnist_digit_7.jpg"
+    path = model_location_generator(sample_path)
+    im = Image.open(path)
+    return im
