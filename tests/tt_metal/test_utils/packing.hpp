@@ -13,6 +13,7 @@ namespace test_utils {
 //! to_float() - get float value from custom type
 //! to_packed() - get packed (into an integral type that is of the bitwidth specified by SIZEOF)
 //! Constructor(float in) - constructor with a float as the initializer
+//! Constructor(uint32_t in) - constructor with a uint32_t as the initializer -- only lower bits needed
 
 // Assumes ValueType has a .to_packed() function and static SIZEOF field
 template <typename PackType, typename ValueType>

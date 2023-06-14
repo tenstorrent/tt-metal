@@ -13,13 +13,16 @@
 using namespace tt;
 
 namespace unit_tests::basic {
-// Ping a set number of bytes into the specified address of L1
+
+/// @brief Ping number of bytes for specified grid_size
+/// @param device
+/// @param byte_size - size in bytes
+/// @param l1_byte_address - l1 address to target for all cores
+/// @param grid_size - grid size. will ping all cores from {0,0} to grid_size (non-inclusive)
+/// @return
 bool l1_ping(
     tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& grid_size) {
     bool pass = true;
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
     auto inputs = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (int y = 0; y < grid_size.y; y++) {
         for (int x = 0; x < grid_size.x; x++) {
@@ -34,23 +37,25 @@ bool l1_ping(
             tt_metal::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
             if (not pass) {
-                cout << "Mismatch at Core: " << dest_core.str() << std::endl;
+                MESSAGE("Mismatch at Core: ", dest_core.str());
             }
         }
     }
     return pass;
 }
 
-// Ping a set number of bytes into the specified address of DRAM
+/// @brief Ping number of bytes for specified channels
+/// @param device
+/// @param byte_size - size in bytes
+/// @param l1_byte_address - l1 address to target for all cores
+/// @param num_channels - num_channels. will ping all channels from {0} to num_channels (non-inclusive)
+/// @return
 bool dram_ping(
     tt_metal::Device* device,
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {
     bool pass = true;
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
     auto inputs = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (unsigned int channel = 0; channel < num_channels; channel++) {
         tt_metal::WriteToDeviceDRAMChannel(device, channel, dram_byte_address, inputs);
@@ -66,30 +71,13 @@ bool dram_ping(
     return pass;
 }
 
-// load_blank_kernels into all cores and ensure all cores hit mailbox values
+/// @brief load_blank_kernels into all cores and will launch
+/// @param device
+/// @return
 bool load_all_blank_kernels(tt_metal::Device* device) {
     bool pass = true;
-    CoreCoord grid_size = device->logical_grid_size();
-    constexpr int INIT_VALUE = 42;
-    constexpr int DONE_VALUE = 1;
-    const std::unordered_map<string, uint32_t> mailbox_addresses = {
-        {"BRISC", MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET},
-        {"TRISC0", MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET},
-        {"TRISC1", MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET},
-        {"TRISC2", MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET},
-        {"NCRISC", MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET},
-    };
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Application Setup
-    ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::CompileProgram(device, program);
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
     return pass;

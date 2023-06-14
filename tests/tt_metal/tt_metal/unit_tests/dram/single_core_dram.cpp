@@ -2,19 +2,24 @@
 #include <functional>
 #include <random>
 
-#include "single_device_fixture.hpp"
-#include "bfloat16.hpp"
 #include "doctest.h"
+#include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
-#include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 using namespace tt;
+using namespace tt::test_utils;
+using namespace tt::test_utils::df;
 
 namespace unit_tests::single_core_dram {
-// Reader reads from 1 DRAM into single core
+/// @brief Does Dram --> Reader --> L1 on a single core
+/// @param device
+/// @param test_config - Configuration of the test -- see struct
+/// @return
 bool reader_only(
     tt_metal::Device* device,
     const size_t& byte_size,
@@ -43,14 +48,10 @@ bool reader_only(
         tt_metal::NOC::RISCV_0_default);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
+    //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    auto inputs = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
+    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
@@ -76,7 +77,10 @@ bool reader_only(
     return pass;
 }
 
-// Writer reads from 1 DRAM into single core
+/// @brief Does L1 --> Writer --> Dram on a single core
+/// @param device
+/// @param test_config - Configuration of the test -- see struct
+/// @return
 bool writer_only(
     tt_metal::Device* device,
     const size_t& byte_size,
@@ -105,14 +109,10 @@ bool writer_only(
         tt_metal::NOC::RISCV_0_default);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
+    //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::CompileProgram(device, program);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    auto inputs = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
+    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt_metal::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
@@ -138,10 +138,6 @@ bool writer_only(
     return pass;
 }
 
-// Reader reads from single dram to core, writer synchronizes with datacopy kernel and writes to dram
-// DRAM --> (Reader Core CB using reader RISCV)
-// Reader Core --> Datacopy --> Reader Core
-// Reader Core --> Writes to Dram
 struct ReaderDatacopyWriterConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
@@ -155,6 +151,10 @@ struct ReaderDatacopyWriterConfig {
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
     CoreCoord core = {};
 };
+/// @brief Does Dram --> Reader --> CB --> Datacopy --> CB --> Writer --> Dram on a single core
+/// @param device
+/// @param test_config - Configuration of the test -- see struct
+/// @return
 bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriterConfig& test_config) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
@@ -225,18 +225,16 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
         math_approx_mode);
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Compile Application
-    ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
+    //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> inputs =
-        create_random_vector_of_bfloat16(byte_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> output_l1_data_init(inputs.size(), 1337);
-    tt_metal::WriteToDeviceL1(device, test_config.core, test_config.l1_output_byte_address, output_l1_data_init);
+    std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Compile and Execute Application
+    ////////////////////////////////////////////////////////////////////////////
+    pass &= tt_metal::CompileProgram(device, program);
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
