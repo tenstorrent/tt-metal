@@ -87,20 +87,37 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t *pack_params) {
     configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
+    ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
+    pack_edge_offset.f.mask = 0x0;
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
-        for (uint i = 0; i < 4; i++) cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32 + i] = 0x00000001;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0x0001;
+        if constexpr (untilize) {
+            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack3 = 1;
+            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x11111111; // each packer packs 1x32 row
+        } else {
+            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x55555555; // each packer packs 1x16 row
+        }    
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = pack_edge_offset.val;
     } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = 0x00000000;
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0x00000001;
-        cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x00000001;
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = pack_edge_offset.val;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0x0001;
+        cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x00000001;
     } else {
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = 0x00000000;
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0x0000ffff;
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = pack_edge_offset.val;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0xffff;
 
         if constexpr (untilize) {
-            cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x00000005;
+            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x00000005;// Each packer packs 1x32 row
         } else {
-            cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x00000001;
+            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x00000001;
         }
     }
 }

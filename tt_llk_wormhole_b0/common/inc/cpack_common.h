@@ -91,6 +91,24 @@ namespace ckernel::packer
       dest_rd_ctrl_t f;
    } dest_rd_ctrl_u;
 
+   // Pack edge mask
+   typedef struct {
+      uint32_t mask : 16;
+      uint32_t mode : 1;
+      uint32_t tile_row_set_select_pack0: 2;
+      uint32_t tile_row_set_select_pack1: 2;
+      uint32_t tile_row_set_select_pack2: 2;
+      uint32_t tile_row_set_select_pack3: 2;
+      uint32_t reserved: 7;
+   } pck_edge_offset_t;
+
+   static_assert(sizeof(pck_edge_offset_t) == (sizeof(uint32_t)));
+
+   typedef union {
+      uint32_t val;
+      pck_edge_offset_t f;
+   } pck_edge_offset_u;
+
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
    inline void packer_addr_counter_init()
    {
@@ -342,10 +360,12 @@ namespace ckernel::packer
       // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
       for (uint i=0; i<4; i++) cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32+i]=0; // disable auto last generation
 
-      for (uint i=0; i<4; i++) {
-         cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+i]=0xffffffff;
-         cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32+i] = 0x0;
-      }
+      pck_edge_offset_u pck_edge_offset;
+      pck_edge_offset.val = 0;
+      pck_edge_offset.f.mask = 0xffff;
+
+      cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]=pck_edge_offset.val;
+      cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask 
 
       regfile[p_gpr_pack::TILE_HEADER]   = GET_L1_TILE_SIZE((uint)pack_dst_format[pack_output]);
       regfile[p_gpr_pack::TILE_HEADER+1] = 0;
