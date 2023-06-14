@@ -25,6 +25,9 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 // if b is nullptr it's treated as zero (no addition)
 Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gamma, const Tensor* beta, bool output_dram) {
 
+    bool profile = false;
+    OpEnvConfig::update_profile(&profile);
+
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     u32 HW = H*W;
@@ -119,10 +122,69 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
 
     //cout << "WTPC=" << wtpc << "Wt=" << Wt << " num_cores=" << num_cores << endl;
 
+    // Parallelize across rows
+    // TODO: Refactor by calling utility function?
+    uint32_t num_full_rows = num_cores / grid.x_;
+    uint32_t last_row_cores = num_cores % grid.x_;
+    CoreRange full_rows{
+        .start={0, 0},
+        .end={grid.x_ - 1, num_full_rows - 1}};
+    CoreRange last_row{
+        .start={0, num_full_rows},
+        .end={last_row_cores - 1, num_full_rows}};
 
-    vector<DataMovementKernel*> readers, writers;
-    readers.reserve(num_cores);
-    writers.reserve(num_cores);
+    std::set<CoreRange> all_cores_set{full_rows};
+    if (last_row_cores) {
+        all_cores_set.insert(last_row);
+    }
+    CoreRangeSet all_cores(all_cores_set);
+
+    auto reader_kernels = CreateDataMovementKernel(
+        program, "tt_metal/kernels/dataflow/reader_unary_8bank_ln.cpp", all_cores,
+        DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        //DataMovementProcessor::RISCV_1, NOC::RISCV_0_default);
+        //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
+        //DataMovementProcessor::RISCV_1, core.x % 6 == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
+        //DataMovementProcessor::RISCV_1, core.y < 5 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
+
+    auto writer_kernels = CreateDataMovementKernel(
+        program, "tt_metal/kernels/dataflow/writer_unary_8bank_ln.cpp", all_cores,
+        DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        //DataMovementProcessor::RISCV_0, NOC::RISCV_1_default);
+        //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
+        //DataMovementProcessor::RISCV_0, core.y < 5 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
+        //DataMovementProcessor::RISCV_0, core.x % 6 == 1 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
+        //DataMovementProcessor::RISCV_0, NOC::NOC_1);
+
+    vector<uint32_t> compute_args = { wtpc, Wt, num_gamma_tiles>0, num_beta_tiles>0 };
+
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = true;
+    auto eltwise_binary_kernels = CreateComputeKernel(
+        program,
+        "kernels/compute/layernorm.cpp",
+        all_cores,
+        compute_args,
+        MathFidelity::HiFi4,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+
+    // Add defines
+    eltwise_binary_kernels->add_define("BLOCK_SIZE", block_size);
+    reader_kernels->add_define("BLOCK_SIZE", block_size);
+    reader_kernels->add_define("A_DRAM", is_dram(a) ? "true" : "false");
+    reader_kernels->add_define("B_DRAM", is_dram(b) ? "true" : "false");
+    reader_kernels->add_define("GAMMA_DRAM", is_dram(gamma) ? "true" : "false");
+    reader_kernels->add_define("BETA_DRAM", is_dram(beta) ? "true" : "false");
+
+    writer_kernels->add_define("BLOCK_SIZE", block_size);
+    writer_kernels->add_define("OUTPUT_DRAM", is_dram(output) ? "true" : "false");
+    if (b) {
+        reader_kernels->add_define("FUSE_PRE_ADD", "1");
+        eltwise_binary_kernels->add_define("FUSE_PRE_ADD", "1");
+    }
+
     for (uint32_t icore = 0; icore < num_cores; icore++) {
         auto core = grid.wrap_core(icore);
         CreateCircularBuffer( program, device, CB::c_in0,       core, in0_t,  in0_t*single_tile_size,  DataFormat::Float16_b );
@@ -148,60 +210,6 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
             CreateCircularBuffer( program, device, CB::c_in1,       core, in1_t,  in1_t*single_tile_size,  DataFormat::Float16_b );
         }
 
-        DataMovementKernel *reader_kernel = CreateDataMovementKernel(
-            program, "tt_metal/kernels/dataflow/reader_unary_8bank_ln.cpp", core,
-            DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
-            //DataMovementProcessor::RISCV_1, NOC::RISCV_0_default);
-            //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
-            //DataMovementProcessor::RISCV_1, core.x % 6 == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
-            //DataMovementProcessor::RISCV_1, core.y < 5 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
-
-        DataMovementKernel *writer_kernel = CreateDataMovementKernel(
-            program, "tt_metal/kernels/dataflow/writer_unary_8bank_ln.cpp", core,
-            DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
-            //DataMovementProcessor::RISCV_0, NOC::RISCV_1_default);
-            //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
-            //DataMovementProcessor::RISCV_0, core.y < 5 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
-            //DataMovementProcessor::RISCV_0, core.x % 6 == 1 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
-            //DataMovementProcessor::RISCV_0, NOC::NOC_1);
-
-        vector<uint32_t> compute_args = { wtpc, Wt, num_gamma_tiles>0, num_beta_tiles>0 };
-
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = true;
-        auto eltwise_binary_kernel = CreateComputeKernel(
-            program,
-            "kernels/compute/layernorm.cpp",
-            core,
-            compute_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
-        );
-        eltwise_binary_kernel->add_define("BLOCK_SIZE", block_size);
-        reader_kernel->add_define("BLOCK_SIZE", block_size);
-        reader_kernel->add_define("A_DRAM", is_dram(a) ? "true" : "false");
-        reader_kernel->add_define("B_DRAM", is_dram(b) ? "true" : "false");
-        reader_kernel->add_define("GAMMA_DRAM", is_dram(gamma) ? "true" : "false");
-        reader_kernel->add_define("BETA_DRAM", is_dram(beta) ? "true" : "false");
-
-        writer_kernel->add_define("BLOCK_SIZE", block_size);
-        writer_kernel->add_define("OUTPUT_DRAM", is_dram(output) ? "true" : "false");
-        if (b) {
-            reader_kernel->add_define("FUSE_PRE_ADD", "1");
-            eltwise_binary_kernel->add_define("FUSE_PRE_ADD", "1");
-        }
-        readers.push_back(reader_kernel);
-        writers.push_back(writer_kernel);
-    }
-
-    bool profile = false;
-    OpEnvConfig::update_profile(&profile);
-    CompileProgram(device, program, profile);
-    ConfigureDeviceWithProgram(device, program);
-
-    for (uint32_t icore = 0; icore < num_cores; icore++) {
-        auto core = grid.wrap_core(icore);
         union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler
         union { float f; uint32_t u; } e; e.f = eps; // epsilon
         uint32_t gamma_tiles = gamma ? gamma->volume() / TILE_HW : 0;
@@ -210,19 +218,22 @@ Tensor layernorm_(const Tensor &a, const Tensor* b, float eps, const Tensor* gam
         //std::cout << "Num beta=" << num_beta_tiles << " addr=" << beta_dram_addr << std::endl;
         uint32_t tile_offset = wtpc*Wt*icore;
         //std::cout << "icore=" << icore << "TO=" << tile_offset << endl;
-        WriteRuntimeArgsToDevice( device, readers[icore], core,
+        WriteRuntimeArgsToDevice( device, reader_kernels, core,
             { a_addr, wtpc, Wt, wtpc*Wt, tile_offset, 0, 0, 0, winv.u, e.u, // 0-9
             num_gamma_tiles, gamma_dram_addr, num_beta_tiles, beta_dram_addr, b_dram_addr } // 10-14
         );
-        WriteRuntimeArgsToDevice( device, writers[icore], core, { dst_addr, 0, 0, wtpc*Wt, tile_offset } );
+        WriteRuntimeArgsToDevice( device, writer_kernels, core, { dst_addr, 0, 0, wtpc*Wt, tile_offset } );
     }
+
+    CompileProgram(device, program, profile);
+    ConfigureDeviceWithProgram(device, program);
     LaunchKernels(device, program);
 
     if (profile)
         tt_metal::DumpDeviceProfileResults(device, program);
 
     return output;
-} // softmax
+} // layernorm
 
 Tensor layernorm(const Tensor &a, float eps, bool out_dram) { return layernorm_(a, nullptr, eps, nullptr, nullptr, out_dram); }
 Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma, bool out_dram) { return layernorm_(a, nullptr, eps, &gamma, nullptr, out_dram); }

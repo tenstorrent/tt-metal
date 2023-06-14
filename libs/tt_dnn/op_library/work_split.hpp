@@ -36,7 +36,7 @@ struct TilesSplit {
 
 struct CoreGridDesc {
     uint32_t x_, y_;
-    CoreGridDesc(Device* dev) { auto gs = dev->logical_grid_size(); x_ = gs.x; y_ = gs.y; TT_ASSERT(x_ > 0 && y_ > 0); }
+    CoreGridDesc(Device* dev) { auto gs = dev->compute_and_storage_grid_size(); x_ = gs.x; y_ = gs.y; TT_ASSERT(x_ > 0 && y_ > 0); }
     uint32_t total_cores() const { return x_*y_; }
     CoreCoord wrap_core(int icore) const {
         TT_ASSERT(icore < total_cores());

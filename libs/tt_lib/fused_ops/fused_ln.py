@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import time
 import os
+from loguru import logger
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../../tests")
@@ -117,25 +118,27 @@ if __name__ == "__main__":
     # N, C, H, W = 1, 1, 4*32, 9*32
     epsf = 1e-2
     torch.manual_seed(123)
-    test_dims = (
-        (1, 1, 4 * 32, 8 * 32),
-        (1, 1, 3 * 32, 8 * 32),
-        (1, 1, 32, 12 * 32),
-        (1, 1, 8 * 32, 32 * 32),
-    )
-    # test_dims = ((1,9,384,1024),)
-    test_dims = ((1, 1, 32 * 6, 1024),)
-    test_dims = ((1, 1, 384, 1024),)
-    test_dims = ((1, 10, 256, 1024),)
-    # test_dims = ((1,6,32,1024),)
-    test_dims = ((1, 1, 32, 1024),)
+
+    # TODO: Clean up
+    # test_dims = (
+    #     (1, 1, 4 * 32, 8 * 32),
+    #     (1, 1, 3 * 32, 8 * 32),
+    #     (1, 1, 32, 12 * 32),
+    #     (1, 1, 8 * 32, 32 * 32),
+    # )
+    # # test_dims = ((1,9,384,1024),)
+    # test_dims = ((1, 1, 32 * 6, 1024),)
+    # test_dims = ((1, 1, 384, 1024),)
+    # test_dims = ((1, 10, 256, 1024),)
+    # # test_dims = ((1,6,32,1024),)
+    # test_dims = ((1, 1, 32, 1024),)
     test_dims = ((1, 9, 384, 1024),)
     for nchw in test_dims:
-        for i in range(0, 1):  # 0: no gamma/beta, 1: gamma, 2: gamma+beta
-            i = 0  # force ln(x)*1+0 path
-            i = 1  # force ln(x)*g+0 path
-            i = 2  # force ln(a+b)*gamma+beta path
-            i = 3  # force ln(x)*gamma+beta path
+        for i in range(0, 4):  # 0: no gamma/beta, 1: gamma, 2: gamma+beta
+            # i = 0  # force ln(x)*1+0 path
+            # i = 1  # force ln(x)*g+0 path
+            # i = 2  # force ln(a+b)*gamma+beta path
+            # i = 3  # force ln(x)*gamma+beta path
             for nrepeat in range(0, 1):
                 (N, C, H, W) = nchw
                 print("NCHW=", nchw)
@@ -194,24 +197,24 @@ if __name__ == "__main__":
                 )
 
                 if i == 0:
-                    print("=== Running LN_NOGB")
+                    logger.info("Running LN_NOGB")
                     ttz = tensor.layernorm(ttx, epsf, out_dram)
                 elif i == 1:
-                    print("=== Running LN_G")
+                    logger.info("Running LN_G")
                     ttz = tensor.layernorm_gamma(ttx, epsf, ttgamma, out_dram)
                 elif i == 2:
-                    print("=== Running LN_GB")
+                    logger.info("Running LN_GB")
                     ttz = tensor.layernorm_gamma_beta(
                         ttx, epsf, ttgamma, ttbeta, out_dram
                     )
                 elif i == 3:
-                    print("=== Running add_LN_GB")
+                    logger.info("Running add_LN_GB")
                     ttz = tensor.add_layernorm_gamma_beta(
                         ttx, tty, epsf, ttgamma, ttbeta, out_dram
                     )
                 else:
                     assert False
-                print("=== Done Running LN")
+                logger.info("Done Running LN")
                 t2_data = ttz.to(host).data()
 
                 tt_got_back = torch.Tensor(t2_data).reshape((N, C, H, W))
