@@ -2,7 +2,7 @@
 #include <functional>
 #include <random>
 
-#include "doctest/doctest.h"
+#include "doctest.h"
 #include "multi_device_fixture.hpp"
 #include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"

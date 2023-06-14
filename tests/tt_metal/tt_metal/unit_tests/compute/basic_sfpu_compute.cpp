@@ -5,7 +5,7 @@
 #include <random>
 
 #include "bfloat16.hpp"
-#include "doctest/doctest.h"
+#include "doctest.h"
 #include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
