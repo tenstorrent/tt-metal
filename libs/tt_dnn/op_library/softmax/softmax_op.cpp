@@ -7,7 +7,10 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/tile_math.hpp"
 
+#include "tt_dnn/op_library/run_operation.hpp"
+
 #include <iostream>
+#include <optional>
 
 using u32 = std::uint32_t;
 using namespace tt::constants;
@@ -18,23 +21,22 @@ namespace tt {
 
 namespace tt_metal {
 
-inline bool is_dram(const Tensor& a) { return a.buffer_type() == BufferType::DRAM; }
-inline bool is_dram(const Tensor* a) { return a ? a->buffer_type() == BufferType::DRAM : true; } // if nullptr doesn't matter
+inline bool is_dram(const Tensor& input_tensor) { return input_tensor.buffer_type() == BufferType::DRAM; }
+inline bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> input_tensor) {
+     return input_tensor.has_value() ? is_dram(input_tensor.value().get()) : true;
+}
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
-// implementation of softmax with optional scale/mask (see the header for a more detailed description)
-Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
+// implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
+Program scale_mask_softmax_(const Tensor &input_tensor, const std::optional<std::reference_wrapper<const Tensor>> mask, float scale) {
 
-    bool profile = false;
-    OpEnvConfig::update_profile(&profile);
-
-    const auto shape = a.shape();
+    const auto shape = input_tensor.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     u32 HW = H*W;
     TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
-    TT_ASSERT(a.dtype() == DataType::BFLOAT16);
-    TT_ASSERT(mask == nullptr || mask->dtype() == DataType::BFLOAT16);
+    TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
+    TT_ASSERT(not mask.has_value() || mask.value().get().dtype() == DataType::BFLOAT16);
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
@@ -42,17 +44,17 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
 
     Program program = Program();
 
-    TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
+    TT_ASSERT(input_tensor.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
 
     uint32_t TBYTES = 2 * 1024;
 
-    auto src0_dram_buffer = a.buffer();
+    auto src0_dram_buffer = input_tensor.buffer();
 
-    TT_ASSERT(a.volume() % TILE_HW == 0);
-    int32_t num_tiles = a.volume()/TILE_HW;
+    TT_ASSERT(input_tensor.volume() % TILE_HW == 0);
+    int32_t num_tiles = input_tensor.volume()/TILE_HW;
 
-    // This should allocate a DRAM buffer on the device
-    Device *device = a.device();
+    // This should allocate input_tensor DRAM buffer on the device
+    Device *device = input_tensor.device();
 
     uint32_t block_size = find_max_divisor(Wt, 8);
     OpEnvConfig::update_block_size(&block_size);
@@ -83,7 +85,7 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
     TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
 
     uint32_t NCHt = NC*Ht;
-    CoreGridDesc grid(a.device());
+    CoreGridDesc grid(input_tensor.device());
     uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
     OpEnvConfig::update_num_cores(&num_cores);
     uint32_t partHt = NCHt/num_cores; // only used by fused_scale_mask variant
@@ -140,10 +142,10 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
 
     softmax_kernels->add_define("BLOCK_SIZE", block_size);
     reader_kernels->add_define("BLOCK_SIZE", block_size);
-    reader_kernels->add_define("A_DRAM", is_dram(a) ? "true" : "false");
+    reader_kernels->add_define("A_DRAM", is_dram(input_tensor) ? "true" : "false");
     reader_kernels->add_define("MASK_DRAM", is_dram(mask) ? "true" : "false");
     writer_kernels->add_define("BLOCK_SIZE", block_size);
-    writer_kernels->add_define("OUTPUT_DRAM", is_dram(a) ? "true" : "false");
+    writer_kernels->add_define("OUTPUT_DRAM", is_dram(input_tensor) ? "true" : "false");
     if (scale != 0.0f) {
         reader_kernels->add_define("FUSED_SCALE_MASK", "1");
         softmax_kernels->add_define("FUSED_SCALE_MASK", "1");
@@ -158,7 +160,7 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
         CreateCircularBuffer( program, device, CB::c_in2,       core, in2_t,  in2_t *TBYTES,  DataFormat::Float16_b );
         CreateCircularBuffer( program, device, CB::c_intermed2, core, im2_t,  im2_t *TBYTES,  DataFormat::Float16_b );
         CreateCircularBuffer( program, device, CB::c_intermed0, core, im0_t,  im0_t *TBYTES,  DataFormat::Float16_b );
-        if (mask != nullptr) {
+        if (mask.has_value()) {
             CreateCircularBuffer( program, device, CB::c_intermed3, core, im3_t,  im3_t *TBYTES,  DataFormat::Float16_b );
             CreateCircularBuffer( program, device, CB::c_in3, core, in3_t,  in3_t *TBYTES,  DataFormat::Float16_b );
             CreateCircularBuffer( program, device, CB::c_in4, core, in4_t,  in4_t *TBYTES,  DataFormat::Float16_b );
@@ -166,7 +168,7 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
 
         uint32_t src_addr = src0_dram_buffer->address();
         //uint32_t dst_addr = dst_dram_buffer->address();
-        uint32_t mask_addr = mask ? mask->buffer()->address() : 0;
+        uint32_t mask_addr = mask.has_value() ? mask.value().get().buffer()->address() : 0;
         uint32_t tile_offset = wtpc*Wt*icore;
         //cout << "WTPC=" << wtpc << endl;
         //cout << "Wt=" << Wt << endl;
@@ -178,23 +180,46 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
         WriteRuntimeArgsToDevice(device, writer_kernels, core, { src_addr, 0,   0, wtpc*Wt, tile_offset });
     }
 
-    CompileProgram(device, program, profile);
-    ConfigureDeviceWithProgram(device, program);
-    LaunchKernels(device, program);
-    if (profile)
-        tt_metal::DumpDeviceProfileResults(device, program);
-
-    return std::move(a);
+    return program;
 } // scale_mask_softmax_
 
-Tensor scale_mask_softmax_in_place(float scale, const Tensor& mask, Tensor& a) {
-    return std::move(scale_mask_softmax_(scale, &mask, a));
+
+void AttentionSoftmaxInPlace::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    TT_ASSERT(input_tensors.size() > 0 and input_tensors.size() <= 2, "Must have 1 or 2 input tensors");
 }
 
-Tensor softmax_in_place(Tensor &a) {
-    return std::move(scale_mask_softmax_(0.0f, nullptr, a)); // 0.0f means unused scale
+std::vector<Shape> AttentionSoftmaxInPlace::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    // Do nothing because it's an in-place operation
+    return {};
 }
 
-}  // namespace ll_buda
+std::vector<Tensor> AttentionSoftmaxInPlace::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    // Do nothing because it's an in-place operation
+    return {};
+}
+
+Program AttentionSoftmaxInPlace::create_program(
+    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
+    std::vector<Tensor> &output_tensors
+) const {
+    auto& input_tensor = input_tensors.at(0);
+    const auto mask = optional_input_tensors.at(0);
+    return scale_mask_softmax_(input_tensor, mask, this->scale);
+
+}
+
+Tensor scale_mask_softmax_in_place(float scale, std::optional<std::reference_wrapper<const Tensor>> mask, Tensor& input_tensor) {
+    std::vector<std::reference_wrapper<const Tensor>> input_tensors{input_tensor};
+    operation::run(AttentionSoftmaxInPlace{.scale=scale}, input_tensors, {mask});
+    return std::move(input_tensor);
+}
+
+Tensor softmax_in_place(Tensor& input_tensor) {
+    return std::move(scale_mask_softmax_in_place(0.0f, std::nullopt, input_tensor)); // 0.0f means unused scale
+}
+
+
+} // namespace tt_metal
 
 }  // namespace tt

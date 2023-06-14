@@ -91,14 +91,30 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
 }
 
 
-std::vector<Tensor> run_without_program_cache(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
+Program create_program(
+    const Operation& op,
+    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors
+)
+{
+    if (optional_input_tensors.empty()) {
+        return op.create_program(input_tensors, output_tensors);
+    }
+    return op.create_program(input_tensors, optional_input_tensors, output_tensors);
+}
+
+std::vector<Tensor> run_without_program_cache(
+    const Operation& op,
+    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
     op.validate(input_tensors);
 
     auto device = detail::get_device(input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
 
-    auto program = op.create_program(input_tensors, output_tensors);
+    auto program = create_program(op, input_tensors, optional_input_tensors, output_tensors);
     tt_metal::CompileProgram(device, program);
     tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::LaunchKernels(device, program);
@@ -107,7 +123,10 @@ std::vector<Tensor> run_without_program_cache(const Operation& op, const std::ve
 }
 
 
-std::vector<Tensor> run_with_program_cache(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
+std::vector<Tensor> run_with_program_cache(
+    const Operation& op,
+    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
     op.validate(input_tensors);
 
@@ -131,11 +150,15 @@ std::vector<Tensor> run_with_program_cache(const Operation& op, const std::vecto
 
 }
 
-std::vector<Tensor> run(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
+std::vector<Tensor> run(
+    const Operation& op,
+    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+) {
     if (program_cache::is_enabled()) {
-        return detail::run_with_program_cache(op, input_tensors);
+        return detail::run_with_program_cache(op, input_tensors, optional_input_tensors);
     } else {
-        return detail::run_without_program_cache(op, input_tensors);
+        return detail::run_without_program_cache(op, input_tensors, optional_input_tensors);
     }
 }
 

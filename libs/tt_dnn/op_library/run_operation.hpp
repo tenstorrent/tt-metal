@@ -4,11 +4,17 @@
 #include "tt_dnn/op_library/auto_pad.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 
+#include <optional>
+
 namespace tt::tt_metal {
 
 namespace operation {
 
-std::vector<Tensor> run(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors);
+std::vector<Tensor> run(
+    const Operation& op,
+    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors = {}
+);
 
 std::vector<Tensor> generic_create_output_tensors(
     const Operation& op,
@@ -30,7 +36,6 @@ static Tensor run_without_autopad(ConcreteOperation&& concrete_op, const Tensor 
         device = input_tensor.device();
     }
 
-    auto output_shape = op.compute_output_shapes({std::cref(input_tensor)}).at(0);
     if (not input_tensor.on_host()) {
         return std::move(run(op, {std::cref(input_tensor)}).at(0));
     } else {
