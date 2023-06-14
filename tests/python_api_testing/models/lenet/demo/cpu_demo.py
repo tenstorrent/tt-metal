@@ -9,16 +9,11 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
-import pytest
 from loguru import logger
 
 from lenet_utils import load_torch_lenet, prepare_image
 
 
-@pytest.mark.parametrize(
-    "",
-    ((),),
-)
 def test_cpu_demo(mnist_sample_input, model_location_generator):
     sample_image = mnist_sample_input
     image = prepare_image(sample_image)
