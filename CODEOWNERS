@@ -83,4 +83,5 @@ docs/source/apis/kernel_apis.rst @davorchap @DrJessop @kkwong10 @pgkeller @tt-rk
 # misc
 tests/**/dtx/ @tt-nshanker
 tests/**/*test*conv*.py @tt-nshanker
+tests/**/module.mk @tenstorrent-metal/developers
 third_party/ @tt-rkim @TT-billteng @kkwong10
