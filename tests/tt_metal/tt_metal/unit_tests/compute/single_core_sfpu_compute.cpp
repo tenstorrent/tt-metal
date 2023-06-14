@@ -17,7 +17,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-namespace unit_tests::basic_sfpu_compute {
+namespace unit_tests::single_core_sfpu_compute {
 // SFPU maps -> relevant kernels, golden functions, comparison functions
 const map<string, string> sfpu_op_to_hlk_op_name = {
     // FIXME: #1157
@@ -231,12 +231,11 @@ bool single_core_sfpu(tt_metal::Device* device, const SingleCoreSfpuConfig& test
     pass &= is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
     return pass;
 }
-}  // namespace unit_tests::basic_sfpu_compute
+}  // namespace unit_tests::single_core_sfpu_compute
 
-TEST_SUITE("BasicSfpuCompute") {
-    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleTile") {
-        unit_tests::basic_sfpu_compute::SingleCoreSfpuConfig test_config = {
-            .num_tiles = 1,
+TEST_SUITE("SfpuCompute") {
+    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleCore") {
+        unit_tests::single_core_sfpu_compute::SingleCoreSfpuConfig test_config = {
             .tile_byte_size = 2 * 32 * 32,
             .output_dram_channel = 0,
             .output_dram_byte_address = 0,
@@ -246,111 +245,102 @@ TEST_SUITE("BasicSfpuCompute") {
             .l1_input_data_format = tt::DataFormat::Float16_b,
             .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
             .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = {.x = 0, .y = 0},
-            .sfpu_op = "relu"};
+            .core = {.x = 0, .y = 0}};
 
-        SUBCASE("relu") {
-            test_config.sfpu_op = "relu";
-            if (arch_ == tt::ARCH::WORMHOLE_B0) {
-                WARN(single_core_sfpu(device_, test_config));
-            } else {
+        SUBCASE("SingleTile") {
+            test_config.num_tiles = 1;
+            SUBCASE("relu") {
+                test_config.sfpu_op = "relu";
+                if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                    WARN(single_core_sfpu(device_, test_config));
+                } else {
+                    REQUIRE(single_core_sfpu(device_, test_config));
+                }
+            }
+            SUBCASE("exponential") {
+                test_config.sfpu_op = "exponential";
+                if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                    WARN(single_core_sfpu(device_, test_config));
+                } else {
+                    REQUIRE(single_core_sfpu(device_, test_config));
+                }
+            }
+            SUBCASE("reciprocal") {
+                test_config.sfpu_op = "reciprocal";
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+            SUBCASE("gelu") {
+                test_config.sfpu_op = "gelu";
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+            SUBCASE("sqrt") {
+                test_config.sfpu_op = "sqrt";
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+            SUBCASE("sigmoid") {
+                test_config.sfpu_op = "sigmoid";
+                REQUIRE(single_core_sfpu(device_, test_config));
+            }
+            SUBCASE("log") {
+                test_config.sfpu_op = "log";
+                if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                    WARN(single_core_sfpu(device_, test_config));
+                } else {
+                    REQUIRE(single_core_sfpu(device_, test_config));
+                }
+            }
+            SUBCASE("tanh") {
+                test_config.sfpu_op = "tanh";
                 REQUIRE(single_core_sfpu(device_, test_config));
             }
         }
-        SUBCASE("exponential") {
-            test_config.sfpu_op = "exponential";
-            if (arch_ == tt::ARCH::WORMHOLE_B0) {
-                WARN(single_core_sfpu(device_, test_config));
-            } else {
+
+        SUBCASE("MultiTile") {
+            test_config.num_tiles = 4;
+            SUBCASE("relu") {
+                test_config.sfpu_op = "relu";
+                if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                    WARN(single_core_sfpu(device_, test_config));
+                } else {
+                    REQUIRE(single_core_sfpu(device_, test_config));
+                }
+            }
+            SUBCASE("exponential") {
+                test_config.sfpu_op = "exponential";
+                if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                    WARN(single_core_sfpu(device_, test_config));
+                } else {
+                    REQUIRE(single_core_sfpu(device_, test_config));
+                }
+            }
+            SUBCASE("reciprocal") {
+                test_config.sfpu_op = "reciprocal";
                 REQUIRE(single_core_sfpu(device_, test_config));
             }
-        }
-        SUBCASE("reciprocal") {
-            test_config.sfpu_op = "reciprocal";
-            REQUIRE(single_core_sfpu(device_, test_config));
-        }
-        SUBCASE("gelu") {
-            test_config.sfpu_op = "gelu";
-            REQUIRE(single_core_sfpu(device_, test_config));
-        }
-        SUBCASE("sqrt") {
-            test_config.sfpu_op = "sqrt";
-            REQUIRE(single_core_sfpu(device_, test_config));
-        }
-        SUBCASE("sigmoid") {
-            test_config.sfpu_op = "sigmoid";
-            REQUIRE(single_core_sfpu(device_, test_config));
-        }
-        SUBCASE("log") {
-            test_config.sfpu_op = "log";
-            if (arch_ == tt::ARCH::WORMHOLE_B0) {
-                WARN(single_core_sfpu(device_, test_config));
-            } else {
+            SUBCASE("gelu") {
+                test_config.sfpu_op = "gelu";
                 REQUIRE(single_core_sfpu(device_, test_config));
             }
-        }
-        SUBCASE("tanh") {
-            test_config.sfpu_op = "tanh";
-            REQUIRE(single_core_sfpu(device_, test_config));
-        }
-    }
-    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "MultiTile") {
-        unit_tests::basic_sfpu_compute::SingleCoreSfpuConfig test_config = {
-            .num_tiles = 4,
-            .tile_byte_size = 2 * 32 * 32,
-            .output_dram_channel = 0,
-            .output_dram_byte_address = 0,
-            .input_dram_channel = 0,
-            .input_dram_byte_address = 16 * 32 * 32,
-            .l1_input_byte_address = UNRESERVED_BASE,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = {.x = 0, .y = 0},
-            .sfpu_op = "relu"};
-        SUBCASE("relu") {
-            test_config.sfpu_op = "relu";
-            if (arch_ == tt::ARCH::WORMHOLE_B0) {
-                WARN(single_core_sfpu(device_, test_config));
-            } else {
+            SUBCASE("sqrt") {
+                test_config.sfpu_op = "sqrt";
                 REQUIRE(single_core_sfpu(device_, test_config));
             }
-        }
-        SUBCASE("exponential") {
-            test_config.sfpu_op = "exponential";
-            if (arch_ == tt::ARCH::WORMHOLE_B0) {
-                WARN(single_core_sfpu(device_, test_config));
-            } else {
+            SUBCASE("sigmoid") {
+                test_config.sfpu_op = "sigmoid";
                 REQUIRE(single_core_sfpu(device_, test_config));
             }
-        }
-        SUBCASE("reciprocal") {
-            test_config.sfpu_op = "reciprocal";
-            REQUIRE(single_core_sfpu(device_, test_config));
-        }
-        SUBCASE("gelu") {
-            test_config.sfpu_op = "gelu";
-            REQUIRE(single_core_sfpu(device_, test_config));
-        }
-        SUBCASE("sqrt") {
-            test_config.sfpu_op = "sqrt";
-            REQUIRE(single_core_sfpu(device_, test_config));
-        }
-        SUBCASE("sigmoid") {
-            test_config.sfpu_op = "sigmoid";
-            REQUIRE(single_core_sfpu(device_, test_config));
-        }
-        SUBCASE("log") {
-            test_config.sfpu_op = "log";
-            if (arch_ == tt::ARCH::WORMHOLE_B0) {
-                WARN(single_core_sfpu(device_, test_config));
-            } else {
+            SUBCASE("log") {
+                test_config.sfpu_op = "log";
+                if (arch_ == tt::ARCH::WORMHOLE_B0) {
+                    WARN(single_core_sfpu(device_, test_config));
+                } else {
+                    REQUIRE(single_core_sfpu(device_, test_config));
+                }
+            }
+            SUBCASE("tanh") {
+                test_config.sfpu_op = "tanh";
                 REQUIRE(single_core_sfpu(device_, test_config));
             }
-        }
-        SUBCASE("tanh") {
-            test_config.sfpu_op = "tanh";
-            REQUIRE(single_core_sfpu(device_, test_config));
         }
     }
 }
