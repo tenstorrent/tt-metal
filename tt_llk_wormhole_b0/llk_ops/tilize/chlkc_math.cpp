@@ -16,7 +16,7 @@ int32_t per_core_block_tile_cnt; // Block tile count = (1xN)
 void math_main(const struct hlk_args_t *args,const int outer_loop_cnt)
 {
 int __outer_loop_iter;
-llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>();
+llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(false);
 llk_math_pack_sync_init<SyncTile16>();
 for (__outer_loop_iter = 0; __outer_loop_iter < outer_loop_cnt; __outer_loop_iter += 1) {
   for (int b = 0; b < args -> per_core_tile_cnt; ++b) {
