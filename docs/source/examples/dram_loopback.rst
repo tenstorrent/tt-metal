@@ -8,8 +8,9 @@ buffer to another, using the compute engine and an intermediate L1 buffer to do
 so. We call this concept "loopback".
 
 We'll go through this code section by section. Note that we have this exact,
-full example program in ``programming_examples/loopback/loopback.cpp``, so you
-can follow along.
+full example program in
+``tt_metal/programming_examples/loopback/loopback.cpp``, so you can follow
+along.
 
 Silicon accelerator setup
 -------------------------

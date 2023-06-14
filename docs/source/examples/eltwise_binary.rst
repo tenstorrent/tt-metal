@@ -8,7 +8,8 @@ equal-sized tensors.
 
 We'll go through any new code section by section. This builds on top of
 previous examples. Note that we have this exact, full example program in
-``programming_examples/loopback/eltwise_binary.cpp``, so you can follow along.
+``tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp``, so you can
+follow along.
 
 New buffers
 -----------
