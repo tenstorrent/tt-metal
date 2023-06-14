@@ -49,27 +49,19 @@ docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent @TT-billt
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
 
 # eager - dtx
-libs/dtx/ @tt-nshanker
-eager/dtx/ @tt-nshanker
-buda_eager/dtx/ @tt-nshanker
+**/dtx/ @tt-nshanker
 tests/python_api_testing/conv/ @tt-nshanker
 
 # eager - tensor
-libs/tensor/ @TT-BrianLiu @tt-aho @arakhmati
-eager/tensor/ @TT-BrianLiu @tt-aho @arakhmati
-buda_eager/tensor/ @TT-BrianLiu @tt-aho @arakhmati
+**/tensor/ @TT-BrianLiu @tt-aho @arakhmati
 
 # eager - ops (dnn)
-libs/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
-eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
-buda_eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
-eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
-buda_eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
+**/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
+**/tt_dnn/op_library/conv/ @tt-nshanker @arakhmati
+**/tt_dnn/op_library/bmm/ @mywoodstock @TT-BrianLiu @tt-aho
 
 # eager - python api
-libs/tt_lib/ @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati
-eager/tt_lib/ @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati
-buda_eager/tt_lib/ @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati
+**/tt_lib/ @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati @mywoodstock
 
 # models
 models/ @boris-drazic @ashayestehmanesh @farbabi # for future
