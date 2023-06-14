@@ -1,3 +1,19 @@
+# coding=utf-8
+# Copyright 2021 Google AI, Ross Wightman, The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+""" PyTorch ViT model."""
+
 from pathlib import Path
 import sys
 f = f"{Path(__file__).parent}"
@@ -19,9 +35,9 @@ from torch import nn
 import tt_lib
 from tt_lib import tensor
 import tt_lib.fallback_ops as fallback_ops
+from transformers import ViTForImageClassification
 
 from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
-from tt_utils import find_pruneable_heads_and_indices, prune_linear_layer
 from configuration_vit import ViTConfig
 from activations import ACT2FN
 
@@ -166,25 +182,7 @@ class TtViTAttention(nn.Module):
         super().__init__()
         self.attention = TtViTSelfAttention(config, f"{base_address}.attention", state_dict, device)
         self.output = TtViTSelfOutput(config, f"{base_address}.output", state_dict, device)
-        self.pruned_heads = set()
 
-    def prune_heads(self, heads: Set[int]) -> None:
-        if len(heads) == 0:
-            return
-        heads, index = find_pruneable_heads_and_indices(
-            heads, self.attention.num_attention_heads, self.attention.attention_head_size, self.pruned_heads
-        )
-
-        # Prune linear layers
-        self.attention.query = prune_linear_layer(self.attention.query, index)
-        self.attention.key = prune_linear_layer(self.attention.key, index)
-        self.attention.value = prune_linear_layer(self.attention.value, index)
-        self.output.dense = prune_linear_layer(self.output.dense, index, dim=1)
-
-        # Update hyper params and store pruned heads
-        self.attention.num_attention_heads = self.attention.num_attention_heads - len(heads)
-        self.attention.all_head_size = self.attention.attention_head_size * self.attention.num_attention_heads
-        self.pruned_heads = self.pruned_heads.union(heads)
 
     def forward(
         self,
@@ -204,7 +202,6 @@ class TtViTIntermediate(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
         self.dense = make_linear(config.hidden_size, config.intermediate_size, "dense", state_dict, base_address, device)
-        # self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
@@ -231,12 +228,10 @@ class TtViTLayer(nn.Module):
         lbw = state_dict[make_address(base_address, "layernorm_before.weight")]
         lbb = state_dict[make_address(base_address, "layernorm_before.bias")]
         self.layernorm_before = fallback_ops.LayerNorm(normalized_shape=config.hidden_size, weights=lbw, biases=lbb, eps=config.layer_norm_eps)
-        # self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
         law = state_dict[make_address(base_address, "layernorm_after.weight")]
         lab = state_dict[make_address(base_address, "layernorm_after.bias")]
         self.layernorm_after = fallback_ops.LayerNorm(normalized_shape=config.hidden_size, weights=law, biases=lab, eps=config.layer_norm_eps)
-        # self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
     def forward(
         self,
@@ -292,18 +287,7 @@ class TtViTEncoder(nn.Module):
             layer_head_mask = head_mask[i] if head_mask is not None else None
 
             if self.gradient_checkpointing and self.training:
-                assert False, "we should never get here!"
-                def create_custom_forward(module):
-                    def custom_forward(*inputs):
-                        return module(*inputs, output_attentions)
-
-                    return custom_forward
-
-                layer_outputs = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(layer_module),
-                    hidden_states,
-                    layer_head_mask,
-                )
+                assert False, "TT does not support training yet"
             else:
                 layer_outputs = layer_module(hidden_states, layer_head_mask, output_attentions)
 
@@ -319,14 +303,14 @@ class TtViTEncoder(nn.Module):
             return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
 
 
-class CPUViTPatchEmbeddings(nn.Module):
+class ViTPatchEmbeddings(nn.Module):
     """
     This class turns `pixel_values` of shape `(batch_size, num_channels, height, width)` into the initial
     `hidden_states` (patch embeddings) of shape `(batch_size, seq_length, hidden_size)` to be consumed by a
     Transformer.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, base_address: str, state_dict: Dict):
         super().__init__()
         image_size, patch_size = config.image_size, config.patch_size
         num_channels, hidden_size = config.num_channels, config.hidden_size
@@ -340,6 +324,8 @@ class CPUViTPatchEmbeddings(nn.Module):
         self.num_patches = num_patches
 
         self.projection = nn.Conv2d(num_channels, hidden_size, kernel_size=patch_size, stride=patch_size)
+        self.projection.weight = nn.Parameter(state_dict[make_address(base_address, "projection.weight")])
+        self.projection.bias = nn.Parameter(state_dict[make_address(base_address, "projection.bias")])
 
     def forward(self, pixel_values: torch.Tensor, interpolate_pos_encoding: bool = False) -> torch.Tensor:
         batch_size, num_channels, height, width = pixel_values.shape
@@ -357,67 +343,21 @@ class CPUViTPatchEmbeddings(nn.Module):
         embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
         return embeddings
 
-class TtViTPatchEmbeddings(nn.Module):
-    """
-    This class turns `pixel_values` of shape `(batch_size, num_channels, height, width)` into the initial
-    `hidden_states` (patch embeddings) of shape `(batch_size, seq_length, hidden_size)` to be consumed by a
-    Transformer.
-    """
 
-    def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device):
-        super().__init__()
-        image_size, patch_size = config.image_size, config.patch_size
-        num_channels, hidden_size = config.num_channels, config.hidden_size
 
-        image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
-        patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
-        num_patches = (image_size[1] // patch_size[1]) * (image_size[0] // patch_size[0])
-        self.image_size = image_size
-        self.patch_size = patch_size
-        self.num_channels = num_channels
-        self.num_patches = num_patches
-
-        weights = state_dict[make_address(base_address, "projection.weight")]
-        biases = state_dict[make_address(base_address, "projection.bias")]
-
-        self.projection = fallback_ops.Conv2d(
-                                weights=weights,
-                                biases=biases,
-                                in_channels=num_channels,
-                                out_channels=hidden_size,
-                                kernel_size=patch_size,
-                                stride=patch_size)
-
-    def forward(self, pixel_values: torch.Tensor, interpolate_pos_encoding: bool = False) -> torch.Tensor:
-        batch_size, num_channels, height, width = pixel_values.shape
-        if num_channels != self.num_channels:
-            raise ValueError(
-                "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
-                f" Expected {self.num_channels} but got {num_channels}."
-            )
-        if not interpolate_pos_encoding:
-            if height != self.image_size[0] or width != self.image_size[1]:
-                raise ValueError(
-                    f"Input image size ({height}*{width}) doesn't match model"
-                    f" ({self.image_size[0]}*{self.image_size[1]})."
-                )
-        embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
-        return embeddings
-
-# candidate for CPU
-class CPUViTEmbeddings(nn.Module):
+class ViTEmbeddings(nn.Module):
     """
     Construct the CLS token, position and patch embeddings. Optionally, also the mask token.
     """
 
-    def __init__(self, config: ViTConfig, use_mask_token: bool = False) -> None:
+    def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, use_mask_token: bool = False, ) -> None:
         super().__init__()
 
-        self.cls_token = nn.Parameter(torch.randn(1, 1, config.hidden_size))
+        self.cls_token = nn.Parameter(state_dict[make_address(base_address, "cls_token")])
         self.mask_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size)) if use_mask_token else None
-        self.patch_embeddings = CPUViTPatchEmbeddings(config)
+        self.patch_embeddings = ViTPatchEmbeddings(config, make_address(base_address, "patch_embeddings"), state_dict)
         num_patches = self.patch_embeddings.num_patches
-        self.position_embeddings = nn.Parameter(torch.randn(1, num_patches + 1, config.hidden_size))
+        self.position_embeddings = nn.Parameter(state_dict[make_address(base_address, "position_embeddings")])
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.config = config
 
@@ -484,23 +424,6 @@ class CPUViTEmbeddings(nn.Module):
 
         return embeddings
 
-
-class TtViTPooler(nn.Module):
-    def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
-        super().__init__()
-        assert False, "ViTPooler is not implemented!"
-        self.dense = make_linear(config.hidden_size, config.hidden_size, "dense", state_dict, base_address, device)
-        self.activation = tt_lib.tensor.tanh
-
-    def forward(self, hidden_states: tt_tensor) -> tt_tensor:
-        # We "pool" the model by simply taking the hidden state corresponding
-        # to the first token.
-        first_token_tensor = hidden_states[:, 0]
-        pooled_output = self.dense(first_token_tensor)
-        pooled_output = self.activation(pooled_output)
-        return pooled_output
-
-
 class TtViTModel(nn.Module):
     def __init__(self,
                 config: ViTConfig,
@@ -512,7 +435,7 @@ class TtViTModel(nn.Module):
         super().__init__()
         self.config = config
         self.device = device
-        self.embeddings = CPUViTEmbeddings(config, use_mask_token=use_mask_token)
+        self.embeddings = ViTEmbeddings(config, use_mask_token=use_mask_token, base_address=make_address(base_address, "embeddings"), state_dict=state_dict)
         self.encoder = TtViTEncoder(config, base_address=f"{base_address}.encoder", state_dict=state_dict, device=device)
 
         wln = state_dict[make_address(base_address, "layernorm.weight")]
@@ -526,16 +449,8 @@ class TtViTModel(nn.Module):
 
         # Initialize weights and apply final processing
 
-    def get_input_embeddings(self) -> CPUViTPatchEmbeddings:
+    def get_input_embeddings(self) -> ViTPatchEmbeddings:
         return self.embeddings.patch_embeddings
-
-    def _prune_heads(self, heads_to_prune: Dict[int, List[int]]) -> None:
-        """
-        Prunes heads of the model. heads_to_prune: dict of {layer_num: list of heads to prune in this layer} See base
-        class PreTrainedModel
-        """
-        for layer, heads in heads_to_prune.items():
-            self.encoder.layer[layer].attention.prune_heads(heads)
 
     def forward(
         self,
@@ -567,8 +482,6 @@ class TtViTModel(nn.Module):
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
-        # put things on cpu
-        # get host
         pixel_values = tt_to_torch_tensor(pixel_values, tt_lib.device.GetHost())
         # TODO: maybe have a cleaner way to cast the input (from `ImageProcessor` side?)
         expected_dtype = self.embeddings.patch_embeddings.projection.weight.dtype
@@ -580,7 +493,6 @@ class TtViTModel(nn.Module):
             pixel_values, bool_masked_pos=bool_masked_pos, interpolate_pos_encoding=interpolate_pos_encoding
         )
         embedding_output = torch_to_tt_tensor_rm(embedding_output, self.device)
-        # PUT THEM BACK ON DEVICE
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -598,7 +510,7 @@ class TtViTModel(nn.Module):
         return head_outputs + encoder_outputs[1:]
 
 
-class ViTForImageClassification(nn.Module):
+class TtViTForImageClassification(nn.Module):
     def __init__(self,
                 config: ViTConfig,
                 base_address: str,
@@ -609,7 +521,7 @@ class ViTForImageClassification(nn.Module):
         self.num_labels = config.num_labels
         self.vit = TtViTModel(
                     config,
-                    base_address=base_address,
+                    base_address=make_address(base_address, "vit"),
                     state_dict=state_dict,
                     device=device,
                     add_pooling_layer=False
@@ -617,7 +529,6 @@ class ViTForImageClassification(nn.Module):
 
         # Classifier head
         self.classifier = make_linear(config.hidden_size, config.num_labels, "classifier", state_dict, base_address, device) if config.num_labels > 0 else None
-        # self.classifier = nn.Linear(config.hidden_size, config.num_labels) if config.num_labels > 0 else nn.Identity()
 
         # Initialize weights and apply final processing
 
@@ -650,11 +561,28 @@ class ViTForImageClassification(nn.Module):
         )
 
         sequence_output = outputs[0]
-        logits = sequence_output[:, 0, :]
         if self.classifier is not None:
-            logits = self.classifier(sequence_output[:, 0, :])
+            # NOTE: keep this here, until we have support for indexing
+            # logits = self.classifier(sequence_output[:, 0, :])
+            logits = self.classifier(sequence_output)
 
         loss = None
 
         output = (logits,) + outputs[1:]
         return ((loss,) + output) if loss is not None else output
+
+
+
+def _vit_for_image_classification(device, config, state_dict, base_address="") -> TtViTForImageClassification:
+
+    tt_model = TtViTForImageClassification(config, base_address=base_address, state_dict=state_dict, device=device)
+    return tt_model
+
+def vit_for_image_classification(device) -> TtViTForImageClassification:
+
+    HF_model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
+    config = HF_model.config
+    state_dict = HF_model.state_dict()
+    tt_model = _vit_for_image_classification(device=device, config=config, state_dict=state_dict)
+    tt_model.vit.get_head_mask = HF_model.vit.get_head_mask
+    return tt_model

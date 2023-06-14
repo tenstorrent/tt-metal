@@ -1,6 +1,5 @@
 from pathlib import Path
 import sys
-from tests.python_api_testing.models.ViT.tt.modeling_vit import TtViTIntermediate
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/..")
@@ -9,7 +8,7 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-from tt.modeling_vit import TtViTModel
+from tt.modeling_vit import TtViTAttention
 from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from loguru import logger
 import torch
@@ -17,32 +16,21 @@ import tt_lib
 from utility_functions_new import comp_allclose_and_pcc, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
+def test_vit_attention(pcc=0.99):
 
-def test_vit_model(imagenet_sample_input, pcc=0.99):
-    image = imagenet_sample_input
-    # hidden_state_shape = (1, 1, 197, 768)
+    hidden_state_shape = (1, 1, 197, 768)
     head_mask = None
-    output_attentions = None
-    output_hidden_states = None
-    interpolate_pos_encoding = None
-    return_dict = None
-    # hidden_state = torch.randn(hidden_state_shape)
+    output_attentions = False
+    hidden_state = torch.randn(hidden_state_shape)
     with torch.no_grad():
         HF_model = HF_ViTForImageClassication.from_pretrained("google/vit-base-patch16-224")
 
         state_dict = HF_model.state_dict()
+        reference = HF_model.vit.encoder.layer[5].attention
 
-        # k = state_dict.keys()
-        # k_ = [_ for _ in k if ".intermediate" in _]
-        # print(k_)
-
-        reference = HF_model.vit
-
-        # print(reference)
-        # print(type(reference))
 
         config = HF_model.config
-        HF_output = reference(image, head_mask, output_attentions, output_hidden_states, interpolate_pos_encoding, return_dict)[0]
+        HF_output = reference(hidden_state.squeeze(0), head_mask, output_attentions)[0]
 
         # Initialize the device
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -50,10 +38,10 @@ def test_vit_model(imagenet_sample_input, pcc=0.99):
         tt_lib.device.SetDefaultDevice(device)
         host = tt_lib.device.GetHost()
 
-        tt_image = torch_to_tt_tensor_rm(image, device, put_on_device=False)
-        tt_layer = TtViTModel(config, add_pooling_layer=False, base_address="vit", state_dict=state_dict, device=device)
-        tt_layer.get_head_mask = reference.get_head_mask
-        tt_output = tt_layer(tt_image, head_mask, output_attentions, output_hidden_states, interpolate_pos_encoding, return_dict)[0]
+        tt_hidden_state = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
+        tt_layer = TtViTAttention(config, base_address="vit.encoder.layer.5.attention", state_dict=state_dict, device=device)
+
+        tt_output = tt_layer(tt_hidden_state, head_mask, output_attentions)[0]
         tt_output = tt_to_torch_tensor(tt_output, host).squeeze(0)
         pcc_passing, _ = comp_pcc(HF_output, tt_output, pcc)
         _, pcc_output = comp_allclose_and_pcc(HF_output, tt_output, pcc)

@@ -1,6 +1,5 @@
 from pathlib import Path
 import sys
-from tests.python_api_testing.models.ViT.tt.modeling_vit import TtViTIntermediate
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/..")
@@ -9,13 +8,13 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-from tt.modeling_vit import TtViTLayer
 from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from loguru import logger
 import torch
+
 import tt_lib
 from utility_functions_new import comp_allclose_and_pcc, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
-
+from tt.modeling_vit import TtViTLayer
 
 
 def test_vit_layer(pcc=0.99):

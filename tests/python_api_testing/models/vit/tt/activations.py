@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
 from collections import OrderedDict
 from pathlib import Path
 import sys
@@ -22,6 +21,7 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
+
 import tt_lib
 from torch import nn
 

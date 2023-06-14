@@ -7,29 +7,29 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-from tt.modeling_vit import TtViTSelfOutput
 from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from loguru import logger
 import torch
+
 import tt_lib
 from datasets import load_dataset
 from utility_functions_new import comp_allclose_and_pcc, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
+from tt.modeling_vit import TtViTOutput
 
 
+def test_vit_output(pcc=0.99):
 
-def test_vit_selfoutput(pcc=0.99):
-
-    hidden_state_shape = (1, 1, 197, 768)
+    hidden_state_shape = (1, 1, 197, 3072)
+    input_tensor_shape = (1, 1, 197, 768)
     hidden_state = torch.randn(hidden_state_shape)
-
+    input_tensor = torch.randn(input_tensor_shape)
     with torch.no_grad():
         HF_model = HF_ViTForImageClassication.from_pretrained("google/vit-base-patch16-224")
 
         state_dict = HF_model.state_dict()
-
-        reference = HF_model.vit.encoder.layer[0].attention.output
+        reference = HF_model.vit.encoder.layer[11].output
         config = HF_model.config
-        HF_output = reference(hidden_state, None)
+        HF_output = reference(hidden_state, input_tensor)
 
 
         # Initialize the device
@@ -38,19 +38,11 @@ def test_vit_selfoutput(pcc=0.99):
         tt_lib.device.SetDefaultDevice(device)
         host = tt_lib.device.GetHost()
 
-        tt_hidden_state = torch_to_tt_tensor_rm(
-                                            hidden_state,
-                                            device,
-                                            put_on_device=False
-                                            )
-        tt_layer = TtViTSelfOutput(
-                                config,
-                                base_address="vit.encoder.layer.0.attention.output",
-                                state_dict=state_dict,
-                                device=device
-                                )
+        tt_hidden_state = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
+        tt_input_tensor = torch_to_tt_tensor_rm(input_tensor, device, put_on_device=False)
+        tt_layer = TtViTOutput(config, base_address="vit.encoder.layer.11.output", state_dict=state_dict, device=device)
 
-        tt_output = tt_layer(tt_hidden_state, None)
+        tt_output = tt_layer(tt_hidden_state, tt_input_tensor)
         tt_output = tt_to_torch_tensor(tt_output, host)
         pcc_passing, _ = comp_pcc(HF_output, tt_output, pcc)
         _, pcc_output = comp_allclose_and_pcc(HF_output, tt_output, pcc)
