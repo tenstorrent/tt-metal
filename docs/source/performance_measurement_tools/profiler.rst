@@ -152,7 +152,7 @@ Post-processing device profiler
 
 ..  code-block:: sh
 
-    cd $TT_METAL_HOME/tools/profiler/
+    cd $TT_METAL_HOME/tt_metal/tools/profiler/
     ./process_device_log.py
 
 3. Navigate to ``<machine IP>:<PORT>`` to the Device Profiler Dashboard to view
