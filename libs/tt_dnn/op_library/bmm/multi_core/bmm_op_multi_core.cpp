@@ -1,5 +1,5 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
-
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
@@ -49,12 +49,8 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
     auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
     uint32_t num_cores_x = compute_and_storage_grid_size.x;
     uint32_t num_cores_y = compute_and_storage_grid_size.y;
-    auto num_output_tiles = cshape[0] * cshape[1] * cshape[2] * cshape[3] / TILE_HW;
-    auto num_cores = std::min(num_output_tiles, num_cores_x * num_cores_y);
-    std::vector<uint32_t> num_output_tiles_per_core(num_cores, num_output_tiles / num_cores);
-    for(uint32_t i = 0; i < num_output_tiles % num_cores; i++){
-        num_output_tiles_per_core[i]++;
-    }
+    auto num_output_tiles_total = cshape[0] * cshape[1] * cshape[2] * cshape[3] / TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_and_storage_grid_size, num_output_tiles_total);
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -80,82 +76,110 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
     uint32_t in1_dram_addr = src1_dram_buffer->address();
     uint32_t out_dram_addr = dst_dram_buffer->address();
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+    uint32_t src0_cb_index = 0;
+    uint32_t num_input_tiles = 2;
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        cb_data_format
+    );
 
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t src0_cb_index = 0;
-        uint32_t num_input_tiles = 2;
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            src0_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            cb_data_format
-        );
+    uint32_t src1_cb_index = 1;
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src1_cb_index,
+        all_cores,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        cb_data_format
+    );
 
-        uint32_t src1_cb_index = 1;
-        auto cb_src1 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            src1_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            cb_data_format
-        );
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t num_output_tiles = 2;
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        num_output_tiles,
+        num_output_tiles * single_tile_size,
+        cb_data_format
+    );
 
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t num_output_tiles = 2;
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            ouput_cb_index,
-            core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            cb_data_format
-        );
+    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+    std::vector<uint32_t> reader_writer_compile_time_args;
+    if (tile_size_is_power_of_two) {
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
+    } else {
+        reader_writer_compile_time_args = {0, 0};
+    }
 
-        bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-        std::vector<uint32_t> reader_writer_compile_time_args;
-        if (tile_size_is_power_of_two) {
-            // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-            reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
-        } else {
-            reader_writer_compile_time_args = {0, 0};
-        }
+    auto reader = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+        all_cores, reader_writer_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
-        auto reader = tt_metal::CreateDataMovementKernel(
-            program,
-            "tt_metal/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
-            core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+    auto writer = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+        all_cores, reader_writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
-        auto writer = tt_metal::CreateDataMovementKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
-            core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+    vector<uint32_t> compute_args_group_1 = {
+        1, // B
+        1, // Mt
+        Kt, // Kt
+        num_output_tiles_per_core_group_1 // Nt
+    }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-        vector<uint32_t> compute_args = {
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    auto eltwise_binary_kernel_group_1 = tt_metal::CreateComputeKernel(
+        program,
+        "tt_metal/kernels/compute/bmm.cpp",
+        core_group_1,
+        compute_args_group_1,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+
+    if (!core_group_2.ranges().empty()) {
+        vector<uint32_t> compute_args_group_2 = {
             1, // B
             1, // Mt
             Kt, // Kt
-            num_output_tiles_per_core[i] // Nt
+            num_output_tiles_per_core_group_2 // Nt
         }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
-        auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
+        auto eltwise_binary_kernel_group_2 = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/bmm.cpp",
-            core,
-            compute_args,
+            core_group_2,
+            compute_args_group_2,
             math_fidelity,
             fp32_dest_acc_en,
             math_approx_mode
         );
+    }
 
+    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        uint32_t num_output_tiles_per_core;
+		if (core_group_1.core_coord_in_core_ranges(core)) {
+			num_output_tiles_per_core = num_output_tiles_per_core_group_1;
+		} else if (core_group_2.core_coord_in_core_ranges(core)) {
+			num_output_tiles_per_core = num_output_tiles_per_core_group_2;
+		} else {
+			TT_ASSERT(false, "Core not in specified core ranges");
+		}
         tt_metal::WriteRuntimeArgsToDevice(
             device, reader, core,
             {in0_dram_addr,
@@ -166,9 +190,9 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
             Mt*Kt,
             Kt*Nt,
             B,
-            uint32_t(bcast_batch ? 1 : 0),
+            uint32_t(bcast_batch),
             num_tiles_written,
-            num_output_tiles_per_core[i],
+            num_output_tiles_per_core,
             Mt*Nt }
         );
         tt_metal::WriteRuntimeArgsToDevice(
@@ -178,10 +202,10 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
             {out_dram_addr,
             0,
             0,
-            num_output_tiles_per_core[i],
+            num_output_tiles_per_core,
             num_tiles_written }
         );
-        num_tiles_written += num_output_tiles_per_core[i];
+        num_tiles_written += num_output_tiles_per_core;
     }
 
     // output does not hold any data, contains pointer to buffer on device with the data

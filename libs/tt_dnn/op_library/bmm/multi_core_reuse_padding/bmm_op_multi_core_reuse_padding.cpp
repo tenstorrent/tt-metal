@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -83,109 +84,111 @@ tt_metal::Program create_program(
     uint32_t num_blocks_read = 0; // Shouldn't be used since this op is only used for 1 core
     uint32_t num_blocks_y = (M - 1) / per_core_M + 1; // Should always be 1
     uint32_t num_blocks_x = (N - 1) / per_core_N + 1; // SHould always be 1
+
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device->compute_and_storage_grid_size(), true));
+    uint32_t src0_cb_index = 0;
+    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src1_cb_index = 1;
+    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src1_cb_index,
+        all_cores,
+        cb1_tiles,
+        cb1_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src2_cb_index = 2;
+    uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
+    auto cb_src2 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src2_cb_index,
+        all_cores,
+        cb2_tiles,
+        cb2_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_data_format
+    );
+
+    uint32_t interm0_cb_index = 24;
+    auto cb_interm0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        interm0_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_output->address(),
+        cb_data_format
+    );
+
+    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+    std::vector<uint32_t> reader_writer_compile_time_args;
+    if (tile_size_is_power_of_two) {
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
+    } else {
+        reader_writer_compile_time_args = {0, 0};
+    }
+
+    // Create reader and writer kernels per core
+    auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_padding.cpp",
+        all_cores,
+        reader_writer_compile_time_args,
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_1_default);
+
+    auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
+        all_cores,
+        reader_writer_compile_time_args,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_0_default);
+
+    // Create compute kernel
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    auto mm_kernel = tt_metal::CreateComputeKernel(
+        program,
+        "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
+        all_cores,
+        compute_kernel_args,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+
     for(int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
         for(int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
             int core_idx_x = num_blocks_read % num_cores_x;
             int core_idx_y = num_blocks_read / num_cores_x;
             CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
-
-            uint32_t src0_cb_index = 0;
-            uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
-            auto cb_src0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src0_cb_index,
-                core,
-                cb0_tiles,
-                cb0_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src1_cb_index = 1;
-            uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
-            auto cb_src1 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src1_cb_index,
-                core,
-                cb1_tiles,
-                cb1_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src2_cb_index = 2;
-            uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
-            auto cb_src2 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src2_cb_index,
-                core,
-                cb2_tiles,
-                cb2_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t ouput_cb_index = 16; // output operands start at index 16
-            auto cb_output = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                ouput_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                cb_data_format
-            );
-
-            uint32_t interm0_cb_index = 24;
-            auto cb_interm0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                interm0_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                cb_output->address(),
-                cb_data_format
-            );
-
-            bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-            std::vector<uint32_t> reader_writer_compile_time_args;
-            if (tile_size_is_power_of_two) {
-                // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-                reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
-            } else {
-                reader_writer_compile_time_args = {0, 0};
-            }
-
-            // Create reader and writer kernels per core
-            auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
-                program,
-                "tt_metal/kernels/dataflow/reader_bmm_tile_layout_padding.cpp",
-                core,
-                reader_writer_compile_time_args,
-                tt_metal::DataMovementProcessor::RISCV_1,
-                tt_metal::NOC::RISCV_1_default);
-
-            auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
-                program,
-                "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
-                core,
-                reader_writer_compile_time_args,
-                tt_metal::DataMovementProcessor::RISCV_0,
-                tt_metal::NOC::RISCV_0_default);
-
-            // Create compute kernel
-            bool fp32_dest_acc_en = false;
-            bool math_approx_mode = false;
-            auto mm_kernel = tt_metal::CreateComputeKernel(
-                program,
-                "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
-                core,
-                compute_kernel_args,
-                math_fidelity,
-                fp32_dest_acc_en,
-                math_approx_mode
-            );
 
             // Write runtime args to device
             std::vector<uint32_t> mm_reader_args = {

@@ -183,79 +183,73 @@ tt_metal::Program create_program_mcast_in0_in1(
     uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
+    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+
+    uint32_t src0_cb_index = 0;
+    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src1_cb_index = 1;
+    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src1_cb_index,
+        all_cores,
+        cb1_tiles,
+        cb1_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src2_cb_index = 2;
+    uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
+    auto cb_src2 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src2_cb_index,
+        all_cores,
+        cb2_tiles,
+        cb2_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_data_format
+    );
+
+    uint32_t interm0_cb_index = 24;
+    auto cb_interm0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        interm0_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_output->address(),
+        cb_data_format
+    );
+
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-            auto l1_bank_ids = device->bank_ids_from_logical_core(core);
-            TT_ASSERT(not l1_bank_ids.empty());
-            auto l1_bank_id = l1_bank_ids.at(0);
-            auto in0_mcast_sender_semaphore = tt_metal::Buffer(device, sizeof(uint32_t), l1_bank_id, sizeof(uint32_t), tt_metal::BufferType::L1);
-            auto in0_mcast_receiver_semaphore = tt_metal::Buffer(device, sizeof(uint32_t), l1_bank_id, sizeof(uint32_t), tt_metal::BufferType::L1);
-            auto in1_mcast_sender_semaphore = tt_metal::Buffer(device, sizeof(uint32_t), l1_bank_id, sizeof(uint32_t), tt_metal::BufferType::L1);
-            auto in1_mcast_receiver_semaphore = tt_metal::Buffer(device, sizeof(uint32_t), l1_bank_id, sizeof(uint32_t), tt_metal::BufferType::L1);
-
-            uint32_t src0_cb_index = 0;
-            uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
-            auto cb_src0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src0_cb_index,
-                core,
-                cb0_tiles,
-                cb0_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src1_cb_index = 1;
-            uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
-            auto cb_src1 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src1_cb_index,
-                core,
-                cb1_tiles,
-                cb1_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src2_cb_index = 2;
-            uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
-            auto cb_src2 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src2_cb_index,
-                core,
-                cb2_tiles,
-                cb2_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t ouput_cb_index = 16; // output operands start at index 16
-            auto cb_output = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                ouput_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                cb_data_format
-            );
-
-            uint32_t interm0_cb_index = 24;
-            auto cb_interm0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                interm0_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                cb_output->address(),
-                cb_data_format
-            );
-
-            std::vector<uint32_t> invalid = {INVALID};
-            tt_metal::WriteToDeviceL1(device, core, in0_mcast_sender_semaphore.address(), invalid);
-            tt_metal::WriteToDeviceL1(device, core, in1_mcast_sender_semaphore.address(), invalid);
 
             CoreCoord left_core    = {(std::size_t) start_core_x, (std::size_t) core.y};
             CoreCoord left_core_plus_one    = {(std::size_t) start_core_x + 1, (std::size_t) core.y};
@@ -300,8 +294,8 @@ tt_metal::Program create_program_mcast_in0_in1(
                 (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
                 (std::uint32_t)  left_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  left_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in0_mcast_sender_semaphore.address(),
-                (std::uint32_t)  in0_mcast_receiver_semaphore.address(),
+                (std::uint32_t)  in0_mcast_sender_semaphore->address(),
+                (std::uint32_t)  in0_mcast_receiver_semaphore->address(),
 
                 (std::uint32_t)  bottom_core_physical.x, // in0_mcast_dest_noc_start_x
                 (std::uint32_t)  bottom_core_physical.y, // in0_mcast_dest_noc_start_y
@@ -310,8 +304,8 @@ tt_metal::Program create_program_mcast_in0_in1(
                 (std::uint32_t)  (num_cores_r - 1), // in0_mcast_num_dests
                 (std::uint32_t)  top_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  top_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in1_mcast_sender_semaphore.address(),
-                (std::uint32_t)  in1_mcast_receiver_semaphore.address(),
+                (std::uint32_t)  in1_mcast_sender_semaphore->address(),
+                (std::uint32_t)  in1_mcast_receiver_semaphore->address(),
 
                 (std::uint32_t)  M * K, // MtKt
                 (std::uint32_t)  K * N, // KtNt
@@ -569,76 +563,72 @@ tt_metal::Program create_program_mcast_in0(
     uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
+
+    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+
+    uint32_t src0_cb_index = 0;
+    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src1_cb_index = 1;
+    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src1_cb_index,
+        all_cores,
+        cb1_tiles,
+        cb1_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src2_cb_index = 2;
+    uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
+    auto cb_src2 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src2_cb_index,
+        all_cores,
+        cb2_tiles,
+        cb2_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_data_format
+    );
+
+    uint32_t interm0_cb_index = 24;
+    auto cb_interm0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        interm0_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_output->address(),
+        cb_data_format
+    );
+
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-            auto l1_bank_ids = device->bank_ids_from_logical_core(core);
-            TT_ASSERT(not l1_bank_ids.empty());
-            auto l1_bank_id = l1_bank_ids.at(0);
-            auto in0_mcast_sender_semaphore = tt_metal::Buffer(device, sizeof(uint32_t), l1_bank_id, sizeof(uint32_t), tt_metal::BufferType::L1);
-            auto in0_mcast_receiver_semaphore = tt_metal::Buffer(device, sizeof(uint32_t), l1_bank_id, sizeof(uint32_t), tt_metal::BufferType::L1);
-
-            uint32_t src0_cb_index = 0;
-            uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
-            auto cb_src0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src0_cb_index,
-                core,
-                cb0_tiles,
-                cb0_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src1_cb_index = 1;
-            uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
-            auto cb_src1 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src1_cb_index,
-                core,
-                cb1_tiles,
-                cb1_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src2_cb_index = 2;
-            uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
-            auto cb_src2 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src2_cb_index,
-                core,
-                cb2_tiles,
-                cb2_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t ouput_cb_index = 16; // output operands start at index 16
-            auto cb_output = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                ouput_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                cb_data_format
-            );
-
-            uint32_t interm0_cb_index = 24;
-            auto cb_interm0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                interm0_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                cb_output->address(),
-                cb_data_format
-            );
-
-            std::vector<uint32_t> invalid = {INVALID};
-            tt_metal::WriteToDeviceL1(device, core, in0_mcast_sender_semaphore.address(), invalid);
 
             CoreCoord mcast_sender = {(std::size_t) start_core_x, core.y};
             CoreCoord core_start = {(std::size_t) start_core_x + 1, core.y};
@@ -677,8 +667,8 @@ tt_metal::Program create_program_mcast_in0(
                 (std::uint32_t)  num_cores_c - 1, // in0_mcast_num_dests
                 (std::uint32_t)  mcast_sender_phyiscal.x, //in0_mcast_sender_noc_x
                 (std::uint32_t)  mcast_sender_phyiscal.y, //in0_mcast_sender_noc_y
-                (std::uint32_t)  in0_mcast_sender_semaphore.address(),
-                (std::uint32_t)  in0_mcast_receiver_semaphore.address(),
+                (std::uint32_t)  in0_mcast_sender_semaphore->address(),
+                (std::uint32_t)  in0_mcast_receiver_semaphore->address(),
 
                 (std::uint32_t)  M * K, // MtKt
                 (std::uint32_t)  K * N, // KtNt
@@ -871,76 +861,71 @@ tt_metal::Program create_program_mcast_in1(
     uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
+    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+
+    uint32_t src0_cb_index = 0;
+    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src1_cb_index = 1;
+    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src1_cb_index,
+        all_cores,
+        cb1_tiles,
+        cb1_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src2_cb_index = 2;
+    uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
+    auto cb_src2 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src2_cb_index,
+        all_cores,
+        cb2_tiles,
+        cb2_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_data_format
+    );
+
+    uint32_t interm0_cb_index = 24;
+    auto cb_interm0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        interm0_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_output->address(),
+        cb_data_format
+    );
+
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-            auto l1_bank_ids = device->bank_ids_from_logical_core(core);
-            TT_ASSERT(not l1_bank_ids.empty());
-            auto l1_bank_id = l1_bank_ids.at(0);
-            auto in1_mcast_sender_semaphore = tt_metal::Buffer(device, sizeof(uint32_t), l1_bank_id, sizeof(uint32_t), tt_metal::BufferType::L1);
-            auto in1_mcast_receiver_semaphore = tt_metal::Buffer(device, sizeof(uint32_t), l1_bank_id, sizeof(uint32_t), tt_metal::BufferType::L1);
-
-            uint32_t src0_cb_index = 0;
-            uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
-            auto cb_src0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src0_cb_index,
-                core,
-                cb0_tiles,
-                cb0_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src1_cb_index = 1;
-            uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
-            auto cb_src1 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src1_cb_index,
-                core,
-                cb1_tiles,
-                cb1_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src2_cb_index = 2;
-            uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
-            auto cb_src2 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src2_cb_index,
-                core,
-                cb2_tiles,
-                cb2_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t ouput_cb_index = 16; // output operands start at index 16
-            auto cb_output = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                ouput_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                cb_data_format
-            );
-
-            uint32_t interm0_cb_index = 24;
-            auto cb_interm0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                interm0_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                cb_output->address(),
-                cb_data_format
-            );
-
-            std::vector<uint32_t> invalid = {INVALID};
-            tt_metal::WriteToDeviceL1(device, core, in1_mcast_sender_semaphore.address(), invalid);
 
             CoreCoord mcast_sender = {core.x, (std::size_t) start_core_y};
             CoreCoord core_start = {core.x, (std::size_t) start_core_y + 1};
@@ -979,8 +964,8 @@ tt_metal::Program create_program_mcast_in1(
                 (std::uint32_t)  num_cores_r - 1, // in1_mcast_num_dests
                 (std::uint32_t)  mcast_sender_physical.x, //in1_mcast_sender_noc_x
                 (std::uint32_t)  mcast_sender_physical.y, //in1_mcast_sender_noc_y
-                (std::uint32_t)  in1_mcast_sender_semaphore.address(),
-                (std::uint32_t)  in1_mcast_receiver_semaphore.address(),
+                (std::uint32_t)  in1_mcast_sender_semaphore->address(),
+                (std::uint32_t)  in1_mcast_receiver_semaphore->address(),
 
                 (std::uint32_t)  M * K, // MtKt
                 (std::uint32_t)  K * N, // KtNt
