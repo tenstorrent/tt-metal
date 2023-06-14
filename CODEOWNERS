@@ -63,6 +63,8 @@ buda_eager/tensor/ @TT-BrianLiu @tt-aho @arakhmati
 libs/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
 eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
 buda_eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
+eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
+buda_eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
 
 # eager - python api
 libs/tt_lib/ @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati
