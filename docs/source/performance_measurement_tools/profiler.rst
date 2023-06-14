@@ -159,8 +159,9 @@ Post-processing device profiler
    stats and timeline plots. ``<PORT>`` default is ``8050`` if not set by the
    ``-p/--port`` cli option. Note that if you are using a Tenstorrent cloud
    machine and are viewing the dashboard through a localhost port forwarded via
-   SSH, you will need to forward port ``<PORT>`` using the ``-L`` option.
-   Otherwise, you will not be able to access the dashboard.
+   SSH, you will need to forward port ``<PORT>`` using the ``-L`` option when
+   you connect via ``ssh``.  Otherwise, you will not be able to access the
+   dashboard.
 
 4. The following are the notable artifacts that will be generated under the ``tt_metal/tools/profiler/output`` folder:
     - ``device_perf.html`` contains the interactive time series plot
