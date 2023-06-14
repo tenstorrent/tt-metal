@@ -2,6 +2,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -47,11 +48,13 @@ tt_metal::Program create_program(
 
     uint32_t out_subblock_num_tiles = out_subblock_h*out_subblock_w;
 
-    uint32_t num_cores = core_range.x * core_range.y;
     uint32_t num_block_rows_per_batch = (M / per_core_M);
     uint32_t num_block_cols_per_batch = (N / per_core_N);
     uint32_t num_output_blocks_per_batch = num_block_rows_per_batch * num_block_cols_per_batch;
     uint32_t num_output_blocks_total = B * (M / per_core_M) * (N / per_core_N);
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] = tt_metal::split_work_to_cores(core_range, num_output_blocks_total);
+    // TODO: This contains same information as above; refactor this?
     uint32_t num_evenly_divided_output_blocks = num_output_blocks_total / num_cores;
     std::vector<uint32_t> num_output_blocks_per_core(num_cores, num_evenly_divided_output_blocks);
     for(uint32_t i = 0; i < num_output_blocks_total % num_cores; i++){
@@ -126,6 +129,64 @@ tt_metal::Program create_program(
         tt_metal::NOC::RISCV_0_default
     );
 
+    vector<uint32_t> compute_kernel_args_group_1 = {
+        in0_block_w, // in0_block_w
+        in0_num_subblocks, // in0_num_subblocks
+        in0_block_num_tiles, // in0_block_num_tiles
+        in0_subblock_num_tiles, // in0_subblock_num_tiles
+
+        in1_num_subblocks, // in1_num_subblocks
+        in1_block_num_tiles, // in1_block_num_tiles
+        in1_per_core_w, // in1_per_core_w
+
+        num_blocks, // num_blocks
+
+        out_subblock_h, // out_subblock_h
+        out_subblock_w, // out_subblock_w
+        out_subblock_num_tiles, // out_subblock_num_tiles
+        num_blocks_per_core_group_1 // batch
+    };
+
+    vector<uint32_t> compute_kernel_args_group_2 = {
+        in0_block_w, // in0_block_w
+        in0_num_subblocks, // in0_num_subblocks
+        in0_block_num_tiles, // in0_block_num_tiles
+        in0_subblock_num_tiles, // in0_subblock_num_tiles
+
+        in1_num_subblocks, // in1_num_subblocks
+        in1_block_num_tiles, // in1_block_num_tiles
+        in1_per_core_w, // in1_per_core_w
+
+        num_blocks, // num_blocks
+
+        out_subblock_h, // out_subblock_h
+        out_subblock_w, // out_subblock_w
+        out_subblock_num_tiles, // out_subblock_num_tiles
+        num_blocks_per_core_group_2 // batch
+    };
+
+    // Create compute kernel
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    auto mm_kernel_group_1 = tt_metal::CreateComputeKernel(
+        program,
+        "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
+        core_group_1,
+        compute_kernel_args_group_1,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+    auto mm_kernel_group_2 = tt_metal::CreateComputeKernel(
+        program,
+        "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
+        core_group_2,
+        compute_kernel_args_group_2,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
         uint32_t core_idx_x = i / core_range.y;
         uint32_t core_idx_y = i % core_range.y;
@@ -179,36 +240,6 @@ tt_metal::Program create_program(
             out_CB_size,
             cb_output->address(),
             cb_data_format
-        );
-
-        vector<uint32_t> compute_kernel_args = {
-            in0_block_w, // in0_block_w
-            in0_num_subblocks, // in0_num_subblocks
-            in0_block_num_tiles, // in0_block_num_tiles
-            in0_subblock_num_tiles, // in0_subblock_num_tiles
-
-            in1_num_subblocks, // in1_num_subblocks
-            in1_block_num_tiles, // in1_block_num_tiles
-            in1_per_core_w, // in1_per_core_w
-
-            num_blocks, // num_blocks
-
-            out_subblock_h, // out_subblock_h
-            out_subblock_w, // out_subblock_w
-            out_subblock_num_tiles, // out_subblock_num_tiles
-            num_output_blocks_per_core[i] // batch
-        };
-        // Create compute kernel
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
-        auto mm_kernel = tt_metal::CreateComputeKernel(
-            program,
-            "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
-            core,
-            compute_kernel_args,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode
         );
 
         // Write runtime args to device
