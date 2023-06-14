@@ -2,15 +2,22 @@
 #include <algorithm>
 #include <random>
 
-#include "common/bfloat16.hpp"
-#include "common/utils.hpp"
+#include "common/logger.hpp"
+#include "tt_metal/test_utils/packing.hpp"
 
 namespace tt {
 namespace test_utils {
+
+//! Generic Library of templated stimulus generation + packing/unpacking functions.
+//! Custom type is supported as long as the custom type supports the following custom functions
+//! static SIZEOF - indicates byte size of custom type
+//! to_float() - get float value from custom type
+//! to_packed() - get packed (into an integral type that is of the bitwidth specified by SIZEOF)
+//! Constructor(float in) - constructor with a float as the initializer
+
 template <typename ValueType>
 std::vector<ValueType> generate_uniform_random_vector(
     ValueType min, ValueType max, const size_t numel, const float seed = 0) {
-    std::random_device rd;
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
     if constexpr (std::is_integral<ValueType>::value) {
@@ -29,7 +36,6 @@ std::vector<ValueType> generate_uniform_random_vector(
 template <typename ValueType>
 std::vector<ValueType> generate_normal_random_vector(
     ValueType mean, ValueType stdev, const size_t numel, const float seed = 0) {
-    std::random_device rd;
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
     if constexpr (std::is_integral<ValueType>::value or std::is_floating_point<ValueType>::value) {
@@ -41,35 +47,14 @@ std::vector<ValueType> generate_normal_random_vector(
     }
     return results;
 }
-// Assumes ValueType has a .to_packed() function and static SIZEOF field
-template <typename PackType, typename ValueType>
-std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
-    static_assert(
-        std::is_integral<PackType>::value,
-        "Packed Type must be an integral type we are packing to -- uint8_t/uint16_t/uint32_t...");
-    tt::log_assert(
-        sizeof(PackType) > ValueType::SIZEOF,
-        "sizeof(PackType)={} > ValueType::SIZEOF)={}",
-        sizeof(PackType),
-        ValueType::SIZEOF);
-    tt::log_assert(
-        (sizeof(PackType) % ValueType::SIZEOF) == 0,
-        "sizeof(PackType)={} % ValueType::SIZEOF={} must equal 0",
-        sizeof(PackType),
-        ValueType::SIZEOF);
-    constexpr unsigned int num_values_to_pack = sizeof(PackType) / ValueType::SIZEOF;
-    tt::log_assert(
-        (values.size() % num_values_to_pack) == 0,
-        "Number of values must evenly divide into the final packed type... no padding assumed");
-    std::vector<PackType> results(values.size() / num_values_to_pack, 0);
-    unsigned int index = 0;
-    std::for_each(results.begin(), results.end(), [&](PackType& result) {
-        for (unsigned j = 0; j < num_values_to_pack; j++) {
-            result |= values[index].to_packed() << (index * ValueType::SIZEOF * CHAR_BIT);
-            index++;
-        }
-        return result;
-    });
+template <typename ValueType>
+std::vector<ValueType> generate_random_vector_from_vector(
+    std::vector<ValueType>& possible_values, const size_t numel, const float seed = 0) {
+    tt::log_assert(possible_values.size(), "possible_values.size()={} > 0", possible_values.size());
+    std::mt19937 gen(seed);
+    std::vector<ValueType> results(numel);
+    std::uniform_int_distribution<unsigned int> dis(0, possible_values.size() - 1);
+    std::generate(results.begin(), results.end(), [&]() { return possible_values.at(dis(gen)); });
     return results;
 }
 
@@ -85,32 +70,10 @@ std::vector<PackType> generate_packed_normal_random_vector(
     return pack_vector<PackType, ValueType>(generate_normal_random_vector(mean, stdev, numel, seed));
 }
 
-template <typename ValueType, typename PackType>
-std::vector<ValueType> unpack_vector(const std::vector<PackType>& values) {
-    static_assert(
-        std::is_integral<PackType>::value,
-        "Packed Type must be an integral type we are packing to -- uint8_t/uint16_t/uint32_t...");
-    tt::log_assert(
-        sizeof(PackType) > ValueType::SIZEOF,
-        "sizeof(PackType)={} > ValueType::SIZEOF)={}",
-        sizeof(PackType),
-        ValueType::SIZEOF);
-    tt::log_assert(
-        (sizeof(PackType) % ValueType::SIZEOF) == 0,
-        "sizeof(PackType)={} % ValueType::SIZEOF={} must equal 0",
-        sizeof(PackType),
-        ValueType::SIZEOF);
-    constexpr unsigned int num_values_to_unpack = sizeof(PackType) / ValueType::SIZEOF;
-    std::vector<ValueType> results = {};
-    constexpr unsigned long bitmask = (1 << (ValueType::SIZEOF * CHAR_BIT)) - 1;
-    std::for_each(values.begin(), values.end(), [&](const PackType& value) {
-        PackType current_value = value;
-        for (unsigned j = 0; j < num_values_to_unpack; j++) {
-            results.push_back(ValueType(static_cast<uint32_t>(current_value & bitmask)));
-            current_value = current_value >> (ValueType::SIZEOF * CHAR_BIT);
-        }
-    });
-    return results;
+template <typename PackType, typename ValueType>
+std::vector<PackType> generate_packed_random_vector_from_vector(
+    std::vector<ValueType>& possible_values, const size_t numel, const float seed = 0) {
+    return pack_vector<PackType, ValueType>(generate_random_vector_from_vector(possible_values, numel, seed));
 }
 
 }  // namespace test_utils

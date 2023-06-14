@@ -2,11 +2,11 @@
 #include <functional>
 #include <random>
 
-#include "basic_device_fixture.hpp"
+#include "single_device_fixture.hpp"
 #include "bfloat16.hpp"
 #include "doctest/doctest.h"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -270,12 +270,12 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 }  // namespace unit_tests::single_core_dram
 
 TEST_SUITE("SingleCoreDram") {
-    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "ReaderOnly") {
+    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "ReaderOnly") {
         REQUIRE(unit_tests::single_core_dram::reader_only(device_, 1 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
         REQUIRE(unit_tests::single_core_dram::reader_only(device_, 2 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
         REQUIRE(unit_tests::single_core_dram::reader_only(device_, 16 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
     }
-    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "WriterOnly") {
+    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "WriterOnly") {
         REQUIRE(unit_tests::single_core_dram::writer_only(device_, 1 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
         REQUIRE(unit_tests::single_core_dram::writer_only(device_, 2 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
         REQUIRE(unit_tests::single_core_dram::writer_only(device_, 16 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
@@ -284,7 +284,7 @@ TEST_SUITE("SingleCoreDram") {
     // FIXME: We should add two test variants --
     //    1. Single Core Dram Mechanic -- Reader -> CB --> Writer
     //    2. Single Core Compute Datacopy -- WriteToDeviceL1 --> Datacopy (Unpack/Math/Pack) --> ReadFromDeviceL1
-    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "ReaderDatacopyWriter") {
+    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "ReaderDatacopyWriter") {
         unit_tests::single_core_dram::ReaderDatacopyWriterConfig test_config = {
             .num_tiles = 1,
             .tile_byte_size = 2 * 32 * 32,

@@ -1,13 +1,15 @@
+#include <math.h>
+
 #include <algorithm>
 #include <functional>
 #include <random>
 
-#include "basic_device_fixture.hpp"
 #include "bfloat16.hpp"
 #include "doctest/doctest.h"
-#include "tests/tt_metal/tt_metal/sfpu_helper/sfpu_helper.hpp"
+#include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
+#include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -17,7 +19,7 @@ using namespace tt;
 namespace unit_tests::basic_sfpu_compute {
 // SFPU maps -> relevant kernels, golden functions, comparison functions
 const map<string, string> sfpu_op_to_hlk_op_name = {
-    // TODO(AP): auto-generate inits
+    // FIXME: We need to fix these nasty code-gen kernels imo
     {"relu", "pack_relu_tile_to_stream(0, CB::c_out0);"},
     {"exponential", "exp_tile_init(); exp_tile(0); pack_tile(0, CB::c_out0);"},
     {"reciprocal", "recip_tile_init(); recip_tile(0); pack_tile(0, CB::c_out0);"},
@@ -27,6 +29,69 @@ const map<string, string> sfpu_op_to_hlk_op_name = {
     {"log", "log_tile_init(); log_tile(0); pack_tile(0, CB::c_out0);"},
     {"tanh", "tanh_tile_init(); tanh_tile(0); pack_tile(0, CB::c_out0);"},
 };
+bfloat16 sfpu_function(const string& op_name, const bfloat16& input) {
+    if (op_name == "relu") {
+        return bfloat16(fmaxf(input.to_float(), 0.0f));
+    } else if (op_name == "exponential") {
+        return bfloat16(std::exp(input.to_float()));
+    } else if (op_name == "reciprocal") {
+        return bfloat16(1 / input.to_float());
+    } else if (op_name == "gelu") {
+        static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
+        auto x = input.to_float();
+        auto x3 = x * x * x;
+        float result = x * 0.5 * (1.0 + tanhf(alpha * (x + 0.044715 * x3)));
+        return bfloat16(result);
+    } else if (op_name == "sqrt") {
+        return bfloat16(sqrtf(input.to_float()));
+    } else if (op_name == "sigmoid") {
+        auto x = input.to_float();
+        float result = 1 / (1 + std::exp(-x));
+        return bfloat16(result);
+    } else if (op_name == "log") {
+        return bfloat16(logf(input.to_float()));
+    } else if (op_name == "tanh") {
+        return bfloat16(std::tanh(input.to_float()));
+    } else {
+        tt::log_fatal("Unsupported op_name in test");
+        return bfloat16(0.0f);
+    }
+}
+std::vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const string& op_name, const int seed) {
+    if ((op_name == "sqrt") or (op_name == "log")) {
+        return tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.0001f, 4.0f, numel, seed);
+    } else if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
+        auto possible_values = std::vector<bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
+        return tt::test_utils::generate_packed_random_vector_from_vector<uint32_t, bfloat16>(
+            possible_values, numel, seed);
+    } else {
+        return tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
+    }
+}
+
+bool is_close_packed_sfpu_output(
+    const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const string& op_name) {
+    if (op_name == "tanh") {
+        return tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
+            vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) {
+                return tt::test_utils::is_close(a, b, 0.175f, 0.1f);
+            });
+    } else if ((op_name == "gelu") or (op_name == "relu")) {
+        return tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
+            vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return tt::test_utils::is_close(a, b, 0.15f); });
+    } else if ((op_name == "exponential")) {
+        return tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
+            vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) {
+                return tt::test_utils::is_close(a, b, 0.1f, 0.1f);
+            });
+    } else {
+        return tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
+            vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) {
+                return tt::test_utils::is_close(a, b, 0.06f, 0.006f);
+            });
+    }
+}
+
 // Reader reads from single dram to core, writer synchronizes with datacopy kernel and writes to dram
 // DRAM --> (Reader Core CB using reader RISCV)
 // Reader Core --> Datacopy --> Reader Core
@@ -129,9 +194,9 @@ bool single_core_sfpu(tt_metal::Device* device, const SingleCoreSfpuConfig& test
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> inputs = sfpu_op_to_init_func.at(test_config.sfpu_op)(
-        byte_size, std::chrono::system_clock::now().time_since_epoch().count());
-    tt_metal::WriteToBuffer(input_dram_buffer, inputs);
+    std::vector<uint32_t> packed_input = generate_packed_sfpu_input(
+        byte_size / bfloat16::SIZEOF, test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
+    tt_metal::WriteToBuffer(input_dram_buffer, packed_input);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::WriteRuntimeArgsToDevice(
@@ -156,17 +221,21 @@ bool single_core_sfpu(tt_metal::Device* device, const SingleCoreSfpuConfig& test
         });
     pass &= tt_metal::LaunchKernels(device, program);
 
-    std::vector<uint32_t> golden = sfpu(inputs, sfpu_op_to_function.at(test_config.sfpu_op));
+    auto input = tt::test_utils::unpack_vector<bfloat16, uint32_t>(packed_input);
+    std::vector<bfloat16> golden(input.size());
+    std::transform(input.begin(), input.end(), golden.begin(), [&](const bfloat16& val) {
+        return sfpu_function(test_config.sfpu_op, val);
+    });
+    std::vector<uint32_t> packed_golden = tt::test_utils::pack_vector<uint32_t, bfloat16>(golden);
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    pass &= packed_uint32_t_vector_comparison(
-        dest_buffer_data, golden, sfpu_op_to_comparison_function.at(test_config.sfpu_op));
+    pass &= is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
     return pass;
 }
 }  // namespace unit_tests::basic_sfpu_compute
 
 TEST_SUITE("BasicSfpuCompute") {
-    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "SingleTile") {
+    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleTile") {
         unit_tests::basic_sfpu_compute::SingleCoreSfpuConfig test_config = {
             .num_tiles = 1,
             .tile_byte_size = 2 * 32 * 32,
@@ -226,7 +295,7 @@ TEST_SUITE("BasicSfpuCompute") {
             REQUIRE(single_core_sfpu(device_, test_config));
         }
     }
-    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "MultiTile") {
+    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "MultiTile") {
         unit_tests::basic_sfpu_compute::SingleCoreSfpuConfig test_config = {
             .num_tiles = 4,
             .tile_byte_size = 2 * 32 * 32,

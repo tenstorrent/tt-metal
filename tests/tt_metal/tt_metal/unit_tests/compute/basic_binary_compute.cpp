@@ -2,11 +2,12 @@
 #include <functional>
 #include <random>
 
-#include "basic_device_fixture.hpp"
 #include "bfloat16.hpp"
 #include "doctest/doctest.h"
+#include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
+#include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
@@ -174,6 +175,9 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         });
     pass &= tt_metal::LaunchKernels(device, program);
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Golden Generation
+    ////////////////////////////////////////////////////////////////////////////
     auto input0 = tt::test_utils::unpack_vector<bfloat16, uint32_t>(packed_input0);
     auto input1 = tt::test_utils::unpack_vector<bfloat16, uint32_t>(packed_input1);
     std::vector<bfloat16> golden(input0.size());
@@ -190,18 +194,18 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
                 return 0.0f;
             }
         });
-    log_info("pack golden");
     auto packed_golden = tt::test_utils::pack_vector<uint32_t, bfloat16>(golden);
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    log_info("compare golden==dest_buffer");
-    pass &= packed_uint32_t_vector_comparison(
-        dest_buffer_data, packed_golden, [&](const float& a, const float& b) { return is_close(a, b, 0.015f); });
+    pass &= tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
+        dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) {
+            return tt::test_utils::is_close(a, b, 0.015f);
+        });
     return pass;
 }
 }  // namespace unit_tests::basic_binary_compute
 TEST_SUITE("SingleCoreBinary") {
-    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "SingleTile") {
+    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleTile") {
         unit_tests::basic_binary_compute::SingleCoreBinaryConfig test_config = {
             .num_tiles = 1,
             .tile_byte_size = 2 * 32 * 32,
@@ -228,7 +232,7 @@ TEST_SUITE("SingleCoreBinary") {
             REQUIRE(unit_tests::basic_binary_compute::single_core_binary(device_, test_config));
         }
     }
-    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "MultiTile") {
+    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "MultiTile") {
         unit_tests::basic_binary_compute::SingleCoreBinaryConfig test_config = {
             .num_tiles = 4,
             .tile_byte_size = 2 * 32 * 32,
