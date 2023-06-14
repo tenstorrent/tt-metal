@@ -98,9 +98,42 @@ TEST_SUITE(
     "BasicDeviceTest" *
     doctest::description("Basic device tests should just test simple APIs and shouldn't take more than 1s") *
     doctest::timeout(1)) {
-    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Load and Teardown device") {}
 
-    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Load Blank Kernels and Teardown device") {
+    TEST_CASE("Multi Device Initialize and Teardown" * doctest::timeout(2)) {
+        auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
+        REQUIRE(num_devices > 0);
+        std::vector<tt::tt_metal::Device*> devices;
+
+        for (unsigned int id = 0; id < num_devices; id++) {
+            devices.push_back(tt::tt_metal::CreateDevice(arch, id));
+            REQUIRE(tt::tt_metal::InitializeDevice(devices.at(id)));
+        }
+        for (unsigned int id = 0; id < num_devices; id++) {
+            REQUIRE(tt::tt_metal::CloseDevice(devices.at(id)));
+        }
+    }
+    TEST_CASE("Multi Device Load Blank Kernels" * doctest::timeout(2)) {
+        auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
+        REQUIRE(num_devices > 0);
+        std::vector<tt::tt_metal::Device*> devices;
+
+        for (unsigned int id = 0; id < num_devices; id++) {
+            devices.push_back(tt::tt_metal::CreateDevice(arch, id));
+            REQUIRE(tt::tt_metal::InitializeDevice(devices.at(id)));
+        }
+        for (unsigned int id = 0; id < num_devices; id++) {
+            unit_tests::basic::load_all_blank_kernels(devices.at(id));
+        }
+        for (unsigned int id = 0; id < num_devices; id++) {
+            REQUIRE(tt::tt_metal::CloseDevice(devices.at(id)));
+        }
+    }
+
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Single Device Initialize and Teardown") {}
+
+    TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Single Device Load Blank Kernels") {
         unit_tests::basic::load_all_blank_kernels(device_);
     }
     TEST_CASE_FIXTURE(unit_tests::BasicDeviceFixture, "Ping all legal dram channels") {

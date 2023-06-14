@@ -7,6 +7,9 @@ namespace tt {
 
 namespace tt_metal {
 
+size_t Device::detect_num_available_devices(const TargetDevice target_type) {
+    return tt_cluster::detect_available_devices(target_type).size();
+}
 void Device::initialize_cluster() {
     std::set<chip_id_t> target_device_ids = {pcie_slot_};
     tt_device_params default_params;

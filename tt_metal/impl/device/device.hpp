@@ -20,7 +20,7 @@ class Program;
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
-
+    static size_t detect_num_available_devices(const TargetDevice target_type = TargetDevice::Silicon);
     friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device(tt::ARCH arch, int pcie_slot) : arch_(arch), cluster_(nullptr), pcie_slot_(pcie_slot), closed_(false), allocator_scheme_(MemoryAllocator::BASIC) {}
 
