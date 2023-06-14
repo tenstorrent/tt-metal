@@ -3,7 +3,7 @@
 
 .github/ @tt-rkim
 
-infra/ @tt-rkim
+/infra/ @tt-rkim
 
 CONTRIBUTING.md @tt-rkim
 
@@ -23,3 +23,64 @@ conftest.py @tt-rkim
 
 tests/scripts/run_pre_post_commit_regressions.sh @tt-rkim
 tests/scripts/run_tests.sh @tt-rkim
+
+# metal - base
+tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
+tt_metal/host_api.hpp @abhullar-tt @TT-billteng @davorchap
+tt_metal/impl/ @abhullar-tt @TT-billteng
+
+# metal - dispatch
+tt_metal/impl/dispatch/ @DrJessop @davorchap
+tt_metal/kernels/dataflow/dispatch @DrJessop @davorchap
+docs/source/frameworks/tt_dispatch.rst @DrJessop @davorchap
+
+# metal - fw, llks, risc-v
+tt_metal/src/ckernels/ @davorchap @kkwong10
+tt_metal/src/firmware/ @davorchap @pgkeller @DrJessop
+tt_metal/src/meta/ @davorchap @pgkeller @DrJessop @tt-rkim
+tt_metal/src/ckernels/**/llk_lib/llk_3c.h @davorchap @kkwong10
+tt_metal/src/firmware/riscv/common/dataflow_api.h @davorchap @DrJessop
+
+# metal - profiler
+tt_metal/**/profiler/ @mo-tenstorrent @TT-billteng
+tests/tt_metal/tools/profiler/ @mo-tenstorrent @TT-billteng
+tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent @TT-billteng
+docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent @TT-billteng
+tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
+
+# eager - dtx
+libs/dtx/ @tt-nshanker
+eager/dtx/ @tt-nshanker
+buda_eager/dtx/ @tt-nshanker
+tests/python_api_testing/conv/ @tt-nshanker
+
+# eager - tensor
+libs/tensor/ @TT-BrianLiu @tt-aho @arakhmati
+eager/tensor/ @TT-BrianLiu @tt-aho @arakhmati
+buda_eager/tensor/ @TT-BrianLiu @tt-aho @arakhmati
+
+# eager - ops (dnn)
+libs/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
+eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
+buda_eager/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
+
+# eager - python api
+libs/tt_lib/ @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati
+eager/tt_lib/ @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati
+buda_eager/tt_lib/ @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati
+
+# models
+models/ @boris-drazic @ashayestehmanesh @farbabi # for future
+tests/python_api_testing/models/ @boris-drazic @ashayestehmanesh @farbabi
+tests/python_api_testing/models/conv_on_device_utils*.py @tt-nshanker
+
+# docs
+docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
+docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
+docs/source/apis/kernel_apis/ @davorchap @DrJessop @kkwong10 @pgkeller @tt-rkim
+docs/source/apis/kernel_apis.rst @davorchap @DrJessop @kkwong10 @pgkeller @tt-rkim
+
+# misc
+tests/**/dtx/ @tt-nshanker
+tests/**/*test*conv*.py @tt-nshanker
+third_party/ @tt-rkim @TT-billteng @kkwong10
