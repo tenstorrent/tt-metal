@@ -98,9 +98,56 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
     TT_ASSERT(partHt >= Ht || Ht % partHt == 0);
     //cout << "NUM CORES=" << num_cores << " WTPC=" << wtpc << " partHt=" << partHt << endl;
 
-    vector<DataMovementKernel*> readers, writers;
-    readers.reserve(num_cores);
-    writers.reserve(num_cores);
+    // Parallelize across rows
+    // TODO: Refactor by calling utility function?
+    uint32_t num_full_rows = num_cores / grid.x_;
+    uint32_t last_row_cores = num_cores % grid.x_;
+    CoreRange full_rows{
+        .start={0, 0},
+        .end={grid.x_ - 1, num_full_rows - 1}};
+    CoreRange last_row{
+        .start={0, num_full_rows},
+        .end={last_row_cores - 1, num_full_rows}};
+
+    std::set<CoreRange> all_cores_set{full_rows};
+    if (last_row_cores) {
+        all_cores_set.insert(last_row);
+    }
+    CoreRangeSet all_cores(all_cores_set);
+
+    auto reader_kernels = CreateDataMovementKernel(
+        program, "tt_metal/kernels/dataflow/reader_unary_8bank_sm.cpp", all_cores,
+        DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
+
+    auto writer_kernels = CreateDataMovementKernel(
+        program, "tt_metal/kernels/dataflow/writer_unary_8bank_sm.cpp", all_cores,
+        DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
+
+    // for broadcasting in H direction we need to
+    // NCHt, Nt, Wt
+    // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
+    // if wtpc >= Ht then tpc should be a multiple of Ht
+    vector<uint32_t> compute_args = { wtpc, partHt, Wt };
+
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = true;
+    auto softmax_kernels = CreateComputeKernel(
+        program, "kernels/compute/softmax.cpp", all_cores, compute_args,
+        MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
+
+    softmax_kernels->add_define("BLOCK_SIZE", block_size);
+    reader_kernels->add_define("BLOCK_SIZE", block_size);
+    reader_kernels->add_define("A_DRAM", is_dram(a) ? "true" : "false");
+    reader_kernels->add_define("MASK_DRAM", is_dram(mask) ? "true" : "false");
+    writer_kernels->add_define("BLOCK_SIZE", block_size);
+    writer_kernels->add_define("OUTPUT_DRAM", is_dram(a) ? "true" : "false");
+    if (scale != 0.0f) {
+        reader_kernels->add_define("FUSED_SCALE_MASK", "1");
+        softmax_kernels->add_define("FUSED_SCALE_MASK", "1");
+    }
+
     for (uint32_t icore = 0; icore < num_cores; icore++) {
         auto core = grid.wrap_core(icore);
         // see softmax.cpp for which buffers are needed
@@ -116,47 +163,6 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
             CreateCircularBuffer( program, device, CB::c_in4, core, in4_t,  in4_t *TBYTES,  DataFormat::Float16_b );
         }
 
-        DataMovementKernel *reader_kernel = CreateDataMovementKernel(
-            program, "tt_metal/kernels/dataflow/reader_unary_8bank_sm.cpp", core,
-            DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
-            //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
-
-        DataMovementKernel *writer_kernel = CreateDataMovementKernel(
-            program, "tt_metal/kernels/dataflow/writer_unary_8bank_sm.cpp", core,
-            DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
-            //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
-
-        // for broadcasting in H direction we need to
-        // NCHt, Nt, Wt
-        // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
-        // if wtpc >= Ht then tpc should be a multiple of Ht
-        vector<uint32_t> compute_args = { wtpc, partHt, Wt };
-
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = true;
-        auto softmax_kernel = CreateComputeKernel(
-            program, "kernels/compute/softmax.cpp", core, compute_args,
-            MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
-
-        softmax_kernel->add_define("BLOCK_SIZE", block_size);
-        reader_kernel->add_define("BLOCK_SIZE", block_size);
-        reader_kernel->add_define("A_DRAM", is_dram(a) ? "true" : "false");
-        reader_kernel->add_define("MASK_DRAM", is_dram(mask) ? "true" : "false");
-        writer_kernel->add_define("BLOCK_SIZE", block_size);
-        writer_kernel->add_define("OUTPUT_DRAM", is_dram(a) ? "true" : "false");
-        if (scale != 0.0f) {
-            reader_kernel->add_define("FUSED_SCALE_MASK", "1");
-            softmax_kernel->add_define("FUSED_SCALE_MASK", "1");
-        }
-        readers.push_back(reader_kernel);
-        writers.push_back(writer_kernel);
-    }
-
-    CompileProgram(device, program, profile);
-    ConfigureDeviceWithProgram(device, program);
-
-    for (uint32_t icore = 0; icore < num_cores; icore++) {
-        auto core = grid.wrap_core(icore);
         uint32_t src_addr = src0_dram_buffer->address();
         //uint32_t dst_addr = dst_dram_buffer->address();
         uint32_t mask_addr = mask ? mask->buffer()->address() : 0;
@@ -167,10 +173,12 @@ Tensor scale_mask_softmax_(float scale, const Tensor* mask, Tensor &a) {
         union { float f; uint32_t u; } s; s.f = scale; // scale for fused scale-mask-softmax
         // always in-place
         //                                                              0  1    2       3            4   5       6          7           8
-        WriteRuntimeArgsToDevice(device, readers[icore], core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
-        WriteRuntimeArgsToDevice(device, writers[icore], core, { src_addr, 0,   0, wtpc*Wt, tile_offset });
+        WriteRuntimeArgsToDevice(device, reader_kernels, core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
+        WriteRuntimeArgsToDevice(device, writer_kernels, core, { src_addr, 0,   0, wtpc*Wt, tile_offset });
     }
 
+    CompileProgram(device, program, profile);
+    ConfigureDeviceWithProgram(device, program);
     LaunchKernels(device, program);
     if (profile)
         tt_metal::DumpDeviceProfileResults(device, program);

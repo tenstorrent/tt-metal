@@ -5,6 +5,7 @@ import sys
 import time
 import random
 import numpy as np
+from loguru import logger
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../../tests")
@@ -123,24 +124,24 @@ if __name__ == "__main__":
         device.StartDebugPrintServer(dev)
 
     host = device.GetHost()
+
+    # TODO: Clean up
     # N, C, H, W = 1, 7, 5*32, 17*32
-    test_dims = (
-        (1, 1, 32, 4 * 8 * 32),
-        (1, 1, 2048, 4 * 8 * 32),
-        (1, 1, 128, 12 * 32),
-        (1, 1, 32, 7 * 32),
-    )
-    # test_dims = ((1,1,4*32,7*32),)
-    # test_dims = ((1,9,6144,384),)
-    test_dims = ((1, 9, 6144, 384),)
-    test_dims = ((1, 1, 6144, 384),)
+    # test_dims = (
+    #     (1, 1, 32, 4 * 8 * 32),
+    #     (1, 1, 2048, 4 * 8 * 32),
+    #     (1, 1, 128, 12 * 32),
+    #     (1, 1, 32, 7 * 32),
+    # )
+    # # test_dims = ((1,1,4*32,7*32),)
+    # # test_dims = ((1,9,6144,384),)
+    # test_dims = ((1, 9, 6144, 384),)
+    # test_dims = ((1, 1, 6144, 384),)
     test_dims = ((1, 9, 6144, 384),)
     torch.manual_seed(123)
     random.seed(123)
     # for test_fused_mask in [True, False]:
-    for test_fused_mask in [
-        True,
-    ]:
+    for test_fused_mask in [True, False]:
         for nchw in test_dims:
             for nrepeat in range(0, 1):
                 # nchw = (1,random.randint(1,5),random.randint(1,16)*32,random.randint(1,16)*32)
@@ -158,6 +159,7 @@ if __name__ == "__main__":
                     ref_sm = ref_scale_mask_softmax(torch_scale, torch_attn_mask, x)
                 else:
                     ref_sm = ref_stable_softmax(x)
+
                 x_t = tilize_to_list(x)
                 t0 = tensor.Tensor(
                     x_t,
@@ -169,12 +171,12 @@ if __name__ == "__main__":
                 )
 
                 if test_fused_mask:
-                    print("=== Running scale_mask_softmax")
+                    logger.info("Running scale_mask_softmax")
                     t1_fused = tensor.scale_mask_softmax_in_place(
                         tt_scale, tt_attn_mask, t0
                     )
                 else:
-                    print("=== Running softmax")
+                    logger.info("Running softmax")
                     t1_fused = tensor.softmax_in_place(t0)
                 t2_data_fused = t1_fused.to(host).data()
                 tt_got_back_fused = torch.Tensor(t2_data_fused).reshape((N, C, H, W))
@@ -182,8 +184,13 @@ if __name__ == "__main__":
 
                 time.sleep(0.33)  # so prints don't overlap with kernel prints
                 if not is_close(tt_unt, ref_sm, rtol=5e-2, atol=5e-2):
+                    assert False
                     print("****  Mismatch!")
                     print("Max abs diff=")
                     print_diff_argmax(tt_unt, ref_sm)
+
+                # Clean up tensors; otherwise, no space on dev?
+                # TODO: Refactor into separate tests
+                del t1_fused
 
     device.CloseDevice(dev)
