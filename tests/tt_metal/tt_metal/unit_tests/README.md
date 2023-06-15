@@ -1,8 +1,8 @@
 # Summary
 Unit testing uses the doctest framework.  See https://github.com/doctest/doctest/
-Generally, there are three main levels of organization:  
+Generally, there are three main levels of organization:
 *  TEST_SUITE - Used to group main areas of tests
-*  TEST_CASE - How Test case and sub-case gets split up is at test-writer discretion, but see the test_case section 
+*  TEST_CASE - How Test case and sub-case gets split up is at test-writer discretion, but see the test_case section
 *  SUB_CASE
 
 
@@ -21,7 +21,7 @@ Generally, there are three main levels of organization:
 ## Folder Structure
 General structure of the tests are as follows, more sub-folders can be added
 <table><tr><td>
-Director Structure
+Directory Structure - Please add any new-tests to a corresponding folder.
 </td></tr><td>
 <pre lang="">
 tt_metal/unit_tests/
@@ -43,7 +43,7 @@ test_utils/
 &nbsp;&nbsp;> tilization.cpp # Useful utils for converting between tiled vectors or not, see example usages in unit tests
 </td></tr></table>
 
-## Excerpt of how Test cases and subcases work 
+## Excerpt of how Test cases and subcases work
 Copied from doctest markdown https://github.com/doctest/doctest/blob/master/doc/markdown/tutorial.md#test-cases-and-subcases
 
 Most test frameworks have a class-based fixture mechanism - test cases map to methods on a class and common setup and teardown can be performed in ```setup()``` and ```teardown()``` methods (or constructor/ destructor in languages like C++ that support deterministic destruction).
@@ -100,7 +100,7 @@ TEST_CASE("lots of nested subcases") {
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cout << "1" << endl;
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;SUBCASE("") { cout << "1.1" << endl; }
 &nbsp;&nbsp;&nbsp;&nbsp;}
-&nbsp;&nbsp;&nbsp;&nbsp;SUBCASE("") {   
+&nbsp;&nbsp;&nbsp;&nbsp;SUBCASE("") {
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cout << "2" << endl;
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;SUBCASE("") { cout << "2.1" << endl; }
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;SUBCASE("") {
@@ -146,4 +146,3 @@ root
 Subcases can be nested to an arbitrary depth (limited only by your stack size). Each leaf subcase (a subcase that contains no nested subcases) will be executed exactly once on a separate path of execution from any other leaf subcase (so no leaf subcase can interfere with another). A fatal failure in a parent subcase will prevent nested subcases from running - but then that's the idea.
 
 Keep in mind that even though **doctest** is [**thread-safe**](faq.md#is-doctest-thread-aware) - using subcases has to be done only in the main test runner thread and all threads spawned in a subcase ought to be joined before the end of that subcase and no new subcases should be entered while other threads with doctest assertions in them are still running.
-
