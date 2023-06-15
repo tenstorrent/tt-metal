@@ -20,7 +20,7 @@ from deit_config import DeiTConfig
 import tt_lib
 from helper_funcs import make_linear
 
-class ttDeiTIntermediate(nn.Module):
+class TtDeiTIntermediate(nn.Module):
     def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address="") -> None:
         super().__init__()
 

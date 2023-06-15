@@ -32,11 +32,11 @@ class DeiTEmbeddings(nn.Module):
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size))
         self.distillation_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size))
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size)) if use_mask_token else None
+        # self.mask_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size)) if use_mask_token else None
         self.patch_embeddings = DeiTPatchEmbeddings(config)
         num_patches = self.patch_embeddings.num_patches
         self.position_embeddings = nn.Parameter(torch.zeros(1, num_patches + 2, config.hidden_size))
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        # self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, pixel_values: torch.Tensor, bool_masked_pos: Optional[torch.BoolTensor] = None) -> torch.Tensor:
         embeddings = self.patch_embeddings(pixel_values)
@@ -52,5 +52,5 @@ class DeiTEmbeddings(nn.Module):
         distillation_tokens = self.distillation_token.expand(batch_size, -1, -1)
         embeddings = torch.cat((cls_tokens, distillation_tokens, embeddings), dim=1)
         embeddings = embeddings + self.position_embeddings
-        embeddings = self.dropout(embeddings)
+        # embeddings = self.dropout(embeddings)
         return embeddings

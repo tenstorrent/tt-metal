@@ -23,24 +23,24 @@ from utility_functions_new import comp_pcc, comp_allclose_and_pcc
 from deit_config import DeiTConfig
 
 from transformers import DeiTModel
-from deit_intermediate import TtDeiTIntermediate
+from deit_self_output import TtDeiTSelfOutput
 from activations import ACT2FN
 
 
-def test_deit_intermediate_inference():
+def test_deit_self_output_inference():
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'encoder.layer.0.intermediate.dense'
-    torch_intermediate = model.encoder.layer[0].intermediate
+    base_address= 'encoder.layer.0.attention.output.dense'
+    torch_self_output = model.encoder.layer[0].attention.output
 
     input_shape =  torch.Size([1, 198, 768])
     hidden_state = torch.randn(input_shape)
 
-    torch_output = torch_intermediate(hidden_state)
+    torch_output = torch_self_output(hidden_state, None)
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -50,10 +50,10 @@ def test_deit_intermediate_inference():
 
     # setup tt model
 
-    tt_intermediate = ttDeiTIntermediate(DeiTConfig(), host, device, state_dict, base_address)
+    tt_self_output = TtDeiTSelfOutput(DeiTConfig(), host, device, state_dict, base_address)
 
     tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
-    tt_out = tt_intermediate(tt_input)
+    tt_out = tt_self_output(tt_input)
     tt_output = tt_to_torch_tensor(tt_out, host)
 
     passing = comp_pcc(torch_output, tt_output)

@@ -22,7 +22,7 @@ from utility_functions_new import comp_pcc, comp_allclose_and_pcc
 from deit_config import DeiTConfig
 
 from transformers import DeiTModel
-from deit_self_attention import ttDeiTSelfAttention
+from deit_self_attention import TtDeiTSelfAttention
 from activations import ACT2FN
 
 
@@ -39,7 +39,7 @@ def test_deit_self_attention_inference():
     input_shape =  torch.Size([1, 198, 768])
     hidden_state = torch.randn(input_shape)
 
-    torch_output = torch_self_attention(hidden_state)
+    torch_output = torch_self_attention(hidden_state)[0]
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -49,7 +49,7 @@ def test_deit_self_attention_inference():
 
     # setup tt model
 
-    tt_self_attention = ttDeiTSelfAttention(DeiTConfig(), host, device, state_dict, base_address)
+    tt_self_attention = TtDeiTSelfAttention(DeiTConfig(), host, device, state_dict, base_address)
 
     tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
     tt_out = tt_self_attention(tt_input)

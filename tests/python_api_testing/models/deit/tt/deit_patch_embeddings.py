@@ -20,6 +20,9 @@ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from activations import ACT2FN
 from deit_config import DeiTConfig
+import tt_lib
+from tt_lib.fallback_ops import fallback_ops
+
 
 class DeiTPatchEmbeddings(nn.Module):
     """
@@ -28,22 +31,24 @@ class DeiTPatchEmbeddings(nn.Module):
     Transformer.
     """
 
-    def __init__(self, config: DeiTConfig):
+    def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address=""):
         super().__init__()
         image_size, patch_size = config.image_size, config.patch_size
         num_channels, hidden_size = config.num_channels, config.hidden_size
 
-        image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
-        patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
+        image_size = (image_size, image_size)
+        patch_size = (patch_size, patch_size)
         num_patches = (image_size[1] // patch_size[1]) * (image_size[0] // patch_size[0])
         self.image_size = image_size
         self.patch_size = patch_size
         self.num_channels = num_channels
         self.num_patches = num_patches
 
-        self.projection = nn.Conv2d(num_channels, hidden_size, kernel_size=patch_size, stride=patch_size)
+        conv_weight = state_dict[f"{base_address}.weight"]
+        conv_bias = state_dict[f"{base_address}.bias"]
+        self.projection = fallback_ops.Conv2d(conv_weights, conv_bias, snum_channels, hidden_size, kernel_size=patch_size, stride=patch_size, padding=0)
 
-    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+    def forward(self, pixel_values):
         batch_size, num_channels, height, width = pixel_values.shape
         if num_channels != self.num_channels:
             raise ValueError(
@@ -53,5 +58,7 @@ class DeiTPatchEmbeddings(nn.Module):
             raise ValueError(
                 f"Input image size ({height}*{width}) doesn't match model ({self.image_size[0]}*{self.image_size[1]})."
             )
+        x = self.projection(pixel_values)
+        x = fallback_ops.flatten
         x = self.projection(pixel_values).flatten(2).transpose(1, 2)
         return x

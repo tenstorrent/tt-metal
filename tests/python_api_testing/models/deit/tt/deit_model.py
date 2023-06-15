@@ -42,7 +42,7 @@ class DeiTModel(nn.Module):
         self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         assign_norm_weight(self.layernorm, state_dict, f"{self.base_address_with_dot}layernorm")
 
-        self.pooler = DeiTPooler(config, state_dict, f"{self.base_address_with_dot}pooler") if add_pooling_layer else None
+        # self.pooler = DeiTPooler(config, state_dict, f"{self.base_address_with_dot}pooler") if add_pooling_layer else None
 
         # Initialize weights and apply final processing
         # self.post_init()
