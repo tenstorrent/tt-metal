@@ -1401,7 +1401,8 @@ void TensorModule(py::module &m_tensor) {
 
 void DeviceModule(py::module &m_device) {
     py::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
-        .value("GRAYSKULL", tt::ARCH::GRAYSKULL);
+        .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
+        .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0);
 
     py::enum_<tt::tt_metal::MemoryAllocator>(m_device, "MemoryAllocator", "Enum of types of memory allocation schemes.")
         .value("BASIC", tt::tt_metal::MemoryAllocator::BASIC)
