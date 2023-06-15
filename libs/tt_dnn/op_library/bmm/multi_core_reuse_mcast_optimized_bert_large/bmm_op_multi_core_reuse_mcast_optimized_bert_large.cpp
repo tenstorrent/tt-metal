@@ -383,6 +383,54 @@ tt_metal::Program create_program_mcast_in0_in1(
         math_approx_mode
     );
 
+    // Create circular buffers
+    uint32_t src0_cb_index = 0;
+    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src1_cb_index = 1;
+    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src1_cb_index,
+        all_cores,
+        cb1_tiles,
+        cb1_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src2_cb_index = 2;
+    uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
+    auto cb_src2 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src2_cb_index,
+        all_cores,
+        cb2_tiles,
+        cb2_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_data_format
+    );
+
     // Parameters for last row, col, or block
     uint32_t last_block_h = M % per_core_M == 0 ? per_core_M : M % per_core_M;
     uint32_t last_block_w = N % per_core_N == 0 ? per_core_N : N % per_core_N;
@@ -398,52 +446,6 @@ tt_metal::Program create_program_mcast_in0_in1(
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
-            uint32_t src0_cb_index = 0;
-            uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
-            auto cb_src0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src0_cb_index,
-                core,
-                cb0_tiles,
-                cb0_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src1_cb_index = 1;
-            uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
-            auto cb_src1 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src1_cb_index,
-                core,
-                cb1_tiles,
-                cb1_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t src2_cb_index = 2;
-            uint32_t cb2_tiles = in2_block_tiles * 2; // double buffer
-            auto cb_src2 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src2_cb_index,
-                core,
-                cb2_tiles,
-                cb2_tiles * single_tile_size,
-                cb_data_format
-            );
-
-            uint32_t ouput_cb_index = 16; // output operands start at index 16
-            auto cb_output = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                ouput_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                cb_data_format
-            );
 
             uint32_t interm0_cb_index = 24;
             auto cb_interm0 = tt_metal::CreateCircularBuffer(

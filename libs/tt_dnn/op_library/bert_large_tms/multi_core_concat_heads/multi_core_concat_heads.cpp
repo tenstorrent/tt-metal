@@ -128,21 +128,22 @@ Program multi_core_concat_heads(const Tensor &a, Tensor& output, CoreCoord compu
         math_approx_mode
     );
 
+    // Create circular buffers
     uint32_t src0_cb_index = 0;
     uint32_t cb0_tiles = per_core_tiles * 2; // double buffer
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        cb_data_format
+    );
+
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-
-            auto cb_src0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src0_cb_index,
-                core,
-                cb0_tiles,
-                cb0_tiles * single_tile_size,
-                cb_data_format
-            );
             uint32_t in0_tensor_tile_id = core_idx_x * in0_w_tiles + core_idx_y * in0_CHtWt;
 
             std::vector<uint32_t> reader_runtime_args = {

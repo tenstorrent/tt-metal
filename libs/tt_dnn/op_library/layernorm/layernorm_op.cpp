@@ -193,30 +193,32 @@ Program layernorm_(
         eltwise_binary_kernels->add_define("FUSE_PRE_ADD", "1");
     }
 
+    // Create circular buffers
+    CreateCircularBuffers( program, device, CB::c_in0,       all_cores, in0_t,  in0_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_out0,      all_cores, out0_t, out0_t*single_tile_size, DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_intermed1, all_cores, im1_t,  im1_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_in2,       all_cores, in2_t,  in2_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_in3,       all_cores, in3_t,  in3_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_in4,       all_cores, in4_t,  in4_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_intermed2, all_cores, im2_t,  im2_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_intermed0, all_cores, im0_t,  im0_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_intermed3, all_cores, im3_t,  im3_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_intermed4, all_cores, im4_t,  im4_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_in5,       all_cores, in5_t,  in5_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_in6,       all_cores, in6_t,  in6_t*single_tile_size,  DataFormat::Float16_b );
+    if (b) {
+        // x = a+b in this notation
+        // result = ln(x)*gamma + beta
+        // if there's no pre-add we use cb_in0 for x, otherwise a is pre-buffered into in0, added into im6, then im6 is used as x
+        // b is buffered into c_in1
+        CreateCircularBuffers( program, device, CB::c_intermed6, all_cores, im6_t,  im6_t*single_tile_size,  DataFormat::Float16_b );
+        // c_in1 is input buffer for b
+        CreateCircularBuffers( program, device, CB::c_in1,       all_cores, in1_t,  in1_t*single_tile_size,  DataFormat::Float16_b );
+    }
+
     for (uint32_t icore = 0; icore < num_cores; icore++) {
         auto core = grid.wrap_core(icore);
-        CreateCircularBuffer( program, device, CB::c_in0,       core, in0_t,  in0_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_out0,      core, out0_t, out0_t*single_tile_size, DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_intermed1, core, im1_t,  im1_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_in2,       core, in2_t,  in2_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_in3,       core, in3_t,  in3_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_in4,       core, in4_t,  in4_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_intermed2, core, im2_t,  im2_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_intermed0, core, im0_t,  im0_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_intermed3, core, im3_t,  im3_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_intermed4, core, im4_t,  im4_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_intermed5, core, im5_t,  im5_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_in5,       core, in5_t,  in5_t*single_tile_size,  DataFormat::Float16_b );
-        CreateCircularBuffer( program, device, CB::c_in6,       core, in6_t,  in6_t*single_tile_size,  DataFormat::Float16_b );
-        if (b) {
-            // x = a+b in this notation
-            // result = ln(x)*gamma + beta
-            // if there's no pre-add we use cb_in0 for x, otherwise a is pre-buffered into in0, added into im6, then im6 is used as x
-            // b is buffered into c_in1
-            CreateCircularBuffer( program, device, CB::c_intermed6, core, im6_t,  im6_t*single_tile_size,  DataFormat::Float16_b );
-            // c_in1 is input buffer for b
-            CreateCircularBuffer( program, device, CB::c_in1,       core, in1_t,  in1_t*single_tile_size,  DataFormat::Float16_b );
-        }
 
         union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler
         union { float f; uint32_t u; } e; e.f = eps; // epsilon

@@ -146,35 +146,39 @@ Program multi_core_create_qkv_heads(const Tensor &a, Tensor& output, CoreCoord c
         );
     }
 
+    // Create circular buffers
     uint32_t src0_cb_index = 0;
     uint32_t cb0_tiles = per_core_tiles * 2; // double buffer
     uint32_t out_cb_index = 16;
     uint32_t out_cb_tiles = per_core_tiles;
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    if (transpose_hw) {
+        auto cb_out = tt_metal::CreateCircularBuffers(
+            program,
+            device,
+            out_cb_index,
+            all_cores,
+            out_cb_tiles,
+            out_cb_tiles * single_tile_size,
+            cb_data_format
+        );
+    }
+
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-
-            auto cb_src0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src0_cb_index,
-                core,
-                cb0_tiles,
-                cb0_tiles * single_tile_size,
-                cb_data_format
-            );
             uint32_t out_tensor_tile_id = core_idx_x * out_w_tiles + core_idx_y * out_CHtWt;
 
             if (transpose_hw) {
-                auto cb_out = tt_metal::CreateCircularBuffer(
-                    program,
-                    device,
-                    out_cb_index,
-                    core,
-                    out_cb_tiles,
-                    out_cb_tiles * single_tile_size,
-                    cb_data_format
-                );
                 out_tensor_tile_id = core_idx_x + core_idx_y * out_CHtWt;
             }
 

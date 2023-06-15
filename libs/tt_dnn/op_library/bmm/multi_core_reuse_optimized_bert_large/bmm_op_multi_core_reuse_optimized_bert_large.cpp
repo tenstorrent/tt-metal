@@ -187,6 +187,54 @@ tt_metal::Program create_program(
         math_approx_mode
     );
 
+    // Create circular buffers
+    uint32_t src0_cb_index = 0;
+    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t src1_cb_index = 1;
+    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src1_cb_index,
+        all_cores,
+        cb1_tiles,
+        cb1_tiles * single_tile_size,
+        cb_data_format
+    );
+
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_data_format
+    );
+
+    uint32_t interm0_cb_index = 24;
+    auto cb_interm0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        interm0_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_output->address(),
+        cb_data_format
+    );
+
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
         uint32_t core_idx_x = i / core_range.y;
         uint32_t core_idx_y = i % core_range.y;
@@ -194,53 +242,6 @@ tt_metal::Program create_program(
         uint32_t output_idx_x = num_blocks_written % num_block_cols_per_batch;
         uint32_t output_idx_y = num_blocks_written % num_block_rows_per_batch;
         CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
-
-        uint32_t src0_cb_index = 0;
-        uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            src0_cb_index,
-            core,
-            cb0_tiles,
-            cb0_tiles * single_tile_size,
-            cb_data_format
-        );
-
-        uint32_t src1_cb_index = 1;
-        uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
-        auto cb_src1 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            src1_cb_index,
-            core,
-            cb1_tiles,
-            cb1_tiles * single_tile_size,
-            cb_data_format
-        );
-
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            ouput_cb_index,
-            core,
-            out_CB_tiles,
-            out_CB_size,
-            cb_data_format
-        );
-
-        uint32_t interm0_cb_index = 24;
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            interm0_cb_index,
-            core,
-            out_CB_tiles,
-            out_CB_size,
-            cb_output->address(),
-            cb_data_format
-        );
 
         // Write runtime args to device
         std::vector<uint32_t> mm_reader_args = {
