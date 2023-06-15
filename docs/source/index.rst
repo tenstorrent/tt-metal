@@ -24,11 +24,6 @@ Welcome to TT-Metal documentation!
    libraries/index
 
 .. toctree::
-   :caption: Frameworks
-
-   frameworks/tt_dispatch
-
-.. toctree::
    :caption: TT-Metal Models
 
    tt_metal_models/get_started

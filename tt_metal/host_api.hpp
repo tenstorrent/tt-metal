@@ -21,6 +21,8 @@
 #include "tt_metal/impl/program.hpp"
 #include "llrt/llrt.hpp"
 
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+
 /** @file */
 
 /** \mainpage tt-metal Internal C++ Documentation
@@ -740,3 +742,58 @@ void GenerateBankToNocCoordHeaders(
 }  // namespace tt_metal
 
 }  // namespace tt
+
+
+/**
+ * Reads a buffer from the device
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * | buffer       | The device buffer we are reading from                                  | Buffer &                      |                                    | Yes      |
+ * | dst          | The vector where the results that are read will be stored              | vector<u32> &                 |                                    | Yes      |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
+ */
+void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking);
+
+/**
+ * Writes a buffer to the device
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * | buffer       | The device buffer we are writing to                                    | Buffer &                      |                                    | Yes      |
+ * | dst          | The vector we are writing to the device                                | vector<u32> &                 |                                    | Yes      |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
+ */
+void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking);
+
+/**
+ * Writes a program to the device and launches it
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * | program      | The program we are writing to the device                               | Program &                     |                                    | Yes      |
+ * | runtime_args | The runtime arg mapping onto the device for each core/RISCV we are     | const RuntimeArgs&            |                                    | Yes      |
+ * |              | targetting on the device                                               |                               |                                    | Yes      |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
+ */
+void EnqueueProgram(CommandQueue& cq, Program& program, const RuntimeArgs& runtime_args, bool blocking);
+
+/**
+ * Blocks until all previously dispatched commands on the device have completed
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ */
+void Finish(CommandQueue& cq);

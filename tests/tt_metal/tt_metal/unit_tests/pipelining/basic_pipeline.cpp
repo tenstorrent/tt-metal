@@ -6,7 +6,6 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "common/bfloat16.hpp"
 
 

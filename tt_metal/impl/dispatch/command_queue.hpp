@@ -9,7 +9,7 @@
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/thread_safe_queue.hpp"
 #include "tt_metal/common/base.hpp"
-#include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/program.hpp"
 #include "tt_metal/src/firmware/riscv/grayskull/noc/noc_parameters.h"
 
 using namespace tt::tt_metal;
@@ -196,11 +196,3 @@ class CommandQueue {
     friend void EnqueueProgram(CommandQueue& cq, Program& program, const RuntimeArgs& runtime_args, bool blocking);
     friend void Finish(CommandQueue& cq);
 };
-
-void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking);
-
-void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking);
-
-void EnqueueProgram(CommandQueue& cq, Program& program, const RuntimeArgs& runtime_args, bool blocking);
-
-void Finish(CommandQueue& cq);
