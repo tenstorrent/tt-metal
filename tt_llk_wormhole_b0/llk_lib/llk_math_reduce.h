@@ -22,8 +22,6 @@ inline void llk_math_reduce(uint dst_index) {
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
         // Transpose for each face in src A done at unpacker, and pool
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         } else {
@@ -34,7 +32,6 @@ inline void llk_math_reduce(uint dst_index) {
                 TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
         }
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
 
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
@@ -52,27 +49,23 @@ inline void llk_math_reduce(uint dst_index) {
         /*
         if constexpr (is_fp32_dest_acc_en) {
             if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
                 TTI_SFPLOAD(0, 0, 3, 0);
                 TTI_SFP_STOCH_RND(0,0,0,0,0,8);
                 TTI_SFPSTORE(0,1,3,0);
             }
         }
         */
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movd2b::MOV_1_ROW, 0);
-        TTI_GATESRCRST(0b1,0b1);
+        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         // Note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
-        // gate math instructions until src B has been updated
-        TTI_GATESRCRST(0b1,0b1);
-        // Only move rows 2-15 back to dest, so no need to change counters
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movb2d::MOV_1_ROW, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movb2d::MOV_1_ROW, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movb2d::MOV_1_ROW, 0);
+        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // Switch to moving 4 rows for speed up, since no longer need row by row offset
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+        TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
+        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
 
         // Increment dest by 32 for next accumulation
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
@@ -85,8 +78,6 @@ inline void llk_math_reduce(uint dst_index) {
         /////////////////////
 
         // Transpose at unpacker and pool
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         } else {
@@ -97,7 +88,6 @@ inline void llk_math_reduce(uint dst_index) {
                 TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);                
             }
         }
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
 
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
@@ -114,35 +104,29 @@ inline void llk_math_reduce(uint dst_index) {
         /*
         if constexpr (is_fp32_dest_acc_en) {
             if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
                 TTI_SFPLOAD(0, 0, 3, 0);
                 TTI_SFP_STOCH_RND(0,0,0,0,0,8);
                 TTI_SFPSTORE(0,1,3,0);
             }
         }
         */
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movd2b::MOV_1_ROW, 0);
-        TTI_GATESRCRST(0b1,0b1);
+        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         // Note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
-        // gate math instructions until src B has been updated
-        TTI_GATESRCRST(0b1,0b1);
-        // Only move rows 2-15 back to dest, so no need to change counters
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movb2d::MOV_1_ROW, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movb2d::MOV_1_ROW, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_1, p_movb2d::MOV_1_ROW, 0);
+        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // Switch to moving 4 rows for speed up, since no longer need row by row offset
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+        TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
+        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
 
         // Increment dest by 32 for next accumulation
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
     } else if constexpr (dim == ReduceDim::REDUCE_COL) {
         for (int row_tile = 0; row_tile < 2; row_tile++) {
             // Just pool
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             } else {
@@ -155,7 +139,6 @@ inline void llk_math_reduce(uint dst_index) {
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
             TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             } else {
@@ -173,7 +156,6 @@ inline void llk_math_reduce(uint dst_index) {
         static_assert(!is_fp32_dest_acc_en);
         for (int tile = 0; tile < 3; tile++) {
             // Wait and pool
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4);
             } else {
@@ -186,7 +168,6 @@ inline void llk_math_reduce(uint dst_index) {
             }
         }
         // Wait and pool
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4);
         } else {
@@ -246,8 +227,8 @@ inline void reduce_configure_addrmod() {
 
     addr_mod_t{
         .srca = {.incr = 0},
-        .srcb = {.incr = 4},
-        .dest = {.incr = 4},
+        .srcb = {.incr = 8},
+        .dest = {.incr = 8},
     }
         .set(ADDR_MOD_2);
 
