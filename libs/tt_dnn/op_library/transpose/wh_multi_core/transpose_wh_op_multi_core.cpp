@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -28,7 +29,7 @@ Program transpose_wh_multi_core(const Tensor &a, Tensor &output) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    uint32_t single_tile_size = 2 * 1024;
+    uint32_t single_tile_size = a.element_size() * TILE_HW;
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
@@ -44,80 +45,87 @@ Program transpose_wh_multi_core(const Tensor &a, Tensor &output) {
     uint32_t num_cores_x = compute_and_storage_grid_size.x;
     uint32_t num_cores_y = compute_and_storage_grid_size.y;
     auto HtWt = Ht * Wt;
-    auto num_cores = std::min(num_tensor_tiles, num_cores_x * num_cores_y);
-    std::vector<uint32_t> num_tiles_per_core(num_cores, num_tensor_tiles / num_cores);
-    for(uint32_t i = 0; i < num_tensor_tiles % num_cores; i++){
-        num_tiles_per_core[i]++;
-    }
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_and_storage_grid_size, num_tensor_tiles);
 
     std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
     auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-    std::vector<tt_metal::DataMovementKernel *> unary_reader_kernels;
-    std::vector<tt_metal::DataMovementKernel *> unary_writer_kernels;
-    for(int i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t src0_cb_index = 0;
-        uint32_t num_input_tiles = 2;
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            src0_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            DataFormat::Float16_b
-        );
-        // no need to create a buffer at CB::c_in2 since we pass scaler=0
 
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t num_output_tiles = 2;
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            ouput_cb_index,
-            core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            DataFormat::Float16_b
-        );
-        bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-        std::vector<uint32_t> reader_writer_compile_time_args;
-        if (tile_size_is_power_of_two) {
-            // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-            reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
-        } else {
-            reader_writer_compile_time_args = {0, 0};
-        }
-        tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
-            program,
-            "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank_input_cols_partitioned.cpp",
-            core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
-        unary_reader_kernels.push_back(reader_kernel);
+    uint32_t src0_cb_index = 0;
+    uint32_t num_input_tiles = 2;
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        DataFormat::Float16_b
+    );
+    // no need to create a buffer at CB::c_in2 since we pass scaler=0
 
-        tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
-            core,
-            reader_writer_compile_time_args,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
-        unary_writer_kernels.push_back(writer_kernel);
-        vector<uint32_t> compute_kernel_args = {
-            num_tiles_per_core[i]
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t num_output_tiles = 2;
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        num_output_tiles,
+        num_output_tiles * single_tile_size,
+        DataFormat::Float16_b
+    );
+    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+    std::vector<uint32_t> reader_writer_compile_time_args;
+    if (tile_size_is_power_of_two) {
+        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
+        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
+    } else {
+        reader_writer_compile_time_args = {0, 0};
+    }
+    tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank_input_cols_partitioned.cpp",
+        all_cores,
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_1_default);
+
+    tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+        all_cores,
+        reader_writer_compile_time_args,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_0_default);
+
+    vector<uint32_t> compute_kernel_args_group_1 = {
+        num_tiles_per_core_group_1, // num_tensor_tiles
+    };
+
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    auto compute_kernel_group_1 = tt_metal::CreateComputeKernel(
+        program,
+        "tt_metal/kernels/compute/transpose_wh.cpp",
+        core_group_1,
+        compute_kernel_args_group_1,
+        MathFidelity::HiFi4,
+        fp32_dest_acc_en,
+        math_approx_mode
+    );
+
+    if(!core_group_2.ranges().empty()){
+        vector<uint32_t> compute_kernel_args_group_2 = {
+            num_tiles_per_core_group_2, // num_tensor_tiles
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
-        auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
+        auto compute_kernel_group_2 = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/transpose_wh.cpp",
-            core,
-            compute_kernel_args,
+            core_group_2,
+            compute_kernel_args_group_2,
             MathFidelity::HiFi4,
             fp32_dest_acc_en,
             math_approx_mode
@@ -126,33 +134,41 @@ Program transpose_wh_multi_core(const Tensor &a, Tensor &output) {
 
     for(uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        uint32_t num_tiles_per_core;
+        if (core_group_1.core_coord_in_core_ranges(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
+        }
         tt_metal::WriteRuntimeArgsToDevice(
             device,
-            unary_reader_kernels[i],
+            reader_kernel,
             core,
             {
                 src0_dram_buffer->address(),
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
                 num_tensor_tiles, NC, Ht, Wt, HtWt,
-                num_tiles_read, num_tiles_per_core[i],
+                num_tiles_read, num_tiles_per_core,
                 0 /*disable scaler*/
             }
         );
 
         tt_metal::WriteRuntimeArgsToDevice(
             device,
-            unary_writer_kernels[i],
+            writer_kernel,
             core,
             {
                 dst_dram_buffer->address(),
                 (std::uint32_t)dram_dst_noc_xy.x,
                 (std::uint32_t)dram_dst_noc_xy.y,
-                num_tiles_per_core[i],
+                num_tiles_per_core,
                 num_tiles_read
             }
         );
-        num_tiles_read += num_tiles_per_core[i];
+        num_tiles_read += num_tiles_per_core;
     }
 
     return program;
