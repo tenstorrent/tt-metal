@@ -1943,6 +1943,10 @@ void ProfilerModule(py::module &m_profiler) {
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
+    m_profiler.def("get_profiler_flag", &op_profiler::get_profiler_flag, R"doc(
+        Gets the profiling flag.
+    )doc");
+
     m_profiler.def("set_profiler_location", &op_profiler::set_profiler_location, R"doc(
         Sets the profiling root folder.
 
