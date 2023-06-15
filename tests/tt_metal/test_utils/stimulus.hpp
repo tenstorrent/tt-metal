@@ -16,6 +16,20 @@ namespace test_utils {
 //! Constructor(float in) - constructor with a float as the initializer
 //! Constructor(uint32_t in) - constructor with a uint32_t as the initializer -- only lower bits needed
 
+// Setup a vector as follows:
+// For the following offsets, corresponding values below
+// [   0,    1, ...   offset, offset + 1, ... offset + stride, offset + stride + 1, ...]
+// [init, init, ... assigned,       init, ...        assigned,                init, ...]
+template <typename ValueType>
+std::vector<ValueType> generate_strided_vector(
+    const ValueType& init, const ValueType& assigned, const size_t& stride, const size_t& offset, const size_t& numel) {
+    std::vector<ValueType> results(numel, init);
+    for (unsigned int index = offset; index < numel; index = index + stride) {
+        results.at(index) = assigned;
+    }
+    return results;
+}
+
 template <typename ValueType>
 std::vector<ValueType> generate_uniform_random_vector(
     ValueType min, ValueType max, const size_t numel, const float seed = 0) {
@@ -48,6 +62,8 @@ std::vector<ValueType> generate_normal_random_vector(
     }
     return results;
 }
+
+// Will randomize values in the generated vector from the input vector
 template <typename ValueType>
 std::vector<ValueType> generate_random_vector_from_vector(
     std::vector<ValueType>& possible_values, const size_t numel, const float seed = 0) {
@@ -75,6 +91,12 @@ template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_random_vector_from_vector(
     std::vector<ValueType>& possible_values, const size_t numel, const float seed = 0) {
     return pack_vector<PackType, ValueType>(generate_random_vector_from_vector(possible_values, numel, seed));
+}
+
+template <typename PackType, typename ValueType>
+std::vector<PackType> generate_packed_strided_vector(
+     const ValueType& init, const ValueType& assigned, const size_t& stride, const size_t& offset, const size_t& numel) {
+    return pack_vector<PackType, ValueType>(generate_strided_vector(init, assigned, stride, offset, numel));
 }
 
 }  // namespace test_utils

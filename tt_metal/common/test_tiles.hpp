@@ -9,6 +9,7 @@
 #include "common/assert.hpp"
 #include "tile_math.hpp"
 
+using namespace std;
 enum TensorLayout {
     LIN_ROW_MAJOR = 0, // standard element-wise row-major
     TILED32_SWIZZLED = 1, // row-major of tiles 32x32, each tile is row-major-swizzled
