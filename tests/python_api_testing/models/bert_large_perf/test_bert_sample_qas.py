@@ -1,10 +1,10 @@
-
 import pytest
 from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 import sys
 from pathlib import Path
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
@@ -16,12 +16,14 @@ from libs import tt_lib as ttl
 from python_api_testing.models.bert_large_perf.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert_large_perf.bert_encoder import TtBertEncoder
 from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
-from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
+from python_api_testing.models.bert_large_perf.fused_ops.layernorm import (
+    create_var_scaler,
+)
 from libs.tt_lib.utils import pad_activation, pad_weight
 from utility_functions import enable_compile_cache
 from utility_functions import profiler
 from utility_functions import disable_compile_cache
-
+from tests.python_api_testing.models.conftest import model_location_generator_
 
 
 class DataSampler:
@@ -39,40 +41,39 @@ class DataSampler:
         titles = []
 
         for topic in self.data["data"]:
-            titles.append(topic['title'])
+            titles.append(topic["title"])
 
         selection = random.choice(titles)
 
         for topic in self.data["data"]:
-            if topic['title'] != selection:
+            if topic["title"] != selection:
                 continue
 
             # select paragraph
-            total_paragraphs = len(topic['paragraphs'])
-            selected_paragraph = random.randint(0, total_paragraphs-1)
-            paragraph = topic['paragraphs'][selected_paragraph]
+            total_paragraphs = len(topic["paragraphs"])
+            selected_paragraph = random.randint(0, total_paragraphs - 1)
+            paragraph = topic["paragraphs"][selected_paragraph]
 
             # select question
-            total_questions = len(paragraph['qas'])
-            selected_question = random.randint(0, total_questions-1)
-            qas = paragraph['qas'][selected_question]
-            question = qas['question']
+            total_questions = len(paragraph["qas"])
+            selected_question = random.randint(0, total_questions - 1)
+            qas = paragraph["qas"][selected_question]
+            question = qas["question"]
 
             # get all related answers
             answers = []
 
-            if len(qas['answers']) == 0:
-                for answer in qas['plausible_answers']:
-                    answers.append(answer['text'])
+            if len(qas["answers"]) == 0:
+                for answer in qas["plausible_answers"]:
+                    answers.append(answer["text"])
             else:
-                for answer in qas['answers']:
-                    answers.append(answer['text'])
+                for answer in qas["answers"]:
+                    answers.append(answer["text"])
 
             # get context
-            context = paragraph['context']
+            context = paragraph["context"]
 
-        return {'context': context, 'question': question, 'answers': answers}
-
+        return {"context": context, "question": question, "answers": answers}
 
     def readn(self, num_samples):
         inputs = []
@@ -84,19 +85,35 @@ class DataSampler:
         return inputs
 
 
-def sample_bert_input(hugging_face_reference_model, tokenizer, seq_len, attention_mask, token_type_ids, qas_sample, num_samples):
-
+def sample_bert_input(
+    hugging_face_reference_model,
+    tokenizer,
+    seq_len,
+    attention_mask,
+    token_type_ids,
+    qas_sample,
+    num_samples,
+):
     samples = []
 
     for i in range(num_samples):
-
         input_qas = qas_sample.read()
-        context = [input_qas['context']]
-        question = [input_qas['question']]
+        context = [input_qas["context"]]
+        question = [input_qas["question"]]
 
-        bert_input = tokenizer.batch_encode_plus(zip(question, context), max_length=seq_len, padding="max_length", truncation=True, return_tensors="pt")
-        nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
-        pl_answer = nlp(question = question[0], context=context[0])
+        bert_input = tokenizer.batch_encode_plus(
+            zip(question, context),
+            max_length=seq_len,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
+        nlp = pipeline(
+            "question-answering",
+            model=hugging_face_reference_model,
+            tokenizer=tokenizer,
+        )
+        pl_answer = nlp(question=question[0], context=context[0])
         preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
         preprocess_params["max_seq_len"] = seq_len
         input_q = {"context": context[0], "question": question[0]}
@@ -107,7 +124,7 @@ def sample_bert_input(hugging_face_reference_model, tokenizer, seq_len, attentio
             "data": (
                 model_input["input_ids"],
                 model_input["attention_mask"] if attention_mask else None,
-                model_input["token_type_ids"] if token_type_ids else None
+                model_input["token_type_ids"] if token_type_ids else None,
             ),
             "example": model_input["example"],
             "inputs": model_input,
@@ -142,29 +159,55 @@ class TtBertForQuestionAnswering(torch.nn.Module):
         state_dict = hugging_face_reference_model.state_dict()
 
         # Constant prop -> create_var_scaler
-        var_scaler = create_var_scaler(seq_len, config.hidden_size, config.layer_norm_eps, device)
+        var_scaler = create_var_scaler(
+            seq_len, config.hidden_size, config.layer_norm_eps, device
+        )
 
         self.hidden_states_list = []
         self.tt_attention_mask_list = []
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
-        self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
-        self.encoders = torch.nn.ModuleList([TtBertEncoder(config, encoder_idx, state_dict, var_scaler, device) for encoder_idx in range(config.num_hidden_layers)])
+        self.get_extended_attention_mask = (
+            hugging_face_reference_model.get_extended_attention_mask
+        )
+        self.encoders = torch.nn.ModuleList(
+            [
+                TtBertEncoder(config, encoder_idx, state_dict, var_scaler, device)
+                for encoder_idx in range(config.num_hidden_layers)
+            ]
+        )
 
         num_classes, hidden_size = state_dict["qa_outputs.weight"].shape
 
         weight = pad_weight(state_dict["qa_outputs.weight"])
-        weight = ttl.tensor.Tensor(weight.reshape(-1).tolist(), weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
-        bias   = pad_weight(state_dict["qa_outputs.bias"])
-        bias = ttl.tensor.Tensor(bias.reshape(-1).tolist(), bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
+        weight = (
+            ttl.tensor.Tensor(
+                weight.reshape(-1).tolist(),
+                weight.shape,
+                ttl.tensor.DataType.BFLOAT16,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(device)
+        )
+        bias = pad_weight(state_dict["qa_outputs.bias"])
+        bias = (
+            ttl.tensor.Tensor(
+                bias.reshape(-1).tolist(),
+                bias.shape,
+                ttl.tensor.DataType.BFLOAT16,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(device)
+        )
 
         # QA linear
         self.qa_linear = Linear(hidden_size, 32, weight, bias, device)
         self.device = device
 
     def forward(self, samples):
-
         for sample in samples:
             profiler.start("_calc_embeddings")
 
@@ -175,22 +218,41 @@ class TtBertForQuestionAnswering(torch.nn.Module):
             embeddings = self.embeddings(input_ids, token_type_ids)
 
             if attention_mask is not None:
-                extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
-                extended_attention_mask = torch.clamp(extended_attention_mask, -100000) # Limit neg value that goes into exp
+                extended_attention_mask = self.get_extended_attention_mask(
+                    attention_mask, input_ids.shape
+                )
+                extended_attention_mask = torch.clamp(
+                    extended_attention_mask, -100000
+                )  # Limit neg value that goes into exp
                 extended_attention_mask = pad_activation(extended_attention_mask)
-                tt_attention_mask = ttl.tensor.Tensor(extended_attention_mask.reshape(-1).tolist(), extended_attention_mask.shape, ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+                tt_attention_mask = ttl.tensor.Tensor(
+                    extended_attention_mask.reshape(-1).tolist(),
+                    extended_attention_mask.shape,
+                    ttl.tensor.DataType.BFLOAT16,
+                    ttl.tensor.Layout.ROW_MAJOR,
+                ).to(ttl.tensor.Layout.TILE)
                 tt_attention_mask = tt_attention_mask.to(self.device)
             else:
                 tt_attention_mask = attention_mask
 
-            #Add to list mask
+            # Add to list mask
             self.tt_attention_mask_list.append(tt_attention_mask)
 
             # Convert to ll buda tensor
             pad_embeddings = pad_activation(embeddings)
-            tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+            tt_embeddings = ttl.tensor.Tensor(
+                pad_embeddings.reshape(-1).tolist(),
+                (
+                    pad_embeddings.shape[0],
+                    1,
+                    pad_embeddings.shape[-2],
+                    pad_embeddings.shape[-1],
+                ),
+                ttl.tensor.DataType.BFLOAT16,
+                ttl.tensor.Layout.ROW_MAJOR,
+            ).to(ttl.tensor.Layout.TILE)
             tt_embeddings = tt_embeddings.to(self.device)
-            hidden_states = tt_embeddings # pad_embeddings #
+            hidden_states = tt_embeddings  # pad_embeddings #
 
             self.hidden_states_list.append(hidden_states)
             profiler.end("_calc_embeddings")
@@ -220,18 +282,18 @@ class TtBertForQuestionAnswering(torch.nn.Module):
         return tt_out_list
 
 
-def model_location_generator_(rel_path):
-    internal_weka_path = Path("/mnt/MLPerf")
-    has_internal_weka = (internal_weka_path / "bit_error_tests").exists()
-
-    if has_internal_weka:
-        return Path("/mnt/MLPerf") / rel_path
-    else:
-        return Path("/opt/tt-metal-models") / rel_path
-
-
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, attention_mask, token_type_ids, pcc, model_location_generator, qas_sample, num_samples):
-
+def run_bert_question_and_answering_inference(
+    model_version,
+    batch,
+    seq_len,
+    on_weka,
+    attention_mask,
+    token_type_ids,
+    pcc,
+    model_location_generator,
+    qas_sample,
+    num_samples,
+):
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -239,20 +301,45 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     host = ttl.device.GetHost()
 
     if on_weka:
-        model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
-        tokenizer_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/tokenizers/") / model_version)
+        model_name = str(
+            model_location_generator(
+                "tt_dnn-models/Bert/BertForQuestionAnswering/models/"
+            )
+            / model_version
+        )
+        tokenizer_name = str(
+            model_location_generator(
+                "tt_dnn-models/Bert/BertForQuestionAnswering/tokenizers/"
+            )
+            / model_version
+        )
     else:
         model_name = model_version
         tokenizer_name = model_version
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
-    tt_bert_model = TtBertForQuestionAnswering(hugging_face_reference_model.config, hugging_face_reference_model, seq_len, device)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
+        model_name, torchscript=False
+    )
+    tt_bert_model = TtBertForQuestionAnswering(
+        hugging_face_reference_model.config,
+        hugging_face_reference_model,
+        seq_len,
+        device,
+    )
 
     profiler.start("processing_of_input")
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
 
     print(f"Sampling random context+question pairs")
-    samples = sample_bert_input(hugging_face_reference_model, tokenizer, seq_len, attention_mask, token_type_ids, qas_sample, num_samples)
+    samples = sample_bert_input(
+        hugging_face_reference_model,
+        tokenizer,
+        seq_len,
+        attention_mask,
+        token_type_ids,
+        qas_sample,
+        num_samples,
+    )
     profiler.end("processing_of_input")
 
     print(f"Running BERT model")
@@ -263,17 +350,18 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     profiler.start("processing_output_to_string")
 
     for i in range(len(tt_out_list)):
-
         single_input = samples[i]["single_input"]
         nlp = samples[i]["nlp"]
         postprocess_params = samples[i]["postprocess_params"]
         tt_out = tt_out_list[i]
-        context = samples[i]['context']
-        question = samples[i]['question']
-        answers = samples[i]['answers']
+        context = samples[i]["context"]
+        question = samples[i]["question"]
+        answers = samples[i]["answers"]
 
         tt_out = tt_out.to(host)
-        tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
+        tt_untilized_output = torch.Tensor(
+            tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()
+        ).reshape(batch, 1, seq_len, -1)
 
         tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
         tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -285,7 +373,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
             **single_input["inputs"],
         }
 
-        tt_answer = nlp.postprocess([tt_res], **postprocess_params)['answer']
+        tt_answer = nlp.postprocess([tt_res], **postprocess_params)["answer"]
 
         print(f"Context: {context}")
         print(f"Question: {question}")
@@ -297,6 +385,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     ttl.device.CloseDevice(device)
     profiler.print()
 
+
 def test_bert_sample_qas():
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
@@ -306,11 +395,27 @@ def test_bert_sample_qas():
     token_type_ids = True
     pcc = 0.98
     model_location_generator = model_location_generator_
-    qas_sample = DataSampler('./tests/python_api_testing/models/bert_large_perf/dev-v2.0.json')
+    qas_sample = DataSampler(
+        "./tests/python_api_testing/models/bert_large_perf/dev-v2.0.json"
+    )
     num_samples = 10
 
-    logger.warning("This test uses binary and compile cache. The cache needs to be filled before running this test.")
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, attention_mask, token_type_ids, pcc, model_location_generator, qas_sample, num_samples)
+    logger.warning(
+        "This test uses binary and compile cache. The cache needs to be filled before running this test."
+    )
+    run_bert_question_and_answering_inference(
+        model_version,
+        batch,
+        seq_len,
+        on_weka,
+        attention_mask,
+        token_type_ids,
+        pcc,
+        model_location_generator,
+        qas_sample,
+        num_samples,
+    )
+
 
 if __name__ == "__main__":
     test_bert_sample_qas()
