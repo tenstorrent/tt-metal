@@ -75,6 +75,8 @@ class Operation {
             const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
             std::vector<Tensor> &output_tensors
         ) const = 0;
+
+        virtual bool supports_program_caching() const = 0;
     };
 
     template< typename T >
@@ -127,15 +129,19 @@ class Operation {
             }
         }
 
+        bool supports_program_caching() const override {
+            return implements_compute_program_hash<T>();
+        }
+
       private:
         T object;
     };
 
-    std::shared_ptr<const Interface> implementation_;
+    std::unique_ptr<const Interface> implementation_;
 
   public:
     template <typename T>
-    Operation(T&& operation): implementation_(std::make_shared<Implementation<T>>(std::forward<T>(operation))) {}
+    Operation(T&& operation): implementation_(std::make_unique<Implementation<T>>(std::forward<T>(operation))) {}
 
     ProgramHash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
         return this->implementation_->compute_program_hash(input_tensors);
@@ -166,6 +172,10 @@ class Operation {
         std::vector<Tensor> &output_tensors
     ) const {
         return this->implementation_->create_program(input_tensors, optional_input_tensors, output_tensors);
+    }
+
+    bool supports_program_caching() const {
+        return this->implementation_->supports_program_caching();
     }
 };
 

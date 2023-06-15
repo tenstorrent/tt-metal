@@ -18,12 +18,12 @@ struct ProgramCache {
         Device* device
     ) {
         auto program_hash = op.compute_program_hash(input_tensors);
-        if (program_hash != "" and this->hash_to_program_.count(program_hash) == 1) {
-            tt::log_info(tt::LogOp, "Program Cache: {}", "HIT - Getting program from the cache.");
+        if (this->hash_to_program_.count(program_hash) == 1) {
+            tt::log_info(tt::LogOp, "Program Cache: HIT - Getting program from the cache ({})", program_hash);
             auto& program = this->hash_to_program_.at(program_hash);
             return program;
         } else {
-            tt::log_info(tt::LogOp, "Program Cache: {}", "MISS - Compiling new program.");
+            tt::log_info(tt::LogOp, "Program Cache: MISS - Compiling new program ({})", program_hash);
             this->hash_to_program_[program_hash] = op.create_program(input_tensors, output_tensors);
             auto& program = this->hash_to_program_[program_hash];
             tt_metal::CompileProgram(device, program);
@@ -45,20 +45,16 @@ struct ProgramCache {
 
     private:
         bool is_enabled_ = false;
-        std::map<ProgramHash, Program> hash_to_program_{};
+        std::unordered_map<ProgramHash, Program> hash_to_program_{};
 };
 
 inline ProgramCache PROGRAM_CACHE{};
 
 }
 
-static Program& get_or_create(
-    const operation::Operation& op,
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-        std::vector<Tensor> &output_tensors,
-        Device* device
-) {
-    return detail::PROGRAM_CACHE.get_or_create(op, input_tensors, output_tensors, device);
+template<typename ... Args>
+static Program& get_or_create(Args&& ... args) {
+    return detail::PROGRAM_CACHE.get_or_create(std::forward<Args>(args)...);
 }
 
 static bool is_enabled() {

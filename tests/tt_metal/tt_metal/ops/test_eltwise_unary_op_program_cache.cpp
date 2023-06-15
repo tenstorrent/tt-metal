@@ -9,6 +9,9 @@
 
 #include <cmath>
 
+#include <chrono>
+using namespace std::chrono;
+
 using tt::tt_metal::Host;
 using tt::tt_metal::Device;
 using tt::tt_metal::Tensor;
@@ -45,76 +48,68 @@ Tensor device_function(const Tensor& input_tensor, Host* host, Device* device) {
 }
 
 template<auto HostFunction, auto DeviceFunction, typename ... Args>
-bool run_test(Host* host, Device* device, const std::array<uint32_t, 4>& shape, float low, float high, Args ...  args) {
+void run_test(Host* host, Device* device, const std::array<uint32_t, 4>& shape, float low, float high, Args ...  args) {
     auto input_tensor = tt::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     auto host_output = HostFunction(input_tensor);
-    auto device_output = DeviceFunction(input_tensor, host, device);
 
-    return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+    auto start = high_resolution_clock::now();
+    auto device_output = DeviceFunction(input_tensor, host, device);
+    auto stop = high_resolution_clock::now();
+    auto duration = duration_cast<microseconds>(stop - start);
+    tt::log_info(tt::LogTest, "Operation executed in {} microseconds\n", duration.count());
+
+    TT_ASSERT(tt::numpy::allclose<bfloat16>(host_output, device_output, args...));
 }
 
 int main(int argc, char **argv) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 
-    tt::tt_metal::program_cache::enable();
+    int pci_express_slot = 0;
+    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+    auto host = tt::tt_metal::GetHost();
 
-    bool pass = true;
+    TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 
-    try {
-        int pci_express_slot = 0;
-        auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
-        auto host = tt::tt_metal::GetHost();
-
-        pass &= tt::tt_metal::InitializeDevice(device);
-
+    auto run_tests = [&]() {
         // Program Cache Miss
-        pass &= run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        pass &= run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        pass &= run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, 8 * TILE_HEIGHT, 8 * TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        pass &= run_test<host_function<detail::exp>,  device_function<tt::tt_metal::exp>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<detail::exp>,  device_function<tt::tt_metal::exp>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        pass &= run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Allocate a tensor to show that the addresses aren't cached
         auto input_tensor = tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
 
         // Program Cache Hit
-        pass &= run_test<host_function<detail::exp>,  device_function<tt::tt_metal::exp>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<detail::exp>,  device_function<tt::tt_metal::exp>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        pass &= run_test<host_function<detail::gelu>, device_function<tt::tt_metal::gelu>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        run_test<host_function<detail::gelu>, device_function<tt::tt_metal::gelu>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
 
         // Program Cache Hit
-        pass &= run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
-        pass &= tt::tt_metal::CloseDevice(device);
+        // Program Cache Hit
+        run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+    };
 
-    } catch (const std::exception &e) {
-        pass = false;
-        // Capture the exception error message
-        tt::log_error(tt::LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        tt::log_error(tt::LogTest, "System error message: {}", std::strerror(errno));
-    }
+    tt::tt_metal::program_cache::enable();
+    run_tests();
 
-    pass &= tt::tt_metal::program_cache::num_cached_programs() == 4;
+    TT_ASSERT(tt::tt_metal::CloseDevice(device));
 
-    if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
-    } else {
-        tt::log_fatal(tt::LogTest, "Test Failed");
-    }
-
-    TT_ASSERT(pass);
+    TT_ASSERT(tt::tt_metal::program_cache::num_cached_programs() == 4);
 
     return 0;
 }

@@ -2,6 +2,8 @@
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 
+#include "tt_dnn/op_library/work_split.hpp"
+
 namespace tt::tt_metal::operation {
 
 namespace detail {
@@ -29,7 +31,7 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
 
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
 
-    if (program.data_movement_kernels().size() == 2) {
+    if (num_tiles == 1) {
         CoreCoord core = {0, 0};
 
         tt_metal::WriteRuntimeArgsToDevice(
@@ -56,36 +58,40 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
         auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
         uint32_t num_cores_x = compute_and_storage_grid_size.x;
         uint32_t num_cores_y = compute_and_storage_grid_size.y;
-        auto num_cores = std::min(num_tiles, num_cores_x * num_cores_y);
-        std::vector<uint32_t> num_tiles_per_core(num_cores, num_tiles / num_cores);
-        for(uint32_t i = 0; i < num_tiles % num_cores; i++){
-            num_tiles_per_core[i]++;
-        }
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_and_storage_grid_size, num_tiles);
 
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            uint32_t num_tiles_per_core;
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                num_tiles_per_core = num_tiles_per_core_group_1;
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                num_tiles_per_core = num_tiles_per_core_group_2;
+            } else {
+                TT_ASSERT(false, "Core not in specified core ranges");
+            }
             tt_metal::WriteRuntimeArgsToDevice(
                 device,
-                program.data_movement_kernels().at(i * 2),
+                program.data_movement_kernels().at(0),
                 core,
                 {src0_dram_buffer->address(),
                 uint32_t(dram_src0_noc_xy.x),
                 uint32_t(dram_src0_noc_xy.y),
-                num_tiles_per_core[i],
+                num_tiles_per_core,
                 num_tiles_written, 0 /*disable scaler*/ }
             );
 
             tt_metal::WriteRuntimeArgsToDevice(
                 device,
-                program.data_movement_kernels().at(i * 2 + 1),
+            program.data_movement_kernels().at(1),
                 core,
                 {dst_dram_buffer->address(),
                 uint32_t(dram_dst_noc_xy.x),
                 uint32_t(dram_dst_noc_xy.y),
-                num_tiles_per_core[i],
+                num_tiles_per_core,
                 num_tiles_written }
             );
-            num_tiles_written+=num_tiles_per_core[i];
+            num_tiles_written+=num_tiles_per_core;
         }
     }
 }
@@ -135,12 +141,8 @@ std::vector<Tensor> run_with_program_cache(
 
     Program& program = program_cache::get_or_create(op, input_tensors, output_tensors, device);
 
-    // TODO(arakhmati): write_runtime_args should always be called
-    // But at the moment, we need to ignore it for the ops that don't support program caching
     auto program_hash = op.compute_program_hash(input_tensors);
-    if (program_hash != "") { // Empty program hash means the op doesn't support program caching
-        write_eltwise_unary_runtime_args(device, program, input_tensors.at(0).get(), output_tensors.at(0));
-    }
+    write_eltwise_unary_runtime_args(device, program, input_tensors.at(0).get(), output_tensors.at(0));
 
     tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::LaunchKernels(device, program);
@@ -155,7 +157,7 @@ std::vector<Tensor> run(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
 ) {
-    if (program_cache::is_enabled()) {
+    if (program_cache::is_enabled() and op.supports_program_caching()) {
         return detail::run_with_program_cache(op, input_tensors, optional_input_tensors);
     } else {
         return detail::run_without_program_cache(op, input_tensors, optional_input_tensors);

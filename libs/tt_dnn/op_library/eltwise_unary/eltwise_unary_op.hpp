@@ -41,7 +41,7 @@ Program eltwise_unary_multi_core (const Tensor &input_tensor, Tensor &output_ten
 struct EltwiseUnary {
     const UnaryOpType::Enum op_type;
 
-    std::string compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    ProgramHash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
