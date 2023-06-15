@@ -13,6 +13,7 @@ namespace tt {
 
 namespace tt_metal {
 
+// This function always returns a new tensor
 Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout) {
     bool pad_input = a.shape() != padded_shape;
     bool convert_layout = a.layout() != target_layout;
@@ -78,16 +79,10 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
     return a;
 }
 
-void AutoFormat::format_output_tensor(const Tensor &a, Tensor &output, const std::array<uint32_t, 4>& shape, Device* device) {
+// This function modifies the output tensor in place
+void AutoFormat::format_output_tensor(Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout) {
     bool unpad_output = output.shape() != shape;
-    Layout target_layout = a.layout();
     bool convert_layout = output.layout() != target_layout;
-    // Hack env variable to leave outputs on device if no unpadding needed
-    if (std::getenv("TT_LEAVE_TILE_OUTPUT_ON_DEVICE") != nullptr) {
-        if (!unpad_output && output.layout() == Layout::TILE) {
-            return;
-        }
-    }
 
     // Noop
     if (!unpad_output && !convert_layout) {
@@ -95,7 +90,7 @@ void AutoFormat::format_output_tensor(const Tensor &a, Tensor &output, const std
     }
 
     // ON DEVICE UNPADDING/CONVERSIONS
-    if (!a.on_host()) {
+    if (!output.on_host()) {
         if (!unpad_output && convert_layout) {
             // If target layout is tile but shape does not support tile, we don't do any conversions
             if (target_layout == Layout::TILE) {
@@ -157,7 +152,7 @@ void AutoFormat::format_output_tensor(const Tensor &a, Tensor &output, const std
                     target_layout == Layout::TILE && output.layout() == Layout::CHANNELS_LAST) {
             // No-Op, leave output in CL
         } else {
-            output = output.to(a.layout());
+            output = output.to(target_layout);
         }
     }
 

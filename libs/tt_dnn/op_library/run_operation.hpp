@@ -63,7 +63,7 @@ static Tensor run_with_autopad(ConcreteOperation&& concrete_op, const Tensor &in
     } else {
         const auto padded_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, pad_value);
         auto output_tensor = std::move(run(op, {std::cref(padded_tensor)}).at(0));
-        AutoFormat::format_output_tensor(input_tensor, output_tensor, output_shape, device);
+        AutoFormat::format_output_tensor(output_tensor, output_shape, device);
         return output_tensor;
     }
 }
@@ -94,18 +94,18 @@ static Tensor run_with_autopad(ConcreteOperation&& concrete_op, const Tensor &in
     } else if (no_pad_a) {
         const auto padded_input_tensor_b = AutoFormat::format_input_tensor(input_tensor_b, device, padded_input_shape_b, pad_value);
         auto output_tensor = std::move(run(op, {std::cref(input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
-        AutoFormat::format_output_tensor(input_tensor_a, output_tensor, output_shape, device);
+        AutoFormat::format_output_tensor(output_tensor, output_shape, device);
         return output_tensor;
     } else if (no_pad_b) {
         const auto padded_input_tensor_a = AutoFormat::format_input_tensor(input_tensor_a, device, padded_input_shape_a, pad_value);
         auto output_tensor = std::move(run(op, {std::cref(padded_input_tensor_a), std::cref(input_tensor_b)}).at(0));
-        AutoFormat::format_output_tensor(input_tensor_a, output_tensor, output_shape, device);
+        AutoFormat::format_output_tensor(output_tensor, output_shape, device);
         return output_tensor;
     } else {
         const auto padded_input_tensor_a = AutoFormat::format_input_tensor(input_tensor_a, device, padded_input_shape_a, pad_value);
         const auto padded_input_tensor_b = AutoFormat::format_input_tensor(input_tensor_b, device, padded_input_shape_b, pad_value);
         auto output_tensor = std::move(run(op, {std::cref(padded_input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
-        AutoFormat::format_output_tensor(input_tensor_a, output_tensor, output_shape, device);
+        AutoFormat::format_output_tensor(output_tensor, output_shape, device);
         return output_tensor;
     }
 }

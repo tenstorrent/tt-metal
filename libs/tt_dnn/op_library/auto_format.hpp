@@ -37,7 +37,7 @@ class AutoFormat {
 
         static Tensor format_input_tensor(const Tensor &a, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value=0, Layout target_layout = Layout::TILE);
 
-        static void format_output_tensor(const Tensor &a, Tensor &output, const std::array<uint32_t, 4>& shape, Device* device);
+        static void format_output_tensor(Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout = Layout::TILE);
 };
 
 

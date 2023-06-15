@@ -1,17 +1,16 @@
 from .. import tensor as ttl_tensor, device as ttl_device
 import torch
 from functools import wraps
+from loguru import logger
 import os
 
 
 def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
     # Update output_format with format of first encountered arg
-    if not output_format:
-        if tt_tensor.on_host():
-            output_format["device"] = host
-        else:
-            output_format["device"] = tt_tensor.device()
-        output_format["layout"] = tt_tensor.layout()
+    if output_format.get("device", None) is None and not tt_tensor.on_host():
+        output_format["device"] = tt_tensor.device()
+
+    if output_format.get("dtype", None) is None:
         output_format["dtype"] = tt_tensor.dtype()
 
     # Convert to PT Tensor
@@ -31,17 +30,6 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
         output_format["dtype"],
         ttl_tensor.Layout.ROW_MAJOR,
     )
-    if (
-        os.environ.get("TT_LEAVE_TILE_OUTPUT_ON_DEVICE", None) is not None
-        and tt_tensor.shape()[2] % 32 == 0
-        and tt_tensor.shape()[3] % 32 == 0
-    ):
-        tt_tensor = tt_tensor.to(ttl_tensor.Layout.TILE)
-        if isinstance(output_format["device"], ttl_device.Device):
-            tt_tensor = tt_tensor.to(output_format["device"])
-        else:
-            tt_tensor = tt_tensor.to(ttl_device.GetDefaultDevice())
-        return tt_tensor
 
     if output_format["layout"] == ttl_tensor.Layout.TILE:
         if (
@@ -129,19 +117,17 @@ def convert_tt_tensors_wrapper(func):
 
     @wraps(func)
     def wrap(*args, **kwargs):
-        output_format = {}
+        output_format = {"layout": ttl_tensor.Layout.TILE}
 
         new_args = convert_tt_tensors_to_pt_tensors(args, host, output_format)
 
         new_kwargs = convert_tt_tensors_to_pt_tensors(kwargs, host, output_format)
 
         # Set default output format
-        if not output_format:
-            output_format = {
-                "device": host,
-                "layout": ttl_tensor.Layout.ROW_MAJOR,
-                "dtype": ttl_tensor.DataType.BFLOAT16,
-            }
+        if output_format.get("device", None) is None:
+            output_format["device"] = ttl_device.GetDefaultDevice()
+        if output_format.get("dtype", None) is None:
+            output_format["dtype"] = ttl_tensor.DataType.BFLOAT16
 
         outputs = func(*new_args, **new_kwargs)
 

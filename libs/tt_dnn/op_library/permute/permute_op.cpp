@@ -89,7 +89,7 @@ Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W) 
         return permute_(a, N, C, H, W);
     } else {
         auto output = permute_(AutoFormat::format_input_tensor(a, device, a_pad_shape, 0), N, C, H, W);
-        AutoFormat::format_output_tensor(a, output, out_shape, device);
+        AutoFormat::format_output_tensor(output, out_shape, device);
         return output;
 
     }
