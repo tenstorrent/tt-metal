@@ -4,6 +4,16 @@ from functools import wraps
 from loguru import logger
 import os
 
+_pytorch_warning_logged = False
+
+# Log only once to not pollute output
+def check_log_pytorch_warning(arg):
+    global _pytorch_warning_logged
+    if not _pytorch_warning_logged and torch.is_tensor(arg):
+        logger.warning(
+            "Pytorch tensor was passed as input to fallback op instead of TT tensor. This is currently supported to improve perf but support for this will be deprecated."
+        )
+        _pytorch_warning_logged = True
 
 def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
     # Update output_format with format of first encountered arg
@@ -53,6 +63,7 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
 
 
 def convert_tt_tensors_to_pt_tensors(args, host, output_format):
+    check_log_pytorch_warning(args)
     if isinstance(args, ttl_tensor.Tensor):
         return convert_tt_tensor_to_pt_tensor(args, host, output_format)
     elif isinstance(args, dict):
@@ -67,6 +78,7 @@ def convert_tt_tensors_to_pt_tensors(args, host, output_format):
                     value, host, output_format
                 )
             else:
+                check_log_pytorch_warning(args)
                 outputs[key] = value
         return outputs
     elif isinstance(args, (list, tuple, dict)):
@@ -79,6 +91,7 @@ def convert_tt_tensors_to_pt_tensors(args, host, output_format):
                     convert_tt_tensors_to_pt_tensors(arg, host, output_format)
                 )
             else:
+                check_log_pytorch_warning(args)
                 outputs.append(arg)
         return outputs
     else:
