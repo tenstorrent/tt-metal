@@ -10,10 +10,10 @@ namespace tt {
 namespace tt_metal {
 
 // TODO: To be merged into Op Base Class
-class AutoPad {
+class AutoFormat {
     private:
         inline static Device* device = nullptr;
-        AutoPad() {}
+        AutoFormat() {}
     public:
         static void SetDefaultDevice(Device * dev) { device = dev; }
         static Device * GetDefaultDevice() { return device; }

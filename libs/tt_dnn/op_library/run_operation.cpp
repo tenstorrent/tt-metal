@@ -14,7 +14,7 @@ static Device* get_device(const std::vector<std::reference_wrapper<const Tensor>
             return input_tensor.get().device();
         }
     }
-    auto device = AutoPad::GetDefaultDevice();
+    auto device = AutoFormat::GetDefaultDevice();
     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     return device;
 }

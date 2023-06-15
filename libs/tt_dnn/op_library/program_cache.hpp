@@ -1,7 +1,7 @@
 #pragma once
 
 #include <libs/tensor/tensor.hpp>
-#include "tt_dnn/op_library/auto_pad.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 
 namespace tt::tt_metal {

@@ -1,7 +1,6 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_dnn/op_library/auto_pad.hpp"
 
 #include "tt_metal/common/constants.hpp"
 

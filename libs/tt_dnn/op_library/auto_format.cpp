@@ -1,7 +1,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_dnn/op_library/auto_pad.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
@@ -13,7 +13,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor AutoPad::format_input_tensor(const Tensor &a, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout) {
+Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout) {
     bool pad_input = a.shape() != padded_shape;
     bool convert_layout = a.layout() != target_layout;
     if (!convert_layout && !pad_input) {
@@ -78,7 +78,7 @@ Tensor AutoPad::format_input_tensor(const Tensor &a, Device * device, const std:
     return a;
 }
 
-void AutoPad::format_output_tensor(const Tensor &a, Tensor &output, const std::array<uint32_t, 4>& shape, Device* device) {
+void AutoFormat::format_output_tensor(const Tensor &a, Tensor &output, const std::array<uint32_t, 4>& shape, Device* device) {
     bool unpad_output = output.shape() != shape;
     Layout target_layout = a.layout();
     bool convert_layout = output.layout() != target_layout;

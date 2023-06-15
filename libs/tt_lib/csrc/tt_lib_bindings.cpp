@@ -16,7 +16,7 @@
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
-#include "tt_dnn/op_library/auto_pad.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tensor/tensor_utils.hpp"
@@ -1875,7 +1875,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def("SetDefaultDevice", &AutoPad::SetDefaultDevice, R"doc(
+    m_device.def("SetDefaultDevice", &AutoFormat::SetDefaultDevice, R"doc(
         Sets the default device to use for ops when inputs aren't on device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -1885,7 +1885,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def("GetDefaultDevice", &AutoPad::GetDefaultDevice, R"doc(
+    m_device.def("GetDefaultDevice", &AutoFormat::GetDefaultDevice, R"doc(
         Gets the default device to use for ops when inputs aren't on device.
     )doc");
 

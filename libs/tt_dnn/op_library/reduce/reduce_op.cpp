@@ -1,7 +1,7 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_dnn/op_library/auto_pad.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
 #include <limits>
 
 using namespace tt::constants;

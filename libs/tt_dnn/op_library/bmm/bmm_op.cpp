@@ -3,8 +3,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include "tt_dnn/op_library/auto_pad.hpp"
-
 using namespace tt::constants;
 
 vector<uint32_t> _get_prime_factors(uint32_t n) {

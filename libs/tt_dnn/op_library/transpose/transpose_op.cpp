@@ -2,7 +2,6 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_dnn/op_library/auto_pad.hpp"
 
 using u32 = std::uint32_t;
 using namespace tt::constants;

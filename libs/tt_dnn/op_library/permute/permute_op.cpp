@@ -3,7 +3,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_dnn/op_library/auto_pad.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
 
 using u32 = std::uint32_t;
 using namespace tt::constants;
@@ -72,7 +72,7 @@ Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W) 
 
     // Get the device
     if (a.on_host()) {
-        device = AutoPad::GetDefaultDevice();
+        device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
         device = a.device();
@@ -81,15 +81,15 @@ Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W) 
     bool pad_n = H == 0 || W == 0;
     bool pad_c = H == 1 || W == 1;
     // Convert tensor back to original
-    auto a_pad_shape = AutoPad::pad_to_tile_shape(a.shape(), pad_c, pad_n);
+    auto a_pad_shape = AutoFormat::pad_to_tile_shape(a.shape(), pad_c, pad_n);
     auto out_shape = a.shape();
     out_shape = {out_shape[N], out_shape[C], out_shape[H], out_shape[W]};
 
-    if (AutoPad::check_input_tensor_format(a, a_pad_shape)) {
+    if (AutoFormat::check_input_tensor_format(a, a_pad_shape)) {
         return permute_(a, N, C, H, W);
     } else {
-        auto output = permute_(AutoPad::format_input_tensor(a, device, a_pad_shape, 0), N, C, H, W);
-        AutoPad::format_output_tensor(a, output, out_shape, device);
+        auto output = permute_(AutoFormat::format_input_tensor(a, device, a_pad_shape, 0), N, C, H, W);
+        AutoFormat::format_output_tensor(a, output, out_shape, device);
         return output;
 
     }
