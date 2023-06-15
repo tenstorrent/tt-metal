@@ -15,7 +15,7 @@ Program fill_rm_single_core(const Tensor& any, Tensor &output, uint32_t N, uint3
 
     tt_metal::Device *device = any.device();
     tt_metal::Program program = tt_metal::Program();
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     uint32_t single_tile_size = any.element_size() * TILE_HW;
 
@@ -24,14 +24,14 @@ Program fill_rm_single_core(const Tensor& any, Tensor &output, uint32_t N, uint3
 
     uint32_t num_cb_tiles = 16;
     TT_ASSERT(W < 1024*num_cb_tiles); // Limitation for simplifying the kernel
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         0, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
         DataFormat::Float16_b);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         device,
         1, // cb index

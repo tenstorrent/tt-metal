@@ -21,7 +21,7 @@ Program tilize_single_core(const Tensor &a, Tensor& output) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     uint32_t single_tile_size = TILE_HW * a.element_size();
 
@@ -66,7 +66,7 @@ Program tilize_single_core(const Tensor &a, Tensor& output) {
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
 
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
@@ -79,7 +79,7 @@ Program tilize_single_core(const Tensor &a, Tensor& output) {
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
 
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
         output_cb_index,
@@ -217,7 +217,7 @@ Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -245,7 +245,7 @@ Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = row_size_datum / TILE_WIDTH;
     assert(num_input_tiles > 0);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
@@ -258,7 +258,7 @@ Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = row_size_datum / TILE_WIDTH;
 
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
         ouput_cb_index,
@@ -268,7 +268,7 @@ Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
         DataFormat::Float16_b
     );
 
-    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+    auto l1_bank_ids = device->bank_ids_from_logical_core(core.start);
     TT_ASSERT(not l1_bank_ids.empty());
     auto l1_bank_id = l1_bank_ids.at(0);
     auto zero_buffer_l1 = tt_metal::Buffer(device, row_size_bytes, l1_bank_id, row_size_bytes, tt_metal::BufferType::L1);
@@ -343,7 +343,7 @@ Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
         (uint32_t) (output.shape()[0] * output.shape()[1] * output.shape()[2] * output.shape()[3] / TILE_HW)}
     );
     std::vector<uint32_t> zero_buffer_stick(row_size_datum, 0);
-    tt_metal::WriteToDeviceL1(device, core, zero_buffer_l1_addr, zero_buffer_stick);
+    tt_metal::WriteToDeviceL1(device, core.start, zero_buffer_l1_addr, zero_buffer_stick);
 
     return program;
 }
@@ -402,7 +402,7 @@ Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::arra
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -470,7 +470,7 @@ Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::arra
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
     assert(num_input_tiles > 0);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
@@ -483,7 +483,7 @@ Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::arra
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
 
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
         ouput_cb_index,
@@ -496,7 +496,7 @@ Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::arra
 
     uint32_t temp_buffer_size = alignment + block_row_size;
 
-    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+    auto l1_bank_ids = device->bank_ids_from_logical_core(core.start);
     TT_ASSERT(not l1_bank_ids.empty());
     auto l1_bank_id = l1_bank_ids.at(0);
     auto temp_buffer_l1 = tt_metal::Buffer(device, temp_buffer_size, l1_bank_id, temp_buffer_size, tt_metal::BufferType::L1);

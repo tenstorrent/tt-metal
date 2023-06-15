@@ -15,7 +15,7 @@ Program pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &o
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -40,7 +40,7 @@ Program pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &o
     uint32_t src_buffer_size = alignment + src_stick_size;
     uint32_t dst_buffer_size = alignment + dst_stick_size;
 
-    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+    auto l1_bank_ids = device->bank_ids_from_logical_core(core.start);
     TT_ASSERT(not l1_bank_ids.empty());
     auto l1_bank_id = l1_bank_ids.at(0);
     auto cache_buffer_l1 = tt_metal::Buffer(device, cache_buffer_size, l1_bank_id, cache_buffer_size, tt_metal::BufferType::L1);
@@ -135,7 +135,7 @@ Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> 
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -153,7 +153,7 @@ Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 1;
 
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
@@ -165,7 +165,7 @@ Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> 
 
     uint32_t src1_cb_index = 1; // For pad buffer
 
-    auto cb_src1 = tt_metal::CreateCircularBuffer(
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src1_cb_index,

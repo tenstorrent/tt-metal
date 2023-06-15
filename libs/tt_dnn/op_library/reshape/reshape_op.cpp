@@ -21,7 +21,7 @@ Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, 
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     uint32_t single_tile_size = 2 * TILE_HW;
 
@@ -42,7 +42,7 @@ Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, 
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
@@ -55,7 +55,7 @@ Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, 
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
         ouput_cb_index,
@@ -130,7 +130,7 @@ Program reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, in
     TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
 
     tt_metal::Program program = tt_metal::Program();
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -176,7 +176,7 @@ Program reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, in
         TT_ASSERT(num_input_tiles > 0 && num_output_tiles > 0, "Cannot fit input/output rows into L1");
     }
 
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
@@ -187,7 +187,7 @@ Program reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, in
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
         output_cb_index,

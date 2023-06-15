@@ -19,7 +19,7 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     uint32_t single_tile_size = 2 * TILE_HW; // Assuming bfloat16 dataformat
 
@@ -62,7 +62,7 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
@@ -74,7 +74,7 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
         ouput_cb_index,
@@ -198,7 +198,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     uint32_t single_tile_size = a.element_size() * TILE_HW; // Assuming bfloat16 dataformat
 
@@ -256,7 +256,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
@@ -268,7 +268,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
         ouput_cb_index,
@@ -280,7 +280,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
 
     uint32_t temp_buffer_size = alignment + block_row_size;
 
-    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
+    auto l1_bank_ids = device->bank_ids_from_logical_core(core.start);
     TT_ASSERT(not l1_bank_ids.empty());
     auto l1_bank_id = l1_bank_ids.at(0);
 

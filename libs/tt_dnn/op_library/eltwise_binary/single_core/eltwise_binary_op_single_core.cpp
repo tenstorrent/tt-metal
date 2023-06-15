@@ -11,7 +11,7 @@ namespace tt_metal {
 Program eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType::Enum op_type) {
 
     Program program{};
-    CoreCoord core = {0, 0};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to eltwise binary need to be on device!");
@@ -40,7 +40,7 @@ Program eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& out
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
@@ -51,7 +51,7 @@ Program eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& out
     );
 
     uint32_t src1_cb_index = 1;
-    auto cb_src1 = tt_metal::CreateCircularBuffer(
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src1_cb_index,
@@ -63,7 +63,7 @@ Program eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& out
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
         ouput_cb_index,
