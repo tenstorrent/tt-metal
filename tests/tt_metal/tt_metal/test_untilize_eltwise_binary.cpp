@@ -238,8 +238,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             binary_reader_kernel,
             core,
             {dram_buffer_src0_addr,
@@ -251,8 +250,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_src1_noc_xy.y,
             num_tiles, 0});
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -261,6 +259,7 @@ int main(int argc, char **argv) {
             num_tiles});
 
         read_trisc_debug_mailbox(device->cluster(), 0, {1, 1}, 0);
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

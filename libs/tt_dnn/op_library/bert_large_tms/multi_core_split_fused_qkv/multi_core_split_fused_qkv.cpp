@@ -158,8 +158,8 @@ Program multi_core_split_fused_qkv(const Tensor &a, std::vector<Tensor>& output,
                 core_id * num_tiles_per_tensor,
             };
 
-            tt_metal::WriteRuntimeArgsToDevice(device, reader_kernel, core, reader_runtime_args);
-            tt_metal::WriteRuntimeArgsToDevice(device, writer_kernel, core, writer_runtime_args);
+            tt_metal::SetRuntimeArgs(reader_kernel, core, reader_runtime_args);
+            tt_metal::SetRuntimeArgs(writer_kernel, core, writer_runtime_args);
         }
     }
 

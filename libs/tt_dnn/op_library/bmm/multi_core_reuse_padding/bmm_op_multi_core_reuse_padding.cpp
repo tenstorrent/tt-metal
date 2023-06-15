@@ -249,8 +249,8 @@ tt_metal::Program create_program(
                 (std::uint32_t) last_block_padded_block_tiles_w_skip
             };
 
-            tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel, core, mm_reader_args);
-            tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(mm_reader_kernel, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
 
             num_blocks_read++;
         }

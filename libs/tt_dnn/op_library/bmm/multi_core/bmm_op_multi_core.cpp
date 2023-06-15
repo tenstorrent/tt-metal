@@ -180,8 +180,8 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
 		} else {
 			TT_ASSERT(false, "Core not in specified core ranges");
 		}
-        tt_metal::WriteRuntimeArgsToDevice(
-            device, reader, core,
+        tt_metal::SetRuntimeArgs(
+            reader, core,
             {in0_dram_addr,
             in1_dram_addr,
             Mt,
@@ -195,8 +195,7 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
             num_output_tiles_per_core,
             Mt*Nt }
         );
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             writer,
             core,
             {out_dram_addr,

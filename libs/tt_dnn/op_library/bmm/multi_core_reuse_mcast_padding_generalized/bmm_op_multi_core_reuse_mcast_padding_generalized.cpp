@@ -339,8 +339,8 @@ tt_metal::Program create_program_mcast_in0_in1(
                 writer_args.push_back(0);
                 writer_args.push_back(0);
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_sender_in1_sender, core, mm_reader_args); // RISCV_0_default
-                tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_sender, core, mm_reader_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x == 0 and core_idx_y != 0) {
                 // h
                 if (core_idx_y == num_cores_r - 1) {
@@ -361,8 +361,8 @@ tt_metal::Program create_program_mcast_in0_in1(
                 writer_args.push_back(0);
                 writer_args.push_back(0);
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_sender_in1_receiver, core, mm_reader_args); // RISCV_0_default
-                tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_receiver, core, mm_reader_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x != 0 and core_idx_y == 0) {
                 // h
                 mm_reader_args.push_back(per_core_M); // not used
@@ -384,8 +384,8 @@ tt_metal::Program create_program_mcast_in0_in1(
                     writer_args.push_back(0);
                 }
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_receiver_in1_sender, core, mm_reader_args); // RISCV_1_default
-                tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_sender, core, mm_reader_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             } else {
                 // h and w for writer_args
                 if (core_idx_x == num_cores_c - 1 and core_idx_y == num_cores_r - 1) {
@@ -422,8 +422,8 @@ tt_metal::Program create_program_mcast_in0_in1(
                     writer_args.push_back(0);
                 }
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_receiver_in1_receiver, core, mm_reader_args); // RISCV_1_default
-                tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_receiver, core, mm_reader_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             }
 
         }
@@ -706,9 +706,9 @@ tt_metal::Program create_program_mcast_in0(
                 writer_args.push_back(0);
 
                 if (core_idx_x == 0)
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_sender, core, mm_reader_args);
+                    tt_metal::SetRuntimeArgs(mm_reader_kernel_sender, core, mm_reader_args);
                 else
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_receiver, core, mm_reader_args);
+                    tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver, core, mm_reader_args);
             } else {
                 mm_reader_args.push_back(last_block_h); // not used
                 mm_reader_args.push_back(last_block_w);
@@ -720,9 +720,9 @@ tt_metal::Program create_program_mcast_in0(
                 writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
                 writer_args.push_back(last_block_padded_block_tiles_w_skip);
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_receiver, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver, core, mm_reader_args);
             }
-            tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
 
         }
     }
@@ -1003,9 +1003,9 @@ tt_metal::Program create_program_mcast_in1(
                 writer_args.push_back(last_block_padded_block_tiles_w_skip);
 
                 if (core_idx_y == 0)
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_sender, core, mm_reader_args);
+                    tt_metal::SetRuntimeArgs(mm_reader_kernel_sender, core, mm_reader_args);
                 else
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_receiver, core, mm_reader_args);
+                    tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver, core, mm_reader_args);
             } else {
                 mm_reader_args.push_back(last_block_h);
                 mm_reader_args.push_back(last_block_w); // not used
@@ -1017,9 +1017,9 @@ tt_metal::Program create_program_mcast_in1(
                 writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
                 writer_args.push_back(last_block_padded_block_tiles_w_skip);
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_receiver, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver, core, mm_reader_args);
             }
-            tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
 
         }
     }

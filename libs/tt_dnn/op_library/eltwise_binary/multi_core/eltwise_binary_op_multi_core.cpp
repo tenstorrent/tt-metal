@@ -150,8 +150,7 @@ Program eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& outp
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             binary_reader_kernel,
             core,
             {src0_dram_buffer->address(),
@@ -165,8 +164,7 @@ Program eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& outp
             num_tiles_read }
         );
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dst_dram_buffer->address(),

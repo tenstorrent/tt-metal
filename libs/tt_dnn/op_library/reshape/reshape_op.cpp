@@ -96,8 +96,7 @@ Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, 
     );
 
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
         {src0_dram_buffer->address(),
@@ -108,8 +107,7 @@ Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, 
         (uint32_t) output_shape[3] / TILE_WIDTH }
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
         {dst_dram_buffer->address(),
@@ -249,15 +247,13 @@ Program reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, in
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
         reader_kernel_args
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
         writer_kernel_args

@@ -81,8 +81,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             dram_copy_kernel,
             core,
             {l1_buffer_addr,
@@ -94,6 +93,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)output_dram_noc_xy.y,
             dram_buffer_size});
 
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

@@ -146,15 +146,13 @@ Program tilize_single_core(const Tensor &a, Tensor& output) {
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
         reader_kernel_args
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
         {dst_dram_buffer->address(),
@@ -326,15 +324,13 @@ Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
         reader_kernel_args
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
         {dst_dram_buffer->address(),
@@ -570,15 +566,13 @@ Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::arra
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
         reader_kernel_args
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
         {dst_dram_buffer->address(),

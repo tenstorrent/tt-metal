@@ -134,8 +134,7 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
         {src0_dram_buffer->address(),
@@ -144,8 +143,7 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
         uint32_t(num_tiles), 0,0,0,0,0 } // TODO(AP): [8] is scaler
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
         writer_kernel_args
@@ -352,8 +350,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
         {src0_dram_buffer->address(),
@@ -362,8 +359,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
         uint32_t(num_tiles), 0,0,0,0,0 } // TODO(AP): [8] is scaler
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
         writer_kernel_args

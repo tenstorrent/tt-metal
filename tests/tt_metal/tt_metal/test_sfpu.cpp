@@ -168,8 +168,7 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_reader_kernel,
             core,
             {
@@ -181,8 +180,7 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
             }
         );
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {
@@ -192,6 +190,8 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
                 num_tiles
             }
         );
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         // tt::tt_metal::tt_gdb(device, 0, program->cores(), program->cores_to_ops());
         pass &= tt_metal::LaunchKernels(device, program);

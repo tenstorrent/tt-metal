@@ -61,7 +61,13 @@ class Kernel {
 
     size_t compile_time_args_hash() const;
 
+    std::map<CoreCoord, std::vector<uint32_t>> const &runtime_args() const { return core_to_runtime_args_; }
+
+    std::vector<uint32_t> const &runtime_args(const CoreCoord &logical_core);
+
     std::map<std::string, std::string> defines() const { return defines_; }
+
+    RISCV processor() const;
 
     virtual bool configure(Device *device, const CoreCoord &logical_core) const = 0;
 
@@ -78,7 +84,11 @@ class Kernel {
     KernelType kernel_type_;
     std::vector<ll_api::memory> binaries_;    // DataMovement kernels have one binary each and Compute kernels have three binaries
     std::vector<uint32_t> compile_time_args_;
+    std::map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;
     std::map<std::string, std::string> defines_; // preprocessor defines. this is to be able to generate generic instances.
+
+    void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
+    friend void SetRuntimeArgs(Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 
     void set_binaries(const std::string &binary_path);
     friend void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profile_kernel);
@@ -152,10 +162,6 @@ class DataMovementKernel : public Kernel {
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
    private:
-    void write_runtime_args_to_device(Device *device, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) const;
-
-    friend bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
-
     DataMovementProcessor processor_;  // For data transfer kernels: NCRISC & BRISC
     NOC noc_;
 };

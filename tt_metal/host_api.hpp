@@ -707,25 +707,67 @@ bool CompileProgram(
 bool ConfigureDeviceWithProgram(Device *device, const Program &program);
 
 /**
- * Set runtime args on program. Program tracks which processor on core receives the runtime args based on the processor that the kernel is targetting. Args are sent to the core during runtime.
+ * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                                                      | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------------------------------------|----------|
+ * | kernel       | The kernel that will receive the runtime args                          | Kernel *                      |                                                                  | Yes      |
+ * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate on which the kernel is placed | Yes      |
+ * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> & |                                                                  | Yes      |
+ */
+void SetRuntimeArgs(Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
+
+/**
+ * Set runtime args for a kernel that are shared amongst a range of cores. Runtime args are sent to cores during runtime. This API needs to be called to update the runtime args for the kernel.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                                                            | Type                          | Valid Range                                                             | Required |
+ * |--------------|--------------------------------------------------------------------------------------------------------|-------------------------------|-------------------------------------------------------------------------|----------|
+ * | kernel       | The kernel that will receive the runtime args                                                          | Kernel *                      |                                                                         | Yes      |
+ * | core_range   | The range of the Tensix co-ordinates which receive the runtime args (Logical co-ordinates)             | const CoreRange &             | A range of any logical Tensix core coordinate on which the kernel is placed | Yes      |
+ * | runtime_args | The runtime args to be written to the core range                                                       | const std::vector<uint32_t> & |                                                                         | Yes      |
+ */
+void SetRuntimeArgs(Kernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args);
+
+/**
+ * Set runtime args for a kernel that are shared amongst a CoreRangeSet. Runtime args are sent to cores during runtime. This API needs to be called to update the runtime args for the kernel.
+ *
+ * Return value: void
+ *
+ * | Argument       | Description                                                                                            | Type                          | Valid Range                        | Required |
+ * |----------------|--------------------------------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | kernel         | The kernel that will receive the runtime args                                                          | Kernel *                      |                                    | Yes      |
+ * | core_range_set | Set of ranges of Tensix co-ordinates which receive the runtime args (Logical co-ordinates)             | const CoreRangeSet &          | Ranges of any logical Tensix core coordinate on which the kernel is placed | Yes      |
+ * | runtime_args   | The runtime args to be written to the core ranges                                                      | const std::vector<uint32_t> & |                                    | Yes      |
+ */
+void SetRuntimeArgs(Kernel *kernel, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &runtime_args);
+
+/**
+ * Get the runtime args for a kernel.
+ *
+ * Return value: std::vector<uint32_t>
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | kernel       | The kernel that will receive the runtime args                          | Kernel *                      |                                    | Yes      |
+ * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
+ */
+std::vector<uint32_t> GetRuntimeArgs(Kernel *kernel, const CoreCoord &logical_core);
+
+/**
+ * Writes runtime args that are saved in the program to device
  *
  * Return value: void
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | program      | The program to which runtime args will be written                      | Program &                     |                                    | Yes      |
- * | kernel       | The kernel that will receive the runtime args                          | Kernel *                      |                                    | Yes      |
- * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
- * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> & |                                    | Yes      |
+ * | device       | The device to whcih runtime args will be written                       | Device *                      |                                    | Yes      |
+ * | program      | The program holding the runtime args                                   | const Program &               |                                    | Yes      |
  */
-void SetRuntimeArgs(Program &program, Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
-
-// Loads all kernel args into L1s of assigned Tensix cores
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
-
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args);
-
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRangeSet &core_ranges, const std::vector<std::vector<uint32_t>> &runtime_args_spec);
+void WriteRuntimeArgsToDevice(Device *device, const Program &program);
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.

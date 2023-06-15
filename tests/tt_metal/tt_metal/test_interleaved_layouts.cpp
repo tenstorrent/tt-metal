@@ -183,8 +183,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_reader_kernel,
             core,
             {dram_buffer_src_addr,
@@ -192,8 +191,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             (uint32_t) stick_size,
             (uint32_t) log2(stick_size)});
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -202,6 +200,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             (uint32_t) num_output_tiles});
 
         CoreCoord debug_core = {1,1};
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -375,8 +374,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_reader_kernel,
             core,
             {dram_buffer_src_addr,
@@ -384,8 +382,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             (uint32_t) stick_size,
             (uint32_t) log2(stick_size)});
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -396,6 +393,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         CoreCoord debug_core = {1,1};
         read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
         read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 1);
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -514,8 +512,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         src = tt_metal::Buffer(device, buffer_size, src_l1_bank_id, num_bytes_per_page, tt_metal::BufferType::L1);
         tt_metal::WriteToBuffer(src, host_buffer);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_reader_kernel,
             core,
             {src.address(), 0, 0, num_pages});
@@ -527,8 +524,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         src = tt_metal::Buffer(device, buffer_size, dram_bank_id, num_bytes_per_page, tt_metal::BufferType::DRAM);
         tt_metal::WriteToBuffer(src, host_buffer);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_reader_kernel,
             core,
             {src.address(), 0, 0, num_pages});
@@ -539,14 +535,14 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         uint32_t dst_l1_bank_id = 0;
         dst = tt_metal::Buffer(device, buffer_size, dst_l1_bank_id, num_bytes_per_page, tt_metal::BufferType::L1);
 
-         tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dst.address(), 0, 0, num_pages});
 
         pass &= tt_metal::CompileProgram(device, program);
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
 
@@ -556,14 +552,14 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
          uint32_t dst_dram_bank_id = 0;
          dst = tt_metal::Buffer(device, buffer_size, dst_dram_bank_id, num_bytes_per_page, tt_metal::BufferType::DRAM);
 
-         tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dst.address(), 0, 0, num_pages});
 
         pass &= tt_metal::CompileProgram(device, program);
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
 

@@ -228,11 +228,11 @@ Program layernorm_(
         //std::cout << "Num beta=" << num_beta_tiles << " addr=" << beta_dram_addr << std::endl;
         uint32_t tile_offset = wtpc*Wt*icore;
         //std::cout << "icore=" << icore << "TO=" << tile_offset << endl;
-        WriteRuntimeArgsToDevice( device, reader_kernels, core,
+        SetRuntimeArgs(reader_kernels, core,
             { a_addr, wtpc, Wt, wtpc*Wt, tile_offset, 0, 0, 0, winv.u, e.u, // 0-9
             num_gamma_tiles, gamma_dram_addr, num_beta_tiles, beta_dram_addr, b_dram_addr } // 10-14
         );
-        WriteRuntimeArgsToDevice( device, writer_kernels, core, { dst_addr, 0, 0, wtpc*Wt, tile_offset } );
+        SetRuntimeArgs(writer_kernels, core, { dst_addr, 0, 0, wtpc*Wt, tile_offset } );
     }
 
     return program;

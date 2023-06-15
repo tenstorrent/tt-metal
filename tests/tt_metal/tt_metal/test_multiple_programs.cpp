@@ -180,7 +180,7 @@ tt_metal::Program setup_program_two(tt_metal::Device *device, const CoreCoord &c
 
 void write_program_runtime_args_to_device(
     tt_metal::Device *device,
-    const tt_metal::Program &program,
+    tt_metal::Program &program,
     const CoreCoord &core,
     uint32_t num_tiles,
     tt_metal::Buffer &src0_dram_buffer,
@@ -193,8 +193,8 @@ void write_program_runtime_args_to_device(
 
     for (auto dm_kernel : program.data_movement_kernels()) {
         if (dm_kernel->name() == "reader_binary" or dm_kernel->name() == "reader_matmul_small_block") {
-            tt_metal::WriteRuntimeArgsToDevice(
-                device, dm_kernel, core,
+            tt_metal::SetRuntimeArgs(
+                dm_kernel, core,
                 {src0_dram_buffer.address(),
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
@@ -203,14 +203,15 @@ void write_program_runtime_args_to_device(
                 (std::uint32_t)dram_src1_noc_xy.y,
                 num_tiles});
         } else if (dm_kernel->name() == "writer_unary") {
-            tt_metal::WriteRuntimeArgsToDevice(
-                device, dm_kernel, core,
+            tt_metal::SetRuntimeArgs(
+                dm_kernel, core,
                 {dst_dram_buffer.address(),
                 (std::uint32_t)dram_dst_noc_xy.x,
                 (std::uint32_t)dram_dst_noc_xy.y,
                 num_tiles});
         }
     }
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
 }
 //////////////////////////////////////////////////////////////////////////////////////////
 // 1. First program runs eltwise binary on logical core {0, 0}

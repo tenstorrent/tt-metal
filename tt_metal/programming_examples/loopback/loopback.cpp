@@ -79,12 +79,13 @@ int main(int argc, char **argv) {
             l1_buffer.size()
         };
 
-        pass &= WriteRuntimeArgsToDevice(
-            device,
+        SetRuntimeArgs(
             dram_copy_kernel,
             core,
             runtime_args
         );
+
+        WriteRuntimeArgsToDevice(device, program);
 
         pass &= LaunchKernels(device, program);
 

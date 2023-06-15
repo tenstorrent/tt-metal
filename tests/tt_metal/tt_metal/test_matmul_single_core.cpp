@@ -364,18 +364,17 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             mm_reader_kernel,
             core,
             mm_reader_rt_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             writer_rt_args);
 
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         log_info(LogTest, "Launching kernels");
         pass &= tt_metal::LaunchKernels(device, program);
         log_info(LogTest, "Kernels done");

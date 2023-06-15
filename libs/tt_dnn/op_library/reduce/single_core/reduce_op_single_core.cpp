@@ -113,8 +113,8 @@ Program reduce_single_core(const Tensor &a, Tensor& output, ReduceOpMath::Enum r
 
     reduce_op_utils::add_defines(reduce_compute_kernel, reduce_op, reduce_dim);
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device, reader_kernel, core,
+    tt_metal::SetRuntimeArgs(
+        reader_kernel, core,
         {
             a.buffer()->address(),
             0, // unused by multibank reader
@@ -132,8 +132,8 @@ Program reduce_single_core(const Tensor &a, Tensor& output, ReduceOpMath::Enum r
         default: TT_ASSERT(false && "Unsupported reduce_dim!");
     }
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device, writer_kernel, core,
+    tt_metal::SetRuntimeArgs(
+        writer_kernel, core,
         {
             output.buffer()->address(),
             0, // unused by multibank writer

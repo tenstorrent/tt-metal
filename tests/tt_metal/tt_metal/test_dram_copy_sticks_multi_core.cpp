@@ -105,8 +105,7 @@ int main(int argc, char **argv) {
         for(int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t) j, (std::size_t) i};
-                tt_metal::WriteRuntimeArgsToDevice(
-                    device,
+                tt_metal::SetRuntimeArgs(
                     unary_reader_kernel,
                     core,
                     {l1_buffer_addr,
@@ -119,6 +118,7 @@ int main(int argc, char **argv) {
             }
         }
 
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
         if (profile_kernel){
             tt_metal::DumpDeviceProfileResults(device, program);

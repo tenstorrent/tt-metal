@@ -217,8 +217,8 @@ tt_metal::Program create_program(
             (std::uint32_t) num_output_blocks_per_core[i] // batch
         };
 
-        tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel, core, mm_reader_args);
-        tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
+        tt_metal::SetRuntimeArgs(mm_reader_kernel, core, mm_reader_args);
+        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
 
         num_blocks_written += num_output_blocks_per_core[i];
     }

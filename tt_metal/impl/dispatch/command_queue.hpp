@@ -9,6 +9,7 @@
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/thread_safe_queue.hpp"
 #include "tt_metal/common/base.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/impl/program.hpp"
 #include "tt_metal/src/firmware/riscv/grayskull/noc/noc_parameters.h"
 
@@ -18,6 +19,8 @@ using std::set;
 using std::shared_ptr;
 using std::tuple;
 using std::unique_ptr;
+
+typedef std::map<CoreCoord, std::map<tt::RISCV, std::vector<u32>>> RuntimeArgs;
 
 enum class TransferType : u8 {
     // RISCV types
@@ -127,7 +130,7 @@ class EnqueueProgramCommand : public Command {
     Device* device;
     Buffer& buffer;
     ProgramSrcToDstAddrMap& program_to_dev_map;
-    const RuntimeArgs& runtime_args;
+    const RuntimeArgs runtime_args;
     SystemMemoryWriter& writer;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 

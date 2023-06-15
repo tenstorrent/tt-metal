@@ -105,8 +105,17 @@ void compile_and_configure_program(
     tt_metal::ConfigureDeviceWithProgram(device, program);
 }
 
+void set_rt_args(tt_metal::Program &program, tt_metal::Kernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
+    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            CoreCoord core = CoreCoord(x, y);
+            tt_metal::SetRuntimeArgs(kernel, core, rt_args);
+        }
+    }
+}
+
 void write_same_runtime_args_to_device(
-    tt_metal::Device *device, const tt_metal::Program &program, const CoreRange &core_range, int32_t num_tiles, tt_metal::Buffer &src_dram_buffer, tt_metal::Buffer &dst_dram_buffer) {
+    tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range, int32_t num_tiles, tt_metal::Buffer &src_dram_buffer, tt_metal::Buffer &dst_dram_buffer) {
     auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
     auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
@@ -124,16 +133,17 @@ void write_same_runtime_args_to_device(
 
     for (auto dm_kernel : program.data_movement_kernels()) {
         if (dm_kernel->name() == "reader_unary_push_4") {
-            tt_metal::WriteRuntimeArgsToDevice(device, dm_kernel, core_range, unary_reader_args);
+            set_rt_args(program, dm_kernel, core_range, unary_reader_args);
         } else if (dm_kernel->name() == "writer_unary") {
-            tt_metal::WriteRuntimeArgsToDevice(device, dm_kernel, core_range, unary_writer_args);
+            set_rt_args(program, dm_kernel, core_range, unary_writer_args);
         }
     }
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
 }
 
 void write_unique_writer_runtime_args_to_device(
     tt_metal::Device *device,
-    const tt_metal::Program &program,
+    tt_metal::Program &program,
     const CoreRange &core_range,
     const CoreRangeSet &core_blocks,
     int32_t num_tiles,
@@ -173,11 +183,16 @@ void write_unique_writer_runtime_args_to_device(
 
     for (auto dm_kernel : program.data_movement_kernels()) {
         if (dm_kernel->name() == "reader_unary_push_4") {
-            tt_metal::WriteRuntimeArgsToDevice(device, dm_kernel, core_range, unary_reader_args);
+            set_rt_args(program, dm_kernel, core_range, unary_reader_args);
         } else if (dm_kernel->name() == "writer_unary") {
-            tt_metal::WriteRuntimeArgsToDevice(device, dm_kernel, core_blocks, {unary_writer_args_1, unary_writer_args_2, unary_writer_args_3});
+            int core_range_idx = 0;
+            std::vector<std::vector<uint32_t>> rt_args = {unary_writer_args_1, unary_writer_args_2, unary_writer_args_3};
+            for (auto core_range : core_blocks.ranges()) {
+                set_rt_args(program, dm_kernel, core_range, rt_args.at(core_range_idx++));
+            }
         }
     }
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
 }
 
 bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {

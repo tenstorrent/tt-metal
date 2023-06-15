@@ -57,8 +57,8 @@ Program fill_rm_single_core(const Tensor& any, Tensor &output, uint32_t N, uint3
         program, "tt_metal/kernels/compute/blank.cpp",
         core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device, binary_reader_kernel, core,
+    tt_metal::SetRuntimeArgs(
+        binary_reader_kernel, core,
         { dst_dram_buffer->address(), u32(N*C), u32(H), u32(W), u32(hFill), u32(wFill), u32(bfloat16(val_hi).to_uint16()), u32(bfloat16(val_lo).to_uint16()) }
     );
 

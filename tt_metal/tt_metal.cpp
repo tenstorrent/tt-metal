@@ -1040,61 +1040,58 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     return pass;
 }
 
-RISCV get_riscv_from_kernel(Kernel *kernel) {
-    switch (kernel->kernel_type()) {
-        case KernelType::Compute: return RISCV::COMPUTE;
-        case KernelType::DataMovement: {
-            auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel);
-            TT_ASSERT(dm_kernel != nullptr);
-            switch (dm_kernel->data_movement_processor()) {
-                case DataMovementProcessor::RISCV_0: return RISCV::BRISC;
-                case DataMovementProcessor::RISCV_1: return RISCV::NCRISC;
-                default:
-                    TT_ASSERT(false, "Unsupported data movement processor");
-            }
+void SetRuntimeArgs(Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
+    log_assert(kernel->kernel_type() != KernelType::Compute, "Compute kernels do not support runtime args");
+    kernel->set_runtime_args(logical_core, runtime_args);
+}
+
+void SetRuntimeArgs(Kernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args) {
+    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            CoreCoord logical_core(x, y);
+            SetRuntimeArgs(kernel, logical_core, runtime_args);
         }
-        default:
-            TT_ASSERT(false, "Unsupported kernel type");
     }
-    return RISCV::BRISC;
 }
 
-void SetRuntimeArgs(Program &program, Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
-    TT_ASSERT(kernel->kernel_type() != KernelType::Compute, "Compute kernels do not support runtime args");
-    program.set_runtime_args(logical_core, get_riscv_from_kernel(kernel), runtime_args);
-}
-
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
-    bool pass = true;
-    kernel->write_runtime_args_to_device(device, logical_core, runtime_args);
-    return pass;
-}
-
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args) {
-    TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
-    CoreRangeSet core_range_set = CoreRangeSet({core_range});
-    return WriteRuntimeArgsToDevice(device, kernel, core_range_set, {runtime_args});
-}
-
-bool WriteRuntimeArgsToDevice(Device *device, DataMovementKernel *kernel, const CoreRangeSet &core_range_set, const std::vector<std::vector<uint32_t>> &runtime_args_spec) {
-    bool pass = true;
-    int index = 0;
-    TT_ASSERT(core_range_set.ranges().size() == runtime_args_spec.size());
+void SetRuntimeArgs(Kernel *kernel, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &runtime_args) {
     for (auto core_range : core_range_set.ranges()) {
-        auto start_core = core_range.start;
-        auto end_core = core_range.end;
-        auto runtime_args = runtime_args_spec.at(index);
-        TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
-        for (auto x = start_core.x; x <= end_core.x; x++) {
-            for (auto y = start_core.y; y <= end_core.y; y++) {
-                //auto core_in_range = CoreCoord{.x=x, .y=y};
-                CoreCoord core_in_range = {.x=x, .y=y};
-                WriteRuntimeArgsToDevice(device, kernel, core_in_range, runtime_args);
-            }
-        }
-        index++;
+        SetRuntimeArgs(kernel, core_range, runtime_args);
     }
-    return pass;
+}
+
+std::vector<uint32_t> GetRuntimeArgs(Kernel *kernel, const CoreCoord &logical_core) {
+    return kernel->runtime_args(logical_core);
+}
+
+void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
+    auto cluster = device->cluster();
+    auto pcie_slot = device->pcie_slot();
+
+    auto get_l1_arg_base_addr = [](const RISCV &riscv) {
+        uint32_t l1_arg_base = 0;
+        switch (riscv) {
+            case RISCV::BRISC: {
+                l1_arg_base = BRISC_L1_ARG_BASE;
+            }
+            break;
+            case RISCV::NCRISC: {
+                l1_arg_base = NCRISC_L1_ARG_BASE;
+            }
+            break;
+            default:
+                log_assert(false, "Unsupported {} processor does not support runtime args", riscv);
+        }
+        return l1_arg_base;
+    };
+
+    for (const auto &kernel : program.kernels()) {
+        auto processor = kernel->processor();
+        for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
+            auto worker_core = device->worker_core_from_logical_core(logical_core);
+            tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, rt_args, get_l1_arg_base_addr(processor));
+        }
+    }
 }
 
 bool core_runs_ncrisc(const Program &program, const CoreCoord &logical_core) {

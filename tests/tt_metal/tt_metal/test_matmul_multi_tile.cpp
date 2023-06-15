@@ -312,14 +312,12 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             }
         }
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             mm_reader_kernel,
             core,
             reader_l1_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -330,6 +328,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         CoreCoord debug_core = {1, 1};
         read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
 
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

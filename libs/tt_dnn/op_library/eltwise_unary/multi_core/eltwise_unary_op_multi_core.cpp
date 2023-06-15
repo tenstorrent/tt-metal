@@ -146,8 +146,7 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");
             }
-            tt_metal::WriteRuntimeArgsToDevice(
-                device,
+            tt_metal::SetRuntimeArgs(
                 unary_reader_kernel,
                 core,
                 {src0_dram_buffer->address(),
@@ -157,8 +156,7 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
                 num_tiles_written, 0 /*disable scaler*/ }
             );
 
-            tt_metal::WriteRuntimeArgsToDevice(
-                device,
+            tt_metal::SetRuntimeArgs(
                 unary_writer_kernel,
                 core,
                 {dst_dram_buffer->address(),

@@ -144,14 +144,15 @@ int main(int argc, char **argv) {
         tt_metal::WriteToBuffer(src1_dram_buffer, src1_vec);
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         uint32_t do_bcast = 0;
-        tt_metal::WriteRuntimeArgsToDevice(
-            device, reader, core,
+        tt_metal::SetRuntimeArgs(
+            reader, core,
             {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, do_bcast}
         );
-        tt_metal::WriteRuntimeArgsToDevice(
-            device, writer, core,
+        tt_metal::SetRuntimeArgs(
+            writer, core,
             {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
         );
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

@@ -226,29 +226,14 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         bool terminate;
 
         // TODO(agrebenisan): Clean this up to only use the first path once Enqueue apis supported on WH
-        if (device->arch() == tt::ARCH::GRAYSKULL) {
-            do {
-                auto [core_coord, terminate_] = cores_in_core_range();
+        do {
+            auto [core_coord, terminate_] = cores_in_core_range();
 
-                terminate = terminate_;
+            terminate = terminate_;
 
-                SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
-                SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
-            } while (not terminate);
-        } else {
-            do {
-                auto [core_coord, terminate_] = cores_in_core_range();
-
-                terminate = terminate_;
-
-                tt_metal::WriteRuntimeArgsToDevice(
-                    device, writer_kernel, core_coord, writer_rt_args);
-
-                tt_metal::WriteRuntimeArgsToDevice(
-                    device, reader_kernel, core_coord, reader_rt_args);
-
-            } while (not terminate);
-        }
+            SetRuntimeArgs(writer_kernel, core_coord, writer_rt_args);
+            SetRuntimeArgs(reader_kernel, core_coord, reader_rt_args);
+        } while (not terminate);
     }
 
     tt_metal::CompileProgram(device, program);
@@ -262,6 +247,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
         EnqueueReadBuffer(cq, output_dram_buffer, dest_buffer_data, true);
     } else {
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         tt_metal::WriteToBuffer(input_dram_buffer, packed_input);
         tt_metal::ConfigureDeviceWithProgram(device, program);
         tt_metal::LaunchKernels(device, program);

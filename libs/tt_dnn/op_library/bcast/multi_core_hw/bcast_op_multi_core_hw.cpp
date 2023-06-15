@@ -160,8 +160,7 @@ Program bcast_multi_core_hw(const Tensor &a, const Tensor &b, Tensor& output, Bc
 			TT_ASSERT(false, "Core not in specified core ranges");
 		}
 
-		tt_metal::WriteRuntimeArgsToDevice(
-			device,
+		tt_metal::SetRuntimeArgs(
 			binary_reader_kernel,
 			core,
 			{
@@ -183,8 +182,8 @@ Program bcast_multi_core_hw(const Tensor &a, const Tensor &b, Tensor& output, Bc
 			}
 		);
 
-		tt_metal::WriteRuntimeArgsToDevice(
-			device, unary_writer_kernel, core,
+		tt_metal::SetRuntimeArgs(
+			unary_writer_kernel, core,
 			{
 				output.buffer()->address(),
 				0,

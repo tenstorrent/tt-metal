@@ -286,6 +286,7 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
 
 bool write_runtime_args_to_device(
     tt_metal::Device *device,
+    tt_metal::Program &program,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
@@ -400,20 +401,21 @@ bool write_runtime_args_to_device(
             };
 
             if(core_idx_x == 0 and core_idx_y == 0) {
-                pass &= tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_sender_in1_sender, core, mm_reader_args); // RISCV_0_default
-                pass &= tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_sender, core, mm_reader_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x == 0 and core_idx_y != 0) {
-                pass &= tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_sender_in1_receiver, core, mm_reader_args); // RISCV_0_default
-                pass &= tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_receiver, core, mm_reader_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x != 0 and core_idx_y == 0) {
-                pass &= tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_receiver_in1_sender, core, mm_reader_args); // RISCV_1_default
-                pass &= tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_sender, core, mm_reader_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             } else {
-                pass &= tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel_in0_receiver_in1_receiver, core, mm_reader_args); // RISCV_1_default
-                pass &= tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_receiver, core, mm_reader_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             }
         }
     }
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
     return pass;
 }
 
@@ -558,6 +560,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Writing kernel runtime args to device");
         pass &= write_runtime_args_to_device(
             device,
+            program,
             start_core_x, start_core_y,
             num_cores_r, num_cores_c,
             mm_reader_kernel_in0_sender_in1_sender, mm_reader_kernel_in0_sender_in1_receiver, mm_reader_kernel_in0_receiver_in1_sender, mm_reader_kernel_in0_receiver_in1_receiver,

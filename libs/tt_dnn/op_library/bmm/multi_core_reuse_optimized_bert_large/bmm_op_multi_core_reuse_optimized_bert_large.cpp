@@ -293,15 +293,15 @@ tt_metal::Program create_program(
 
         // left half
         if (core_idx_x <= 4) {
-            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_reader, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in0_reader, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
-            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_reader_writer, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer, core, mm_reader_args);
         }
         // right half
         else {
-            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_reader_other_noc_setup, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in0_reader_other_noc_setup, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
-            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_reader_writer_other_noc_setup, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer_other_noc_setup, core, mm_reader_args);
         }
         /* Checkerboard logic
         // white
@@ -324,9 +324,9 @@ tt_metal::Program create_program(
                 tt_metal::NOC::RISCV_0_default
             );
 
-            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_reader, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in0_reader, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
-            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_reader_writer, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer, core, mm_reader_args);
         }
         // black
         else {
@@ -348,9 +348,9 @@ tt_metal::Program create_program(
                 tt_metal::NOC::RISCV_1_default
             );
 
-            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_reader, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in0_reader, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
-            tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_reader_writer, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer, core, mm_reader_args);
         }
         */
 
@@ -371,9 +371,9 @@ tt_metal::Program create_program(
             tt_metal::DataMovementProcessor::RISCV_0,
             num_output_blocks_per_core[i] > num_evenly_divided_output_blocks ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default);
 
-        tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_reader, core, mm_reader_args);
+        tt_metal::SetRuntimeArgs(mm_kernel_in0_reader, core, mm_reader_args);
         mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
-        tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_reader_writer, core, mm_reader_args);
+        tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer, core, mm_reader_args);
         */
 
         num_blocks_written += num_output_blocks_per_core[i];

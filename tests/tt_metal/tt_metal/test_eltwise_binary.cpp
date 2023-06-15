@@ -213,8 +213,8 @@ int main(int argc, char** argv) {
             vector<u32> writer_args = {
                 dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles};
 
-            SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
-            SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
+            SetRuntimeArgs(unary_writer_kernel, core, writer_args);
+            SetRuntimeArgs(binary_reader_kernel, core, reader_args);
 
             EnqueueProgram(cq, program, false);
             std::vector<uint32_t> result_vec;

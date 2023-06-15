@@ -432,10 +432,11 @@ int main(int argc, char **argv) {
                     (std::uint32_t) out_subblock_h * out_subblock_w * single_tile_size * (per_core_N/out_subblock_w), // bytes offset to next row of sub-blocks
                     (std::uint32_t) out_subblock_w * single_tile_size};
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel, core, mm_reader_args);
-                tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
+                tt_metal::SetRuntimeArgs(mm_reader_kernel, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
             }
         }
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         log_info(LogTest, "Copying inputs to dram and runtime args to cores complete");
 
         log_info(LogTest, "Running Matmul 120 core test");

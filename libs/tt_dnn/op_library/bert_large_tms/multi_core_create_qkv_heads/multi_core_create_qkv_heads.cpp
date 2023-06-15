@@ -191,8 +191,8 @@ Program multi_core_create_qkv_heads(const Tensor &a, Tensor& output, CoreCoord c
                 out_tensor_tile_id, // out_tensor_tile_id
             };
 
-            tt_metal::WriteRuntimeArgsToDevice(device, reader_kernel, core, reader_runtime_args);
-            tt_metal::WriteRuntimeArgsToDevice(device, writer_kernel, core, writer_runtime_args);
+            tt_metal::SetRuntimeArgs(reader_kernel, core, reader_runtime_args);
+            tt_metal::SetRuntimeArgs(writer_kernel, core, writer_runtime_args);
         }
     }
 

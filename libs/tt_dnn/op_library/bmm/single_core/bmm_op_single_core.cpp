@@ -136,12 +136,12 @@ Program matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bo
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device, reader, core,
+    tt_metal::SetRuntimeArgs(
+        reader, core,
         {in0_dram_addr, in1_dram_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, uint32_t(bcast_batch ? 1 : 0)}
     );
-    tt_metal::WriteRuntimeArgsToDevice(
-        device, writer, core,
+    tt_metal::SetRuntimeArgs(
+        writer, core,
         {out_dram_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
     );
 
@@ -876,18 +876,19 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_act,
                 math_approx_mode
             );
 
-            tt_metal::WriteRuntimeArgsToDevice(
-                device, reader, core,
+            tt_metal::SetRuntimeArgs(
+                reader, core,
                 reader_rt_args
             );
 
-            tt_metal::WriteRuntimeArgsToDevice(
-                device, writer, core,
+            tt_metal::SetRuntimeArgs(
+                writer, core,
                 writer_rt_args
             );
 
             pass &= tt_metal::CompileProgram(device, program, false);
             pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+            tt_metal::WriteRuntimeArgsToDevice(device, program);
         }
 
         pass &= tt_metal::LaunchKernels(device, program);

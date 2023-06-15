@@ -181,8 +181,7 @@ int main(int argc, char **argv) {
          */
         pass &= ConfigureDeviceWithProgram(device, program);
 
-        WriteRuntimeArgsToDevice(
-            device,
+        SetRuntimeArgs(
             binary_reader_kernel,
             core,
             {
@@ -198,8 +197,7 @@ int main(int argc, char **argv) {
             }
         );
 
-        WriteRuntimeArgsToDevice(
-            device,
+        SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {
@@ -209,6 +207,8 @@ int main(int argc, char **argv) {
                 num_tiles
             }
         );
+
+        WriteRuntimeArgsToDevice(device, program);
 
         pass &= LaunchKernels(device, program);
 
@@ -306,8 +306,7 @@ int main(int argc, char **argv) {
         /*
          * Configure program and runtime kernel arguments.
          */
-        WriteRuntimeArgsToDevice(
-            device,
+        SetRuntimeArgs(
             binary_reader_kernel,
             core,
             {
@@ -323,8 +322,7 @@ int main(int argc, char **argv) {
             }
         );
 
-        WriteRuntimeArgsToDevice(
-            device,
+        SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {
@@ -339,6 +337,7 @@ int main(int argc, char **argv) {
         /*
          * Execute.
          */
+        WriteRuntimeArgsToDevice(device, program_mul);
         pass &= LaunchKernels(device, program_mul);
 
         /*

@@ -163,8 +163,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             mm_reader_kernel,
             core,
             {dram_buffer_src0_addr,
@@ -179,14 +178,15 @@ int main(int argc, char **argv) {
             1 * single_tile_size,
             1 * single_tile_size});
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dst_l1_buffer.address(),
             (std::uint32_t)l1_dst_noc_xy.x,
             (std::uint32_t)l1_dst_noc_xy.y,
             num_tiles});
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
 

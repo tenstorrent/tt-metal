@@ -178,8 +178,8 @@ Program scale_mask_softmax_(const Tensor &input_tensor, const std::optional<std:
         union { float f; uint32_t u; } s; s.f = scale; // scale for fused scale-mask-softmax
         // always in-place
         //                                                              0  1    2       3            4   5       6          7           8
-        WriteRuntimeArgsToDevice(device, reader_kernels, core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
-        WriteRuntimeArgsToDevice(device, writer_kernels, core, { src_addr, 0,   0, wtpc*Wt, tile_offset });
+        SetRuntimeArgs(reader_kernels, core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
+        SetRuntimeArgs(writer_kernels, core, { src_addr, 0,   0, wtpc*Wt, tile_offset });
     }
 
     return program;

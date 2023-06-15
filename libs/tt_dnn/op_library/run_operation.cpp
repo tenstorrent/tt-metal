@@ -34,8 +34,7 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
     if (num_tiles == 1) {
         CoreCoord core = {0, 0};
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             program.data_movement_kernels().at(0),
             core,
             {src0_dram_buffer->address(),
@@ -44,8 +43,7 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
             num_tiles, 0,0,0,0,0 } // TODO(AP): [8] is scaler
         );
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             program.data_movement_kernels().at(1),
             core,
             {dst_dram_buffer->address(),
@@ -53,7 +51,6 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
             uint32_t(dram_dst_noc_xy.y),
             num_tiles }
         );
-
     } else {
         auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
         uint32_t num_cores_x = compute_and_storage_grid_size.x;
@@ -70,8 +67,7 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");
             }
-            tt_metal::WriteRuntimeArgsToDevice(
-                device,
+            tt_metal::SetRuntimeArgs(
                 program.data_movement_kernels().at(0),
                 core,
                 {src0_dram_buffer->address(),
@@ -81,9 +77,8 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
                 num_tiles_written, 0 /*disable scaler*/ }
             );
 
-            tt_metal::WriteRuntimeArgsToDevice(
-                device,
-            program.data_movement_kernels().at(1),
+            tt_metal::SetRuntimeArgs(
+                program.data_movement_kernels().at(1),
                 core,
                 {dst_dram_buffer->address(),
                 uint32_t(dram_dst_noc_xy.x),
@@ -94,6 +89,7 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
             num_tiles_written+=num_tiles_per_core;
         }
     }
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
 }
 
 
@@ -123,6 +119,7 @@ std::vector<Tensor> run_without_program_cache(
     auto program = create_program(op, input_tensors, optional_input_tensors, output_tensors);
     tt_metal::CompileProgram(device, program);
     tt_metal::ConfigureDeviceWithProgram(device, program);
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
     tt_metal::LaunchKernels(device, program);
 
     return output_tensors;
@@ -145,6 +142,7 @@ std::vector<Tensor> run_with_program_cache(
     write_eltwise_unary_runtime_args(device, program, input_tensors.at(0).get(), output_tensors.at(0));
 
     tt_metal::ConfigureDeviceWithProgram(device, program);
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
     tt_metal::LaunchKernels(device, program);
 
     return output_tensors;

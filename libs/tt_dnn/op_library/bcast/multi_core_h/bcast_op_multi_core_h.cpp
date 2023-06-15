@@ -152,8 +152,7 @@ Program bcast_multi_core_h(const Tensor &a, const Tensor &b, Tensor& output, Bca
 		}
 		uint32_t num_tensor_tiles_per_core = NC * Ht_per_core * Wt;
 
-		tt_metal::WriteRuntimeArgsToDevice(
-			device,
+		tt_metal::SetRuntimeArgs(
 			binary_reader_kernel,
 			core,
 			{
@@ -175,8 +174,8 @@ Program bcast_multi_core_h(const Tensor &a, const Tensor &b, Tensor& output, Bca
 			}
 		);
 
-		tt_metal::WriteRuntimeArgsToDevice(
-			device, unary_writer_kernel, core,
+		tt_metal::SetRuntimeArgs(
+			unary_writer_kernel, core,
 			{
 				output.buffer()->address(),
 				0,

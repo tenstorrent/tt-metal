@@ -84,8 +84,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             dram_copy_kernel,
             core,
             {input_dram_buffer_addr,
@@ -100,6 +99,7 @@ int main(int argc, char **argv) {
             total_l1_buffer_size_tiles,
             total_l1_buffer_size_bytes});
 
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

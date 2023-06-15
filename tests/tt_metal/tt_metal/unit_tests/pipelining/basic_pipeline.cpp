@@ -166,13 +166,13 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         auto l1_valid_value_addr = sems[core].at(2)->address();
 
         if (core_id == 0) {
-            SetRuntimeArgs(program, receiver_kernels.at(core_id), core, {src_address,
+            SetRuntimeArgs(receiver_kernels.at(core_id), core, {src_address,
                 (u32)src_noc_xy.x,
                 (u32)src_noc_xy.y,
                 (u32)num_tiles,
                 (u32)num_repetitions});
         } else {
-            SetRuntimeArgs(program, receiver_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id-1]).x,
+            SetRuntimeArgs(receiver_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id-1]).x,
                 (u32)device->worker_core_from_logical_core(cores[core_id-1]).y,
                 (u32)num_tiles,
                 (u32)sender_semaphore_addr,
@@ -181,13 +181,13 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         }
 
         if (core_id == num_cores - 1) {
-            SetRuntimeArgs(program, sender_kernels.at(core_id), core, {dst_address,
+            SetRuntimeArgs(sender_kernels.at(core_id), core, {dst_address,
                 (u32)dst_noc_xy.x,
                 (u32)dst_noc_xy.y,
                 (u32)num_tiles,
                 (u32)num_repetitions});
         } else {
-            SetRuntimeArgs(program, sender_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id+1]).x,
+            SetRuntimeArgs(sender_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id+1]).x,
                 (u32)device->worker_core_from_logical_core(cores[core_id+1]).y,
                 (u32)num_tiles,
                 (u32)sender_semaphore_addr,

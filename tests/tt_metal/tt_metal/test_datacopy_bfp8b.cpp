@@ -134,8 +134,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_reader_kernel,
             core,
             {dram_buffer_src_addr,
@@ -143,8 +142,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_src_noc_xy.y,
             num_tiles});
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -152,6 +150,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles});
 
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

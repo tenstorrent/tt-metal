@@ -511,19 +511,19 @@ bool test_matmul_large_block(const tt::ARCH& arch, bool activations_rm, bool out
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             mm_reader_kernel,
             core,
             mm_reader_rt_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             writer_rt_args);
 
         CoreCoord debug_core = {1, 1};
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
         pass &= tt_metal::LaunchKernels(device, program);

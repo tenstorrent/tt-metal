@@ -5,7 +5,6 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 
 namespace tt {
@@ -18,8 +17,6 @@ struct KernelGroup {
     DataMovementKernel *riscv_1 = nullptr;
 };
 
-typedef std::map<CoreCoord, std::map<RISCV, std::vector<u32>>> RuntimeArgs;
-
 class Program {
    public:
     Program() {}
@@ -27,8 +24,8 @@ class Program {
     Program(const Program &other) = delete;
     Program& operator=(const Program &other) = delete;
 
-    Program(Program &&other);
-    Program& operator=(Program &&other);
+    Program(Program &&other) = default;
+    Program& operator=(Program &&other) = default;
 
     ~Program();
 
@@ -54,13 +51,10 @@ class Program {
 
     std::vector<std::string> cores_to_ops() const;
 
-    RuntimeArgs const &runtime_args() const { return core_to_runtime_args_; }
-
    private:
     std::vector<Kernel *> kernels_;
     std::vector<CircularBuffer *> circular_buffers_;
     std::vector<Semaphore *> semaphores_;
-    RuntimeArgs core_to_runtime_args_;
 
     friend DataMovementKernel *CreateDataMovementKernel(
         Program &program,
@@ -157,15 +151,11 @@ class Program {
 
     friend Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_range_set, uint32_t initial_value);
 
-    friend void SetRuntimeArgs(Program &program, Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
-
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
 
     void add_circular_buffer(CircularBuffer *circular_buffer) { circular_buffers_.push_back(circular_buffer); }
 
     void add_semaphore(Semaphore *semaphore) { semaphores_.push_back(semaphore); }
-
-    void set_runtime_args(const CoreCoord &logical_core, const RISCV &riscv, const std::vector<uint32_t> &runtime_args);
 };
 
 }  // namespace tt_metal

@@ -601,12 +601,23 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         this->program_to_dev_map.emplace(&program, std::move(program_to_device_map));
     }
 
+    auto get_current_runtime_args = [&program]() {
+        RuntimeArgs runtime_args;
+        for (const auto kernel : program.kernels()) {
+            tt::RISCV processor = kernel->processor();
+            for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
+                runtime_args[logical_core][processor] = rt_args;
+            }
+        }
+        return runtime_args;
+    };
+
     shared_ptr<EnqueueProgramCommand> command = std::make_shared<EnqueueProgramCommand>(
         this->device,
         *this->program_to_buffer.at(&program),
         this->program_to_dev_map.at(&program),
         this->sysmem_writer,
-        program.runtime_args());
+        get_current_runtime_args());
 
     this->enqueue_command(command, blocking);
 }

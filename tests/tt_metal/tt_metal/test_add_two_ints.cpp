@@ -58,9 +58,10 @@ int main(int argc, char **argv) {
         if (profile_device == false){
             StartDebugPrintServer(device);
         }
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+        tt_metal::SetRuntimeArgs(add_two_ints_kernel, core, first_runtime_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, first_runtime_args);
+        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
         if (profile_device){
@@ -75,7 +76,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                  Update Runtime Args and Re-run Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, second_runtime_args);
+        tt_metal::SetRuntimeArgs(add_two_ints_kernel, core, second_runtime_args);
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
         if (profile_device){

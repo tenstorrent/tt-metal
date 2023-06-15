@@ -257,8 +257,7 @@ int main(int argc, char **argv) {
 
 
         uint32_t nc1 = 0;
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             binary_reader_kernel,
             core,
             {dram_buffer_src0_addr, // 0
@@ -270,8 +269,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_src1_noc_xy.y, // 6
             num_bcast_tiles, NC*Ht*Wt, NC, Ht, Wt, nc1}); // 7 8 9 10 11 12
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -313,6 +311,7 @@ int main(int argc, char **argv) {
         auto seed = std::chrono::system_clock::now().time_since_epoch().count();
         vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 10.0f, 0x1234);
         tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 

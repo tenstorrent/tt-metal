@@ -152,8 +152,8 @@ Program reduce_multi_core_h(const Tensor &a, Tensor& output, ReduceOpMath::Enum 
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         uint32_t num_tensor_tiles_per_core = Ht*num_cols_per_core;
-        tt_metal::WriteRuntimeArgsToDevice(
-            device, reader_kernel, core,
+        tt_metal::SetRuntimeArgs(
+            reader_kernel, core,
             {
                 a.buffer()->address(),
                 0, // unused by multibank reader
@@ -165,8 +165,8 @@ Program reduce_multi_core_h(const Tensor &a, Tensor& output, ReduceOpMath::Enum 
             }
         );
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device, writer_kernel, core,
+        tt_metal::SetRuntimeArgs(
+            writer_kernel, core,
             {
                 output.buffer()->address(),
                 0, // unused by multibank writer

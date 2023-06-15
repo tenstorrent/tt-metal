@@ -117,8 +117,7 @@ Program pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &o
         program, "tt_metal/kernels/compute/blank.cpp",
         core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
         reader_kernel_args
@@ -243,8 +242,7 @@ Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> 
         core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
         reader_kernel_args

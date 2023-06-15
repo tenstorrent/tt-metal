@@ -147,8 +147,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             reader_cb_kernel,
             core,
             {dram_buffer_src_addr,
@@ -156,14 +155,15 @@ int main(int argc, char **argv) {
             (uint32_t)dram_src_noc_xy.y,
             (uint32_t)num_tiles_per_cb});
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             writer_cb_kernel,
             core,
             {dram_buffer_dst_addr,
             (uint32_t)dram_dst_noc_xy.x,
             (uint32_t)dram_dst_noc_xy.y,
             (uint32_t)num_tiles_per_cb});
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
 

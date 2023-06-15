@@ -100,8 +100,7 @@ Program transpose_wh_single_core(const Tensor &a, Tensor& output) {
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         reader_kernel,
         core,
         {
@@ -113,8 +112,7 @@ Program transpose_wh_single_core(const Tensor &a, Tensor& output) {
         }
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         writer_kernel,
         core,
         {
@@ -217,8 +215,7 @@ Program transpose_hc_single_core(const Tensor &a, Tensor &output) {
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         reader_kernel,
         core,
         {
@@ -229,8 +226,7 @@ Program transpose_hc_single_core(const Tensor &a, Tensor &output) {
         }
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         writer_kernel,
         core,
         {
@@ -333,8 +329,7 @@ Program transpose_cn_single_core(const Tensor &a, Tensor &output) {
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         reader_kernel,
         core,
         {
@@ -343,8 +338,7 @@ Program transpose_cn_single_core(const Tensor &a, Tensor &output) {
         }
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         writer_kernel,
         core,
         {

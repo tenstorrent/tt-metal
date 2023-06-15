@@ -189,8 +189,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_reader_kernel,
             core,
             {
@@ -202,8 +201,7 @@ int main(int argc, char **argv) {
             }
         );
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {
@@ -213,6 +211,8 @@ int main(int argc, char **argv) {
                 num_tensor_tiles/(Wt*Ht)
             }
         );
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
 

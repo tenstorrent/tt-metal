@@ -78,8 +78,7 @@ int main(int argc, char **argv) {
                         tt_metal::DataMovementProcessor::RISCV_1,
                         tt_metal::NOC::RISCV_1_default);
 
-                tt_metal::WriteRuntimeArgsToDevice(
-                        device,
+                tt_metal::SetRuntimeArgs(
                         l1_to_l1_kernel,
                         core,
                         {dram_buffer_src_addr,
@@ -105,7 +104,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);

@@ -298,8 +298,10 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        pass &= tt_metal::WriteRuntimeArgsToDevice(device, unary_reader_kernel, core, unary_reader_args);
-        pass &= tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, unary_writer_args);
+        tt_metal::SetRuntimeArgs(unary_reader_kernel, core, unary_reader_args);
+        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, unary_writer_args);
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         // TT_ASSERT(false);
         pass &= tt_metal::LaunchKernels(device, program);
@@ -575,8 +577,10 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        pass &= tt_metal::WriteRuntimeArgsToDevice(device, binary_reader_kernel, core, binary_reader_args);
-        pass &= tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, unary_writer_args);
+        tt_metal::SetRuntimeArgs(binary_reader_kernel, core, binary_reader_args);
+        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, unary_writer_args);
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         // TT_ASSERT(false);
         pass &= tt_metal::LaunchKernels(device, program);
@@ -1080,9 +1084,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        pass &= tt_metal::WriteRuntimeArgsToDevice(device, nary_reader_kernel, core, nary_reader_args);
-        pass &= tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, unary_writer_args);
+        tt_metal::SetRuntimeArgs(nary_reader_kernel, core, nary_reader_args);
+        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, unary_writer_args);
 
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

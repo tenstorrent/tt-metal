@@ -316,17 +316,16 @@ int main(int argc, char **argv) {
         tt_metal::WriteToBuffer(src1_dram_buffer, weights);
         std::cout << "DONE WRITING TO DEVICE. GOING TO CONFIGURE DEVICE WITH PROGRAM" << std::endl;
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             generic_binary_reader_kernel,
             core,
             generic_binary_reader_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             writer_rt_args);
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         std::cout << "DONE DEVICE CONFIGURE. GOING TO WRITE address map TO DEVICE L1" << std::endl;
         tt_metal::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
 

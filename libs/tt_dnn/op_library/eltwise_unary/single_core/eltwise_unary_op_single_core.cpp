@@ -105,8 +105,7 @@ Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::
         TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
         auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             program.data_movement_kernels().at(0),
             core,
             {src0_dram_buffer->address(),
@@ -115,8 +114,7 @@ Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::
             num_tiles, 0,0,0,0,0 } // TODO(AP): [8] is scaler
         );
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             program.data_movement_kernels().at(1),
             core,
             {dst_dram_buffer->address(),

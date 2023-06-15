@@ -96,7 +96,9 @@ int main(int argc, char **argv) {
         tt_metal::WriteToBuffer(dram_buffer, activations);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-        pass &= tt_metal::WriteRuntimeArgsToDevice(device, mcast_reader_kernel, core, mcast_reader_args);
+        tt_metal::SetRuntimeArgs(mcast_reader_kernel, core, mcast_reader_args);
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         log_info(LogTest, "Launching kernels");
         pass &= tt_metal::LaunchKernels(device, program);

@@ -142,8 +142,7 @@ Program transpose_wh_multi_core(const Tensor &a, Tensor &output) {
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             reader_kernel,
             core,
             {
@@ -156,8 +155,7 @@ Program transpose_wh_multi_core(const Tensor &a, Tensor &output) {
             }
         );
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             writer_kernel,
             core,
             {

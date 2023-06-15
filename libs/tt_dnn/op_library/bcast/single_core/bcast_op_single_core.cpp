@@ -126,8 +126,7 @@ Program bcast_single_core(const Tensor &a, const Tensor &b, Tensor& output, Bcas
     bcast_op_utils::add_defines(bcast_kernel, bcast_dim, bcast_math);
 
     uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         binary_reader_kernel,
         core,
         {
@@ -142,8 +141,7 @@ Program bcast_single_core(const Tensor &a, const Tensor &b, Tensor& output, Bcas
         }
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
         {

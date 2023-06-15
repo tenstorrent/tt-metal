@@ -365,17 +365,16 @@ int main(int argc, char **argv) {
         tt_metal::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             generic_binary_reader_kernel,
             core,
             generic_binary_reader_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+         tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             writer_rt_args);
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

@@ -4,25 +4,6 @@ namespace tt {
 
 namespace tt_metal {
 
-Program::Program(Program &&other)
-    : kernels_(other.kernels_), circular_buffers_(other.circular_buffers_), semaphores_(other.semaphores_) {
-        other.kernels_.clear();
-        other.circular_buffers_.clear();
-        other.semaphores_.clear();
-}
-
-Program &Program::operator=(Program &&other) {
-    if (this != &other) {
-        this->kernels_ = other.kernels_;
-        this->circular_buffers_ = other.circular_buffers_;
-        this->semaphores_ = other.semaphores_;
-        other.kernels_.clear();
-        other.circular_buffers_.clear();
-        other.semaphores_.clear();
-    }
-    return *this;
-}
-
 std::vector<ComputeKernel *> Program::compute_kernels() const {
     std::vector<ComputeKernel *> compute_kernels;
     for (auto kernel : kernels_) {
@@ -126,66 +107,6 @@ std::vector<CoreCoord> Program::logical_cores() const {
         }
     }
     return cores_in_program;
-}
-
-void validate_runtime_args_size(const CoreCoord &logical_core, const RISCV &riscv, const std::vector<uint32_t> &runtime_args) {
-    uint32_t runtime_args_size = runtime_args.size() * sizeof(uint32_t);
-    uint64_t l1_arg_base;
-    uint64_t result_base;
-    switch (riscv) {
-        case RISCV::BRISC:
-            l1_arg_base = BRISC_L1_ARG_BASE;
-            result_base = BRISC_L1_RESULT_BASE;
-            break;
-        case RISCV::NCRISC:
-            l1_arg_base = NCRISC_L1_ARG_BASE;
-            result_base = NCRISC_L1_RESULT_BASE;
-            break;
-        default:
-            TT_ASSERT(false, "Only BRISC and NCRISC have runtime arg support");
-    }
-
-    std::stringstream identifier;
-    identifier << riscv;
-    if (l1_arg_base + runtime_args_size >= result_base) {
-        TT_THROW(std::to_string(runtime_args_size / 1024) + "KB " + identifier.str()  + " runtime args targeting " + logical_core.str() + " are too large.\
-            Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
-    }
-}
-
-void Program::set_runtime_args(const CoreCoord &logical_core, const RISCV &riscv, const std::vector<uint32_t> &runtime_args) {
-    TT_ASSERT(riscv == RISCV::BRISC or riscv == RISCV::NCRISC, "Compute kernels do not support runtime args");
-    std::vector<uint32_t> rt_args = runtime_args;
-    // dumpDeviceProfiler needs to know core coordinates to know what cores to dump from
-    rt_args.push_back(logical_core.x);
-    rt_args.push_back(logical_core.y);
-
-    auto validate_runtime_args_size = [&]() {
-        uint32_t runtime_args_size = runtime_args.size() * sizeof(uint32_t);
-        uint64_t l1_arg_base;
-        uint64_t result_base;
-        switch (riscv) {
-            case RISCV::BRISC:
-                l1_arg_base = BRISC_L1_ARG_BASE;
-                result_base = BRISC_L1_RESULT_BASE;
-                break;
-            case RISCV::NCRISC:
-                l1_arg_base = NCRISC_L1_ARG_BASE;
-                result_base = NCRISC_L1_RESULT_BASE;
-                break;
-            default:
-                TT_ASSERT(false, "Only BRISC and NCRISC have runtime arg support");
-        }
-        std::stringstream identifier;
-        identifier << riscv;
-        if (l1_arg_base + runtime_args_size >= result_base) {
-            TT_THROW(std::to_string(runtime_args_size / 1024) + "KB " + identifier.str()  + " runtime args targeting " + logical_core.str() + " are too large.\
-                Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
-        }
-    };
-
-    validate_runtime_args_size();
-    this->core_to_runtime_args_[logical_core][riscv] = rt_args;
 }
 
 Program::~Program() {

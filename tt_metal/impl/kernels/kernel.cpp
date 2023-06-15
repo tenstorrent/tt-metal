@@ -59,6 +59,39 @@ size_t Kernel::define_args_hash() const {
     return KernelDefinesHash{}(defines_);
 }
 
+std::vector<uint32_t> const &Kernel::runtime_args(const CoreCoord &logical_core) {
+    log_assert(this->is_on_logical_core(logical_core), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
+    return this->core_to_runtime_args_[logical_core];
+}
+
+void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
+    auto validate_runtime_args_size = [&]() {
+        uint32_t runtime_args_size = runtime_args.size() * sizeof(uint32_t);
+        uint64_t l1_arg_base;
+        uint64_t result_base;
+        switch (this->kernel_type_) {
+            case KernelType::DataMovement:
+                l1_arg_base = BRISC_L1_ARG_BASE;
+                result_base = BRISC_L1_RESULT_BASE;
+                break;
+            default:
+                log_assert(false, "Only data movement kernels have runtime arg support");
+        }
+        std::stringstream identifier;
+        identifier << this->kernel_type_;
+        if (l1_arg_base + runtime_args_size >= result_base) {
+            TT_THROW(std::to_string(runtime_args_size / 1024) + "KB " + identifier.str()  + " runtime args targeting " + logical_core.str() + " are too large.\
+                Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
+        }
+    };
+
+    log_assert(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
+    validate_runtime_args_size();
+    auto &set_rt_args = this->core_to_runtime_args_[logical_core];
+    log_assert(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
+    set_rt_args = runtime_args;
+}
+
 void Kernel::set_binaries(const std::string &binary_path) {
     std::vector<ll_api::memory> binaries;
     switch (this->kernel_type_) {
@@ -104,6 +137,25 @@ void Kernel::set_binaries(const std::string &binary_path) {
     }
 }
 
+RISCV Kernel::processor() const {
+    switch (this->kernel_type_) {
+        case KernelType::Compute: return RISCV::COMPUTE;
+        case KernelType::DataMovement: {
+            auto dm_kernel = dynamic_cast<const DataMovementKernel *>(this);
+            log_assert(dm_kernel != nullptr, "Expected data movement kernel");
+            switch (dm_kernel->data_movement_processor()) {
+                case DataMovementProcessor::RISCV_0: return RISCV::BRISC;
+                case DataMovementProcessor::RISCV_1: return RISCV::NCRISC;
+                default:
+                    log_assert(false, "Unsupported data movement processor");
+            }
+        }
+        default:
+            log_assert(false, "Unsupported kernel type");
+    }
+    return RISCV::BRISC;
+}
+
 void init_test_mailbox(Device *device, const CoreCoord &core, uint64_t test_mailbox_addr) {
     std::vector<uint32_t> test_mailbox_init_val = {INIT_VALUE};
     tt::llrt::write_hex_vec_to_core(
@@ -113,44 +165,6 @@ void init_test_mailbox(Device *device, const CoreCoord &core, uint64_t test_mail
     test_mailbox_init_val_check = tt::llrt::read_hex_vec_from_core(
         device->cluster(), device->pcie_slot(), core, test_mailbox_addr, sizeof(uint32_t));  // read a single uint32_t
     TT_ASSERT(test_mailbox_init_val_check[0] == INIT_VALUE);
-}
-
-void DataMovementKernel::write_runtime_args_to_device(Device *device, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) const {
-    auto cluster = device->cluster();
-    auto pcie_slot = device->pcie_slot();
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-
-    std::vector<uint32_t> rt_args = runtime_args;
-    uint32_t core_x = logical_core.x;
-    uint32_t core_y = logical_core.y;
-    // dumpDeviceProfiler needs to know core coordinates to know what cores to dump from
-    rt_args.push_back(core_x);
-    rt_args.push_back(core_y);
-    uint32_t runtime_args_size = rt_args.size() * sizeof(uint32_t);
-
-    uint64_t l1_arg_base;
-    uint64_t result_base;
-    switch (processor_) {
-        case DataMovementProcessor::RISCV_0:
-            l1_arg_base = BRISC_L1_ARG_BASE;
-            result_base = BRISC_L1_RESULT_BASE;
-            break;
-        case DataMovementProcessor::RISCV_1:
-            l1_arg_base = NCRISC_L1_ARG_BASE;
-            result_base = NCRISC_L1_RESULT_BASE;
-            break;
-        default:
-            TT_THROW("Unexpected data movement processor type");
-    }
-
-    std::stringstream identifier;
-    identifier << processor_;
-    if (l1_arg_base + runtime_args_size >= result_base) {
-        TT_THROW(std::to_string(runtime_args_size / 1024) + "KB " + identifier.str()  + " runtime args targeting " + logical_core.str() + " are too large.\
-            Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
-    }
-
-    tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, rt_args, l1_arg_base);
 }
 
 bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core) const {

@@ -155,8 +155,8 @@ Program multi_core_concat_heads(const Tensor &a, Tensor& output, CoreCoord compu
                 (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles, // out_tensor_tile_id
             };
 
-            tt_metal::WriteRuntimeArgsToDevice(device, reader_kernel, core, reader_runtime_args);
-            tt_metal::WriteRuntimeArgsToDevice(device, writer_kernel, core, writer_runtime_args);
+            tt_metal::SetRuntimeArgs(reader_kernel, core, reader_runtime_args);
+            tt_metal::SetRuntimeArgs(writer_kernel, core, writer_runtime_args);
         }
     }
 

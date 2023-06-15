@@ -291,8 +291,7 @@ int main(int argc, char **argv) {
         // send run-time kernel arguments
         for (int core_id = 0; core_id < num_cores; core_id++) {
             if (core_id == 0) {
-                tt_metal::WriteRuntimeArgsToDevice(
-                    device,
+                tt_metal::SetRuntimeArgs(
                     receiver_kernels[core_id],
                     cores[core_id],
                     {src_address,
@@ -301,8 +300,7 @@ int main(int argc, char **argv) {
                     (uint32_t)num_tiles,
                     (uint32_t)num_repetitions});
             } else {
-                tt_metal::WriteRuntimeArgsToDevice(
-                    device,
+                tt_metal::SetRuntimeArgs(
                     receiver_kernels[core_id],
                     cores[core_id],
                     {(uint32_t)device->worker_core_from_logical_core(cores[core_id-1]).x,
@@ -314,8 +312,7 @@ int main(int argc, char **argv) {
             }
 
             if (core_id == num_cores - 1) {
-                tt_metal::WriteRuntimeArgsToDevice(
-                    device,
+                tt_metal::SetRuntimeArgs(
                     sender_kernels[core_id],
                     cores[core_id],
                     {dst_address,
@@ -324,8 +321,7 @@ int main(int argc, char **argv) {
                     (uint32_t)num_tiles,
                     (uint32_t)num_repetitions});
             } else {
-                tt_metal::WriteRuntimeArgsToDevice(
-                    device,
+                tt_metal::SetRuntimeArgs(
                     sender_kernels[core_id],
                     cores[core_id],
                     {(uint32_t)device->worker_core_from_logical_core(cores[core_id+1]).x,
@@ -337,6 +333,8 @@ int main(int argc, char **argv) {
                     (uint32_t)num_repetitions});
             }
         }
+
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         log_info(LogTest, "Launching kernels...");

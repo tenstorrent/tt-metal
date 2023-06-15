@@ -231,6 +231,7 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
 
 bool write_runtime_args_to_device(
     tt_metal::Device *device,
+    tt_metal::Program &program,
     int num_cores_r,
     int num_cores_c,
     tt_metal::DataMovementKernel *mm_reader_kernel,
@@ -301,10 +302,11 @@ bool write_runtime_args_to_device(
                 (std::uint32_t) (per_core_M / out_subblock_h), // out_num_subblocks_h
             };
 
-            pass &= tt_metal::WriteRuntimeArgsToDevice(device, mm_reader_kernel, core, mm_reader_args);
-            pass &= tt_metal::WriteRuntimeArgsToDevice(device, unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(mm_reader_kernel, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
         }
     }
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
     return pass;
 }
 
@@ -426,6 +428,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Writing kernel runtime args to device");
         pass &= write_runtime_args_to_device(
             device,
+            program,
             num_cores_r, num_cores_c,
             mm_reader_kernel, unary_writer_kernel,
             M, N, K,

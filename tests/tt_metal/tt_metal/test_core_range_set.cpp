@@ -166,21 +166,15 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         (std::uint32_t)dram_src_noc_xy.y,
         num_tiles
     };
-    std::vector<std::vector<uint32_t>> reader_args_for_core_ranges;
-    for (auto core_range : core_range_set.ranges()) {
-        reader_args_for_core_ranges.push_back(reader_rt_args);
-    }
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
-        unary_reader_kernel,
-        core_range_set,
-        reader_args_for_core_ranges);
 
-    // Write runtime args for each writer separately because they may be writing to different location in their cores L1
     for (const auto &[core, dst_l1_buffer] : core_to_l1_buffer) {
+        tt_metal::SetRuntimeArgs(
+            unary_reader_kernel,
+            core,
+            reader_rt_args);
+
         auto l1_dst_noc_xy = dst_l1_buffer.noc_coordinates();
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
             {dst_l1_buffer.address(),
@@ -189,6 +183,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
             num_tiles});
     }
 
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
 
     for (const auto &[core, dst_l1_buffer] : core_to_l1_buffer) {

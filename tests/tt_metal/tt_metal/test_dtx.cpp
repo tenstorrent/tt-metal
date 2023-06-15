@@ -112,8 +112,7 @@ int main(int argc, char **argv) {
 
         tt_metal::WriteToDeviceL1(device, core, address_map_l1_addr, address_map);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
             dram_to_l1_copy_kernel,
             core,
             {input_dram_buffer_addr,
@@ -123,6 +122,7 @@ int main(int argc, char **argv) {
             address_map_l1_addr,
             (std::uint32_t) address_map.size()});
 
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

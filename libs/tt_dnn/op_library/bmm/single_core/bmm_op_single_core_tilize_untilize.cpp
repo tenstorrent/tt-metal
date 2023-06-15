@@ -416,13 +416,14 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
     );
 
     // Reader rt args
-    WriteRuntimeArgsToDevice(device, reader, core, reader_rt_args);
+    SetRuntimeArgs(reader, core, reader_rt_args);
     // Writer rt args
-    WriteRuntimeArgsToDevice(device, writer, core, writer_rt_args);
+    SetRuntimeArgs(writer, core, writer_rt_args);
 
     // Compile and launch
     bool pass = CompileProgram(device, program, false);
     pass &= ConfigureDeviceWithProgram(device, program);
+    WriteRuntimeArgsToDevice(device, program);
     pass &= LaunchKernels(device, program);
 
     TT_ASSERT(pass);

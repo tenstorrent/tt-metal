@@ -109,8 +109,7 @@ Program eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& out
     eltwise_binary_op_utils::add_defines(eltwise_binary_kernel, op_type);
 
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         binary_reader_kernel,
         core,
         {src0_dram_buffer->address(),
@@ -122,8 +121,7 @@ Program eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& out
         (std::uint32_t)dram_src1_noc_xy.y,
         num_tiles});
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
         {dst_dram_buffer->address(),

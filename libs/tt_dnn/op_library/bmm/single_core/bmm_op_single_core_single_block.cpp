@@ -458,17 +458,18 @@ Tensor large_bmm_single_core_single_block_(const Tensor& a, const Tensor &b, boo
             math_approx_mode
         );
 
-            tt_metal::WriteRuntimeArgsToDevice(
-                device, reader, core,
+            tt_metal::SetRuntimeArgs(
+                reader, core,
                 reader_rt_args
             );
 
-            tt_metal::WriteRuntimeArgsToDevice(
-                device, writer, core,
+            tt_metal::SetRuntimeArgs(
+                writer, core,
                 writer_rt_args
             );
 
             pass &= tt_metal::CompileProgram(device, program, false);
+            tt_metal:WriteRuntimeArgsToDevice(device, program);
             pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         }
 

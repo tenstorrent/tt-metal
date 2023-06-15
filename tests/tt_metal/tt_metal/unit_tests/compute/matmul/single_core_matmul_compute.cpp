@@ -155,8 +155,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    pass &= tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         reader_kernel,
         test_config.core,
         {
@@ -168,8 +167,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
             (uint32_t)input1_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
         });
-    pass &= tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         writer_kernel,
         test_config.core,
         {
@@ -178,6 +176,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
         });
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
 
     ////////////////////////////////////////////////////////////////////////////

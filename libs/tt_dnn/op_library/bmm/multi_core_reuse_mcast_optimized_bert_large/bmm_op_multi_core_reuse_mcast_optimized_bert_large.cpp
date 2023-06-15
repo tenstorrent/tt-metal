@@ -512,8 +512,8 @@ tt_metal::Program create_program_mcast_in0_in1(
                     (std::uint32_t)  0
                 };
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_sender, core, mm_in0_sender_args); // RISCV_0_default
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_sender_writer, core, mm_in1_sender_writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_kernel_in0_sender, core, mm_in0_sender_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_kernel_in1_sender_writer, core, mm_in1_sender_writer_args); // RISCV_1_default
             }
             // in0 sender and in1 receiver
             else if (core_idx_x == 0 and core_idx_y != 0) {
@@ -563,8 +563,8 @@ tt_metal::Program create_program_mcast_in0_in1(
                     mm_in1_receiver_writer_args.push_back(0);
                 }
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_sender, core, mm_in0_sender_args); // RISCV_0_default
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_receiver_writer, core, mm_in1_receiver_writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_kernel_in0_sender, core, mm_in0_sender_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer, core, mm_in1_receiver_writer_args); // RISCV_1_default
             }
             // in0 receiver and in 1 sender
             else if (core_idx_x != 0 and core_idx_y == 0) {
@@ -613,8 +613,8 @@ tt_metal::Program create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(0);
                 }
 
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_receiver, core, mm_in0_receiver_args); // RISCV_1_default
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_sender_writer, core, mm_in1_sender_writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver, core, mm_in0_receiver_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_kernel_in1_sender_writer, core, mm_in1_sender_writer_args); // RISCV_0_default
             }
             // in0 receiver and in 1 receiver
             else {
@@ -673,30 +673,30 @@ tt_metal::Program create_program_mcast_in0_in1(
 
                 // left half
                 if (core_idx_x <= 4) {
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_receiver, core, mm_in0_receiver_args);
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_receiver_writer, core, mm_in1_receiver_writer_args);
+                    tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver, core, mm_in0_receiver_args);
+                    tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer, core, mm_in1_receiver_writer_args);
                 }
                 // right half
                 else {
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_receiver_other_noc_setup, core, mm_in0_receiver_args);
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_receiver_writer_other_noc_setup, core, mm_in1_receiver_writer_args);
+                    tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver_other_noc_setup, core, mm_in0_receiver_args);
+                    tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer_other_noc_setup, core, mm_in1_receiver_writer_args);
                 }
                 /* Checkerboard logic
                 // white
                 if ((core_idx_x + core_idx_y) % 2 == 0) {
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_receiver_ckb_white, core, mm_in0_receiver_args); // RISCV_1_default
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_receiver_writer_ckb_white, core, mm_in1_receiver_writer_args); // RISCV_0_default
+                    tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver_ckb_white, core, mm_in0_receiver_args); // RISCV_1_default
+                    tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer_ckb_white, core, mm_in1_receiver_writer_args); // RISCV_0_default
                 }
                 // black
                 else {
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in0_receiver_ckb_black, core, mm_in0_receiver_args); // RISCV_1_default
-                    tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_in1_receiver_writer_ckb_black, core, mm_in1_receiver_writer_args); // RISCV_0_default
+                    tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver_ckb_black, core, mm_in0_receiver_args); // RISCV_1_default
+                    tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer_ckb_black, core, mm_in1_receiver_writer_args); // RISCV_0_default
                 }
                 */
 
                 /* Uncomment if we don't checkerboard
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_checkerboard_in0_receiver, core, mm_in0_receiver_args); // RISCV_1_default
-                tt_metal::WriteRuntimeArgsToDevice(device, mm_kernel_checkerboard_in1_receiver_writer, core, mm_in1_receiver_writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_kernel_checkerboard_in0_receiver, core, mm_in0_receiver_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_kernel_checkerboard_in1_receiver_writer, core, mm_in1_receiver_writer_args); // RISCV_0_default
                 */
             }
         }

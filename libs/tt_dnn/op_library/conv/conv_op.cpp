@@ -717,13 +717,13 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
         math_approx_mode
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device, reader, core,
+    tt_metal::SetRuntimeArgs(
+        reader, core,
         reader_rt_args
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(
-        device, writer, core,
+    tt_metal::SetRuntimeArgs(
+        writer, core,
         writer_rt_args
     );
 

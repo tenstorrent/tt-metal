@@ -99,8 +99,10 @@ int main(int argc, char **argv) {
         auto activations = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
         tt_metal::WriteToBuffer(dram_buffer, activations);
 
+        tt_metal::SetRuntimeArgs(mcast_reader_kernel, core, mcast_reader_args);
+        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-        pass &= tt_metal::WriteRuntimeArgsToDevice(device, mcast_reader_kernel, core, mcast_reader_args);
+
 
         log_info(LogTest, "Launching kernels");
         pass &= tt_metal::LaunchKernels(device, program);

@@ -138,8 +138,8 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
+            program,
             producer_kernel,
             loader_logical_core,
             {dram_buffer_src_addr,
@@ -156,8 +156,8 @@ int main(int argc, char **argv) {
             transient_buffer_size_bytes}
         );
 
-        tt_metal::WriteRuntimeArgsToDevice(
-            device,
+        tt_metal::SetRuntimeArgs(
+            program,
             consumer_kernel,
             writer_logical_core,
             {loader_buffer_address1,
@@ -176,6 +176,7 @@ int main(int argc, char **argv) {
             transient_buffer_size_bytes}
         );
 
+        tt_metal::WriteRuntimeArgsToDevice(device, program)
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
