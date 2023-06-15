@@ -4,13 +4,6 @@
 #include "debug_print.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
-// Dispatch constants
-// u64 worker_cores_multicast_soft_reset_addr = get_noc_multicast_addr(1, 1, 12, 10, TENSIX_SOFT_RESET_ADDR);
-// u64 worker_cores_multicast_notify_addr = get_noc_multicast_addr(1, 1, 12, 10, DISPATCH_MESSAGE_REMOTE_SENDER_ADDR);
-// u64 worker_cores_multicast_soft_reset_addr = get_noc_addr(1, 1, TENSIX_SOFT_RESET_ADDR);
-// u64 worker_cores_multicast_notify_addr = get_noc_addr(1, 1, DISPATCH_MESSAGE_REMOTE_SENDER_ADDR);
-u32 num_worker_cores = 108;
-
 template <typename T>
 void write_buffer(
     T addr_gen,
@@ -29,7 +22,7 @@ void write_buffer(
     addr_gen.bank_base_address = dst_addr;
     addr_gen.page_size = page_size;
 
-    u32 id = 0;
+    u32 id = 0;                                    // TODO(agrebenisan): FIXME, what if buffer doesn't start at bank 0?
     for (u32 j = 0; j < num_bursts; j++) {
         u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
         u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
@@ -138,7 +131,7 @@ FORCE_INLINE void read_buffer(
     addr_gen.bank_base_address = src_addr;
     addr_gen.page_size = page_size;
 
-    u32 id = 0;
+    u32 id = 0;                                    // TODO(agrebenisan): FIXME, what if buffer doesn't start at bank 0?
     for (u32 j = 0; j < num_bursts; j++) {
         u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
         u64 dst_noc_addr = (u64(dst_noc) << 32) | dst_addr;
@@ -246,9 +239,7 @@ FORCE_INLINE void write_program_section(
 
         command_ptr += 5;
 
-        noc_async_write(
-            src, get_noc_addr(1, 1, dst), transfer_size);  // To keep things simple, hardcoded until it works
-        // noc_async_write_multicast(src, u64(dst_noc) << 32 | dst, transfer_size, num_receivers);
+        noc_async_write_multicast(src, u64(dst_noc) << 32 | dst, transfer_size, num_receivers);
     }
     noc_async_write_barrier();
 }
@@ -259,36 +250,45 @@ FORCE_INLINE void write_program(u32 num_program_relays, volatile u32*& command_p
         u32 src_noc = command_ptr[1];
         u32 transfer_size = command_ptr[2];
         u32 num_writes = command_ptr[3];
+
         command_ptr += 4;
         write_program_section(src, src_noc, transfer_size, num_writes, command_ptr);
     }
 }
 
-FORCE_INLINE void launch_program(u32 launch) {
-    if (not launch)
+FORCE_INLINE void launch_program(u32 num_workers, volatile u32*& command_ptr) {
+    if (not num_workers)
         return;
-
-    // TODO(agrebenisan): Get proper multicast noc coords. For now hardcoding
-    u64 worker_cores_multicast_soft_reset_addr = get_noc_addr(1, 1, TENSIX_SOFT_RESET_ADDR);
-    u64 worker_cores_multicast_notify_addr = get_noc_addr(1, 1, DISPATCH_MESSAGE_ADDR);
 
     volatile uint32_t* message_addr_ptr = reinterpret_cast<volatile uint32_t*>(DISPATCH_MESSAGE_ADDR);
     *message_addr_ptr = 0;
 
-    // Notify the worker core of who sent them data
-    noc_async_write(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR, worker_cores_multicast_notify_addr, 8);
+    // Until Almeet checks in changes for the core_coords to be core range, just looping over all num workers
+    // and sending notify address and deasserting/asserting one-by-one
+    for (u32 i = 0; i < num_workers; i++) {
+        u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
+        u64 notify_addr = worker_core_noc_coord | DISPATCH_MESSAGE_ADDR;
+        noc_async_write(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR, notify_addr, 8);
+    }
+
+    noc_async_write_barrier();
+    for (u32 i = 0; i < num_workers; i++) {
+        u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
+        u64 deassert_addr = worker_core_noc_coord | TENSIX_SOFT_RESET_ADDR;
+        noc_semaphore_set_remote(DEASSERT_RESET_SRC_L1_ADDR, deassert_addr);
+    }
     noc_async_write_barrier();
 
-    noc_semaphore_set_remote(DEASSERT_RESET_SRC_L1_ADDR, worker_cores_multicast_soft_reset_addr);
-    noc_async_write_barrier();  // Somehow only works when I have this barrier. Why??
-
     // Wait on worker cores to notify me that they have completed
-    while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != 1)
-        ;  // So far, assuming only one receiver. TODO(agrebenisan): Multi-receiver
-    ;
+    while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers)
+        ;
 
-    // This is only required until PK checks in his changes to separate kernels from firmware
-    noc_semaphore_set_remote(ASSERT_RESET_SRC_L1_ADDR, worker_cores_multicast_soft_reset_addr);
+    for (u32 i = 0; i < num_workers; i++) {
+        u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
+        u64 assert_addr = worker_core_noc_coord | TENSIX_SOFT_RESET_ADDR;
+
+        noc_semaphore_set_remote(ASSERT_RESET_SRC_L1_ADDR, assert_addr);
+    }
     noc_async_write_barrier();
 }
 

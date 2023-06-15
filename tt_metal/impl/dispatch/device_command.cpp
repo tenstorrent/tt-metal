@@ -4,7 +4,7 @@
 
 DeviceCommand::DeviceCommand() {
     this->desc[this->finish_idx] = 0;
-    this->desc[this->launch_idx] = 0;
+    this->desc[this->num_workers_idx] = 0;
     this->desc[this->data_size_in_bytes_idx] = 0;
     this->desc[this->num_relay_buffer_reads_idx] = 0;
     this->desc[this->num_relay_buffer_writes_idx] = 0;
@@ -13,7 +13,12 @@ DeviceCommand::DeviceCommand() {
 
 void DeviceCommand::finish() { this->desc[this->finish_idx] = 1; }
 
-void DeviceCommand::launch() { this->desc[this->launch_idx] = 1; }
+void DeviceCommand::set_num_workers(u32 num_workers) { this->desc[this->num_workers_idx] = num_workers; }
+
+void DeviceCommand::set_worker_core_noc_coord(u32 noc_coord) {
+    this->desc[this->worker_launch_idx] = noc_coord;
+    this->worker_launch_idx++;
+}
 
 void DeviceCommand::add_buffer_relay(
     u32 addr0,
@@ -27,10 +32,6 @@ void DeviceCommand::add_buffer_relay(
     u32 remainder_burst_size,
     u32 num_pages_per_remainder_burst,
     u32 banking_enum) {
-    // tt::log_debug(tt::LogDispatch, "Writing buffer relay to addr {}", this->relay_buffer_entry_idx);
-    // tt::log_debug(tt::LogDispatch, "Addr 0 {}", addr0);
-    // tt::log_debug(tt::LogDispatch, "addr0_noc {}", addr0_noc);
-
     this->desc[this->relay_buffer_entry_idx] = addr0;
     this->desc[this->relay_buffer_entry_idx + 1] = addr0_noc;
     this->desc[this->relay_buffer_entry_idx + 2] = addr1;

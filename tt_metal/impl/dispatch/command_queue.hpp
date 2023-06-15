@@ -23,14 +23,13 @@ enum class TransferType : u8 {
     // RISCV types
     B = 0,
     N = 1,
-    C = 2,   // General compute
+    T0 = 2,
+    T1 = 3,
+    T2 = 4,
 
-    T0 = 3,  // Each compute kernnel within general compute
-    T1 = 4,
-    T2 = 5,
-
-    // CB type
-    CB = 6
+    // CB and Sems
+    CB = 5,
+    SEM = 6,
 };
 
 typedef tuple<
@@ -55,6 +54,7 @@ struct ProgramSection {
 struct ProgramSrcToDstAddrMap {
     vector<u32> program_vector;
     vector<ProgramSection> program_sections;
+    vector<u32> worker_noc_coords;
 };
 
 ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Program& program);

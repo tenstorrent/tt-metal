@@ -16,6 +16,8 @@ struct TrailingWriteCommand {
     u32 num_receivers;
 };
 
+static constexpr u32 NUM_DISPATCH_CORES = 108;  // TODO(agrebenisan): Need to fix for wormhole
+
 // The beginning of data section for dispatcher
 static constexpr u32 DEVICE_COMMAND_DATA_ADDR = 150 * 1024;
 
@@ -25,7 +27,8 @@ static constexpr u32 CONTROL_SECTION_NUM_ENTRIES = 16;
 static constexpr u32 RELAY_BUFFER_NUM_ENTRIES = 4 * NUM_ENTRIES_PER_BUFFER_RELAY;
 static constexpr u32
     RELAY_PROGRAM_NUM_ENTRIES =  // Whatever is left of the available size, we allocate for relaying program data
-    DEVICE_COMMAND_NUM_ENTRIES - CONTROL_SECTION_NUM_ENTRIES - RELAY_BUFFER_NUM_ENTRIES;
+    DEVICE_COMMAND_NUM_ENTRIES - CONTROL_SECTION_NUM_ENTRIES - RELAY_BUFFER_NUM_ENTRIES - NUM_DISPATCH_CORES;
+
 
 // DeviceCommand.desc organized as follows
 // finish (whether we need to notify host when we finished)
@@ -46,21 +49,24 @@ class DeviceCommand {
 
     // Command header
     static constexpr u32 finish_idx = 0;
-    static constexpr u32 launch_idx = 1;
+    static constexpr u32 num_workers_idx = 1;
     static constexpr u32 data_size_in_bytes_idx = 2;
     static constexpr u32 num_relay_buffer_reads_idx = 3;
     static constexpr u32 num_relay_buffer_writes_idx = 4;
     static constexpr u32 num_relay_program_writes_idx = 5;
 
-    // Relay instructions
     static_assert(CONTROL_SECTION_NUM_ENTRIES == 16);
-    u32 relay_buffer_entry_idx = CONTROL_SECTION_NUM_ENTRIES;  // Not const, keeps track of which index in the array we're at
+    u32 worker_launch_idx = CONTROL_SECTION_NUM_ENTRIES;  // So far, we unicast the de-assert until Almeet provides
+                                                          // support for program.logical_cores() -> core range set
+
+    // Relay instructions
+    u32 relay_buffer_entry_idx = CONTROL_SECTION_NUM_ENTRIES +
+                                 NUM_DISPATCH_CORES;  // Not const, keeps track of which index in the array we're at
 
     // This magic 16 coming from the fact that we needed to over-allocate the control bit
     // section in order to have the command size be nicely divisble by 32
-    static_assert(CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES == 60);
-    u32 relay_program_entry_idx =
-        CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES;
+    static_assert(CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES + NUM_DISPATCH_CORES == 168);
+    u32 relay_program_entry_idx = CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES + NUM_DISPATCH_CORES;
 
     array<u32, DEVICE_COMMAND_NUM_ENTRIES> desc;
 
@@ -85,14 +91,13 @@ class DeviceCommand {
     DeviceCommand();
     static constexpr u32 size() { return DEVICE_COMMAND_NUM_ENTRIES; }
     static constexpr u32 size_in_bytes() { return DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32); }
-    // static constexpr u32 relay_buffer_section_offset() { return 6; }
-    // static constexpr u32 relay_program_section_offset() { return DeviceCommand::relay_buffer_section_offset() +
-    // DeviceCommand::num_possible_relay_buffer_instructions; }
 
     void finish();  // Creates a finish command, in which the command queue is blocked until the device notifies host of
                     // completion.
 
-    void launch();  // Launches a program
+    void set_num_workers(u32 num_workers);  // Specifies how many cores to de-assert
+
+    void set_worker_noc_coord(u32 noc_coord);
 
     // 'dst' must be a single bank
     void add_read_buffer_instruction(
@@ -129,10 +134,13 @@ class DeviceCommand {
     // small pieces of this data around (multicasting or
     // unicasting) where the transfer sizes are not uniform
     // in size
-    void add_read_multi_write_instruction(u32 src, u32 src_noc, u32 transfer_size, vector<TrailingWriteCommand> write_commands);
+    void add_read_multi_write_instruction(
+        u32 src, u32 src_noc, u32 transfer_size, vector<TrailingWriteCommand> write_commands);
 
     // number of bytes in buffer following command, if applicable
     void set_data_size_in_bytes(u32 data_size_in_bytes);
+
+    void set_worker_core_noc_coord(u32 core_coord);
 
     u32 get_data_size_in_bytes() const;
 
