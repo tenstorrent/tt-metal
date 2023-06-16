@@ -156,8 +156,6 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         sems.at(core).push_back(l1_valid_value_semaphore);
     }
 
-    // Store runtime args
-    RuntimeArgs rt_args;
     for (int core_id = 0; core_id < num_cores; core_id++) {
 
         // TODO(agrebenisan):  Once semaphores are properly allocated at 16B-aligned addresses, then
@@ -167,39 +165,36 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         auto receiver_semaphore_addr = sems[core].at(1)->address();
         auto l1_valid_value_addr = sems[core].at(2)->address();
 
-        map<RISCV, vector<u32>> worker_core_rt_args;
         if (core_id == 0) {
-            worker_core_rt_args[RISCV::NCRISC] = {src_address,
+            SetRuntimeArgs(program, receiver_kernels.at(core_id), core, {src_address,
                 (u32)src_noc_xy.x,
                 (u32)src_noc_xy.y,
                 (u32)num_tiles,
-                (u32)num_repetitions};
+                (u32)num_repetitions});
         } else {
-            worker_core_rt_args[RISCV::NCRISC] = {(u32)device->worker_core_from_logical_core(cores[core_id-1]).x,
+            SetRuntimeArgs(program, receiver_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id-1]).x,
                 (u32)device->worker_core_from_logical_core(cores[core_id-1]).y,
                 (u32)num_tiles,
                 (u32)sender_semaphore_addr,
                 (u32)receiver_semaphore_addr,
-                (u32)num_repetitions};
+                (u32)num_repetitions});
         }
 
         if (core_id == num_cores - 1) {
-            worker_core_rt_args[RISCV::BRISC] = {dst_address,
+            SetRuntimeArgs(program, sender_kernels.at(core_id), core, {dst_address,
                 (u32)dst_noc_xy.x,
                 (u32)dst_noc_xy.y,
                 (u32)num_tiles,
-                (u32)num_repetitions};
+                (u32)num_repetitions});
         } else {
-                worker_core_rt_args[RISCV::BRISC] = {(u32)device->worker_core_from_logical_core(cores[core_id+1]).x,
+            SetRuntimeArgs(program, sender_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id+1]).x,
                 (u32)device->worker_core_from_logical_core(cores[core_id+1]).y,
                 (u32)num_tiles,
                 (u32)sender_semaphore_addr,
                 (u32)receiver_semaphore_addr,
                 (u32)l1_valid_value_addr,
-                (u32)num_repetitions};
+                (u32)num_repetitions});
         }
-
-        rt_args[cores[core_id]] = worker_core_rt_args;
     }
 
     constexpr bool profile_device = false;
@@ -214,7 +209,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
 
     EnqueueWriteBuffer(cq, src_buffer, src_vec, false);
 
-    EnqueueProgram(cq, program, rt_args, false);
+    EnqueueProgram(cq, program, false);
     Finish(cq);
 
     if (profile_device){

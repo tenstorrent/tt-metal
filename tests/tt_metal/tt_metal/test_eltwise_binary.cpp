@@ -213,12 +213,10 @@ int main(int argc, char** argv) {
             vector<u32> writer_args = {
                 dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles};
 
+            SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
+            SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
 
-            RuntimeArgs rt_args;
-            map<RISCV, vector<u32>> worker_core_rt_args = {{RISCV::BRISC, writer_args}, {RISCV::NCRISC, reader_args}};
-            rt_args[core] = worker_core_rt_args;
-
-            EnqueueProgram(cq, program, rt_args, false);
+            EnqueueProgram(cq, program, false);
             std::vector<uint32_t> result_vec;
             EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 

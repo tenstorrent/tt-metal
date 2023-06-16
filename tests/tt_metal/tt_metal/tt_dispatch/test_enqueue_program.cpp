@@ -113,27 +113,6 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
 
     tt_metal::Program program = create_program(device);
 
-    // if (1) {
-    //     auto brisc_binary_path = program.kernels().at(0)->binary_path() + "/brisc/brisc.hex";
-    //     auto ncrisc_binary_path = program.kernels().at(1)->binary_path() + "/ncrisc/ncrisc.hex";
-    //     auto trisc0_binary_path = program.kernels().at(2)->binary_path() + "/tensix_thread0/tensix_thread0.hex";
-    //     auto trisc1_binary_path = program.kernels().at(2)->binary_path() + "/tensix_thread1/tensix_thread1.hex";
-    //     auto trisc2_binary_path = program.kernels().at(2)->binary_path() + "/tensix_thread2/tensix_thread2.hex";
-
-    //     tt::llrt::test_load_write_read_risc_binary(device->cluster(), brisc_binary_path, 0, {1, 1}, 0);
-    //     tt::llrt::test_load_write_read_risc_binary(device->cluster(), ncrisc_binary_path, 0, {1, 1}, 1);
-    //     tt::llrt::test_load_write_read_risc_binary(device->cluster(), trisc0_binary_path, 0, {1, 1}, 2);
-    //     tt::llrt::test_load_write_read_risc_binary(device->cluster(), trisc1_binary_path, 0, {1, 1}, 3);
-    //     tt::llrt::test_load_write_read_risc_binary(device->cluster(), trisc2_binary_path, 0, {1, 1}, 4);
-
-    //     auto vec = tt::llrt::read_hex_vec_from_core(device->cluster(), 0, {1, 1}, 0, 1024 * 1024);
-    //     for (u32 el: vec) {
-    //         std::cout << el << std::endl;
-    //     }
-    //     return;
-    // }
-
-
     CoreCoord worker_core(0, 0);
     zero_out_sysmem(device);
     vector<u32> inp = create_random_vector_of_bfloat16(NUM_TILES * 2048, 100, 0);
@@ -146,12 +125,12 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         Buffer buf(device, NUM_TILES * 2048, 0, 2048, BufferType::DRAM);
         Buffer out(device, NUM_TILES * 2048, 0, 2048, BufferType::DRAM);
 
-        RuntimeArgs rt_args;
-        map<RISCV, vector<u32>> worker_core_rt_args = {{RISCV::BRISC, {out.address(), 0, 0, NUM_TILES}}, {RISCV::NCRISC, {buf.address(), 0, 0, NUM_TILES}}};
-        rt_args[worker_core] = worker_core_rt_args;
+        // Absolutely disgusting way to query for the kernel I want to set runtime args for... needs to be cleaned up
+        SetRuntimeArgs(program, program.kernels_on_core(worker_core).riscv_0, worker_core, {out.address(), 0, 0, NUM_TILES});
+        SetRuntimeArgs(program, program.kernels_on_core(worker_core).riscv_1, worker_core, {buf.address(), 0, 0, NUM_TILES});
 
         EnqueueWriteBuffer(cq, buf, inp, false);
-        EnqueueProgram(cq, program, rt_args, false);
+        EnqueueProgram(cq, program, false);
 
         EnqueueReadBuffer(cq, out, out_vec, true);
     }

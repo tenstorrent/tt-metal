@@ -781,11 +781,9 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  * | program      | The program we are writing to the device                               | Program &                     |                                    | Yes      |
- * | runtime_args | The runtime arg mapping onto the device for each core/RISCV we are     | const RuntimeArgs&            |                                    | Yes      |
- * |              | targetting on the device                                               |                               |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
-void EnqueueProgram(CommandQueue& cq, Program& program, const RuntimeArgs& runtime_args, bool blocking);
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 /**
  * Blocks until all previously dispatched commands on the device have completed

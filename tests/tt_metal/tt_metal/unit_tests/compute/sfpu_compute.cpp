@@ -148,16 +148,14 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
     std::vector<u32> packed_golden = pack_vector<u32, bfloat16>(golden);
 
     // Same runtime args for every core
-    RuntimeArgs rt_args;
-    map<RISCV, vector<u32>> worker_core_rt_args;
-    worker_core_rt_args[RISCV::NCRISC] = {
+    vector<u32> reader_rt_args = {
         (u32)test_config.input_dram_byte_address,
         (u32)input_dram_noc_xy.x,
         (u32)input_dram_noc_xy.y,
         (u32)test_config.num_tiles,
     };
 
-    worker_core_rt_args[RISCV::BRISC] = {
+    vector<u32> writer_rt_args = {
         (u32)test_config.output_dram_byte_address,
         (u32)output_dram_noc_xy.x,
         (u32)output_dram_noc_xy.y,
@@ -233,8 +231,8 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
                 terminate = terminate_;
 
-                rt_args[core_coord] = worker_core_rt_args;
-
+                SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
+                SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
             } while (not terminate);
         } else {
             do {
@@ -243,10 +241,10 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
                 terminate = terminate_;
 
                 tt_metal::WriteRuntimeArgsToDevice(
-                    device, reader_kernel, core_coord, worker_core_rt_args[RISCV::NCRISC]);
+                    device, writer_kernel, core_coord, writer_rt_args);
 
                 tt_metal::WriteRuntimeArgsToDevice(
-                    device, writer_kernel, core_coord, worker_core_rt_args[RISCV::BRISC]);
+                    device, reader_kernel, core_coord, reader_rt_args);
 
             } while (not terminate);
         }
@@ -259,7 +257,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         CommandQueue cq(device);
         EnqueueWriteBuffer(cq, input_dram_buffer, packed_input, false);
 
-        EnqueueProgram(cq, program, rt_args, false);
+        EnqueueProgram(cq, program, false);
 
         EnqueueReadBuffer(cq, output_dram_buffer, dest_buffer_data, true);
     } else {

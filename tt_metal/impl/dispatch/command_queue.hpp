@@ -127,13 +127,13 @@ class EnqueueProgramCommand : public Command {
     Device* device;
     Buffer& buffer;
     ProgramSrcToDstAddrMap& program_to_dev_map;
-    RuntimeArgs rt_args;
+    const RuntimeArgs& runtime_args;
     SystemMemoryWriter& writer;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
     static map<const Program*, DeviceCommand> command_cache;
-    EnqueueProgramCommand(Device*, Buffer&, ProgramSrcToDstAddrMap&, SystemMemoryWriter&, RuntimeArgs);
+    EnqueueProgramCommand(Device*, Buffer&, ProgramSrcToDstAddrMap&, SystemMemoryWriter&, const RuntimeArgs&);
 
     const DeviceCommand assemble_device_command(u32);
 
@@ -187,12 +187,12 @@ class CommandQueue {
 
     void enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool blocking);
 
-    void enqueue_program(Program& program, const RuntimeArgs& runtime_args, bool blocking);
+    void enqueue_program(Program& program, bool blocking);
 
     void finish();
 
     friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking);
     friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking);
-    friend void EnqueueProgram(CommandQueue& cq, Program& program, const RuntimeArgs& runtime_args, bool blocking);
+    friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
     friend void Finish(CommandQueue& cq);
 };

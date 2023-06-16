@@ -323,10 +323,9 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     Buffer& buffer,
     ProgramSrcToDstAddrMap& program_to_dev_map,
     SystemMemoryWriter& writer,
-    RuntimeArgs runtime_args) :
-    buffer(buffer), program_to_dev_map(program_to_dev_map), writer(writer) {
+    const RuntimeArgs& runtime_args) :
+    buffer(buffer), program_to_dev_map(program_to_dev_map), writer(writer), runtime_args(runtime_args) {
     this->device = device;
-    this->rt_args = runtime_args;
 }
 
 const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_args_src) {
@@ -391,7 +390,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
     u32 data_size_in_bytes = 0;
     vector<TrailingWriteCommand> trailing_write_commands;
     u32 rt_args_src = DEVICE_COMMAND_DATA_ADDR;
-    for (const auto& [core_coord, rt_arg_map] : this->rt_args) {
+    for (const auto& [core_coord, rt_arg_map] : this->runtime_args) {
         // u32 dst_noc = noc_coord_to_u32(core_coord);
         CoreCoord worker_dst_noc = this->device->worker_core_from_logical_core(core_coord);
         u32 dst_noc_multicast_encoding = get_noc_multicast_encoding(worker_dst_noc, worker_dst_noc);
@@ -436,7 +435,7 @@ void EnqueueProgramCommand::process() {
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
 
     vector<u32> rt_args_vector;
-    for (const auto& [core_coord, rt_arg_map] : this->rt_args) {
+    for (const auto& [core_coord, rt_arg_map] : this->runtime_args) {
         for (const auto& [riscv, rt_args_for_core] : rt_arg_map) {
             rt_args_vector.insert(rt_args_vector.end(), rt_args_for_core.begin(), rt_args_for_core.end());
 
@@ -572,7 +571,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool b
     this->enqueue_command(command, blocking);
 }
 
-void CommandQueue::enqueue_program(Program& program, const RuntimeArgs& runtime_args, bool blocking) {
+void CommandQueue::enqueue_program(Program& program, bool blocking) {
     TT_ASSERT(not blocking, "EnqueueProgram only has support for non-blocking mode currently");
 
     // Need to relay the program into DRAM if this is the first time
@@ -607,7 +606,7 @@ void CommandQueue::enqueue_program(Program& program, const RuntimeArgs& runtime_
         *this->program_to_buffer.at(&program),
         this->program_to_dev_map.at(&program),
         this->sysmem_writer,
-        runtime_args);
+        program.runtime_args());
 
     this->enqueue_command(command, blocking);
 }
@@ -642,10 +641,10 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool
     cq.enqueue_write_buffer(buffer, src, blocking);
 }
 
-void EnqueueProgram(CommandQueue& cq, Program& program, const RuntimeArgs& runtime_args, bool blocking) {
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     tt::log_debug(tt::LogDispatch, "EnqueueProgram");
 
-    cq.enqueue_program(program, runtime_args, blocking);
+    cq.enqueue_program(program, blocking);
 }
 
 void Finish(CommandQueue& cq) {
