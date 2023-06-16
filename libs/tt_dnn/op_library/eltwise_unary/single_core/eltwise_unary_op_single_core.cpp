@@ -84,7 +84,7 @@ Program eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::
     };
 
     bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
+    bool math_approx_mode = eltwise_unary_op_utils::get_op_approx_mode(op_type);
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",

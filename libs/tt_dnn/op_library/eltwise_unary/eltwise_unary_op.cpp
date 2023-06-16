@@ -162,6 +162,15 @@ static std::string op_type_to_string(UnaryOpType::Enum op_type) {
     throw std::runtime_error("Undefined op type");
 }
 
+bool get_op_approx_mode(UnaryOpType::Enum op_type) {
+    switch (op_type) {
+        case UnaryOpType::GELU:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static
 void add_defines_impl(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type, std::string op_name){
     eltwise_unary_kernel->add_define("SFPU_OP_AND_PACK", op_name);

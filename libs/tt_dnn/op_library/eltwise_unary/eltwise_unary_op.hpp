@@ -75,6 +75,7 @@ inline Tensor power(const Tensor& a,uint32_t exponent) { return operation::run_w
 namespace eltwise_unary_op_utils {
 using namespace tt::tt_metal;
 
+bool get_op_approx_mode(UnaryOpType::Enum op_type);
 string get_op_name(UnaryOpType::Enum op_type,std::optional<float> param={});
 void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type,std::optional<float> param={});
 
