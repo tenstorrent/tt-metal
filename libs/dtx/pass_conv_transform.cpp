@@ -1,4 +1,3 @@
-#include "tt_metal/host_api.hpp"
 #include "dtx.hpp"
 #include "dtx_passes.hpp"
 #include "util.hpp"
