@@ -8,36 +8,16 @@ from loguru import logger
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../../tests")
 
-DEBUG_PRINTS = True
-DEBUG_PRINTS = False
-PROFILE = not DEBUG_PRINTS
-
 import torch
 
 from libs import tt_lib as ttl
 
-# from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 from libs.tt_lib.utils import (
-    _nearest_32 as nearest_32,
-    pad_activation,
     pad_weight,
-    tilize,
     tilize_to_list,
     untilize,
-    print_diff_argmax,
-    tt2torch,
-    tt2torch_rm,
-    roundup,
-    roundup32,
-    float_to_bits,
-    divup,
-    channels_last,
-    convert_weights_2d_matrix,
     is_close,
 )
-
-tensor = ttl.tensor
-device = ttl.device
 
 
 # This ref implementation is only here for debugging
@@ -51,14 +31,14 @@ def ref_ln(x, gamma, beta=None, epsilon=1e-5, b=None):
     ph0, ph1, pw0, pw1 = 1, 2, 0, 1
     # ph0, ph1, pw0, pw1 = 0, 1, 0, 1
 
-    print("x.shape=", x.shape)
+    # print("x.shape=", x.shape)
     # print("eps=", epsilon)
-    print(f"slice={ph0}:{ph1}, {pw0}:{pw1}")
-    print("Ref x=\n", x[0, 0, ph0 * 32 : ph1 * 32 : sth, pw0 * 32 : pw1 * 32 : stw])
-    print(
-        "Ref a=\n", (x - b)[0, 0, ph0 * 32 : ph1 * 32 : sth, pw0 * 32 : pw1 * 32 : stw]
-    )
-    print("Ref b=\n", b[0, 0, ph0 * 32 : ph1 * 32 : sth, pw0 * 32 : pw1 * 32 : stw])
+    # print(f"slice={ph0}:{ph1}, {pw0}:{pw1}")
+    # print("Ref x=\n", x[0, 0, ph0 * 32 : ph1 * 32 : sth, pw0 * 32 : pw1 * 32 : stw])
+    # print(
+    #     "Ref a=\n", (x - b)[0, 0, ph0 * 32 : ph1 * 32 : sth, pw0 * 32 : pw1 * 32 : stw]
+    # )
+    # print("Ref b=\n", b[0, 0, ph0 * 32 : ph1 * 32 : sth, pw0 * 32 : pw1 * 32 : stw])
     mean = x.mean(dim=-1, keepdim=True)
     # print("Ref Ex=\n", mean[0, 0, ph0*32 : ph1*32 : sth, 0*32 : 1*32 : stw])
     xmm = x - mean
@@ -77,8 +57,8 @@ def ref_ln(x, gamma, beta=None, epsilon=1e-5, b=None):
     # print("Ref y*1+0=\n", y1[0, 0, ph0*32 : ph1*32 : st, pw0*32 : pw1*32 : st])
     y = y1.clone()
     if gamma is not None:
-        print("yshape=", y.shape)
-        print("gshape=", gamma.shape)
+        # print("yshape=", y.shape)
+        # print("gshape=", gamma.shape)
         y *= gamma
     if beta is not None:
         y += beta
@@ -93,77 +73,37 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
     return lnorm(x)
 
 
-if __name__ == "__main__":
-    out_dram = False
-    in_dram = False
+def run_layernorm_tests(dtype, in0_mem_config, out_mem_config):
+    torch.manual_seed(1234)
+
+    tensor = ttl.tensor
     # Initialize the device
-    if PROFILE:
-        os.environ["TT_PROFILE"] = "1"
-    os.environ["TT_BLOCK_SIZE"] = "2"
-    os.environ["TT_FORCE_NUMCORES"] = "108"
-    # os.environ["TT_FORCE_NUMCORES"] = "1"
+    device = ttl.device
     dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
     device.InitializeDevice(dev, ttl.device.MemoryAllocator.L1_BANKING)
-
-    in0_mem_config = ttl.tensor.MemoryConfig(
-        buffer_type=(
-            ttl.tensor.BufferType.DRAM if in_dram else ttl.tensor.BufferType.L1
-        )
-    )
-
-    out_mem_config = ttl.tensor.MemoryConfig(
-        buffer_type=(
-            ttl.tensor.BufferType.DRAM if out_dram else ttl.tensor.BufferType.L1
-        )
-    )
-
-    if DEBUG_PRINTS:
-        device.StartDebugPrintServerOnCores(
-            dev, [[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1]]
-        )
     host = device.GetHost()
 
-    # N, C, H, W = 1, 1, 4*32, 9*32
     epsf = 1e-2
-    torch.manual_seed(123)
 
-    # TODO: Clean up
-    # test_dims = (
-    #     (1, 1, 4 * 32, 8 * 32),
-    #     (1, 1, 3 * 32, 8 * 32),
-    #     (1, 1, 32, 12 * 32),
-    #     (1, 1, 8 * 32, 32 * 32),
-    # )
-    # # test_dims = ((1,9,384,1024),)
-    # test_dims = ((1, 1, 32 * 6, 1024),)
-    # test_dims = ((1, 1, 384, 1024),)
-    # test_dims = ((1, 10, 256, 1024),)
-    # # test_dims = ((1,6,32,1024),)
-    # test_dims = ((1, 1, 32, 1024),)
     test_dims = ((1, 9, 384, 1024),)
     for nchw in test_dims:
         for i in range(0, 4):  # 0: no gamma/beta, 1: gamma, 2: gamma+beta
             # i = 0  # force ln(x)*1+0 path
             # i = 1  # force ln(x)*g+0 path
-            # i = 2  # force ln(a+b)*gamma+beta path
-            # i = 3  # force ln(x)*gamma+beta path
+            # i = 2  # force ln(x)*gamma+beta path
+            # i = 3  # force ln(a+b)*gamma+beta path
             for nrepeat in range(0, 1):
                 (N, C, H, W) = nchw
-                print("NCHW=", nchw)
                 if i >= 0:
                     gamma = torch.ones(1, 1, 1, W)
                     beta = torch.zeros(1, 1, 1, W)
                 if i >= 1:
                     gamma = torch.rand(1, 1, 1, W) * 2 - 1
-                    # gamma = torch.arange(0.0, float(W)-0.01, 1.0).reshape(1,1,1,W) # debug gamma
-                    # gammah32 = tilize_to_list(pad_weight(gamma.repeat(1,1,32,1))) # debug gamma
-                    print(gamma)
-                    # gamma[:,:,:,320:] = 0.0
                     gammah32 = tilize_to_list(pad_weight(gamma))
                     ttgamma = tensor.Tensor(
                         gammah32,
                         [1, 1, 32, W],
-                        tensor.DataType.BFLOAT16,
+                        dtype,
                         tensor.Layout.TILE,
                         dev,
                         in0_mem_config,
@@ -174,7 +114,7 @@ if __name__ == "__main__":
                     ttbeta = tensor.Tensor(
                         betah32,
                         [1, 1, 32, W],
-                        tensor.DataType.BFLOAT16,
+                        dtype,
                         tensor.Layout.TILE,
                         dev,
                         in0_mem_config,
@@ -182,15 +122,14 @@ if __name__ == "__main__":
 
                 x = torch.rand((N, C, H, W)) * 2 - 0.95
                 y = torch.rand((N, C, H, W)) * 2 - 0.8
+
                 if i < 3:
                     y *= 0.0  # zero out the y to exclude x+y from reference calculation
-                # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
-                ref_lnorm, _, _, _, _, _ = ref_ln(x + y, gamma, beta, epsf, y)
 
                 ttx = tensor.Tensor(
                     tilize_to_list(x),
                     [N, C, H, W],
-                    tensor.DataType.BFLOAT16,
+                    dtype,
                     tensor.Layout.TILE,
                     dev,
                     in0_mem_config,
@@ -198,7 +137,7 @@ if __name__ == "__main__":
                 tty = tensor.Tensor(
                     tilize_to_list(y),
                     [N, C, H, W],
-                    tensor.DataType.BFLOAT16,
+                    dtype,
                     tensor.Layout.TILE,
                     dev,
                     in0_mem_config,
@@ -207,7 +146,6 @@ if __name__ == "__main__":
                 if i == 0:
                     logger.info("Running LN_NOGB")
                     ttz = tensor.layernorm(ttx, epsf, out_mem_config)
-                    print(ttz.buffer_type())
                 elif i == 1:
                     logger.info("Running LN_G")
                     ttz = tensor.layernorm_gamma(ttx, epsf, ttgamma, out_mem_config)
@@ -223,18 +161,53 @@ if __name__ == "__main__":
                     )
                 else:
                     assert False
-                logger.info("Done Running LN")
+                logger.info("Done")
+
+                assert ttx.buffer_type() == in0_mem_config.buffer_type
+                assert tty.buffer_type() == in0_mem_config.buffer_type
+                assert ttz.buffer_type() == out_mem_config.buffer_type
+
+                logger.debug(f"ttx is on: {ttx.buffer_type()}")
+                logger.debug(f"tty is on: {tty.buffer_type()}")
+                logger.debug(f"ttz is on: {ttz.buffer_type()}")
+
                 t2_data = ttz.to(host).data()
 
                 tt_got_back = torch.Tensor(t2_data).reshape((N, C, H, W))
                 tt_got_back = untilize(tt_got_back)
-                # print("tt_result[ht=0,wt=0]=", tt_got_back[:,:,0:32:1,0:32:1])
 
+                # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
+                ref_lnorm, _, _, _, _, _ = ref_ln(x + y, gamma, beta, epsf, y)
                 time.sleep(0.3)  # sleep to avoid print intermixing with kernel prints
 
-                # if not is_close(tt_got_back[:,0,0:128,:], ref_lnorm[:,0,0:128,:]):
-                if not is_close(tt_got_back, ref_lnorm):
-                    assert False
-                    print("****  Mismatch!")
+                assert is_close(tt_got_back, ref_lnorm)
 
     device.CloseDevice(dev)
+
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "out_mem_config",
+    (
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
+    ),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize(
+    "in0_mem_config",
+    (
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
+    ),
+    ids=["in0_DRAM", "in0_L1"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT16,),
+    ids=["BFLOAT16"],
+)
+def test_bert_large_layernorm_test(dtype, in0_mem_config, out_mem_config):
+    run_layernorm_tests(dtype, in0_mem_config, out_mem_config)
