@@ -820,8 +820,7 @@ void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &bui
     if (auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel)) {
         build_options.set_hlk_file_name_all_cores(compute_kernel->kernel_path_file_name());
         build_options.set_hlk_math_fidelity_all_cores(compute_kernel->math_fidelity());
-        // TODO(AP): see issue #504
-        //build_kernel_for_riscv_options->set_hlk_math_approx_mode_all_cores(kernel_group.compute->math_approx_mode());
+        build_options.set_hlk_math_approx_mode_all_cores(compute_kernel->math_approx_mode());
         build_options.fp32_dest_acc_en = compute_kernel->fp32_dest_acc_en();
         build_options.hlk_defines = compute_kernel->defines();
     } else {
