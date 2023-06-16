@@ -18,6 +18,8 @@ env pytest tests/python_api_testing/models/stable_diffusion/test_downblock_2d.py
 env pytest tests/python_api_testing/models/stable_diffusion/test_unet_mid_block.py -k test_run_unet_mid_block_real_input_inference
 env pytest tests/python_api_testing/models/stable_diffusion/test_upblock_2d.py -k test_run_upblock_real_input_inference
 
+env pytest tests/python_api_testing/models/vit/tests/test_vit_image_classification.py -k test_vit_image_classification
+
 env pytest tests/python_api_testing/models/bert/bert_encoder.py -k bert_encoder
 env pytest tests/python_api_testing/models/bert -k bert_question_and_answering
 env pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k bert_large
