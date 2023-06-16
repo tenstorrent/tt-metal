@@ -739,7 +739,7 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
              uint32_t out_subblock_h, uint32_t out_subblock_w) {
-    return operation::run_with_autopad(Conv(in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, conv_params, true), a, b);
+    return std::move(operation::run(Conv(in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, conv_params, true), {a, b}).at(0));
 }
 
 Program conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
@@ -760,7 +760,7 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<std::reference_
     auto mm_shape = compute_conv_as_mm_shape(input_tensor_a_shape, conv_params, in0_block_h, in0_block_w);
     // TODO: Update batch size below
     Shape output_tensor_shape = {1, 1, mm_shape[1], input_tensor_b.shape()[3] };
-    return {};
+    return {output_tensor_shape};
 }
 
 std::vector<Tensor> Conv::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
