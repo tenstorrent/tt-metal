@@ -28,30 +28,30 @@ from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from transformers.generation.configuration_utils import GenerationConfig
 
 from transformers.generation.logits_process import (
-    EncoderNoRepeatNGramLogitsProcessor,
-    EncoderRepetitionPenaltyLogitsProcessor,
-    EpsilonLogitsWarper,
-    EtaLogitsWarper,
-    ExponentialDecayLengthPenalty,
-    ForcedBOSTokenLogitsProcessor,
-    ForcedEOSTokenLogitsProcessor,
-    ForceTokensLogitsProcessor,
-    HammingDiversityLogitsProcessor,
-    InfNanRemoveLogitsProcessor,
-    LogitNormalization,
+    # EncoderNoRepeatNGramLogitsProcessor,
+    # EncoderRepetitionPenaltyLogitsProcessor,
+    # EpsilonLogitsWarper,
+    # EtaLogitsWarper,
+    # ExponentialDecayLengthPenalty,
+    # ForcedBOSTokenLogitsProcessor,
+    # ForcedEOSTokenLogitsProcessor,
+    # ForceTokensLogitsProcessor,
+    # HammingDiversityLogitsProcessor,
+    # InfNanRemoveLogitsProcessor,
+    # LogitNormalization,
     LogitsProcessorList,
-    MinLengthLogitsProcessor,
-    MinNewTokensLengthLogitsProcessor,
-    NoBadWordsLogitsProcessor,
-    NoRepeatNGramLogitsProcessor,
-    PrefixConstrainedLogitsProcessor,
-    RepetitionPenaltyLogitsProcessor,
-    SuppressTokensAtBeginLogitsProcessor,
-    SuppressTokensLogitsProcessor,
-    TemperatureLogitsWarper,
-    TopKLogitsWarper,
-    TopPLogitsWarper,
-    TypicalLogitsWarper,
+    # MinLengthLogitsProcessor,
+    # MinNewTokensLengthLogitsProcessor,
+    # NoBadWordsLogitsProcessor,
+    # NoRepeatNGramLogitsProcessor,
+    # PrefixConstrainedLogitsProcessor,
+    # RepetitionPenaltyLogitsProcessor,
+    # SuppressTokensAtBeginLogitsProcessor,
+    # SuppressTokensLogitsProcessor,
+    # TemperatureLogitsWarper,
+    # TopKLogitsWarper,
+    # TopPLogitsWarper,
+    # TypicalLogitsWarper,
 )
 
 
@@ -265,20 +265,6 @@ def pad_input_32_left(tensor, value):
     return tensor
 
 
-def pad_input_32_right(tensor, value):
-    len = tensor.shape[1]
-
-    if len % 32 == 0:
-        return tensor
-
-    padded_len = ((len // 32) + 1) * 32
-
-    pad_tensor = (value * torch.ones(tensor.shape[0], padded_len - len)).to(torch.long)
-    tensor = torch.cat([tensor, pad_tensor], dim=1)
-
-    return tensor
-
-
 def gen_position_ids(input_ids):
     # get positions_ids values
     past_key_values_length = 0
@@ -301,40 +287,56 @@ def get_next_llama_output_token(input_ids, out_tensor, order, model="Pytorch"):
 
     # argmax
     next_tokens = torch.argmax(next_tokens_scores, dim=-1)
-    logger.info(f"{model} forward {order+1}-th generated id: {next_tokens}")
+    logger.debug(f"{model} forward {order+1}-th generated id: {next_tokens}")
 
     return next_tokens
 
 
-def call_hf_llama_forward_func(
-    hugging_face_reference_model,
-    logits_processor,
-    input_ids,
-    attention_mask,
-    num_words=2,
+def run_llama_split_inference(
+    device,
+    state_dict,
+    base_url,
+    max_position_embeddings,
+    configuration,
+    num_decoders_start,
+    num_decoders,
+    x_inputs=None,
+    att_mask=None,
+    position_ids=None,
+    half=1,
 ):
-    # generate next words by using huggingface llama forward function
-    for i in range(num_words):
-        # pad input tensors
-        input_ids_padded = pad_input_32_left(input_ids, configuration.pad_token_id)
-        attention_mask_padded = pad_input_32_left(attention_mask, -1)
-        position_ids_padded = gen_position_ids(input_ids_padded)
-
-        pytorch_out = hugging_face_reference_model(
-            input_ids=input_ids_padded,
-            attention_mask=attention_mask_padded,
-            position_ids=position_ids_padded,
+    if half == 1:
+        logger.info("First pass throught TT model")
+        tt_llama_model = TtLlamaModelFirstHFModel(
+            device,
+            state_dict,
+            base_url,
+            max_position_embeddings,
+            configuration,
+            num_decoders_start,
+            num_decoders,
+        )
+        tt_out = tt_llama_model(
+            input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
+        )
+    else:
+        logger.info("Second pass throught TT model")
+        tt_llama_model = TtLlamaModelSecondHFModel(
+            device,
+            state_dict,
+            base_url,
+            max_position_embeddings,
+            configuration,
+            num_decoders_start,
+            num_decoders,
+        )
+        tt_out = tt_llama_model(
+            input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
         )
 
-        # get next token
-        next_tokens = get_next_llama_output_token(
-            input_ids_padded, pytorch_out.logits, i
-        )
-
-        # update input ids
-        input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
-        attention_mask = torch.cat([attention_mask, torch.full((1, 1), 1)], dim=-1)
-        position_ids = gen_position_ids(input_ids)
+    # returned type from the model is tuple
+    tt_output = tt2torch_tensor(tt_out[0])
+    return tt_output
 
 
 def call_tt_llama_forward_func(
@@ -412,7 +414,7 @@ def call_tt_llama_forward_func(
 
         # save output words
         s = tokenizer.decode(next_tokens.item(), skip_special_tokens=True)
-        logger.info(f"TT {i+1}-th generated word: {s}")
+        logger.debug(f"TT {i+1}-th generated word: {s}")
         tt_generated_text = tt_generated_text + " " + s
 
         # update input ids
@@ -426,53 +428,6 @@ def call_tt_llama_forward_func(
     return tt_generated_text
 
 
-def run_llama_split_inference(
-    device,
-    state_dict,
-    base_url,
-    max_position_embeddings,
-    configuration,
-    num_decoders_start,
-    num_decoders,
-    x_inputs=None,
-    att_mask=None,
-    position_ids=None,
-    half=1,
-):
-    if half == 1:
-        logger.info("First pass throught TT model")
-        tt_llama_model = TtLlamaModelFirstHFModel(
-            device,
-            state_dict,
-            base_url,
-            max_position_embeddings,
-            configuration,
-            num_decoders_start,
-            num_decoders,
-        )
-        tt_out = tt_llama_model(
-            input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
-        )
-    else:
-        logger.info("Second pass throught TT model")
-        tt_llama_model = TtLlamaModelSecondHFModel(
-            device,
-            state_dict,
-            base_url,
-            max_position_embeddings,
-            configuration,
-            num_decoders_start,
-            num_decoders,
-        )
-        tt_out = tt_llama_model(
-            input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
-        )
-
-    # returned type from the model is tuple
-    tt_output = tt2torch_tensor(tt_out[0])
-    return tt_output
-
-
 if __name__ == "__main__":
     torch.manual_seed(1234)
 
@@ -481,8 +436,6 @@ if __name__ == "__main__":
     max_position_embeddings = 2048
     tokenizer_name = "huggyllama/llama-7b"
     llama_model_name = "huggyllama/llama-7b"
-    # tokenizer_name = "hf-internal-testing/llama-tokenizer"
-    # llama_model_name = "decapoda-research/llama-7b-hf"
 
     # how many decoders to use
     first_decoder_start = 0
@@ -490,10 +443,10 @@ if __name__ == "__main__":
     num_consecutive_decoders = 16
 
     # how many words to generate
-    num_words = 10
+    num_words = 2
     # parameters --------------------------------------------------
 
-    # load llama pytorch model =======================================
+    # load llama pytorch model ================================================
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
         llama_model_name
@@ -504,9 +457,9 @@ if __name__ == "__main__":
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 
-    # generate real input ============================================================
-    # prompt_1 = "I believe the meaning of life is"
-    prompt = "Hey, are you conscious? Can you talk to me?"
+    # generate real input =====================================================
+    # prompt size less than 32 (8 in this case)
+    prompt = "I believe the meaning of life is"
 
     inputs = tokenizer(prompt, return_tensors="pt")
     input_ids = inputs.input_ids
@@ -523,27 +476,7 @@ if __name__ == "__main__":
         input_ids, hugging_face_reference_model.config
     )
 
-    # generate Pytorch output of num_words with generate function ========================================================
-    generate_ids = hugging_face_reference_model.generate(
-        input_ids, logits_processor=logits_processor, max_length=seq_length + num_words
-    )
-    # logger.info(f"generate_ids shape: {generate_ids.shape}")
-    output = tokenizer.batch_decode(
-        generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
-    )[0]
-    logger.info(f"PyTorch generated response: {output}")
-    logger.debug(f"PyTorch generated ids: {generate_ids}")
-
-    # generate Pytorch output: call forward() function several times ======================================================
-    call_hf_llama_forward_func(
-        hugging_face_reference_model,
-        logits_processor,
-        input_ids,
-        attention_mask,
-        num_words,
-    )
-
-    # TT output: call forward() function several times ====================================================================
+    # TT output: call forward() function several times ========================
     tt_generated_text = call_tt_llama_forward_func(
         prompt,
         logits_processor,
@@ -555,5 +488,4 @@ if __name__ == "__main__":
         num_words,
     )
 
-    logger.info(f"PyTorch generated response: {output}")
     logger.info(f"Tenstorrent generated output: {tt_generated_text}")
