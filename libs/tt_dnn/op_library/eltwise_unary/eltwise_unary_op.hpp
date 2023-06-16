@@ -15,37 +15,6 @@ struct UnaryOpType {
                 ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23  };
     static const vector<Enum> all() { return { EXP, RECIP, GELU, RELU, SQRT, SIGMOID, LOG, TANH, LOG2, LOG10, SIN, COS, ABS, SIGN, SQUARE,
                 EQZ , NEZ , GTZ , LTZ , GEZ , LEZ , RELU_MAX , RELU_MIN, POWER }; }
-    static UnaryOpType::Enum str2enum(std::string value_) {
-      std::string value(value_.size(),'\0');
-      for(int i = 0; i < value_.size(); i++) value[i] = toupper(value_[i]);
-      if ( value == "EXP" || value == "EXPONENTIAL" ) return EXP;
-      if ( value == "RECIP" || value == "RECIPROCAL" ) return RECIP;
-      if ( value == "GELU" ) return GELU;
-      if ( value == "RELU" ) return RELU;
-      if ( value == "SQRT" ) return SQRT;
-      if ( value == "SIGMOID" ) return SIGMOID;
-      if ( value == "LOG" ) return LOG;
-      if ( value == "TANH" ) return TANH;
-      if ( value == "LOG2" ) return LOG2;
-      if ( value == "LOG10" ) return LOG10;
-      if ( value == "SIN" ) return SIN;
-      if ( value == "COS" ) return COS;
-      if ( value == "ABS" ) return ABS;
-      if ( value == "SIGN" ) return SIGN;
-      if ( value == "SQUARE" ) return SQUARE;
-      if ( value == "EQZ") return EQZ;
-      if ( value == "NEZ") return NEZ;
-      if ( value == "GTZ") return GTZ;
-      if ( value == "LTZ") return LTZ;
-      if ( value == "GEZ") return GEZ;
-      if ( value == "LEZ") return LEZ;
-      if ( value == "RELU_MIN" ) return RELU_MIN;
-      if ( value == "RELU_MAX" ) return RELU_MAX;
-      if ( value == "POWER" ) return POWER;
-
-      TT_ASSERT(false && "string does not match any known operator");
-      return POWER;
-    }
 };
 
 struct UnaryOpParallelizationStrategy {

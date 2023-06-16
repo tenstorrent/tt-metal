@@ -3,6 +3,8 @@
 #include <random>
 #include <cmath>
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "sfpu_helper/sfpu_helper.hpp"
@@ -15,8 +17,20 @@ std::map<std::string,std::string> sfpu_op_to_hlk_op_name={};
 
 void update_sfpu_op_to_hlk_op()
 {
-  for(const std::string& op_name : sfpu_op)
-    sfpu_op_to_hlk_op_name[op_name]  = eltwise_unary_op_utils::get_op_name( tt::tt_metal::UnaryOpType::str2enum( op_name ) );
+  for(const std::string& sfpu_op_name : sfpu_op) {
+    std::string unary_op_name{sfpu_op_name};
+    for(auto& c: unary_op_name) {
+        c = toupper(c);
+    }
+    if (unary_op_name == "EXPONENTIAL") {
+        unary_op_name = "EXP";
+    }
+    else if (unary_op_name == "RECIPROCAL") {
+        unary_op_name = "RECIP";
+    }
+    auto unary_op_type = magic_enum::enum_cast<tt::tt_metal::UnaryOpType::Enum>(unary_op_name).value();
+    sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_op_name(unary_op_type);
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -229,7 +243,7 @@ int main(int argc, char **argv) {
     } catch (const std::exception& e) {
         log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
     }
-    update_sfpu_op_to_hlk_op();    
+    update_sfpu_op_to_hlk_op();
     const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
         log_info(LogTest, "Running {}", op_name);
