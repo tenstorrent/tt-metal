@@ -14,17 +14,15 @@ from dataclasses import dataclass
 from typing import Optional, Set, Tuple, Union
 
 import torch
-import torch.utils.checkpoint
 from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-
-from activations import ACT2FN
 from deit_config import DeiTConfig
+
 import tt_lib
+from helper_funcs import make_linear
 from tt_lib.fallback_ops import fallback_ops
 
 
-class DeiTPatchEmbeddings(nn.Module):
+class TtDeiTPatchEmbeddings(nn.Module):
     """
     This class turns `pixel_values` of shape `(batch_size, num_channels, height, width)` into the initial
     `hidden_states` (patch embeddings) of shape `(batch_size, seq_length, hidden_size)` to be consumed by a
@@ -46,10 +44,10 @@ class DeiTPatchEmbeddings(nn.Module):
 
         conv_weight = state_dict[f"{base_address}.weight"]
         conv_bias = state_dict[f"{base_address}.bias"]
-        self.projection = fallback_ops.Conv2d(conv_weights, conv_bias, snum_channels, hidden_size, kernel_size=patch_size, stride=patch_size, padding=0)
+        self.projection = fallback_ops.Conv2d(conv_weight, conv_bias, num_channels, hidden_size, kernel_size=patch_size, stride=patch_size, padding=0)
 
     def forward(self, pixel_values):
-        batch_size, num_channels, height, width = pixel_values.shape
+        batch_size, num_channels, height, width = pixel_values.shape()
         if num_channels != self.num_channels:
             raise ValueError(
                 "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
@@ -59,6 +57,8 @@ class DeiTPatchEmbeddings(nn.Module):
                 f"Input image size ({height}*{width}) doesn't match model ({self.image_size[0]}*{self.image_size[1]})."
             )
         x = self.projection(pixel_values)
-        x = fallback_ops.flatten
-        x = self.projection(pixel_values).flatten(2).transpose(1, 2)
+        x_shape = x.shape()
+        new_x_shape = [1, 1, x_shape[1], x_shape[2]*x_shape[3]]
+        x = fallback_ops.reshape(x, new_x_shape[0], new_x_shape[1], new_x_shape[2], new_x_shape[3])
+        x = tt_lib.tensor.transpose(x)
         return x

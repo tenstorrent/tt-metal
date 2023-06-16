@@ -17,23 +17,22 @@ from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, com
 
 from deit_config import DeiTConfig
 from transformers import DeiTModel
-from deit_self_output import TtDeiTSelfOutput
+from deit_patch_embeddings import TtDeiTPatchEmbeddings
 
-
-def test_deit_self_output_inference():
+def test_deit_patch_embeddings_inference():
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'encoder.layer.0.attention.output.dense'
-    torch_self_output = model.encoder.layer[0].attention.output
+    base_address= 'embeddings.patch_embeddings.projection'
+    torch_patch_embeddings = model.embeddings.patch_embeddings
 
-    input_shape =  torch.Size([1, 198, 768])
-    hidden_state = torch.randn(input_shape)
+    input_shape =  torch.Size([1, 3, 224, 224])
+    pixel_values = torch.randn(input_shape)
 
-    torch_output = torch_self_output(hidden_state, None)
+    torch_output = torch_patch_embeddings(pixel_values)
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -43,10 +42,10 @@ def test_deit_self_output_inference():
 
     # setup tt model
 
-    tt_self_output = TtDeiTSelfOutput(DeiTConfig(), host, device, state_dict, base_address)
+    tt_patch_embeddings = TtDeiTPatchEmbeddings(DeiTConfig(), host, device, state_dict, base_address)
 
-    tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
-    tt_out = tt_self_output(tt_input)
+    tt_input = torch_to_tt_tensor_rm(pixel_values, device, put_on_device=False)
+    tt_out = tt_patch_embeddings(tt_input)
     tt_output = tt_to_torch_tensor(tt_out, host)
 
     passing = comp_pcc(torch_output, tt_output)
