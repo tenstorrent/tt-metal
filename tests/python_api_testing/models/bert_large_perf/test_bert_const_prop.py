@@ -27,7 +27,6 @@ from utility_functions import (
     disable_compile_cache,
 )
 from utility_functions import profiler
-from tests.python_api_testing.models.conftest import model_location_generator_
 
 
 class TtBertBatchDram(torch.nn.Module):
@@ -134,11 +133,11 @@ class TtBertBatchDram(torch.nn.Module):
             self.hidden_states_list.append(hidden_states)
             profiler.end("_calc_embeddings")
 
-        print(f"Num encoders {len(self.encoders)}")
+        logger.debug(f"Num encoders {len(self.encoders)}")
         tt_out_list = []
 
         for i in range(PERF_CNT):
-            print(f"Running BERT model {i}")
+            logger.debug(f"Running BERT model {i}")
             profiler.start("_run_encoders")
 
             hidden_states = self.hidden_states_list[i]
@@ -261,7 +260,7 @@ def run_bert_question_and_answering_inference(
     pytorch_out = hugging_face_reference_model(**bert_input)
     profiler.end("hugging_face_reference_model")
 
-    print(f"Running BERT model once to fill caches -> disable profiler")
+    logger.info(f"Running BERT model once to fill caches -> disable profiler")
     profiler.disable()
 
     tt_out_list = tt_bert_model(1, **bert_input)
@@ -272,13 +271,13 @@ def run_bert_question_and_answering_inference(
         tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()
     ).reshape(batch, 1, seq_len, -1)
 
-    print(f"Enable profiler and enable binary and compile cache")
+    logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
     enable_compile_cache()
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
-    print(f"Running BERT model for perf measurement")
+    logger.info(f"Running BERT model for perf measurement")
 
     profiler.start("whole_model")
     tt_out_list = tt_bert_model(PERF_CNT, **bert_input)
@@ -349,7 +348,7 @@ def run_bert_question_and_answering_inference(
     ), f"At least one start or end logits don't meet PCC requirement {pcc}"
 
 
-def test_bert_constant_prop():
+def test_bert_constant_prop(model_location_generator):
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
     seq_len = 384
@@ -358,7 +357,6 @@ def test_bert_constant_prop():
     attention_mask = True
     token_type_ids = True
     pcc = 0.98
-    model_location_generator = model_location_generator_
     PERF_CNT = 2
 
     disable_compile_cache()
@@ -375,7 +373,3 @@ def test_bert_constant_prop():
         model_location_generator,
         PERF_CNT,
     )
-
-
-if __name__ == "__main__":
-    test_bert_constant_prop()

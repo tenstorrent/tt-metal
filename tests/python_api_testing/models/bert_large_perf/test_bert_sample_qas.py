@@ -23,7 +23,6 @@ from libs.tt_lib.utils import pad_activation, pad_weight
 from utility_functions import enable_compile_cache
 from utility_functions import profiler
 from utility_functions import disable_compile_cache
-from tests.python_api_testing.models.conftest import model_location_generator_
 
 
 class DataSampler:
@@ -33,7 +32,7 @@ class DataSampler:
             with open(file_name) as json_file:
                 self.data = json.load(json_file)
         except FileNotFoundError:
-            print("File not found")
+            logger.warning("File not found")
 
         self.file_name = file_name
 
@@ -260,7 +259,7 @@ class TtBertForQuestionAnswering(torch.nn.Module):
         tt_out_list = []
 
         for i in range(len(self.hidden_states_list)):
-            print(f"Running BERT model for sample {i}")
+            logger.debug(f"Running BERT model for sample {i}")
             profiler.start("_run_encoders")
 
             hidden_states = self.hidden_states_list[i]
@@ -330,7 +329,7 @@ def run_bert_question_and_answering_inference(
     profiler.start("processing_of_input")
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
 
-    print(f"Sampling random context+question pairs")
+    logger.info(f"Sampling random context+question pairs")
     samples = sample_bert_input(
         hugging_face_reference_model,
         tokenizer,
@@ -342,7 +341,7 @@ def run_bert_question_and_answering_inference(
     )
     profiler.end("processing_of_input")
 
-    print(f"Running BERT model")
+    logger.info(f"Running BERT model")
     profiler.start("whole_model")
     tt_out_list = tt_bert_model(samples)
     profiler.end("whole_model", num_samples)
@@ -375,10 +374,10 @@ def run_bert_question_and_answering_inference(
 
         tt_answer = nlp.postprocess([tt_res], **postprocess_params)["answer"]
 
-        print(f"Context: {context}")
-        print(f"Question: {question}")
-        print(f"Answer from GS: '{tt_answer}'")
-        print(f"All valid answers: {answers}\n")
+        logger.info(f"Context: {context}")
+        logger.info(f"Question: {question}")
+        logger.info(f"Answer from GS: '{tt_answer}'")
+        logger.info(f"All valid answers: {answers}\n")
 
     profiler.end("processing_output_to_string")
 
@@ -386,7 +385,7 @@ def run_bert_question_and_answering_inference(
     profiler.print()
 
 
-def test_bert_sample_qas():
+def test_bert_sample_qas(model_location_generator):
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
     seq_len = 384
@@ -394,15 +393,16 @@ def test_bert_sample_qas():
     attention_mask = True
     token_type_ids = True
     pcc = 0.98
-    model_location_generator = model_location_generator_
+    num_samples = 10
+
     qas_sample = DataSampler(
         "./tests/python_api_testing/models/bert_large_perf/dev-v2.0.json"
     )
-    num_samples = 10
 
     logger.warning(
         "This test uses binary and compile cache. The cache needs to be filled before running this test."
     )
+
     run_bert_question_and_answering_inference(
         model_version,
         batch,
@@ -415,7 +415,3 @@ def test_bert_sample_qas():
         qas_sample,
         num_samples,
     )
-
-
-if __name__ == "__main__":
-    test_bert_sample_qas()
