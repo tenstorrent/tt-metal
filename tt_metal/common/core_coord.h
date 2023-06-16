@@ -4,14 +4,11 @@
 #include <string>
 #include <regex>
 #include <set>
-#include <utility>
-
 
 #include "common/assert.hpp"
 // #include <boost/functional/hash.hpp>
 // #include <command_assembler/xy_pair.h>
 
-using std::pair;
 
 struct CoreCoord {
 
@@ -32,10 +29,6 @@ constexpr inline bool operator!=(const CoreCoord &a, const CoreCoord &b) { retur
 
 constexpr inline bool operator<(const CoreCoord &left, const CoreCoord &right) {
   return (left.x < right.x || (left.x == right.x && left.y < right.y));
-}
-
-constexpr inline bool operator<=(const CoreCoord &a, const CoreCoord &b) {
-    return (a < b) or (a == b);
 }
 
 struct RelativeCoreCoord {
@@ -86,35 +79,6 @@ struct CoreRange {
     size_t s = (this->end.x - this->start.x + 1) * (this->end.y - this->start.y + 1);
     return (s > 0) ? s: -s;
   }
-};
-
-struct CoresInCoreRangeGenerator {
-    CoreCoord current;
-    CoreCoord end;
-    int num_worker_cores_x;
-    int num_worker_cores_y;
-
-    CoresInCoreRangeGenerator(const CoreRange& core_range, const CoreCoord& worker_grid_size) {
-        this->current = core_range.start;
-        this->end = core_range.end;
-
-        this->num_worker_cores_x = worker_grid_size.x;
-        this->num_worker_cores_y = worker_grid_size.y;
-    }
-
-    pair<CoreCoord, bool> operator() () {
-        CoreCoord coord = this->current;
-        CoreCoord new_coord;
-
-        new_coord.x = (coord.x + 1) % this->num_worker_cores_x;
-        new_coord.y = coord.y + (new_coord.x == 0); // It means we moved to next row
-
-        this->current = new_coord;
-
-        bool terminate = this->end < this->current;
-
-        return {coord, terminate};
-    }
 };
 
 constexpr inline bool operator==(const CoreRange &a, const CoreRange &b) { return a.start == b.start && a.end == b.end; }

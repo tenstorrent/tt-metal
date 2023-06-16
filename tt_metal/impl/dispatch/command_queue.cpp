@@ -525,8 +525,6 @@ CommandQueue::CommandQueue(Device* device) {
     vector<u32> zeros(96 / sizeof(u32), 0);
     device->cluster()->write_sysmem_vec(zeros, 0, 0);
 
-    // BUG: Potential race since I don't initialize the device's write pointer copy, it does it
-    // in its own deassert. Easy fix, just need to do it.
     send_dispatch_kernel_to_device(device);
     this->device = device;
 }
