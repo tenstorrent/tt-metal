@@ -35,7 +35,7 @@ struct Conv {
 };
 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
-             uint32_t out_subblock_h, uint32_t out_subblock_w, bool untilize_out);
+             uint32_t out_subblock_h, uint32_t out_subblock_w);
 Program conv_single_core(const Tensor& A, const Tensor& B, vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
              uint32_t out_subblock_h, uint32_t out_subblock_w, bool untilize_out, Tensor& output); // Tilizes a, untilizes b
 Program conv_as_large_bmm_single_core_single_block(const Tensor& A, const Tensor& B, bool untilize_out, bool use_single_bank_reader); // Allows support for tilizing a, untilize b

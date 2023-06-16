@@ -727,19 +727,19 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
         writer_rt_args
     );
 
-    pass &= tt_metal::CompileProgram(device, program, false);
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+    // pass &= tt_metal::CompileProgram(device, program, false);
+    // pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::WriteToDeviceL1(device, core_coord, act_address_map_metadata_l1_address, act_address_map_metadata);
     tt_metal::WriteToDeviceL1(device, core_coord, weight_address_map_metadata_l1_address, weight_address_map_metadata);
-    pass &= tt_metal::LaunchKernels(device, program);
+    // pass &= tt_metal::LaunchKernels(device, program);
 
-    TT_ASSERT(pass);
+    // TT_ASSERT(pass);
     return program;
 }
 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
-             uint32_t out_subblock_h, uint32_t out_subblock_w, bool untilize_out) {
-    return operation::run_with_autopad(Conv(in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, conv_params, untilize_out), a, b);
+             uint32_t out_subblock_h, uint32_t out_subblock_w) {
+    return operation::run_with_autopad(Conv(in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, conv_params, true), a, b);
 }
 
 Program conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
@@ -757,7 +757,10 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<std::reference_
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
     vector<int> input_tensor_a_shape = { (int) input_tensor_a.shape()[1], (int) input_tensor_a.shape()[2], (int) input_tensor_a.shape()[3]};
-    return {Shape(compute_conv_as_mm_shape(input_tensor_a_shape, conv_params, in0_block_h, in0_block_w))};
+    auto mm_shape = compute_conv_as_mm_shape(input_tensor_a_shape, conv_params, in0_block_h, in0_block_w);
+    // TODO: Update batch size below
+    Shape output_tensor_shape = {1, 1, mm_shape[1], input_tensor_b.shape()[3] };
+    return {};
 }
 
 std::vector<Tensor> Conv::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
