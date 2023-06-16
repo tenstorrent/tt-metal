@@ -25,13 +25,13 @@ extern uint32_t header;
 void allocate_perf_buffer() {
    std::int32_t perf_buf_base_addr;
    if ((uint32_t)__firmware_start == (uint32_t)l1_mem::address_map::TRISC0_BASE) {
-      perf_buf_base_addr = l1_mem::address_map::PERF_BUF_BASE_ADDR + l1_mem::address_map::MATH_PERF_BUF_SIZE + 0*TRISC_PERF_BUF_SIZE;
+      perf_buf_base_addr = l1_mem::address_map::UNPACK_PACK_PERF_BUF_BASE_ADDR + 0*TRISC_PERF_BUF_SIZE;
       perf_index = 2; // The first 4B value is always initialized to 0xbaddf00d.
       perf_end = 3;
       dram_dump_req_local = EPOCH_INFO_PTR->perf_dram_copy_req[0];
       ncrisc_ack_addr = &EPOCH_INFO_PTR->perf_dram_copy_ack[0];
    } else if ((uint32_t) __firmware_start == (uint32_t)l1_mem::address_map::TRISC1_BASE) {
-      perf_buf_base_addr = l1_mem::address_map::PERF_BUF_BASE_ADDR;
+      perf_buf_base_addr = l1_mem::address_map::MATH_PERF_BUF_BASE_ADDR;
       perf_index = 4; // The first 4 32b regs are skipped in recording math perf counters.
       perf_end = 16;
 
@@ -40,7 +40,7 @@ void allocate_perf_buffer() {
       dram_dump_req_local = EPOCH_INFO_PTR->perf_dram_copy_req[1];
       ncrisc_ack_addr = &EPOCH_INFO_PTR->perf_dram_copy_ack[1];
    } else {
-      perf_buf_base_addr = l1_mem::address_map::PERF_BUF_BASE_ADDR + l1_mem::address_map::MATH_PERF_BUF_SIZE + TRISC_PERF_BUF_SIZE;
+      perf_buf_base_addr = l1_mem::address_map::UNPACK_PACK_PERF_BUF_BASE_ADDR + TRISC_PERF_BUF_SIZE;
       perf_index = 2; // The first 4B value is always initialized to 0xbaddf00d.
       perf_end = 3;
       TTI_SEMINIT(1, 0, 1 << semaphore::PACK_DONE);
@@ -57,7 +57,7 @@ void allocate_perf_buffer() {
 #if PERF_DUMP_CONCURRENT
    volatile uint32_t* header_ptr = reinterpret_cast<volatile uint32_t *>(l1_mem::address_map::PERF_THREAD_HEADER);
    header = header_ptr[0];
-   header = (header & 0xfff9ffff) | (((uint32_t)(thread_id) & 0b11) << 17);
+   header = (header & 0xfff8ffff) | (((uint32_t)(thread_id) & 0b111) << 16);
    perf_buf_base[perf_buf_base_id][1] = header;
    for (uint i = 2; i < perf_index; i++) {
       perf_buf_base[perf_buf_base_id][i] = 0xffffffff;
