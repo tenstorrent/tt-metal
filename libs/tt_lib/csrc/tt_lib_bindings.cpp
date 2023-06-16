@@ -1765,10 +1765,22 @@ void TensorModule(py::module &m_tensor) {
         "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place.");
 
     // layernorm
-    m_tensor.def("layernorm", &layernorm, "Performs a layernorm operation on the last tensor dimension.");
-    m_tensor.def("layernorm_gamma", &layernorm_gamma, "Performs a layernorm operation on the last tensor dimension fused with post-multiplication via W-bcast.");
-    m_tensor.def("layernorm_gamma_beta", &layernorm_gamma_beta, "Performs a layernorm operation on the last tensor dimension fused with post-multiplication and addition via W-bcast.");
-    m_tensor.def("add_layernorm_gamma_beta", &add_layernorm_gamma_beta, "Performs a layernorm(a+b)*gamma + beta operation.");
+    m_tensor.def("layernorm", &layernorm,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Performs a layernorm operation on the last tensor dimension.
+    )doc");
+    m_tensor.def("layernorm_gamma", &layernorm_gamma,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Performs a layernorm operation on the last tensor dimension fused with post-multiplication via W-bcast.
+    )doc");
+    m_tensor.def("layernorm_gamma_beta", &layernorm_gamma_beta,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        "Performs a layernorm operation on the last tensor dimension fused with post-multiplication and addition via W-bcast.
+    )doc");
+    m_tensor.def("add_layernorm_gamma_beta", &add_layernorm_gamma_beta,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        "Performs a layernorm(a+b)*gamma + beta operation."
+    )doc");
 
     // TMs
     m_tensor.def("split_last_dim_qk_tiled", &split_last_dim_qk_tiled, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(

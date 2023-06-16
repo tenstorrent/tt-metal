@@ -104,11 +104,19 @@ if __name__ == "__main__":
     # os.environ["TT_FORCE_NUMCORES"] = "1"
     dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
     device.InitializeDevice(dev, ttl.device.MemoryAllocator.L1_BANKING)
-    memcfg = ttl.tensor.MemoryConfig(
+
+    in0_mem_config = ttl.tensor.MemoryConfig(
         buffer_type=(
             ttl.tensor.BufferType.DRAM if in_dram else ttl.tensor.BufferType.L1
         )
     )
+
+    out_mem_config = ttl.tensor.MemoryConfig(
+        buffer_type=(
+            ttl.tensor.BufferType.DRAM if out_dram else ttl.tensor.BufferType.L1
+        )
+    )
+
     if DEBUG_PRINTS:
         device.StartDebugPrintServerOnCores(
             dev, [[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1]]
@@ -158,7 +166,7 @@ if __name__ == "__main__":
                         tensor.DataType.BFLOAT16,
                         tensor.Layout.TILE,
                         dev,
-                        memcfg,
+                        in0_mem_config,
                     )
                 if i >= 2:
                     beta = torch.rand(1, 1, 1, W) * 2.0 - 1.1
@@ -169,7 +177,7 @@ if __name__ == "__main__":
                         tensor.DataType.BFLOAT16,
                         tensor.Layout.TILE,
                         dev,
-                        memcfg,
+                        in0_mem_config,
                     )
 
                 x = torch.rand((N, C, H, W)) * 2 - 0.95
@@ -185,7 +193,7 @@ if __name__ == "__main__":
                     tensor.DataType.BFLOAT16,
                     tensor.Layout.TILE,
                     dev,
-                    memcfg,
+                    in0_mem_config,
                 )
                 tty = tensor.Tensor(
                     tilize_to_list(y),
@@ -193,24 +201,25 @@ if __name__ == "__main__":
                     tensor.DataType.BFLOAT16,
                     tensor.Layout.TILE,
                     dev,
-                    memcfg,
+                    in0_mem_config,
                 )
 
                 if i == 0:
                     logger.info("Running LN_NOGB")
-                    ttz = tensor.layernorm(ttx, epsf, out_dram)
+                    ttz = tensor.layernorm(ttx, epsf, out_mem_config)
+                    print(ttz.buffer_type())
                 elif i == 1:
                     logger.info("Running LN_G")
-                    ttz = tensor.layernorm_gamma(ttx, epsf, ttgamma, out_dram)
+                    ttz = tensor.layernorm_gamma(ttx, epsf, ttgamma, out_mem_config)
                 elif i == 2:
                     logger.info("Running LN_GB")
                     ttz = tensor.layernorm_gamma_beta(
-                        ttx, epsf, ttgamma, ttbeta, out_dram
+                        ttx, epsf, ttgamma, ttbeta, out_mem_config
                     )
                 elif i == 3:
                     logger.info("Running add_LN_GB")
                     ttz = tensor.add_layernorm_gamma_beta(
-                        ttx, tty, epsf, ttgamma, ttbeta, out_dram
+                        ttx, tty, epsf, ttgamma, ttbeta, out_mem_config
                     )
                 else:
                     assert False

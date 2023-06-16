@@ -5,6 +5,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 #include "../op_config.hpp"
 
 #include <optional>
@@ -32,8 +34,7 @@ operation::ProgramWithCallbacks layernorm_(
     const std::optional<std::reference_wrapper<const Tensor>> gamma,
     const std::optional<std::reference_wrapper<const Tensor>> beta,
     Tensor& output,
-    float eps,
-    bool output_dram
+    float eps
 ) {
 
     const auto shape = a.shape();
@@ -73,8 +74,6 @@ operation::ProgramWithCallbacks layernorm_(
 
     // This should allocate a DRAM buffer on the device
     Device *device = a.device();
-
-    auto memcfg = tt::tt_metal::MemoryConfig{true, -1, output_dram ? BufferType::DRAM : BufferType::L1};
     auto dst_addr = output.buffer()->address();
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
@@ -291,7 +290,7 @@ std::vector<Shape> ResidualLayerNorm::compute_output_shapes(const std::vector<st
 }
 
 std::vector<Tensor> ResidualLayerNorm::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks ResidualLayerNorm::create_program(
@@ -304,7 +303,7 @@ operation::ProgramWithCallbacks ResidualLayerNorm::create_program(
     const auto gamma = optional_input_tensors.at(1);
     const auto beta = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
-    return layernorm_(a, b, gamma, beta, output_tensor, this->eps, this->out_dram);
+    return layernorm_(a, b, gamma, beta, output_tensor, this->eps);
 
 }
 
@@ -315,28 +314,15 @@ operation::Hash ResidualLayerNorm::compute_program_hash(
     const auto& input_tensor = input_tensors.at(0).get();
 
     return fmt::format(
-        "residual_layer_norm_{}_{}_{}_{}",
+        "residual_layer_norm_{}_{}_{}_{}_{}_{}",
          this->eps,
-         this->out_dram,
+         this->output_mem_config.interleaved,
+         this->output_mem_config.bank_id,
+         magic_enum::enum_name(this->output_mem_config.buffer_type),
          operation::hash_tensor(input_tensor),
          optional_input_tensors.size()
     );
 }
-
-Tensor layernorm(const Tensor &a, float eps, bool out_dram) {
-    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .out_dram=out_dram}, {a}, {std::nullopt, std::nullopt, std::nullopt}).at(0));
-}
-Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma, bool out_dram) {
-    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .out_dram=out_dram}, {a}, {std::nullopt, gamma, std::nullopt}).at(0));
-}
-Tensor layernorm_gamma_beta(const Tensor &a, float eps, const Tensor& gamma, const Tensor& beta, bool out_dram) {
-    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .out_dram=out_dram}, {a}, {std::nullopt, gamma, beta}).at(0));
-}
-Tensor add_layernorm_gamma_beta(const Tensor &a, const Tensor& b, float eps, const Tensor& gamma, const Tensor& beta, bool out_dram) {
-    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .out_dram=out_dram}, {a}, {b, gamma, beta}).at(0));
-}
-
-
 
 }  // namespace ll_buda
 

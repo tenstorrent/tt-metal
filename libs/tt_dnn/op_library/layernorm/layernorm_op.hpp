@@ -2,20 +2,22 @@
 
 #include "libs/tensor/tensor.hpp"
 
-#include "tt_dnn/op_library/operation.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
 
-namespace tt { namespace tt_metal {
+namespace tt {
 
-Tensor layernorm(const Tensor &a, float eps, bool out_dram);
-Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma, bool out_dram);
-Tensor layernorm_gamma_beta(const Tensor &a, float eps, const Tensor& gamma, const Tensor& beta, bool out_dram);
+namespace tt_metal {
+
+Tensor layernorm(const Tensor &a, float eps, const MemoryConfig& mem_config);
+Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma, const MemoryConfig& mem_config);
+Tensor layernorm_gamma_beta(const Tensor &a, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config);
 
 // computes layernorm(a+b)*gamma+beta
-Tensor add_layernorm_gamma_beta(const Tensor& a, const Tensor &b, float eps, const Tensor& gamma, const Tensor& beta, bool out_dram);
+Tensor add_layernorm_gamma_beta(const Tensor& a, const Tensor &b, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config);
 
 struct ResidualLayerNorm {
     float eps;
-    bool out_dram;
+    MemoryConfig output_mem_config;
 
     void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
@@ -30,4 +32,19 @@ struct ResidualLayerNorm {
         const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const;
 };
 
-} }  // namespace tt::tt_metal
+inline Tensor layernorm(const Tensor &a, float eps, const MemoryConfig& mem_config) {
+    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, std::nullopt, std::nullopt}).at(0));
+}
+inline Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma, const MemoryConfig& mem_config) {
+    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, std::nullopt}).at(0));
+}
+inline Tensor layernorm_gamma_beta(const Tensor &a, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config) {
+    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, beta}).at(0));
+}
+inline Tensor add_layernorm_gamma_beta(const Tensor &a, const Tensor& b, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config) {
+    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {b, gamma, beta}).at(0));
+}
+
+}
+
+}  // namespace tt::tt_metal

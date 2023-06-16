@@ -181,14 +181,14 @@ class TtBertEncoder(torch.nn.Module):
 
     def op12_add_layernorm(self, activation, mha_out):
         # profiler.start("__op12_add_layernorm")
-        out_dram = True
+        out_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM)
         mha_out_add_and_norm = ttl.tensor.add_layernorm_gamma_beta(
             activation,
             mha_out,
             self.layer_norm_eps,
             self.mha_gamma,
             self.mha_beta,
-            out_dram,
+            out_mem_config,
         )
         """
         mha_out_add_and_norm = self.mha_add_and_norm(activation, mha_out)
@@ -199,14 +199,14 @@ class TtBertEncoder(torch.nn.Module):
 
     def op15_add_layernorm(self, mha_out_add_and_norm, ffn_out):
         # profiler.start("__op15_add_layernorm")
-        out_dram = True
+        out_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM)
         ffn_out_add_and_norm = ttl.tensor.add_layernorm_gamma_beta(
             mha_out_add_and_norm,
             ffn_out,
             self.layer_norm_eps,
             self.ffn_gamma,
             self.ffn_beta,
-            out_dram,
+            out_mem_config,
         )
         """
         ffn_out_add_and_norm = self.ffn_add_and_norm(mha_out_add_and_norm, ffn_out)
