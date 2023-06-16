@@ -1,7 +1,6 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_dnn/op_library/auto_format.hpp"
 #include <limits>
 
 using namespace tt::constants;
@@ -101,10 +100,26 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
     auto parallelization_strategy = reduce_op_utils::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? std::numeric_limits<float>::lowest() : 0;
-    // TODO: For perf for reduce hw, we should autopad the tensor before running reduce w, reduce h, or else we may end up autopadding twice
     if (is_multicore_hw) {
-        const Tensor output_tensor = operation::run_with_autoformat(Reduce{reduce_math, ReduceOpDim::W, scaler}, input_tensor, pad_value);
-        return operation::run_with_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, output_tensor, pad_value);
+        Device * device;
+
+        // Get the device
+        if (input_tensor.on_host()) {
+            device = AutoFormat::GetDefaultDevice();
+            TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+        } else {
+            device = input_tensor.device();
+        }
+        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
+
+        if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
+            const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, scaler}, input_tensor);
+            return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, output_tensor);
+        } else {
+            // We only need to format the input tensor in this case, no need to format the output tensor
+            const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, scaler}, AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value));
+            return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, output_tensor);
+        }
     } else {
         return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler}, input_tensor, pad_value);
     }
