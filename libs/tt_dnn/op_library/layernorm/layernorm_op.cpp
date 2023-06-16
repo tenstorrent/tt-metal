@@ -7,7 +7,7 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
-#include "../op_config.hpp"
+#include "tt_dnn/op_library/op_config.hpp"
 
 #include <optional>
 
@@ -42,22 +42,29 @@ operation::ProgramWithCallbacks layernorm_(
     u32 HW = H*W;
     TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
+
+    // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
     TT_ASSERT(a.dtype() == DataType::BFLOAT16);
-    TT_ASSERT(not b.has_value() || b.value().get().dtype() == DataType::BFLOAT16);
-    TT_ASSERT(not gamma.has_value() || gamma.value().get().dtype() == DataType::BFLOAT16);
-    TT_ASSERT(not beta.has_value() || beta.value().get().dtype() == DataType::BFLOAT16);
+    const auto& a_dtype = a.dtype();
+    TT_ASSERT(not b.has_value() || b.value().get().dtype() == a_dtype);
+    TT_ASSERT(not gamma.has_value() || gamma.value().get().dtype() == a_dtype);
+    TT_ASSERT(not beta.has_value() || beta.value().get().dtype() == a_dtype);
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 
-    Program program = Program();
-
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
     uint32_t block_size = find_max_divisor(Wt, 8);
     OpEnvConfig::update_block_size(&block_size);
 
-    uint32_t single_tile_size = 2 * 1024;
+    // TODO: CHANGE TO FUNCTION CONVERSION
+    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
+    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        cb_data_format = tt::DataFormat::Float16_b;
+    }
+
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     auto a_addr = a.buffer()->address();
     auto b_dram_addr = b ? b.value().get().buffer()->address() : 0;
@@ -72,10 +79,18 @@ operation::ProgramWithCallbacks layernorm_(
     TT_ASSERT(num_gamma_tiles == Wt || num_gamma_tiles == 0);
     TT_ASSERT(num_beta_tiles == Wt || num_beta_tiles == 0);
 
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Grayskull Device Setup
+    ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     Device *device = a.device();
     auto dst_addr = output.buffer()->address();
 
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                         Parameters Setup
+    ////////////////////////////////////////////////////////////////////////////
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
     // TODO(AP): can also add support for block_size=7 -> 63, 28
@@ -125,7 +140,14 @@ operation::ProgramWithCallbacks layernorm_(
     auto wtpc = ts.get_tpc(); // Wt*tpc per core
     TT_ASSERT(NCHt % wtpc == 0);
 
+    //cout << "block_size=" << block_size << endl;
     //cout << "WTPC=" << wtpc << "Wt=" << Wt << " num_cores=" << num_cores << endl;
+
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Application Setup
+    ////////////////////////////////////////////////////////////////////////////
+    Program program = Program();
 
     // Parallelize across rows
     // TODO: Refactor by calling utility function?
@@ -145,22 +167,24 @@ operation::ProgramWithCallbacks layernorm_(
     }
     CoreRangeSet all_cores(all_cores_set);
 
+    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     auto reader_kernels = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/reader_unary_8bank_ln.cpp", all_cores,
-        DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
-        //DataMovementProcessor::RISCV_1, NOC::RISCV_0_default);
-        //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
-        //DataMovementProcessor::RISCV_1, core.x % 6 == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
-        //DataMovementProcessor::RISCV_1, core.y < 5 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
+        program,
+        "tt_metal/kernels/dataflow/reader_unary_8bank_ln.cpp",
+        all_cores,
+        {tile_dtype_is_bfloat16},
+        DataMovementProcessor::RISCV_1,
+        NOC::RISCV_1_default
+    );
 
     auto writer_kernels = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/writer_unary_8bank_ln.cpp", all_cores,
-        DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
-        //DataMovementProcessor::RISCV_0, NOC::RISCV_1_default);
-        //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
-        //DataMovementProcessor::RISCV_0, core.y < 5 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
-        //DataMovementProcessor::RISCV_0, core.x % 6 == 1 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
-        //DataMovementProcessor::RISCV_0, NOC::NOC_1);
+        program,
+        "tt_metal/kernels/dataflow/writer_unary_8bank_ln.cpp",
+        all_cores,
+        {tile_dtype_is_bfloat16},
+        DataMovementProcessor::RISCV_0,
+        NOC::RISCV_0_default
+    );
 
     vector<uint32_t> compute_args = { wtpc, Wt, num_gamma_tiles>0, num_beta_tiles>0 };
 
@@ -180,6 +204,7 @@ operation::ProgramWithCallbacks layernorm_(
     eltwise_binary_kernels->add_define("BLOCK_SIZE", block_size);
     reader_kernels->add_define("BLOCK_SIZE", block_size);
     reader_kernels->add_define("A_DRAM", is_dram(a) ? "true" : "false");
+
     reader_kernels->add_define("B_DRAM", is_dram(b) ? "true" : "false");
     reader_kernels->add_define("GAMMA_DRAM", is_dram(gamma) ? "true" : "false");
     reader_kernels->add_define("BETA_DRAM", is_dram(beta) ? "true" : "false");
@@ -192,43 +217,40 @@ operation::ProgramWithCallbacks layernorm_(
     }
 
     // Create circular buffers
-    CreateCircularBuffers( program, device, CB::c_in0,       all_cores, in0_t,  in0_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_out0,      all_cores, out0_t, out0_t*single_tile_size, DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_intermed1, all_cores, im1_t,  im1_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_in2,       all_cores, in2_t,  in2_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_in3,       all_cores, in3_t,  in3_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_in4,       all_cores, in4_t,  in4_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_intermed2, all_cores, im2_t,  im2_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_intermed0, all_cores, im0_t,  im0_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_intermed3, all_cores, im3_t,  im3_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_intermed4, all_cores, im4_t,  im4_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_in5,       all_cores, in5_t,  in5_t*single_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_in6,       all_cores, in6_t,  in6_t*single_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, device, CB::c_in0,       all_cores, in0_t,  in0_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_out0,      all_cores, out0_t, out0_t*single_tile_size, cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_intermed1, all_cores, im1_t,  im1_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_in2,       all_cores, in2_t,  in2_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_in3,       all_cores, in3_t,  in3_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_in4,       all_cores, in4_t,  in4_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_intermed2, all_cores, im2_t,  im2_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_intermed0, all_cores, im0_t,  im0_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_intermed3, all_cores, im3_t,  im3_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_intermed4, all_cores, im4_t,  im4_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_in5,       all_cores, in5_t,  in5_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, device, CB::c_in6,       all_cores, in6_t,  in6_t*single_tile_size,  cb_data_format );
     if (b) {
         // x = a+b in this notation
         // result = ln(x)*gamma + beta
         // if there's no pre-add we use cb_in0 for x, otherwise a is pre-buffered into in0, added into im6, then im6 is used as x
         // b is buffered into c_in1
-        CreateCircularBuffers( program, device, CB::c_intermed6, all_cores, im6_t,  im6_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffers( program, device, CB::c_intermed6, all_cores, im6_t,  im6_t*single_tile_size,  cb_data_format );
         // c_in1 is input buffer for b
-        CreateCircularBuffers( program, device, CB::c_in1,       all_cores, in1_t,  in1_t*single_tile_size,  DataFormat::Float16_b );
+        CreateCircularBuffers( program, device, CB::c_in1,       all_cores, in1_t,  in1_t*single_tile_size,  cb_data_format );
     }
 
+    union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler
+    union { float f; uint32_t u; } e; e.f = eps; // epsilon
     for (uint32_t icore = 0; icore < num_cores; icore++) {
         auto core = grid.wrap_core(icore);
 
-        union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler
-        union { float f; uint32_t u; } e; e.f = eps; // epsilon
         uint32_t gamma_tiles = gamma ? gamma.value().get().volume() / TILE_HW : 0;
         uint32_t beta_tiles = beta ? beta.value().get().volume() / TILE_HW : 0;
-        //std::cout << "Num gamma=" << num_gamma_tiles << " addr=" << gamma_dram_addr << std::endl;
-        //std::cout << "Num beta=" << num_beta_tiles << " addr=" << beta_dram_addr << std::endl;
         uint32_t tile_offset = wtpc*Wt*icore;
-        //std::cout << "icore=" << icore << "TO=" << tile_offset << endl;
         SetRuntimeArgs(reader_kernels, core,
-            { a_addr, wtpc, Wt, wtpc*Wt, tile_offset, 0, 0, 0, winv.u, e.u, // 0-9
-            num_gamma_tiles, gamma_dram_addr, num_beta_tiles, beta_dram_addr, b_dram_addr } // 10-14
+            { a_addr, wtpc, Wt, wtpc*Wt, tile_offset, winv.u, e.u, // 0-6
+            num_gamma_tiles, gamma_dram_addr, num_beta_tiles, beta_dram_addr, b_dram_addr } // 7-11
         );
         SetRuntimeArgs(writer_kernels, core, { dst_addr, 0, 0, wtpc*Wt, tile_offset } );
     }

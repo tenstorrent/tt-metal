@@ -8,13 +8,6 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor layernorm(const Tensor &a, float eps, const MemoryConfig& mem_config);
-Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma, const MemoryConfig& mem_config);
-Tensor layernorm_gamma_beta(const Tensor &a, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config);
-
-// computes layernorm(a+b)*gamma+beta
-Tensor add_layernorm_gamma_beta(const Tensor& a, const Tensor &b, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config);
-
 struct ResidualLayerNorm {
     float eps;
     MemoryConfig output_mem_config;
@@ -41,6 +34,7 @@ inline Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma, c
 inline Tensor layernorm_gamma_beta(const Tensor &a, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config) {
     return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, beta}).at(0));
 }
+// computes layernorm(a+b)*gamma+beta
 inline Tensor add_layernorm_gamma_beta(const Tensor &a, const Tensor& b, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config) {
     return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {b, gamma, beta}).at(0));
 }

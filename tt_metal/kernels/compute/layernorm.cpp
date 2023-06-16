@@ -8,11 +8,8 @@
 
 #include "llk_3c.h"
 
-#include "debug_print.h"
-#undef DPRINT
-
+//#include "debug_print.h"
 //#include "tt_metal/tools/profiler/kernel_profiler.hpp"
-#define MT(id) //kernel_profiler::mark_time(id);
 
 
 ALWI void ACQ() { acquire_dst(DstMode::Half); }
@@ -21,7 +18,6 @@ ALWI void REL() { release_dst(DstMode::Half); }
 
 namespace NAMESPACE {
 void MAIN {
-
     //kernel_profiler::mark_time(7);
     //kernel_profiler::init_profiler();
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);
@@ -53,25 +49,32 @@ void MAIN {
     constexpr auto cb_fusion = CB::c_intermed5; // stream gamma/beta
     constexpr auto blk = BLOCK_SIZE; // configurable size of DST block, use 1,2 for stress testing
     constexpr auto scaler0 = 0;
-    //constexpr auto cb_exps1 = CB::c_intermed4;
     #ifdef FUSE_PRE_ADD
     constexpr auto cb_x = CB::c_intermed6;
     #else
     constexpr auto cb_x = CB::c_in0;
     #endif
 
-    MT(10)
     cb_wait_front(cb_scaler, 1); // comes from the reader
     cb_wait_front(cb_eps, 1); // comes from the reader
-    cb_wait_front(cb_col1, 1); // comes from the reader
+    //cb_wait_front(cb_col1, 1); // comes from the reader
+
             //UNPACK(( { DPRINT  << TSLICE(cb_scaler, 0, 32, 0, 1) << ENDL(); } ));
             //UNPACK(( { DPRINT  << "====== Wt=" << Wt << ENDL(); } ));
+
+    /* DEBUG: Scaler tile
+    //uint32_t cb_addr = cb_read_interface[cb_scaler].fifo_rd_ptr<<4;
+    //UNPACK(( { DPRINT << "CB addr=" << cb_addr << ENDL(); } ));
+    //auto data = reinterpret_cast<volatile uint32_t*>(cb_addr);
+    //for (size_t i = 0; i < 272; i++) {
+    //   UNPACK(( { DPRINT << HEX() << data[i] << ENDL(); } ));
+    //}
+    */
 
     constexpr int cb_im_or_out = (do_gamma|do_beta) ? cb_fusion : CB::c_out0;
     //UNPACK(( DPRINT << "TR Gamma = " << do_gamma << " beta=" << do_beta << ENDL() ));
     //UNPACK(( DPRINT << "cb out id=" << cb_im_or_out << ENDL() ));
 
-    MT(20)
 
     //if (core_x() == 2 && core_y() == 1) DPRINT << "Core21" << ENDL();
 
@@ -80,289 +83,340 @@ void MAIN {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
         //auto s8 = SliceRange::hw0_32_8();
-        auto s16 = SliceRange::hw0_32_16();
+        //auto s16 = SliceRange::hw0_32_16();
         //auto h032 = SliceRange::h0_32_w0();
         //auto h0w032 = SliceRange::h0_w0_32();
         //auto h9w26 = SliceRange{.h0 = 9, .h1 = 10, .hs = 1, .w0 = 26, .w1 = 27, .ws = 1};
         //DPRINT << FIXP() << SETW(4) << SETP(3);
-            #ifdef FUSE_PRE_ADD
-                add_tiles_init();
-                for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                    ACQ();
-                            //UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
-                    cb_wait_front(cb_in, blk);
-                            //UNPACK(( { DPRINT  << "Waiting on cb_inb" << ENDL(); } ));
-                    cb_wait_front(cb_inb, blk);
-    MT(21)
-                            //UNPACK(( { DPRINT  << "Done Waiting on cb_inb" << ENDL(); } ));
-                    cb_reserve_back(cb_x, blk);
-                    for (uint32_t j = 0; j < blk; j++) {
-                            //if (ncht == 1 && wt+j == 0) UNPACK(( { DPRINT  << "pre-addA: " << ncht << ENDL(); } ));
-                            //if (ncht == 1 && wt+j == 0) UNPACK(( { DPRINT  << TSLICE(cb_in, j, s16) << ENDL(); } ));
-                            //if (ncht == 1 && wt+j == 0) UNPACK(( { DPRINT  << "pre-addB: " << ncht << ENDL(); } ));
-                            //if (ncht == 1 && wt+j == 0) UNPACK(( { DPRINT  << TSLICE(cb_inb, j, s16) << ENDL(); } ));
-                        add_tiles(cb_in, cb_inb, j, j, j);
-                        pack_tile(j, cb_x);
-                            //if (ncht == 1 && wt+j == 0) PACK(( { DPRINT  << "a+b:" << ENDL(); } ));
-                            //if (ncht == 1 && wt+j == 0) PACK(( { DPRINT  << TSLICE(cb_x, wt+j, s16) << ENDL(); } ));
-                    }
-                    REL();
-                    cb_push_back(cb_x, blk); // push the sum into the same buffer
-                    cb_pop_front(cb_in, blk);
-                    cb_pop_front(cb_inb, blk);
-                }
-                // by the end of this loop we should end up with Wt tiles in cb_x
-            #endif
 
-    MT(30)
-            // means = tensor.reduce(x, RSUM, RW, 1.0/W) # -> NCH1
-            ACQ();
-            cb_reserve_back(cb_ex, 1*onetile);
-            reduce_init_delta_v2<false>(REDUCE_OP, REDUCE_DIM);
+        /*
+         * X + Y
+         */
+        #ifdef FUSE_PRE_ADD
+            add_tiles_init();
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_wait_front(cb_x, wt+blk);
-                //UNPACK(( DPRINT  << "ln compute got " << U32(wt+blk) << ENDL() ));
+                ACQ();
+                        //UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
+                cb_wait_front(cb_in, blk);
+                        //UNPACK(( { DPRINT  << "Waiting on cb_inb" << ENDL(); } ));
+                cb_wait_front(cb_inb, blk);
+                        //UNPACK(( { DPRINT  << "Done Waiting on cb_inb" << ENDL(); } ));
+                cb_reserve_back(cb_x, blk);
                 for (uint32_t j = 0; j < blk; j++) {
-                    //UNPACK(( DPRINT  << "rem=" << U32(rem) << ENDL() ));
-                    //UNPACK(( DPRINT << "wt=" << wt << " j=" << j << ENDL() ));
-                    //UNPACK(( { DPRINT << "CB addr=" << HEX() << uint32_t(&cb_read_interface[0]) << ENDL(); } ));
-                    //if (ncht == 1 && wt+j == 0) { UNPACK(( { DPRINT  << "x: ncht=" << ncht << " wt=" << wt+j << ENDL(); } )); }
-                    //if (ncht == 1 && wt+j == 0) { UNPACK(( { DPRINT  << TSLICE8(cb_x, wt+j, s16) << ENDL(); } )); }
-                    reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_x, cb_scaler, wt+j, scaler0, dst0);
+                        //if (ncht == 1 && wt+j == 0) UNPACK(( { DPRINT  << "pre-addA: " << ncht << ENDL(); } ));
+                        //if (ncht == 1 && wt+j == 0) UNPACK(( { DPRINT  << TSLICE(cb_in, j, s16) << ENDL(); } ));
+                        //if (ncht == 1 && wt+j == 0) UNPACK(( { DPRINT  << "pre-addB: " << ncht << ENDL(); } ));
+                        //if (ncht == 1 && wt+j == 0) UNPACK(( { DPRINT  << TSLICE(cb_inb, j, s16) << ENDL(); } ));
+                    add_tiles(cb_in, cb_inb, j, j, j);
+                    pack_tile(j, cb_x);
+                        //if (ncht == 1 && wt+j == 0) PACK(( { DPRINT  << "a+b:" << ENDL(); } ));
+                        //if (ncht == 1 && wt+j == 0) PACK(( { DPRINT  << TSLICE(cb_x, wt+j, s16) << ENDL(); } ));
                 }
-                // we don't pop cb_x until we compute Ex
-            }
-            reduce_revert_delta_v2();
-                //UNPACK(( DPRINT  << "ln compute reduce done" << ENDL() ));
-
-            pack_tile(dst0, cb_ex);
-            REL();
-                    //if (ht == 3) PACK((   DPRINT  << "E[x]:" << ENDL() ));
-                    //if (ht == 3) PACK(( { DPRINT  << TSLICE(cb_ex, 0, s8) << ENDL(); } ));
-            cb_push_back(cb_ex, 1);
-    MT(40)
-
-            // compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
-            cb_wait_front(cb_ex, 1); // should have 1 tile
-    MT(41)
-            cb_reserve_back(cb_xmm, Wt);
-            sub_bcast_cols_init_short();
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                ACQ();
-                for (uint32_t wtr = 0; wtr<blk; wtr++) {
-                        //UNPACK(( { if (ht == 3 && wt+wtr >= 0) DPRINT  << "x:" << wt+wtr << ENDL(); } ));
-                        //UNPACK(( { if (ht == 3 && wt+rem == 4) DPRINT  << U32(sizeof(TSLICE32)) << ENDL(); } ));
-                        //UNPACK(( { if (ht == 3 && wt+wtr >= 0) DPRINT  << TSLICE8(cb_x, wt+wtr, s16) << ENDL(); } ));
-                        //UNPACK(( { if (ht == 3 && wt+rem >= 4) DPRINT  << CB_RD_PTR(cb_x) << ENDL(); } ));
-                        //if (ht >= 0 && wt+wtr >= 0) { UNPACK(( { DPRINT  << "x: ht=" << ht << " wt=" << wt+wtr << ENDL(); } )); }
-                        //if (ht >= 0 && wt+wtr >= 0) { UNPACK(( { DPRINT  << TSLICE8(cb_x, wt+wtr, s16) << ENDL(); } )); }
-                        //UNPACK(( { for(volatile int i = 0; i < 10000000; i++) ; } )) ;
-                    sub_tiles_bcast_cols(cb_x, cb_ex, wt+wtr, 0, wtr); // tile *= 1/(sum(exp(x)))
-                    pack_tile(wtr, cb_xmm);
-                        //PACK(( { if (ht == 3 && wt+wtr >= 4) DPRINT << "xmm[" << ht << "," << wt+wtr << "]" << ENDL(); } ));
-                        //PACK(( { if (ht == 3 && wt+wtr >= 4) DPRINT << TSLICE(cb_xmm, wt+wtr, s8) << ENDL(); } ));
-                }
-                cb_push_back(cb_xmm, blk);
-                    //PACK(( DPRINT << "Pushing to xmm" << wt << " " << blk << ENDL() ));
                 REL();
+                cb_push_back(cb_x, blk); // push the sum into the same buffer
+                cb_pop_front(cb_in, blk);
+                cb_pop_front(cb_inb, blk);
             }
-            cb_pop_front(cb_ex, 1);
-            cb_pop_front(cb_x, Wt);
-    MT(50)
+            // by the end of this loop we should end up with Wt tiles in cb_x
+        #endif
 
-            // compute temp = xmm*xmm = (x-E[x])^2
-            mul_tiles_init();
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_wait_front(cb_xmm, wt+blk); // cumulative wait
-                cb_reserve_back(cb_xmm2, blk); // can probably use less space for this if we block
+        /*
+         * E[x]
+         * means = tensor.reduce(x, RSUM, RW, 1.0/W) # -> NCH1
+         */
+        ACQ();
+        cb_reserve_back(cb_ex, 1*onetile);
+        reduce_init_delta_v2<false>(REDUCE_OP, REDUCE_DIM);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            cb_wait_front(cb_x, wt+blk);
+            //UNPACK(( DPRINT  << "ln compute got " << U32(wt+blk) << ENDL() ));
+            for (uint32_t j = 0; j < blk; j++) {
+                //UNPACK(( DPRINT  << "rem=" << U32(rem) << ENDL() ));
+                //UNPACK(( DPRINT << "wt=" << wt << " j=" << j << ENDL() ));
+                //UNPACK(( { DPRINT << "CB addr=" << HEX() << uint32_t(&cb_read_interface[0]) << ENDL(); } ));
+                //if (ncht == 1 && wt+j == 0) { UNPACK(( { DPRINT  << "x: ncht=" << ncht << " wt=" << wt+j << ENDL(); } )); }
+                //if (ncht == 1 && wt+j == 0) { UNPACK(( { DPRINT  << TSLICE8(cb_x, wt+j, s16) << ENDL(); } )); }
+                reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_x, cb_scaler, wt+j, scaler0, dst0);
+            }
+            // we don't pop cb_x until we compute Ex
+        }
+        reduce_revert_delta_v2();
+            //UNPACK(( DPRINT  << "ln compute reduce done" << ENDL() ));
+
+        pack_tile(dst0, cb_ex);
+        REL();
+                //if (ht == 3) PACK((   DPRINT  << "E[x]:" << ENDL() ));
+                //if (ht == 3) PACK(( { DPRINT  << TSLICE(cb_ex, 0, s8) << ENDL(); } ));
+        cb_push_back(cb_ex, 1);
+
+        /* DEBUG: E[x]
+        uint32_t cb_addr = cb_read_interface[cb_ex].fifo_rd_ptr<<4;
+        UNPACK(( { DPRINT << "CB addr=" << cb_addr << ENDL(); } ));
+        auto data = reinterpret_cast<volatile uint32_t*>(cb_addr);
+        for (size_t i = 0; i < 272; i++) {
+           UNPACK(( { DPRINT << HEX() << data[i] << ENDL(); } ));
+        }
+        */
+
+        /*
+         * x - E[x]
+         * compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
+         */
+        cb_wait_front(cb_ex, 1); // should have 1 tile
+        cb_reserve_back(cb_xmm, Wt);
+        sub_bcast_cols_init_short();
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            ACQ();
+            for (uint32_t wtr = 0; wtr<blk; wtr++) {
+                    //UNPACK(( { if (ht == 3 && wt+wtr >= 0) DPRINT  << "x:" << wt+wtr << ENDL(); } ));
+                    //UNPACK(( { if (ht == 3 && wt+rem == 4) DPRINT  << U32(sizeof(TSLICE32)) << ENDL(); } ));
+                    //UNPACK(( { if (ht == 3 && wt+wtr >= 0) DPRINT  << TSLICE8(cb_x, wt+wtr, s16) << ENDL(); } ));
+                    //UNPACK(( { if (ht == 3 && wt+rem >= 4) DPRINT  << CB_RD_PTR(cb_x) << ENDL(); } ));
+                    //if (ht >= 0 && wt+wtr >= 0) { UNPACK(( { DPRINT  << "x: ht=" << ht << " wt=" << wt+wtr << ENDL(); } )); }
+                    //if (ht >= 0 && wt+wtr >= 0) { UNPACK(( { DPRINT  << TSLICE8(cb_x, wt+wtr, s16) << ENDL(); } )); }
+                    //UNPACK(( { for(volatile int i = 0; i < 10000000; i++) ; } )) ;
+                sub_tiles_bcast_cols(cb_x, cb_ex, wt+wtr, 0, wtr); // tile *= 1/(sum(exp(x)))
+                pack_tile(wtr, cb_xmm);
+                    //PACK(( { if (ht == 3 && wt+wtr >= 4) DPRINT << "xmm[" << ht << "," << wt+wtr << "]" << ENDL(); } ));
+                    //PACK(( { if (ht == 3 && wt+wtr >= 4) DPRINT << TSLICE(cb_xmm, wt+wtr, s8) << ENDL(); } ));
+            }
+            cb_push_back(cb_xmm, blk);
+                //PACK(( DPRINT << "Pushing to xmm" << wt << " " << blk << ENDL() ));
+            REL();
+        }
+        cb_pop_front(cb_ex, 1);
+        cb_pop_front(cb_x, Wt);
+
+        /* DEBUG: x - E[x]
+        uint32_t cb_addr = cb_read_interface[cb_xmm].fifo_rd_ptr<<4;
+        UNPACK(( { DPRINT << "CB addr=" << cb_addr << ENDL(); } ));
+        auto data = reinterpret_cast<volatile uint32_t*>(cb_addr);
+        for (size_t i = 0; i < 272; i++) {
+           UNPACK(( { DPRINT << HEX() << data[i] << ENDL(); } ));
+        }
+        */
+
+        /* (x - E[x])^2
+         * compute temp = xmm*xmm = (x-E[x])^2
+         */
+        mul_tiles_init();
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            cb_wait_front(cb_xmm, wt+blk); // cumulative wait
+            cb_reserve_back(cb_xmm2, blk); // can probably use less space for this if we block
+            ACQ();
+            for (uint32_t wtr = 0; wtr<blk; wtr++) {
+                    //if ((ht == 0) && wt+wtr>=16) UNPACK(( DPRINT << "xmm in xmm2[" << ht << "," << wt+wtr << "]" << ENDL() ));
+                    //if ((ht == 3) && wt+wtr>=4) UNPACK(( DPRINT << "rdtiles=" << CB_RD_SZ(cb_xmm) << " " << CB_RD_LIM(cb_xmm) << ENDL() ));
+                    //if ((ht == 3) && wt+wtr>=4) UNPACK(( DPRINT << TSLICE8(cb_xmm, wt+wtr, s16) << ENDL() ));
+                mul_tiles(cb_xmm, cb_xmm, wt+wtr, wt+wtr, wtr);
+                //mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
+                pack_tile(wtr, cb_xmm2);
+                    //if ((ht == 0) && wt+wtr>=16) PACK(( DPRINT << "xmm2[" << ht << "," << wt+wtr << "]" << ENDL() ));
+                    //if ((ht == 0) && wt+wtr>=16) PACK(( DPRINT << TSLICE8(cb_xmm2, wtr, s16) << ENDL() ));
+            }
+            cb_push_back(cb_xmm2, blk);
+            REL();
+        }
+
+        /* DEBUG: (x - E[x])^2
+        uint32_t cb_addr = cb_read_interface[cb_xmm2].fifo_rd_ptr<<4;
+        UNPACK(( { DPRINT << "CB addr=" << cb_addr << ENDL(); } ));
+        auto data = reinterpret_cast<volatile uint32_t*>(cb_addr);
+        for (size_t i = 0; i < 272; i++) {
+           UNPACK(( { DPRINT << HEX() << data[i] << ENDL(); } ));
+        }
+        */
+
+        /* Var(x)
+         * compute E[(x-E[x])^2]
+         * IIRC E[x^2] - E[x]^2 trick was unstable
+         * TODO(AP): can save space here by reusing CB
+         */
+        cb_reserve_back(cb_ex2, 1);
+        reduce_init_delta_v2<false>(REDUCE_OP, REDUCE_DIM);
+        ACQ();
+        cb_wait_front(cb_xmm2, Wt);
+        //cb_wait_front(cb_xmm, Wt);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            // reduce
+            for (uint32_t wtr = 0; wtr<blk; wtr++)
+                reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_xmm2, cb_scaler, wt+wtr, scaler0, dst0);
+                //reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
+        }
+        cb_pop_front(cb_xmm2, Wt);
+        reduce_revert_delta_v2();
+        pack_tile(dst0, cb_ex2);
+                    //if (ht == 3) PACK(( DPRINT << "exmm2[" << ht << "," << 0 << "]" << ENDL() ));
+                    //if (ht == 3) PACK(( DPRINT << TSLICE(cb_ex2, 0, s8) << ENDL() ));
+        REL();
+
+        cb_push_back(cb_ex2, 1);
+        cb_wait_front(cb_ex2, 1);
+
+        /* Var(x) + eps
+         * add epsilon E[(x-E[x])^2]+eps
+         */
+        ACQ();
+        add_tiles_init();
+                //UNPACK(( DPRINT  << "cb_ex2:" << ENDL() ));
+                //UNPACK(( DPRINT  << TSLICE(cb_ex2, 0, s8) << ENDL() ));
+                //UNPACK(( DPRINT  << "eps:" << ENDL() ));
+                //for (int j = 0; j<32; j++) { UNPACK(( DPRINT  << TSLICE(cb_eps, 0, h0w032) << ENDL() )); h0w032.h0++; h0w032.h1++; }
+        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
+
+        cb_reserve_back(cb_ex2pe, 1); // 1
+        pack_tile(dst0, cb_ex2pe);
+                //if (ht == 2) PACK(( DPRINT  << "eps:" << ENDL() ));
+                //if (ht == 2) for (int j = 0; j<32; j++) { PACK(( DPRINT  << TSLICE(cb_eps, 0, h0w032) << ENDL() )); h0w032.h0++; h0w032.h1++; }
+                //if (ht == 2) PACK(( DPRINT  << "exmm2pe:" << ENDL() ));
+                //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_debug, 0, s8) << ENDL() ));
+                //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_ex2pe, 0, s8) << ENDL() ));
+        cb_push_back(cb_ex2pe, 1);
+        REL();
+
+        cb_pop_front(cb_ex2, 1);
+
+
+        /* sqrt( Var(x) + eps )
+         * sqrt( E[(x-E[x])^2] + eps )
+         */
+        cb_wait_front(cb_ex2pe, 1);
+        cb_reserve_back(cb_ex2pe, 1); // 2
+
+        ACQ();
+        copy_tile_init();
+        copy_tile(cb_ex2pe, 0, 0);
+        cb_pop_front(cb_ex2pe, 1); // 1
+        sqrt_tile_init();
+        sqrt_tile(0);
+        pack_tile(0, cb_ex2pe);
+                //if (ht == 2) PACK(( DPRINT  << "sqrt_exmm2pe:" << ENDL() ));
+                //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_ex2pe, 0, s8) << ENDL() ));
+        cb_push_back(cb_ex2pe, 1);
+        REL();
+
+        cb_wait_front(cb_ex2pe, 1);
+        cb_reserve_back(cb_ex2pe, 1); // 2
+
+        /* 1 / sqrt ( Var(x) + eps)
+         * Take reciprocal of sqrt( E[(x-E[x])^2] + eps )
+         */
+        ACQ();
+        copy_tile_init();
+        copy_tile(cb_ex2pe, 0, dst0);
+        cb_pop_front(cb_ex2pe, 1); // 1
+        recip_tile_init();
+        recip_tile(dst0);
+        pack_tile(dst0, cb_ex2pe);
+                //if (ht == 2) PACK(( DPRINT  << "1/sqrt_exmm2pe:" << ENDL() ));
+                //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_ex2pe, 0, s8) << ENDL() ));
+        cb_push_back(cb_ex2pe, 1);
+        REL();
+
+        /* DEBUG: 1 / sqrt ( Var(x) + eps)
+        uint32_t cb_addr = cb_read_interface[cb_ex2pe].fifo_rd_ptr<<4;
+        UNPACK(( { DPRINT << "CB addr=" << cb_addr << ENDL(); } ));
+        auto data = reinterpret_cast<volatile uint32_t*>(cb_addr);
+        for (size_t i = 0; i < 272; i++) {
+           UNPACK(( { DPRINT << HEX() << data[i] << ENDL(); } ));
+        }
+        */
+
+        /* Mask out incorrect values right of [:, 0:1]
+         * Incorrect values com from reduce along row
+         * This is not needed if treat these values as DC's
+         */
+        //cb_reserve_back(cb_ex2pe, 1); // 2
+        //cb_wait_front(cb_ex2pe, 1);
+
+        //ACQ();
+        //mul_tiles_init();
+        //mul_tiles(cb_ex2pe, cb_col1, 0, 0, dst0);
+        //cb_pop_front(cb_ex2pe, 1);
+        //pack_tile(dst0, cb_ex2pe);
+        //        //if (ht == 2) PACK(( DPRINT  << "mask_col1_sqrt_exmm2pe:" << ENDL() ));
+        //        //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_col1, 0, s8) << ENDL() ));
+        //        //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_ex2pe, 0, s8) << ENDL() ));
+        //REL();
+        //cb_push_back(cb_ex2pe, 1);
+
+
+        /* ln(x) * gamma + beta (gamma and beta are optional)
+         * now xmm = (x-E[x])
+         * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
+         * just need to bcast_mul xmm with cb_ex2pe
+         */
+        cb_reserve_back(cb_ex2pe, 1); // 2
+        cb_wait_front(cb_ex2pe, 1);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+                        //if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
+                        //if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
+            cb_reserve_back(cb_im_or_out, blk);
+
+            ACQ();
+            mul_bcast_cols_init_short();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    //UNPACK(( DPRINT << "ExpsInBcast:[" << ht << "," << wt << "]" << ENDL() ));
+                    //UNPACK(( DPRINT << TSLICE(cb_exps, wt+wtr, s8) << ENDL() ));
+                    //UNPACK(( DPRINT << "RecipsInBcast:" << ENDL() ));
+                    //UNPACK(( DPRINT << TSLICE(cb_recips, 0, s8) << ENDL() ));
+                // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
+                mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt+wtr, 0, wtr); // tile *= 1/(sum(exp(x)))
+                pack_tile(wtr, cb_im_or_out); // pack either to intermediate (cb_fusion or out0)
+                    //if (ht == 3 && wt+wtr==3) PACK(( DPRINT << "xmm/v2eps[" << ht << "," << wt+wtr << "]" << ENDL() ));
+                    //if (ht == 3 && wt+wtr==3) PACK(( DPRINT << TSLICE(CB::c_out0, 0, h9w26) << ENDL() ));
+                    //if (ht == 3 && wt+wtr==3) PACK(( DPRINT << TSLICE(CB::c_out0, 0, s8) << ENDL() ));
+            }
+            cb_push_back(cb_im_or_out, blk); // if no gamma/beta are provided, this will be passed on to the writer
+            REL();
+
+            if (do_gamma) {
                 ACQ();
-                for (uint32_t wtr = 0; wtr<blk; wtr++) {
-                        //if ((ht == 0) && wt+wtr>=16) UNPACK(( DPRINT << "xmm in xmm2[" << ht << "," << wt+wtr << "]" << ENDL() ));
-                        //if ((ht == 3) && wt+wtr>=4) UNPACK(( DPRINT << "rdtiles=" << CB_RD_SZ(cb_xmm) << " " << CB_RD_LIM(cb_xmm) << ENDL() ));
-                        //if ((ht == 3) && wt+wtr>=4) UNPACK(( DPRINT << TSLICE8(cb_xmm, wt+wtr, s16) << ENDL() ));
-                    mul_tiles(cb_xmm, cb_xmm, wt+wtr, wt+wtr, wtr);
-                    pack_tile(wtr, cb_xmm2);
-                        //if ((ht == 0) && wt+wtr>=16) PACK(( DPRINT << "xmm2[" << ht << "," << wt+wtr << "]" << ENDL() ));
-                        //if ((ht == 0) && wt+wtr>=16) PACK(( DPRINT << TSLICE8(cb_xmm2, wtr, s16) << ENDL() ));
-                }
-                cb_push_back(cb_xmm2, blk);
-                REL();
-            }
-
-            // compute E[(x-E[x])^2]
-            // IIRC E[x^2] - E[x]^2 trick was unstable
-            // TODO(AP): can save space here by reusing CB
-            cb_reserve_back(cb_ex2, 1);
-            reduce_init_delta_v2<false>(REDUCE_OP, REDUCE_DIM);
-    MT(60)
-            ACQ();
-            cb_wait_front(cb_xmm2, Wt);
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                // reduce
-                for (uint32_t wtr = 0; wtr<blk; wtr++)
-                    reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_xmm2, cb_scaler, wt+wtr, scaler0, dst0);
-            }
-            cb_pop_front(cb_xmm2, Wt);
-            reduce_revert_delta_v2();
-            pack_tile(dst0, cb_ex2);
-                        //if (ht == 3) PACK(( DPRINT << "exmm2[" << ht << "," << 0 << "]" << ENDL() ));
-                        //if (ht == 3) PACK(( DPRINT << TSLICE(cb_ex2, 0, s8) << ENDL() ));
-            REL();
-    MT(70)
-
-            cb_push_back(cb_ex2, 1);
-            cb_wait_front(cb_ex2, 1);
-
-            //cb_reserve_back(cb_debug, 1);
-
-            ACQ();
-            // add epsilon E[(x-E[x])^2]+eps
-            {
-                add_tiles_init();
-                        //UNPACK(( DPRINT  << "cb_ex2:" << ENDL() ));
-                        //UNPACK(( DPRINT  << TSLICE(cb_ex2, 0, s8) << ENDL() ));
-                        //UNPACK(( DPRINT  << "eps:" << ENDL() ));
-                        //for (int j = 0; j<32; j++) { UNPACK(( DPRINT  << TSLICE(cb_eps, 0, h0w032) << ENDL() )); h0w032.h0++; h0w032.h1++; }
-                add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-
-                cb_reserve_back(cb_ex2pe, 1); // 1
-                //pack_tile(dst0, cb_debug);
-                pack_tile(dst0, cb_ex2pe);
-                        //if (ht == 2) PACK(( DPRINT  << "eps:" << ENDL() ));
-                        //if (ht == 2) for (int j = 0; j<32; j++) { PACK(( DPRINT  << TSLICE(cb_eps, 0, h0w032) << ENDL() )); h0w032.h0++; h0w032.h1++; }
-                        //if (ht == 2) PACK(( DPRINT  << "exmm2pe:" << ENDL() ));
-                        //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_debug, 0, s8) << ENDL() ));
-                        //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_ex2pe, 0, s8) << ENDL() ));
-                cb_push_back(cb_ex2pe, 1);
-            }
-            REL();
-
-            cb_pop_front(cb_ex2, 1);
-
-    MT(80)
-            cb_wait_front(cb_ex2pe, 1);
-            cb_reserve_back(cb_ex2pe, 1); // 2
-
-            ACQ();
-            { // sqrt( E[(x-E[x])^2] + eps )
-                copy_tile_init();
-                copy_tile(cb_ex2pe, 0, 0);
-                cb_pop_front(cb_ex2pe, 1); // 1
-                sqrt_tile_init();
-                sqrt_tile(0);
-                pack_tile(0, cb_ex2pe);
-                        //if (ht == 2) PACK(( DPRINT  << "sqrt_exmm2pe:" << ENDL() ));
-                        //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_ex2pe, 0, s8) << ENDL() ));
-                cb_push_back(cb_ex2pe, 1);
-            }
-            REL();
-
-    MT(90)
-            cb_wait_front(cb_ex2pe, 1);
-            cb_reserve_back(cb_ex2pe, 1); // 2
-
-
-            ACQ();
-            { // 1.0 / sqrt( E[(x-E[x])^2] + eps )
-                copy_tile_init();
-                copy_tile(cb_ex2pe, 0, dst0);
-                cb_pop_front(cb_ex2pe, 1); // 1
-                recip_tile_init();
-                recip_tile(dst0);
-                pack_tile(dst0, cb_ex2pe);
-                        //if (ht == 2) PACK(( DPRINT  << "1/sqrt_exmm2pe:" << ENDL() ));
-                        //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_ex2pe, 0, s8) << ENDL() ));
-                cb_push_back(cb_ex2pe, 1);
-            }
-            REL();
-
-            cb_reserve_back(cb_ex2pe, 1); // 2
-    MT(100)
-            cb_wait_front(cb_ex2pe, 1);
-
-            ACQ();
-            // mask out incorrect values right of [:, 0:1]
-            { // mask_col( 1.0 / sqrt( E[(x-E[x])^2] + eps ) )
-                mul_tiles_init();
-                mul_tiles(cb_ex2pe, cb_col1, 0, 0, dst0);
-                cb_pop_front(cb_ex2pe, 1);
-                pack_tile(dst0, cb_ex2pe);
-                        //if (ht == 2) PACK(( DPRINT  << "mask_col1_sqrt_exmm2pe:" << ENDL() ));
-                        //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_col1, 0, s8) << ENDL() ));
-                        //if (ht == 2) PACK(( DPRINT  << TSLICE(cb_ex2pe, 0, s8) << ENDL() ));
-            }
-            REL();
-            cb_push_back(cb_ex2pe, 1);
-
-            cb_reserve_back(cb_ex2pe, 1); // 2
-            cb_wait_front(cb_ex2pe, 1);
-
-    MT(110)
-            // now xmm = (x-E[x])
-            // we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
-            // just need to bcast_mul
-            cb_wait_front(cb_ex2pe, 1);
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                            //if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
-                            //if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
-                cb_reserve_back(cb_im_or_out, blk);
-
-                ACQ();
-                mul_bcast_cols_init_short();
+                uint32_t cb_outg = do_beta ? cb_fusion : CB::c_out0;
+                mul_bcast_rows_init_short();
+                cb_reserve_back(cb_outg, blk);
+                cb_wait_front(cb_gamma, wt+blk); // we don't pop, TODO: only wait on first ht
+                cb_wait_front(cb_fusion, blk);
+                //UNPACK(( DPRINT << "wait gamma=" << nwait_g << ENDL() ));
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                        //UNPACK(( DPRINT << "ExpsInBcast:[" << ht << "," << wt << "]" << ENDL() ));
-                        //UNPACK(( DPRINT << TSLICE(cb_exps, wt+wtr, s8) << ENDL() ));
-                        //UNPACK(( DPRINT << "RecipsInBcast:" << ENDL() ));
-                        //UNPACK(( DPRINT << TSLICE(cb_recips, 0, s8) << ENDL() ));
-                    // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
-                    mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt+wtr, 0, wtr); // tile *= 1/(sum(exp(x)))
-                    pack_tile(wtr, cb_im_or_out); // pack either to intermediate (cb_fusion or out0)
-                        //if (ht == 3 && wt+wtr==3) PACK(( DPRINT << "xmm/v2eps[" << ht << "," << wt+wtr << "]" << ENDL() ));
-                        //if (ht == 3 && wt+wtr==3) PACK(( DPRINT << TSLICE(CB::c_out0, 0, h9w26) << ENDL() ));
-                        //if (ht == 3 && wt+wtr==3) PACK(( DPRINT << TSLICE(CB::c_out0, 0, s8) << ENDL() ));
+                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, wtr, wt+wtr, wtr); // tile *= 1/(sum(exp(x)))
+                    pack_tile(wtr, cb_outg); // pack either to intermediate (cb_fusion or out0)
                 }
-                cb_push_back(cb_im_or_out, blk); // if no gamma/beta are provided, this will be passed on to the writer
+                cb_pop_front(cb_fusion, blk);
+                // we don't pop gamma
+                //UNPACK(( DPRINT << "cb_outg=" << cb_outg << ENDL() ));
+                cb_push_back(cb_outg, blk);
+                // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
                 REL();
-    MT(120)
-
-                if (do_gamma) {
-                    ACQ();
-                    uint32_t cb_outg = do_beta ? cb_fusion : CB::c_out0;
-                    mul_bcast_rows_init_short();
-                    cb_reserve_back(cb_outg, blk);
-                    cb_wait_front(cb_gamma, wt+blk); // we don't pop, TODO: only wait on first ht
-                    cb_wait_front(cb_fusion, blk);
-                    //UNPACK(( DPRINT << "wait gamma=" << nwait_g << ENDL() ));
-                    for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                        mul_tiles_bcast_rows(cb_fusion, cb_gamma, wtr, wt+wtr, wtr); // tile *= 1/(sum(exp(x)))
-                        pack_tile(wtr, cb_outg); // pack either to intermediate (cb_fusion or out0)
-                    }
-                    cb_pop_front(cb_fusion, blk);
-                    // we don't pop gamma
-                    //UNPACK(( DPRINT << "cb_outg=" << cb_outg << ENDL() ));
-                    cb_push_back(cb_outg, blk);
-                    // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
-                    REL();
-                }
-                if (do_beta) {
-                    ACQ();
-                    add_bcast_rows_init_short();
-                    cb_reserve_back(CB::c_out0, blk);
-                    cb_wait_front(cb_beta, wt+blk); // TODO: optimization - only wait on first ht
-                    cb_wait_front(cb_fusion, blk);
-                    for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                        add_tiles_bcast_rows(cb_fusion, cb_beta, wtr, wt+wtr, wtr); // tile *= 1/(sum(exp(x)))
-                        pack_tile(wtr, CB::c_out0); // pack either to intermediate (cb_fusion or out0)
-                    }
-                    cb_pop_front(cb_fusion, blk);
-                    // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
-                    cb_push_back(CB::c_out0, blk);
-                    REL();
-                }
             }
-            cb_pop_front(cb_ex2pe, 1);
-            cb_pop_front(cb_xmm, Wt);
-    MT(130)
+            if (do_beta) {
+                ACQ();
+                add_bcast_rows_init_short();
+                cb_reserve_back(CB::c_out0, blk);
+                cb_wait_front(cb_beta, wt+blk); // TODO: optimization - only wait on first ht
+                cb_wait_front(cb_fusion, blk);
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    add_tiles_bcast_rows(cb_fusion, cb_beta, wtr, wt+wtr, wtr); // tile *= 1/(sum(exp(x)))
+                    pack_tile(wtr, CB::c_out0); // pack either to intermediate (cb_fusion or out0)
+                }
+                cb_pop_front(cb_fusion, blk);
+                // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
+                cb_push_back(CB::c_out0, blk);
+                REL();
+            }
+        }
+        cb_pop_front(cb_ex2pe, 1);
+        cb_pop_front(cb_xmm, Wt);
+
+        /* DEBUG: ln(x)
+        uint32_t cb_addr = cb_read_interface[cb_im_or_out].fifo_rd_ptr<<4;
+        UNPACK(( { DPRINT << "CB addr=" << cb_addr << ENDL(); } ));
+        auto data = reinterpret_cast<volatile uint32_t*>(cb_addr);
+        for (size_t i = 0; i < 272; i++) {
+           UNPACK(( { DPRINT << HEX() << data[i] << ENDL(); } ));
+        }
+        */
+
     } // NCHt loop
     //cb_pop_front(cb_scaler, 1); // optional for correctness
     //cb_pop_front(cb_eps, 1); // optional for correctness
