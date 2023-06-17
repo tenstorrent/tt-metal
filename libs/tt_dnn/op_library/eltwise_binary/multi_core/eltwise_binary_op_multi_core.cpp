@@ -12,7 +12,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Program eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType::Enum op_type) {
+operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType::Enum op_type) {
 
     Program program{};
 
@@ -153,31 +153,78 @@ Program eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& outp
         tt_metal::SetRuntimeArgs(
             binary_reader_kernel,
             core,
-            {src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
-            (std::uint32_t)num_tiles_per_core,
-            src1_dram_buffer->address(),
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
-            num_tiles_per_core,
-            num_tiles_read }
+            {
+                src0_dram_buffer->address(),
+                (std::uint32_t)dram_src0_noc_xy.x,
+                (std::uint32_t)dram_src0_noc_xy.y,
+                (std::uint32_t)num_tiles_per_core,
+                src1_dram_buffer->address(),
+                (std::uint32_t)dram_src1_noc_xy.x,
+                (std::uint32_t)dram_src1_noc_xy.y,
+                num_tiles_per_core,
+                num_tiles_read
+            }
         );
 
         tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
-            {dst_dram_buffer->address(),
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
-            num_tiles_per_core,
-            num_tiles_read }
+            {
+                dst_dram_buffer->address(),
+                (std::uint32_t)dram_dst_noc_xy.x,
+                (std::uint32_t)dram_dst_noc_xy.y,
+                num_tiles_per_core,
+                num_tiles_read
+            }
         );
         num_tiles_read+=num_tiles_per_core;
     }
 
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return program;
+    auto override_runtime_args_callback = [
+            binary_reader_kernel,
+            unary_writer_kernel,
+            num_cores,
+            num_cores_y
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_noc_xy_a = src_dram_buffer_a->noc_coordinates();
+
+        auto src_dram_buffer_b = input_buffers.at(1);
+        auto src_dram_noc_xy_b = src_dram_buffer_b->noc_coordinates();
+
+        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+
+        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+            {
+                auto runtime_args = GetRuntimeArgs(binary_reader_kernel, core);
+                runtime_args[0] = src_dram_buffer_a->address();
+                runtime_args[1] = uint32_t(src_dram_noc_xy_a.x);
+                runtime_args[2] = uint32_t(src_dram_noc_xy_a.y);
+                runtime_args[4] = src_dram_buffer_b->address();
+                runtime_args[5] = uint32_t(src_dram_noc_xy_b.x);
+                runtime_args[6] = uint32_t(src_dram_noc_xy_b.y);
+                SetRuntimeArgs(binary_reader_kernel, core, runtime_args);
+            }
+
+            {
+                auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+                runtime_args[0] = dst_dram_buffer->address();
+                runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
+                runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
+                SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 }  // namespace tt_metal

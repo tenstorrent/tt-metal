@@ -1,5 +1,4 @@
-#include "tt_metal/host_api.hpp"
-
+#include "tt_dnn/op_library/operation_cache.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -42,37 +41,65 @@ bool run_test(Host* host, Device* device, Args ...  args) {
     return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
 }
 
-int main(int argc, char **argv) {
-    bool pass = true;
+int main() {
+    using tt::constants::TILE_HEIGHT;
+    using tt::constants::TILE_WIDTH;
 
-    try {
-        int pci_express_slot = 0;
-        auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
-        auto host = tt::tt_metal::GetHost();
+    int pci_express_slot = 0;
+    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+    auto host = tt::tt_metal::GetHost();
 
-        pass &= tt::tt_metal::InitializeDevice(device);
+    TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 
-        pass &= run_test<host_function<std::plus<float>>, device_function<tt::tt_metal::add>>(host, device);
-        pass &= run_test<host_function<std::minus<float>>, device_function<tt::tt_metal::sub>>(host, device);
-        pass &= run_test<host_function<std::multiplies<float>>, device_function<tt::tt_metal::mul>>(host, device, 1e-2f, 1e-3f);
-
-        pass &= tt::tt_metal::CloseDevice(device);
-
-    } catch (const std::exception &e) {
-        pass = false;
-        // Capture the exception error message
-        tt::log_error(tt::LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        tt::log_error(tt::LogTest, "System error message: {}", std::strerror(errno));
+    {
+        auto allclose = run_test<host_function<std::plus<float>>, device_function<tt::tt_metal::add>>(host, device);
+        TT_ASSERT(allclose);
     }
 
-    if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
-    } else {
-        tt::log_fatal(tt::LogTest, "Test Failed");
+    {
+        auto allclose = run_test<host_function<std::minus<float>>, device_function<tt::tt_metal::sub>>(host, device);
+        TT_ASSERT(allclose);
     }
 
-    TT_ASSERT(pass);
+    {
+        auto allclose = run_test<host_function<std::multiplies<float>>, device_function<tt::tt_metal::mul>>(host, device, 1e-2f, 1e-3f);
+        TT_ASSERT(allclose);
+    }
+
+    tt::tt_metal::operation_cache::enable();
+
+    auto run_binary_ops = [&] {
+        {
+            auto allclose = run_test<host_function<std::plus<float>>, device_function<tt::tt_metal::add>>(host, device);
+            TT_ASSERT(allclose);
+        }
+
+        {
+            auto allclose = run_test<host_function<std::minus<float>>, device_function<tt::tt_metal::sub>>(host, device);
+            TT_ASSERT(allclose);
+        }
+
+        {
+            auto allclose = run_test<host_function<std::multiplies<float>>, device_function<tt::tt_metal::mul>>(host, device, 1e-2f, 1e-3f);
+            TT_ASSERT(allclose);
+        }
+    };
+
+    run_binary_ops();
+    run_binary_ops();
+
+    // Allocate a tensor to show that the addresses aren't cached
+    auto input_tensor = tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
+
+    run_binary_ops();
+
+    TT_ASSERT(tt::tt_metal::operation_cache::num_cached_programs() == 3);
+
+    tt::tt_metal::operation_cache::disable_and_clear();
+
+    TT_ASSERT(tt::tt_metal::operation_cache::num_cached_programs() == 0);
+
+    TT_ASSERT(tt::tt_metal::CloseDevice(device));
 
     return 0;
 }

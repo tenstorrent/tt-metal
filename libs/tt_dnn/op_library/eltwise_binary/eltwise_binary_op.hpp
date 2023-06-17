@@ -20,8 +20,8 @@ struct BinaryOpParallelizationStrategy {
     static const vector<Enum> all() { return { MULTI_CORE, SINGLE_CORE }; }
 };
 
-Program eltwise_binary_single_core (const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType::Enum op_type);
-Program eltwise_binary_multi_core (const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType::Enum op_type);
+operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType::Enum op_type);
+operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType::Enum op_type);
 
 struct EltwiseBinary {
     const BinaryOpType::Enum op_type;
@@ -30,6 +30,7 @@ struct EltwiseBinary {
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
 
 inline Tensor add(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {

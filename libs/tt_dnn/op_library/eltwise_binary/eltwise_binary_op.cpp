@@ -2,6 +2,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 using namespace tt::constants;
 
 namespace eltwise_binary_op_utils {
@@ -58,13 +60,24 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
 
     switch (eltwise_binary_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b)){
         case BinaryOpParallelizationStrategy::MULTI_CORE:
-            return {eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type)};
+            return eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
             break;
         case BinaryOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return {eltwise_binary_single_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type)};
+            return eltwise_binary_single_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
     }
+}
 
+operation::Hash EltwiseBinary::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
+
+    return fmt::format(
+        "eltwise_binary_{}_{}_{}",
+         magic_enum::enum_name(this->op_type),
+         operation::hash_tensor(input_tensor_a),
+         operation::hash_tensor(input_tensor_b)
+    );
 }
 
 }  // namespace tt_metal
