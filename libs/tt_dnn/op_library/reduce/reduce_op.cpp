@@ -3,6 +3,8 @@
 #include "tt_metal/common/constants.hpp"
 #include <limits>
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 using namespace tt::constants;
 
 namespace reduce_op_utils {
@@ -123,6 +125,19 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
     } else {
         return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler}, input_tensor, pad_value);
     }
+}
+
+
+operation::Hash Reduce::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+
+    return fmt::format(
+        "reduce_{}_{}_{}_{}",
+         magic_enum::enum_name(this->math_op),
+         magic_enum::enum_name(this->dim),
+         this->scaler,
+         operation::hash_tensor(input_tensor)
+    );
 }
 
 }  // namespace tt_metal

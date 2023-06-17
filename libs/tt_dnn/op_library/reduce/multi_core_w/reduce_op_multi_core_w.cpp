@@ -12,7 +12,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Program reduce_multi_core_w(const Tensor &a, Tensor& output, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
+operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& output, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
 
     TT_ASSERT(reduce_dim == ReduceOpDim::W);
     const auto shape = a.shape();
@@ -177,8 +177,45 @@ Program reduce_multi_core_w(const Tensor &a, Tensor& output, ReduceOpMath::Enum 
         num_tiles_read+=num_tensor_tiles_per_core;
     }
 
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return program;
+    auto override_runtime_args_callback = [
+            reader_kernel,
+            writer_kernel,
+            num_cores,
+            num_cores_y
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
+
+        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+
+        for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+            {
+                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                runtime_args[0] = src_dram_buffer->address();
+                runtime_args[1] = uint32_t(src_dram_noc_xy.x);
+                runtime_args[2] = uint32_t(src_dram_noc_xy.y);
+                SetRuntimeArgs(reader_kernel, core, runtime_args);
+            }
+
+            {
+                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                runtime_args[0] = dst_dram_buffer->address();
+                runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
+                runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
+                SetRuntimeArgs(writer_kernel, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 }  // namespace tt_metal
