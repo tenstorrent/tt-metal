@@ -15,7 +15,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-namespace unit_tests::single_core_matmul_compute {
+namespace unit_tests::compute::matmul {
 struct SingleCoreMatmulConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;

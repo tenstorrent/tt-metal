@@ -15,7 +15,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-namespace unit_tests::single_core_binary_compute {
+namespace unit_tests::compute::binary {
 const map<string, string> binary_op_name_to_op_code = {
     {"add", "0"},
     {"sub", "1"},
@@ -206,10 +206,10 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); });
     return pass;
 }
-}  // namespace unit_tests::single_core_binary_compute
+}  // namespace unit_tests::compute::binary
 TEST_SUITE("BinaryCompute") {
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleCore") {
-        unit_tests::single_core_binary_compute::SingleCoreBinaryConfig test_config = {
+        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
             .tile_byte_size = 2 * 32 * 32,
             .output_dram_channel = 0,
             .output_dram_byte_address = 0,
@@ -224,30 +224,30 @@ TEST_SUITE("BinaryCompute") {
             test_config.num_tiles = 1;
             SUBCASE("add") {
                 test_config.binary_op = "add";
-                REQUIRE(unit_tests::single_core_binary_compute::single_core_binary(device_, test_config));
+                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
             }
             SUBCASE("sub") {
                 test_config.binary_op = "sub";
-                REQUIRE(unit_tests::single_core_binary_compute::single_core_binary(device_, test_config));
+                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
             }
             SUBCASE("sub") {
                 test_config.binary_op = "sub";
-                REQUIRE(unit_tests::single_core_binary_compute::single_core_binary(device_, test_config));
+                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
             }
         }
         SUBCASE("MultiTile") {
             test_config.num_tiles = 4;
             SUBCASE("add") {
                 test_config.binary_op = "add";
-                REQUIRE(unit_tests::single_core_binary_compute::single_core_binary(device_, test_config));
+                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
             }
             SUBCASE("sub") {
                 test_config.binary_op = "sub";
-                REQUIRE(unit_tests::single_core_binary_compute::single_core_binary(device_, test_config));
+                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
             }
             SUBCASE("sub") {
                 test_config.binary_op = "sub";
-                REQUIRE(unit_tests::single_core_binary_compute::single_core_binary(device_, test_config));
+                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
             }
         }
     }
