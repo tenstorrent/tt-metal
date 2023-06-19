@@ -83,6 +83,7 @@ inline void llk_setup_outputs() {
 }
 
 void stream_wait_for_free_tiles(std::uint32_t operand, std::uint32_t stream_id, std::int32_t num_tiles, std::uint32_t num_words, std::uint32_t fork_indx, std::uint32_t dram_output_no_push) {
+  
   bool dram_output_no_push_bool = (dram_output_no_push & (1 << fork_indx)) ? 1 : 0;
 
   if (dram_output_no_push_bool) {
@@ -96,13 +97,13 @@ void stream_wait_for_free_tiles(std::uint32_t operand, std::uint32_t stream_id, 
     if (free_tiles < num_tiles) {
         uint32_t event_id = perf::get_event_id(
             operand, num_tiles, perf::EventType::WAIT_FOR_FREE_TILES, current_outer_loop_iter);
-        record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+        record_timestamp_64b(event_id, 9);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
         do {
             tiles_acked = (std::uint16_t) reg_read((std::uint32_t)tiles_acked_ptr);
             free_tiles_wrap = outputs[output].f.fifo_size_tiles - (outputs[output].f.tiles_received - tiles_acked);
             free_tiles = (std::int32_t) free_tiles_wrap;
         } while (free_tiles < num_tiles);
-        record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+        record_timestamp_64b(event_id, 9);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
     }
 #else
     do {
@@ -124,7 +125,7 @@ void stream_wait_for_free_tiles(std::uint32_t operand, std::uint32_t stream_id, 
   if (stream_not_ready) {
       uint32_t event_id = perf::get_event_id(
           operand, num_tiles, perf::EventType::WAIT_FOR_FREE_TILES, current_outer_loop_iter);
-      record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+      record_timestamp_64b(event_id, 9);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
       do {
           free_words = stream_get_free_words(stream_id);
           if (dram_output_no_push_bool)
@@ -132,7 +133,7 @@ void stream_wait_for_free_tiles(std::uint32_t operand, std::uint32_t stream_id, 
           else
               stream_not_ready = free_words < num_words;
       } while (stream_not_ready);
-      record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+      record_timestamp_64b(event_id, 9);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
   }
 #else
   do {
@@ -214,13 +215,13 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
             if (free_tiles < num_tiles) {
                 uint32_t event_id = perf::get_event_id(
                     operand, num_tiles, perf::EventType::WAIT_FOR_FREE_TILES, current_outer_loop_iter);
-                record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+                record_timestamp_64b(event_id, 9);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
                 do {
                     tiles_acked = (std::uint16_t) reg_read((std::uint32_t)tiles_acked_ptr);
                     free_tiles_wrap = outputs[output].f.fifo_size_tiles - (outputs[output].f.tiles_received - tiles_acked);
                     free_tiles = (std::int32_t) free_tiles_wrap;
                 } while (free_tiles < num_tiles);
-                record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+                record_timestamp_64b(event_id, 9);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
             }
     #else
             do {
@@ -244,10 +245,10 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
         if (regfile[p_gpr_pack::PACK_STREAM_SYNC + output] > (0)) {
             uint32_t event_id = perf::get_event_id(
                 operand, num_tiles, perf::EventType::WAIT_FOR_FREE_TILES, current_outer_loop_iter);
-            record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+            record_timestamp_64b(event_id, 9);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
             while (regfile[p_gpr_pack::PACK_STREAM_SYNC + output] > (0))
                 ;  // Wait for prev push_tiles to complete write to register
-            record_timestamp_64b(event_id, 6);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
+            record_timestamp_64b(event_id, 9);  // Leave space for last-pack end-time, its possible upper 32b, and num_tiles
         }
         if constexpr (!skip_sync) {
             regfile[p_gpr_pack::PACK_STREAM_SYNC + output]++;
@@ -417,6 +418,15 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
 #if OVERLAY_OUTPUT_DECOUPLE == 1
     brisc_auto_clearing_en = is_output_operand_decoupled(operand);
 #endif
+    if (!operand_is_intermediate(operand)) {
+        uint16_t num_tiles_pushing = num_tiles;
+        if (outputs[output].f.fork) {
+            for (std::uint32_t k = 0; k < outputs[output].f.num_fork_streams; k++) {
+                num_tiles_pushing += num_tiles;
+            }
+        }
+        increment_pack_tiles(num_tiles_pushing);
+    }
 #endif
 
     std::uint32_t stream_id = get_operand_stream_id(operand);

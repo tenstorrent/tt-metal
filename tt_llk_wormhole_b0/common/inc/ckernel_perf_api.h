@@ -79,10 +79,15 @@ inline void record_pack_input_init_timestamp() {
    }
 }
 
-inline void record_pack_input_end_timestamp() {
+void record_pack_input_end_timestamp() {
    if (record_perf_events) {
       uint32_t event_id = perf::get_event_id(0, 0, perf::EventType::PACK_EACH_INPUT, current_outer_loop_iter);
-      record_timestamp_64b(event_id);      
+      record_timestamp_64b(event_id);
+      if (perf_events_target_idx == 1) {
+         uint32_t event_id_num_tiles_pack = perf::get_event_id(0, 0, perf::EventType::NUM_TILES_PACK, 0);
+         uint16_t num_tiles = regfile[p_gpr_pack::PERF_PACK_NUM_TILES] & 0xffff;
+         record_perf_value_and_check_overflow(event_id_num_tiles_pack, num_tiles, 0);
+      }
    }
 }
 
@@ -109,12 +114,35 @@ inline void record_perf_math_counter() {
    }
 }
 
-inline void record_unpack_first_instruction_timestamp() {
+void record_unpack_num_tiles() {
+   if (perf_events_target_idx == 1) {
+      for (uint8_t operand = 0; operand < PERF_MAX_NUM_INPUTS; operand++) {
+         uint regfile_base_idx = p_gpr_unpack::PERF_UNPACK_NUM_TILES_0;
+         regfile_base_idx += (operand >> 1);
+         bool upper = operand & 0b1;
+         uint16_t num_tiles;
+         if (upper) {
+            num_tiles = (regfile[regfile_base_idx] >> 16) & 0xffff;
+         } else {
+            num_tiles = regfile[regfile_base_idx] & 0xffff;
+         }
+         if (num_tiles != 0) {
+            uint32_t event_id_num_tiles_unpack = perf::get_event_id(operand, 0, perf::EventType::NUM_TILES_UNPACK, 0);
+            record_perf_value_and_check_overflow(event_id_num_tiles_unpack, num_tiles, 0);
+         }
+      }
+   }
+}
+
+void record_unpack_first_instruction_timestamp() {
    if (record_perf_events) {
       uint32_t clock_lo = regfile[p_gpr_unpack::PERF_FIRST_UNP_LO];
       uint32_t clock_hi = regfile[p_gpr_unpack::PERF_FIRST_UNP_HI];
       uint32_t event_id_last_wait_tile = perf::get_event_id(0, 0, perf::EventType::UNPACK_FIRST_INSTRUCTION, current_outer_loop_iter);
       record_perf_value_and_check_overflow(event_id_last_wait_tile, clock_lo, clock_hi);
+      if (perf_events_target_idx == 1) {
+         record_unpack_num_tiles();
+      }
    }
 }
 

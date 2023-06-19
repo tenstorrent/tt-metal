@@ -69,13 +69,13 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
         if (num_tiles_recv < num_tiles_u) {
             uint32_t event_id = perf::get_event_id(
                 operand, num_tiles, perf::EventType::WAIT_FOR_INCOMING_TILES, current_outer_loop_iter);
-            record_timestamp_64b(event_id, 3); // Leave space for first-unpack-instruction
+            record_timestamp_64b(event_id, 9); // Leave space for first-unpack-instruction (3 words) and tile count for first 2 operands (6 words)
             do {
                 tiles_received = (std::uint16_t) reg_read((std::uint32_t)tiles_received_ptr);
                 uint16_t num_tiles_recv = tiles_received - operands[input].f.tiles_acked;
             if (num_tiles_recv >= num_tiles_u) break;
             } while (1);
-            record_timestamp_64b(event_id, 3); // Leave space for first-unpack-instruction
+            record_timestamp_64b(event_id, 9); // Leave space for first-unpack-instruction (3 words) and tile count for first 2 operands (6 words)
         }
     #else
         do {
@@ -130,6 +130,9 @@ inline void llk_pop_tiles(
     }
 
 #if defined(PERF_DUMP)
+    if (!operand_is_intermediate(operand) && operand < PERF_MAX_NUM_INPUTS) {
+        increment_unpack_tiles(operand, num_tiles);
+    }
     #if SKIP_UNP == 1 
         if (!operand_is_intermediate(operand)) {
             volatile std::uint32_t tt_reg_ptr * tiles_acked_ptr = get_operand_tiles_acked_ptr(operand);

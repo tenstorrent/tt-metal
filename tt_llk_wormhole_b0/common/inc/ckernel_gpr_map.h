@@ -39,6 +39,10 @@ struct p_gpr_unpack
     constexpr static uint FACE_DIM_4x16     = 42;   // Holds face dimension (4x16)
     constexpr static uint FACE_DIM_2x16     = 43;   // Holds face dimension (2x16)
     constexpr static uint FACE_DIM_1x16     = 44;   // Holds face dimension (1x16)
+    constexpr static uint PERF_UNPACK_NUM_TILES_0 = 45;   // num tiles for input operands 0-1
+    constexpr static uint PERF_UNPACK_NUM_TILES_1 = 46;   // num tiles for input operands 2-3
+    constexpr static uint PERF_UNPACK_NUM_TILES_2 = 47;   // num tiles for input operands 4-5
+    constexpr static uint PERF_UNPACK_NUM_TILES_3 = 48;   // num tiles for input operands 6-7
 };
 
 // Math GPR thread
@@ -78,6 +82,7 @@ struct p_gpr_pack
     constexpr static uint TMP_LO            = 30;   // Temp data, upper 16-bit always 0
     constexpr static uint TMP_HI            = 31;   // Temp data, lower 16-bit always 0
     constexpr static uint PACK_STREAM_SYNC  = 32;  // sync between pack and output stream [32:63]
+    constexpr static uint PERF_PACK_NUM_TILES = 51; // output operand num tiles
     constexpr static uint EXP0_SEC_SIZE_BFP   = 52;  // pack0,1,2,3 exp section size for bfp8,4,2
     constexpr static uint EXP1_SEC_SIZE_BFP8  = 53;  // pack1 exp section size for bfp8
     constexpr static uint EXP2_SEC_SIZE_BFP8  = 54;  // pack2 exp section size for bfp8

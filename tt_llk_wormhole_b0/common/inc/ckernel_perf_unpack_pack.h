@@ -36,6 +36,7 @@ extern uint8_t thread_id;
 // We read this value initially for all threads to reduce the l1-reads.
 extern int32_t dram_dump_req_local;
 extern bool record_perf_events;
+extern uint32_t perf_events_target_idx;
 extern bool first_unpack_recorded;
 extern volatile uint tt_l1_ptr * ncrisc_ack_addr;
 extern uint16_t current_outer_loop_iter;
@@ -115,6 +116,7 @@ inline void record_perf_dump_end_and_check_overflow() {
          perf_index += (PERF_CNT_DUMP_ENTRY_SIZE/sizeof(uint32_t));
       }
    }
+
 #if (INTERMED_DUMP == 1) || (PERF_DUMP_CONCURRENT == 1)
    if (perf_index >= perf_end) {
       switch_perf_buffers();
@@ -139,5 +141,8 @@ inline void record_latest_wait_for_tile() {
    }
 #endif
 }
+
+void increment_unpack_tiles(uint operand_idx, uint num_tiles);
+void increment_pack_tiles(uint num_tiles);
 
 }

@@ -145,6 +145,35 @@ void last_trisc_perf_dump_to_dram() {
    }
 }
 
+void increment_unpack_tiles(uint operand_idx, uint num_tiles) {
+   if (record_perf_events && (perf_events_target_idx == 1)) {
+      if (operand_idx >= PERF_MAX_NUM_INPUTS) {
+         return;
+      }
+      uint regfile_base_idx = p_gpr_unpack::PERF_UNPACK_NUM_TILES_0;
+      regfile_base_idx += (operand_idx >> 1);
+      bool upper = operand_idx & 0b1;
+      uint32_t num_tiles_regfile = regfile[regfile_base_idx];
+      uint32_t current_num_tiles;
+      if (upper) {
+         current_num_tiles = (num_tiles_regfile >> 16) & 0xffff;
+         current_num_tiles += num_tiles;
+         regfile[regfile_base_idx] = (num_tiles_regfile & 0xffff) + ((current_num_tiles & 0xffff) << 16);
+      } else {
+         current_num_tiles = (num_tiles_regfile + num_tiles) & 0xffff;
+         regfile[regfile_base_idx] = (num_tiles_regfile & 0xffff0000) + (current_num_tiles & 0xffff);
+      }
+      sync_regfile_write(regfile_base_idx);
+   }   
+}
+
+void increment_pack_tiles(uint num_tiles) {
+   if (record_perf_events && (perf_events_target_idx == 1)) {
+      regfile[p_gpr_pack::PERF_PACK_NUM_TILES] += num_tiles;
+      sync_regfile_write(p_gpr_pack::PERF_PACK_NUM_TILES);
+   }
+}
+
 // void record_timestamp_64b(uint event_id, uint leave_space) {
 //    if (record_perf_events) {
 //       uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
