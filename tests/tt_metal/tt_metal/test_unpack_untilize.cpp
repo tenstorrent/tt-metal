@@ -151,31 +151,24 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/dataflow/reader_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
             1, // per_core_block_cnt
             uint(num_tiles_c) // per_core_block_tile_cnt
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/untilize.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
         ////////////////////////////////////////////////////////////////////////////
@@ -195,6 +188,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_reader_kernel,
             core,
             {dram_buffer_src_addr,
@@ -203,6 +197,7 @@ int main(int argc, char **argv) {
             num_tiles});
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,

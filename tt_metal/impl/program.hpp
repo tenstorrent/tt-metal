@@ -19,12 +19,13 @@ namespace tt_metal {
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
     void AddKernel ( Program & program, Kernel * kernel);
+    Kernel *GetKernel(const Program &program, KernelID kernel_id);
 }
 
 struct KernelGroup {
-    ComputeKernel *compute = nullptr;
-    DataMovementKernel *riscv_0 = nullptr;
-    DataMovementKernel *riscv_1 = nullptr;
+    std::optional<KernelID> compute_id = std::nullopt;
+    std::optional<KernelID> riscv0_id = std::nullopt;
+    std::optional<KernelID> riscv1_id = std::nullopt;
 };
 
 class Program {
@@ -43,15 +44,11 @@ class Program {
 
     const u64 get_id() const { return this->id; }
 
-    std::vector<Kernel *> kernels() const { return kernels_; }
+    std::vector<KernelID> kernel_ids() const { return kernel_ids_; }
 
     const std::vector<CircularBuffer> &circular_buffers() const { return circular_buffers_; }
 
     const std::vector< Semaphore > & semaphores() const { return semaphores_; }
-
-    std::vector<ComputeKernel *> compute_kernels() const;
-
-    std::vector<DataMovementKernel *> data_movement_kernels() const;
 
     KernelGroup kernels_on_core(const CoreCoord &core) const;
 
@@ -96,28 +93,30 @@ class Program {
 
     u64 id; // Need to make non-const due to move constructor
     static std::atomic<u64> program_counter;
-    std::vector<Kernel *> kernels_;
+    std::vector<KernelID> kernel_ids_;
+    std::unordered_map<KernelID, Kernel *> kernel_by_id_;
     std::vector<CircularBuffer> circular_buffers_;
     std::map<CoreCoord, CircularBufferConfig> per_core_cb_config_;
     std::vector<Semaphore> semaphores_;
     CoreRangeSet worker_crs_;
 
+    friend const CircularBuffer &CreateCircularBuffers(
+        Program &program,
+        const std::set<uint32_t> &buffer_indices,
+        const CoreRangeSet &core_range_set,
+        uint32_t num_tiles,
+        uint32_t size_in_bytes,
+        DataFormat data_format,
+        std::optional<uint32_t> l1_address);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
 
-    friend void detail::AddKernel ( Program & program, Kernel *kernel);
+    friend void detail::AddKernel(Program &program, Kernel *kernel);
+    friend Kernel *detail::GetKernel(const Program &program, KernelID kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value);
 
-    friend const CircularBuffer &CreateCircularBuffers(
-                                                    Program &program,
-                                                    const std::set<uint32_t> &buffer_indices,
-                                                    const CoreRangeSet &core_range_set,
-                                                    uint32_t num_tiles,
-                                                    uint32_t size_in_bytes,
-                                                    DataFormat data_format,
-                                                    std::optional<uint32_t> l1_address);
-
-    void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
+    void add_kernel(Kernel *kernel);
+    Kernel *get_kernel(KernelID kernel_id) const;
 
     const CircularBuffer &add_circular_buffer(const CoreRangeSet &core_range_set, const std::set<u32> &indices, u32 num_tiles, u32 size_bytes, const DataFormat &data_format, std::optional<u32> address);
 

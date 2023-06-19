@@ -93,15 +93,17 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         (std::uint32_t) dst_is_dram
     };
 
-    auto reader = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
-        all_cores, reader_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        all_cores,
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto writer = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores, writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        all_cores,
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_args_group_1 = {
         1, // B
@@ -110,16 +112,11 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         num_output_tiles_per_core_group_1 // Nt
     }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_binary_kernel_group_1 = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm.cpp",
         core_group_1,
-        compute_args_group_1,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1}
     );
 
     if (!core_group_2.ranges().empty()) {
@@ -130,14 +127,11 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             num_output_tiles_per_core_group_2 // Nt
         }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-        auto eltwise_binary_kernel_group_2 = tt_metal::CreateComputeKernel(
+        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/bmm.cpp",
             core_group_2,
-            compute_args_group_2,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2}
         );
     }
 
@@ -154,7 +148,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 			TT_ASSERT(false, "Core not in specified core ranges");
 		}
         tt_metal::SetRuntimeArgs(
-            reader, core,
+            program, reader_id, core,
             {src0_addr,
             src1_addr,
             Mt,
@@ -169,7 +163,8 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             MtNt }
         );
         tt_metal::SetRuntimeArgs(
-            writer,
+            program,
+            writer_id,
             core,
             {dst_addr,
             num_output_tiles_per_core,
@@ -179,12 +174,13 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     }
 
     auto override_runtime_args_callback = [
-            reader_kernel=reader,
-            writer_kernel=writer,
+            reader_kernel_id=reader_id,
+            writer_kernel_id=writer_id,
             num_cores,
             num_cores_y
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -198,16 +194,16 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer_a->address();
                 runtime_args[1] = src_dram_buffer_b->address();
-                SetRuntimeArgs(reader_kernel, core, runtime_args);
+                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(writer_kernel, core, runtime_args);
+                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };

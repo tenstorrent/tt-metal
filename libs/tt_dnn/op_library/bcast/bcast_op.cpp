@@ -46,14 +46,16 @@ const char* get_compute_name(BcastOpDim::Enum bcast_dim) {
     return "";
 }
 
-void add_defines(ComputeKernel* k, BcastOpDim::Enum bcast_dim, BcastOpMath::Enum bcast_math)
+std::map<std::string, std::string> get_defines(BcastOpDim::Enum bcast_dim, BcastOpMath::Enum bcast_math)
 {
+    std::map<std::string, std::string> defines;
     const char* math_to_op_define[] = { "add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast" };
     const char* math_to_llkop_define[] = {"ELWADD", "ELWSUB", "ELWMUL"};
     const char* bdim_to_llkdim_define[] = { "BroadcastType::ROW", "BroadcastType::COL", "BroadcastType::SCALAR" };
-    k->add_define("BCAST_OP", math_to_op_define[int(bcast_math)]);
-    k->add_define("BCAST_LLKOP", math_to_llkop_define[int(bcast_math)]);
-    k->add_define("BCAST_DIM", bdim_to_llkdim_define[int(bcast_dim)]);
+    defines["BCAST_OP"] = math_to_op_define[int(bcast_math)];
+    defines["BCAST_LLKOP"] = math_to_llkop_define[int(bcast_math)];
+    defines["BCAST_DIM"] = bdim_to_llkdim_define[int(bcast_dim)];
+    return defines;
 }
 
 } // namespace bcast_op_utils

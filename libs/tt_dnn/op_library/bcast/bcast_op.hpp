@@ -98,6 +98,6 @@ const char* get_compute_name(BcastOpDim::Enum bcast_dim);
 
 const char* get_math_to_op_define(BcastOpMath::Enum bcast_math);
 
-void add_defines(ComputeKernel * bcast_kernel, BcastOpDim::Enum bcast_dim, BcastOpMath::Enum bcast_math);
+std::map<std::string, std::string> get_defines(BcastOpDim::Enum bcast_dim, BcastOpMath::Enum bcast_math);
 
 } // namespace bcast_op_utils

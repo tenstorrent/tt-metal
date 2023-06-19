@@ -8,6 +8,8 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/device/tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/program.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -26,7 +28,8 @@ void ClearKernelCache (int pcie_slot){
 std::unordered_map<std::string, std::string> get_last_program_binary_path(const Program &program, int pcie_slot) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
     auto root_dir = get_kernel_compile_outpath(pcie_slot);
-    for (auto kernel : program.kernels()) {
+    for (auto kernel_id : program.kernel_ids()) {
+        tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         if (not std::filesystem::exists(root_dir + kernel->name())) {
             continue;
         }
@@ -119,15 +122,13 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
         program,
         "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
         core,
-        program_attributes.reader_processor,
-        program_attributes.reader_noc);
+        tt_metal::DataMovementConfig{.processor = program_attributes.reader_processor, .noc = program_attributes.reader_noc});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
-        program_attributes.writer_processor,
-        program_attributes.writer_noc);
+        tt_metal::DataMovementConfig{.processor = program_attributes.writer_processor, .noc = program_attributes.writer_noc});
 
     vector<uint32_t> compute_kernel_args = {
         uint(program_attributes.num_tiles) // per_core_tile_cnt
@@ -137,10 +138,12 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
         program,
         "tt_metal/kernels/compute/eltwise_copy_3m.cpp",
         core,
-        compute_kernel_args,
-        program_attributes.math_fidelity,
-        program_attributes.fp32_dest_acc_en,
-        program_attributes.math_approx_mode
+        tt_metal::ComputeConfig{
+            .math_fidelity = program_attributes.math_fidelity,
+            .fp32_dest_acc_en = program_attributes.fp32_dest_acc_en,
+            .math_approx_mode = program_attributes.math_approx_mode,
+            .compile_args = compute_kernel_args
+        }
     );
 
     return std::move(program);
@@ -148,7 +151,8 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
 
 void assert_kernel_binary_path_exists(const Program &program, int pcie_slot, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-    for (auto kernel : program.kernels()) {
+    for (auto kernel_id : program.kernel_ids()) {
+        tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         auto hash = kernel_name_to_hash.at(kernel->name());
         auto kernel_binary_path = get_kernel_compile_outpath(pcie_slot) + kernel->name() + "/" + hash;
         TT_ASSERT(std::filesystem::exists(kernel_binary_path), "Expected " + kernel_binary_path + " folder to exist!");
@@ -157,7 +161,8 @@ void assert_kernel_binary_path_exists(const Program &program, int pcie_slot, con
 
 void assert_program_cache_hit_status(const Program &program, bool hit_expected, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
-    for (auto kernel : program.kernels()) {
+    for (auto kernel_id : program.kernel_ids()) {
+        tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
         TT_ASSERT(hit_status == hit_expected, "Did not get expected cache status " + std::to_string(hit_expected) + " for kernel " + kernel->name());
     }
@@ -220,14 +225,15 @@ bool test_compile_program_after_clean_kernel_binary_directory(Device *device) {
 void assert_hash_comparison_for_kernel_type(
     const Program &program,
     const std::unordered_map<std::string, std::string> &prev_kernel_name_to_hash,
-    const std::unordered_map<KernelType, bool> &type_to_same_hash_expected,
+    const std::unordered_map<tt::RISCV, bool> &type_to_same_hash_expected,
     const KernelCacheStatus &kernel_cache_status
 ) {
     auto curr_kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-    for (auto kernel : program.kernels()) {
+    for (auto kernel_id : program.kernel_ids()) {
+        tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         auto prev_hash = prev_kernel_name_to_hash.at(kernel->name());
         auto curr_hash = curr_kernel_name_to_hash.at(kernel->name());
-        bool same_hash_expected = type_to_same_hash_expected.at(kernel->kernel_type());
+        bool same_hash_expected = type_to_same_hash_expected.at(kernel->processor());
         if (same_hash_expected) {
             TT_ASSERT(prev_hash == curr_hash, "Expected same hashes for " + kernel->name());
         } else {
@@ -236,10 +242,11 @@ void assert_hash_comparison_for_kernel_type(
     }
 }
 
-void assert_cache_hit_status_for_kernel_type(const Program &program, const std::unordered_map<KernelType, bool> &type_to_cache_hit_status, const KernelCacheStatus &kernel_cache_status) {
+void assert_cache_hit_status_for_kernel_type(const Program &program, const std::unordered_map<tt::RISCV, bool> &type_to_cache_hit_status, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
-    for (auto kernel : program.kernels()) {
-        bool hit_expected = type_to_cache_hit_status.at(kernel->kernel_type());
+    for (auto kernel_id : program.kernel_ids()) {
+        tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
+        bool hit_expected = type_to_cache_hit_status.at(kernel->processor());
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
         TT_ASSERT(hit_status == hit_expected, "Did not get expected cache status " + std::to_string(hit_expected) + " for kernel " + kernel->name());
     }
@@ -249,7 +256,7 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
     Device *device,
     const ProgramAttributes &attributes,
     const std::unordered_map<std::string, std::string> &prev_kernel_name_to_hash,
-    const std::unordered_map<KernelType, bool> &kernel_type_to_cache_hit_status
+    const std::unordered_map<tt::RISCV, bool> &kernel_type_to_cache_hit_status
 ) {
     auto program = create_program(device, attributes);
     auto kernel_cache_status = CompileProgramTestWrapper(device, program);
@@ -263,24 +270,28 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
 bool test_compile_program_with_modified_program(Device *device) {
     bool pass = true;
 
-    const static std::unordered_map<KernelType, bool> compute_miss_data_movement_hit = {
-        {KernelType::Compute, false},
-        {KernelType::DataMovement, true}
+    const static std::unordered_map<tt::RISCV, bool> compute_miss_data_movement_hit = {
+        {tt::RISCV::COMPUTE, false},
+        {tt::RISCV::BRISC, true},
+        {tt::RISCV::NCRISC, true}
     };
 
-    const static std::unordered_map<KernelType, bool> compute_hit_data_movement_miss = {
-        {KernelType::Compute, true},
-        {KernelType::DataMovement, false}
+    const static std::unordered_map<tt::RISCV, bool> compute_hit_data_movement_miss = {
+        {tt::RISCV::COMPUTE, true},
+        {tt::RISCV::BRISC, false},
+        {tt::RISCV::NCRISC, false}
     };
 
-    const static std::unordered_map<KernelType, bool> compute_hit_data_movement_hit = {
-        {KernelType::Compute, true},
-        {KernelType::DataMovement, true}
+    const static std::unordered_map<tt::RISCV, bool> compute_hit_data_movement_hit = {
+        {tt::RISCV::COMPUTE, true},
+        {tt::RISCV::BRISC, true},
+        {tt::RISCV::NCRISC, true}
     };
 
-    const static std::unordered_map<KernelType, bool> compute_miss_data_movement_miss = {
-        {KernelType::Compute, false},
-        {KernelType::DataMovement, false}
+    const static std::unordered_map<tt::RISCV, bool> compute_miss_data_movement_miss = {
+        {tt::RISCV::COMPUTE, false},
+        {tt::RISCV::BRISC, false},
+        {tt::RISCV::NCRISC, false}
     };
 
     ClearKernelCache(device->pcie_slot());

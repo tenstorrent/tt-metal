@@ -60,26 +60,22 @@ operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &ou
     bool src_and_dst_is_dram = src_is_dram and dst_is_dram;
 
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(input_cb_data_format), (uint32_t)src_is_dram};
-    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         src_and_dst_is_dram ? "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp" : "tt_metal/kernels/dataflow/reader_unary_backwards_interleaved_start_id.cpp",
         core,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         static_cast<uint32_t>(output_cb_data_format),
         (uint32_t)dst_is_dram,
     };
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         src_and_dst_is_dram ? "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp" : "tt_metal/kernels/dataflow/writer_unary_backwards_interleaved_start_id.cpp",
         core,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     /* If we need dataformat conversion, use compute kernel
     bool fp32_dest_acc_en = false;
@@ -99,7 +95,8 @@ operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &ou
     */
 
     SetRuntimeArgs(
-        unary_reader_kernel,
+        program,
+        unary_reader_kernel_id,
         core,
         {
             src_buffer->address(),
@@ -109,7 +106,8 @@ operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &ou
     );
 
     SetRuntimeArgs(
-        unary_writer_kernel,
+        program,
+        unary_writer_kernel_id,
         core,
         {
             dst_buffer->address(),
@@ -118,7 +116,8 @@ operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &ou
         }
     );
 
-    auto override_runtime_args_callback = [unary_reader_kernel, unary_writer_kernel](
+    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -130,15 +129,15 @@ operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &ou
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(unary_reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
-            SetRuntimeArgs(unary_reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 

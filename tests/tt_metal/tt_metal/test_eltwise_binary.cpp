@@ -131,17 +131,15 @@ int main(int argc, char** argv) {
                 multibank ? "tt_metal/kernels/dataflow/reader_dual_8bank.cpp"
                           : "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
                 core,
-                tt_metal::DataMovementProcessor::RISCV_1,
-                tt_metal::NOC::RISCV_1_default);
+                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
+            std::map<string, string> writer_defines = {{"TT_METAL_DEVICE_DISPATCH_MODE", "1"}};
             auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
                 program,
                 multibank ? "tt_metal/kernels/dataflow/writer_unary_8bank.cpp"
                           : "tt_metal/kernels/dataflow/writer_unary.cpp",
                 core,
-                tt_metal::DataMovementProcessor::RISCV_0,
-                tt_metal::NOC::RISCV_0_default);
-            unary_writer_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
+                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = writer_defines});
 
             vector<uint32_t> compute_kernel_args = {
                 2048,  // per_core_block_cnt
@@ -150,17 +148,15 @@ int main(int argc, char** argv) {
 
             bool fp32_dest_acc_en = false;
             bool math_approx_mode = false;
+            std::map<string, string> binary_defines = {
+                {"ELTWISE_OP", op_id_to_op_define[eltwise_op]},
+                {"ELTWISE_OP_CODE", op_id_to_op_code_define[eltwise_op]}
+            };
             auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
                 program,
                 "tt_metal/kernels/compute/eltwise_binary.cpp",
                 core,
-                compute_kernel_args,
-                MathFidelity::HiFi4,
-                fp32_dest_acc_en,
-                math_approx_mode);
-
-            eltwise_binary_kernel->add_define("ELTWISE_OP", op_id_to_op_define[eltwise_op]);
-            eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_id_to_op_code_define[eltwise_op]);
+                tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
             ////////////////////////////////////////////////////////////////////////////
             //                      Compile Application
@@ -199,8 +195,8 @@ int main(int argc, char** argv) {
             vector<u32> writer_args = {
                 dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles};
 
-            SetRuntimeArgs(unary_writer_kernel, core, writer_args);
-            SetRuntimeArgs(binary_reader_kernel, core, reader_args);
+            SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
+            SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
 
             EnqueueProgram(cq, program, false);
             std::vector<uint32_t> result_vec;

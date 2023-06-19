@@ -417,15 +417,17 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
 
-    auto reader = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateDataMovementKernel(
         program,
         reader_kernel,
-        core, reader_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        core,
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto writer = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
         writer_kernel,
-        core, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        core,
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,
@@ -450,33 +452,29 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         untilize_out
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto compute = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_tilize_untilize.cpp",
         core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
     tt_metal::SetRuntimeArgs(
-        reader, core,
+        program, reader_id, core,
         reader_rt_args
     );
 
     tt_metal::SetRuntimeArgs(
-        writer, core,
+        program, writer_id, core,
         writer_rt_args
     );
 
     auto override_runtime_args_callback = [
-        reader_kernel=reader,
-        writer_kernel=writer
+        reader_kernel_id=reader_id,
+        writer_kernel_id=writer_id
     ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -489,16 +487,16 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer_a->address();
             runtime_args[3] = src_dram_buffer_b->address();
-            SetRuntimeArgs(reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 
@@ -1171,15 +1169,17 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
             Hat / out_subblock_h_ntiles
         };
     }
-    auto reader = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateDataMovementKernel(
         program,
         reader_kernel,
-        core, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        core,
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    auto writer = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
         writer_kernel,
-        core, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        core,
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,
@@ -1204,25 +1204,20 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         untilize_out
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_tilize_untilize.cpp",
         core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
     tt_metal::SetRuntimeArgs(
-        reader, core,
+        program, reader_id, core,
         reader_rt_args
     );
 
     tt_metal::SetRuntimeArgs(
-        writer, core,
+        program, writer_id, core,
         writer_rt_args
     );
 
@@ -1230,10 +1225,11 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     tt_metal::detail::WriteToDeviceL1(device, core_coord, weight_address_map_metadata_l1_address, weight_address_map_metadata);
 
      auto override_runtime_args_callback = [
-        reader_kernel=reader,
-        writer_kernel=writer
+        reader_kernel_id=reader_id,
+        writer_kernel_id=writer_id
     ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -1246,20 +1242,20 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer_a->address();
             runtime_args[1] = src_dram_buffer_a->noc_coordinates().x;
             runtime_args[2] = src_dram_buffer_a->noc_coordinates().y;
             runtime_args[8] = src_dram_buffer_b->address();
             runtime_args[9] = src_dram_buffer_b->noc_coordinates().x;
             runtime_args[10] = src_dram_buffer_b->noc_coordinates().y;
-            SetRuntimeArgs(reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 

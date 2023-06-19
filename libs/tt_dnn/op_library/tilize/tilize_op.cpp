@@ -116,48 +116,41 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     };
 
     // Tilized reader
-    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     // Tilized writer
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_args = {
         uint32_t(num_tiles / num_tiles_per_block), // per_core_block_cnt
         uint32_t(num_tiles_per_block) // per_core_block_tile_cnt
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto tilize_kernel = tt_metal::CreateComputeKernel(
+    auto tilize_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/tilize.cpp",
         core,
-        compute_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_args}
     );
 
     tt_metal::SetRuntimeArgs(
-        unary_reader_kernel,
+        program,
+        unary_reader_kernel_id,
         core,
         reader_kernel_args
     );
 
     tt_metal::SetRuntimeArgs(
-        unary_writer_kernel,
+        program,
+        unary_writer_kernel_id,
         core,
         {dst_buffer->address(),
         (uint32_t) num_tiles,
@@ -165,9 +158,10 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     );
 
     auto override_runtime_args_callback = [
-        reader_kernel=unary_reader_kernel,
-        writer_kernel=unary_writer_kernel
+        reader_kernel_id=unary_reader_kernel_id,
+        writer_kernel_id=unary_writer_kernel_id
     ](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -179,15 +173,15 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 
@@ -389,57 +383,51 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     };
 
     // Tilized reader
-    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_pad_dims_split_rows.cpp",
         core,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     // Tilized writer
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(num_tiles / num_tiles_per_block),
         uint32_t(num_tiles_per_block)
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto tilize_kernel = tt_metal::CreateComputeKernel(
+    auto tilize_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/tilize.cpp",
         core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
     tt_metal::SetRuntimeArgs(
-        unary_reader_kernel,
+        program,
+        unary_reader_kernel_id,
         core,
         reader_kernel_args
     );
 
     tt_metal::SetRuntimeArgs(
-        unary_writer_kernel,
+        program,
+        unary_writer_kernel_id,
         core,
         {dst_buffer->address(),
         (uint32_t) num_tiles, 0}
     );
 
     auto override_runtime_args_callback = [
-        reader_kernel=unary_reader_kernel,
-        writer_kernel=unary_writer_kernel
+        reader_kernel_id=unary_reader_kernel_id,
+        writer_kernel_id=unary_writer_kernel_id
     ](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -451,15 +439,15 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 

@@ -115,17 +115,13 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/dataflow/reader_cb_test.cpp",
             core,
-            reader_cb_kernel_args,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_cb_kernel_args});
 
         auto writer_cb_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_cb_test.cpp",
             core,
-            writer_cb_kernel_args,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_cb_kernel_args});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
@@ -142,6 +138,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         tt_metal::SetRuntimeArgs(
+            program,
             reader_cb_kernel,
             core,
             {dram_buffer_src_addr,
@@ -150,6 +147,7 @@ int main(int argc, char **argv) {
             (uint32_t)num_tiles_per_cb});
 
         tt_metal::SetRuntimeArgs(
+            program,
             writer_cb_kernel,
             core,
             {dram_buffer_dst_addr,

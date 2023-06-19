@@ -1,5 +1,6 @@
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
+#include "tt_metal/detail/program.hpp"
 
 namespace tt::tt_metal {
 
@@ -38,6 +39,39 @@ CompilationReporter::~CompilationReporter() {
     }
 }
 
+std::string kernel_attributes_str(Kernel *kernel) {
+    std::string attr_str = "{";
+    if (not kernel->compile_time_args().empty()) {
+        attr_str += "Compile args: [";
+        for (const auto compile_arg : kernel->compile_time_args()) {
+            attr_str += std::to_string(compile_arg) + " ";
+        }
+        attr_str += "] ";
+    }
+    if (not kernel->defines().empty()) {
+        attr_str += "Defines: {";
+        for (const auto &[k, v] : kernel->defines()) {
+            attr_str += "{ " + k + " - " + v + " } ";
+        }
+        attr_str += "} ";
+    }
+    auto config = kernel->config();
+    if (std::holds_alternative<DataMovementConfig>(config)) {
+        attr_str += "NOC: " + std::to_string(std::get<DataMovementConfig>(config).noc) + " ";
+    } else {
+        TT_ASSERT(std::holds_alternative<ComputeConfig>(config));
+        auto compute_config = std::get<ComputeConfig>(config);
+        std::stringstream math_fidel_str;
+        math_fidel_str << compute_config.math_fidelity;
+        attr_str += "Math fidelity: " + math_fidel_str.str() + " ";
+        attr_str += "FP32 dest accumulate enabled: " + std::string(compute_config.fp32_dest_acc_en ? "Y" : "N") + " ";
+        attr_str += "Math approx mode enabled: " + std::string(compute_config.math_approx_mode ? "Y" : "N") + " ";
+    }
+
+    attr_str += "}";
+    return attr_str;
+}
+
 void CompilationReporter::add_kernel_compile_stats(const Program &program, Kernel *kernel, bool cache_hit, size_t kernel_hash) {
     unique_lock<mutex> lock(mutex_);
 
@@ -68,17 +102,34 @@ void CompilationReporter::flush_program_entry(const Program &program, bool persi
     if (this->total_num_compile_programs_ == 0) {
         this->init_reports();
     }
+
+    auto get_num_compute_and_data_movement_kernels = [&]() {
+        u32 num_compute = 0;
+        u32 num_data_movement = 0;
+        for (auto kernel_id : program.kernel_ids()) {
+            const auto kernel = detail::GetKernel(program, kernel_id);
+            if (kernel->processor() == tt::RISCV::BRISC or kernel->processor() == tt::RISCV::NCRISC) {
+                num_data_movement++;
+            } else {
+                num_compute++;
+            }
+        }
+        return std::make_pair(num_compute, num_data_movement);
+    };
+
+    auto [num_compute_kernels, num_data_movement_kernels] = get_num_compute_and_data_movement_kernels();
+
     this->summary_report_ << program.get_id() << ", "
-                            << program.compute_kernels().size() << ", "
-                            << program.data_movement_kernels().size() << ", "
+                            << num_compute_kernels << ", "
+                            << num_data_movement_kernels << ", "
                             << (persistent_compilation_cache_enabled ? "Y" : "N") << ", "
                             << num_cache_misses << ", "
                             << num_cache_hits << "\n";
 
     this->detailed_report_ << "Compiling Program: " << program.get_id() << "\n";
     this->detailed_report_ << "\n,Kernel Creation Report:\n";
-    this->detailed_report_ << ",,Number of CreateComputeKernel API calls: " << program.compute_kernels().size() << "\n";
-    this->detailed_report_ << ",,Number of CreateDataMovementKernel API calls: " << program.data_movement_kernels().size() << "\n";
+    this->detailed_report_ << ",,Number of CreateComputeKernel API calls: " << num_compute_kernels << "\n";
+    this->detailed_report_ << ",,Number of CreateDataMovementKernel API calls: " << num_data_movement_kernels << "\n";
 
     this->detailed_report_ << "\n,Kernel Compilation Report:\n";
     this->detailed_report_ << ",,Persistent kernel compile cache enabled: " << (persistent_compilation_cache_enabled ? "Y\n" : "N\n");

@@ -45,8 +45,7 @@ bool reader_only(
         program,
         "tt_metal/kernels/dataflow/unit_tests/dram/direct_reader_dram_to_l1.cpp",
         reader_core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -57,6 +56,7 @@ bool reader_only(
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::SetRuntimeArgs(
+        program,
         reader_kernel,
         reader_core,
         {
@@ -108,8 +108,7 @@ bool writer_only(
         program,
         "tt_metal/kernels/dataflow/unit_tests/dram/direct_writer_l1_to_dram.cpp",
         writer_core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -121,6 +120,7 @@ bool writer_only(
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::SetRuntimeArgs(
+        program,
         writer_kernel,
         writer_core,
         {
@@ -192,17 +192,13 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
         program,
         "tt_metal/kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         test_config.core,
-        {cb_index},
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {cb_index}});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         test_config.core,
-        {cb_index},
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = {cb_index}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -217,6 +213,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::SetRuntimeArgs(
+        program,
         reader_kernel,
         test_config.core,
         {
@@ -227,6 +224,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
         }
     );
     tt_metal::SetRuntimeArgs(
+        program,
         writer_kernel,
         test_config.core,
         {
@@ -305,31 +303,22 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
         program,
         "tt_metal/kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         test_config.core,
-        {input0_cb_index},
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {input0_cb_index}});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         test_config.core,
-        {output_cb_index},
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = {output_cb_index}});
 
     vector<uint32_t> compute_kernel_args = {
         uint(test_config.num_tiles)  // per_core_tile_cnt
     };
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto datacopy_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_copy.cpp",
         test_config.core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode);
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -344,6 +333,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::SetRuntimeArgs(
+        program,
         reader_kernel,
         test_config.core,
         {
@@ -353,6 +343,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
             (uint32_t)test_config.num_tiles,
         });
     tt_metal::SetRuntimeArgs(
+        program,
         writer_kernel,
         test_config.core,
         {

@@ -79,21 +79,19 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank_input_cols_partitioned.cpp",
         all_cores,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
+    std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     vector<uint32_t> compute_kernel_args_group_1 = {
         uint32_t(*reinterpret_cast<uint32_t*>(&scaler)), // scaler
         Ht, // Ht
@@ -101,18 +99,12 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         1, // NC
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto reduce_compute_kernel_group_1 = tt_metal::CreateComputeKernel(
+    auto reduce_compute_kernel_group_1_id = tt_metal::CreateComputeKernel(
         program,
         compute_kernel_name,
         core_group_1,
-        compute_kernel_args_group_1,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1, .defines = reduce_defines}
     );
-    reduce_op_utils::add_defines(reduce_compute_kernel_group_1, reduce_op, reduce_dim);
 
     if(!core_group_2.ranges().empty()){
         vector<uint32_t> compute_kernel_args_group_2 = {
@@ -122,16 +114,12 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             1, // NC
         };
 
-        auto reduce_compute_kernel_group_2 = tt_metal::CreateComputeKernel(
+        auto reduce_compute_kernel_group_2_id = tt_metal::CreateComputeKernel(
             program,
             compute_kernel_name,
             core_group_2,
-            compute_kernel_args_group_2,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2, .defines = reduce_defines}
         );
-        reduce_op_utils::add_defines(reduce_compute_kernel_group_2, reduce_op, reduce_dim);
     }
 
     uint32_t out_dim_divider = Ht;
@@ -147,7 +135,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         }
         uint32_t num_tensor_tiles_per_core = Ht*num_cols_per_core;
         tt_metal::SetRuntimeArgs(
-            reader_kernel, core,
+            program, reader_kernel_id, core,
             {
                 a.buffer()->address(),
                 0, // unused by multibank reader
@@ -160,7 +148,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         );
 
         tt_metal::SetRuntimeArgs(
-            writer_kernel, core,
+            program, writer_kernel_id, core,
             {
                 output.buffer()->address(),
                 num_tensor_tiles_per_core / out_dim_divider, // number of tiles to write
@@ -171,12 +159,13 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     }
 
     auto override_runtime_args_callback = [
-            reader_kernel,
-            writer_kernel,
+            reader_kernel_id,
+            writer_kernel_id,
             num_cores,
             num_cores_y
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -190,17 +179,17 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer->address();
                 runtime_args[1] = uint32_t(src_dram_noc_xy.x);
                 runtime_args[2] = uint32_t(src_dram_noc_xy.y);
-                SetRuntimeArgs(reader_kernel, core, runtime_args);
+                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(writer_kernel, core, runtime_args);
+                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };

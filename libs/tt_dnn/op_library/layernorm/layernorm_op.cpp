@@ -201,48 +201,43 @@ operation::ProgramWithCallbacks layernorm_(
     CoreRangeSet all_cores(all_cores_set);
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    auto reader_kernels = CreateDataMovementKernel(
+    std::map<string, string> reader_defines;
+    std::map<string, string> eltwise_binary_defines;
+    if (b) {
+        reader_defines["FUSE_PRE_ADD"] = "1";
+        eltwise_binary_defines["FUSE_PRE_ADD"] = "1";
+    }
+    if (gamma.has_value()) {
+        reader_defines["FUSE_GAMMA"] = "1";
+    }
+    if (beta.has_value()) {
+        reader_defines["FUSE_BETA"] = "1";
+    }
+    auto reader_kernels_id = CreateDataMovementKernel(
         program,
         rm_gb ? "tt_metal/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_metal/kernels/dataflow/reader_unary_interleaved_ln.cpp",
         all_cores,
-        reader_compile_time_args,
-        DataMovementProcessor::RISCV_1,
-        NOC::RISCV_1_default
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines}
     );
 
-    auto writer_kernels = CreateDataMovementKernel(
+    auto writer_kernels_id = CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
-        writer_compile_time_args,
-        DataMovementProcessor::RISCV_0,
-        NOC::RISCV_0_default
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args}
     );
 
     vector<uint32_t> compute_args = { wtpc, Wt, block_size, gamma.has_value(), beta.has_value() };
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
-    auto eltwise_binary_kernels = CreateComputeKernel(
+    auto eltwise_binary_kernels_id = CreateComputeKernel(
         program,
         rms_norm ? "tt_metal/kernels/compute/rmsnorm.cpp" : "tt_metal/kernels/compute/layernorm.cpp",
         all_cores,
-        compute_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = eltwise_binary_defines}
     );
 
-    if (b) {
-        reader_kernels->add_define("FUSE_PRE_ADD", "1");
-        eltwise_binary_kernels->add_define("FUSE_PRE_ADD", "1");
-    }
-    if (gamma.has_value()) {
-        reader_kernels->add_define("FUSE_GAMMA", "1");
-    }
-    if (beta.has_value()) {
-        reader_kernels->add_define("FUSE_BETA", "1");
-    }
     // Create circular buffers
     CreateCircularBuffers( program, CB::c_in0,       all_cores, in0_t,  in0_t*single_tile_size,  cb_data_format );
     CreateCircularBuffers( program, CB::c_out0,      all_cores, out0_t, out0_t*single_tile_size, cb_data_format );
@@ -280,20 +275,21 @@ operation::ProgramWithCallbacks layernorm_(
         auto core = grid.wrap_core(icore);
 
         uint32_t tile_offset = wtpc*Wt*icore;
-        SetRuntimeArgs(reader_kernels, core,
+        SetRuntimeArgs(program, reader_kernels_id, core,
             { a_addr, wtpc, Wt, tile_offset, winv.u, e.u, // 0-5
             gamma_dram_addr, beta_dram_addr, b_dram_addr } // 6-8
         );
-        SetRuntimeArgs(writer_kernels, core, { dst_addr, wtpc*Wt, tile_offset } );
+        SetRuntimeArgs(program, writer_kernels_id, core, { dst_addr, wtpc*Wt, tile_offset } );
     }
 
     auto override_runtime_args_callback = [
-            reader_kernel=reader_kernels,
-            writer_kernel=writer_kernels,
+            reader_kernel_id=reader_kernels_id,
+            writer_kernel_id=writer_kernels_id,
             num_cores,
             grid
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -309,7 +305,7 @@ operation::ProgramWithCallbacks layernorm_(
             auto core = grid.wrap_core(icore);
 
             {
-                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_a_dram_buffer->address();
                 if (src_b_dram_buffer != nullptr) {
                     runtime_args[8] = src_b_dram_buffer->address();
@@ -320,13 +316,13 @@ operation::ProgramWithCallbacks layernorm_(
                 if (beta_dram_buffer != nullptr) {
                     runtime_args[7] = beta_dram_buffer->address();
                 }
-                SetRuntimeArgs(reader_kernel, core, runtime_args);
+                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(writer_kernel, core, runtime_args);
+                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };

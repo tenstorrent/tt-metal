@@ -81,35 +81,27 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank_input_cols_partitioned.cpp",
         all_cores,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args_group_1 = {
         num_tiles_per_core_group_1, // num_tensor_tiles
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto compute_kernel_group_1 = tt_metal::CreateComputeKernel(
+    auto compute_kernel_group_1_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/transpose_wh.cpp",
         core_group_1,
-        compute_kernel_args_group_1,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1}
     );
 
     if(!core_group_2.ranges().empty()){
@@ -117,14 +109,11 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
             num_tiles_per_core_group_2, // num_tensor_tiles
         };
 
-        auto compute_kernel_group_2 = tt_metal::CreateComputeKernel(
+        auto compute_kernel_group_2_id = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/transpose_wh.cpp",
             core_group_2,
-            compute_kernel_args_group_2,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2}
         );
     }
 
@@ -139,7 +128,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         tt_metal::SetRuntimeArgs(
-            reader_kernel,
+            program,
+            reader_kernel_id,
             core,
             {
                 src0_dram_buffer->address(),
@@ -152,7 +142,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         );
 
         tt_metal::SetRuntimeArgs(
-            writer_kernel,
+            program,
+            writer_kernel_id,
             core,
             {
                 dst_dram_buffer->address(),
@@ -165,12 +156,13 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
 
 
     auto override_runtime_args_callback = [
-            reader_kernel,
-            writer_kernel,
+            reader_kernel_id,
+            writer_kernel_id,
             num_cores,
             num_cores_y
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -184,17 +176,17 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer->address();
                 runtime_args[1] = uint32_t(src_dram_noc_xy.x);
                 runtime_args[2] = uint32_t(src_dram_noc_xy.y);
-                SetRuntimeArgs(reader_kernel, core, runtime_args);
+                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(writer_kernel, core, runtime_args);
+                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };

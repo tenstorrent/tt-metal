@@ -72,10 +72,10 @@ int main(int argc, char **argv) {
                         program,
                         "tt_metal/kernels/dataflow/l1_to_l1.cpp",
                         core,
-                        tt_metal::DataMovementProcessor::RISCV_1,
-                        tt_metal::NOC::RISCV_1_default);
+                        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
                 tt_metal::SetRuntimeArgs(
+                        program,
                         l1_to_l1_kernel,
                         core,
                         {dram_buffer_src_addr,

@@ -136,16 +136,14 @@ int main(int argc, char **argv) {
             multibank ? "tt_metal/kernels/dataflow/reader_unary_8bank_reduce.cpp"
                       : "tt_metal/kernels/dataflow/reader_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             multibank ? "tt_metal/kernels/dataflow/writer_unary_8bank.cpp"
                       : "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
             *reinterpret_cast<uint32_t*>(&scaler),
@@ -154,22 +152,17 @@ int main(int argc, char **argv) {
             uint(NC),
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
-
         string compute_kernel;
+        std::map<string, string> reduce_defines = {
+            {"REDUCE_OP", do_max ? "PoolType::MAX" : "PoolType::SUM"},
+            {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"}
+        };
         auto reduce_hw_compute_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/reduce_hw.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = reduce_defines}
         );
-
-        reduce_hw_compute_kernel->add_define("REDUCE_OP", do_max ? "PoolType::MAX" : "PoolType::SUM");
-        reduce_hw_compute_kernel->add_define("REDUCE_DIM", "ReduceDim::REDUCE_SCALAR");
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
@@ -187,6 +180,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_reader_kernel,
             core,
             {
@@ -199,6 +193,7 @@ int main(int argc, char **argv) {
         );
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_writer_kernel,
             core,
             {

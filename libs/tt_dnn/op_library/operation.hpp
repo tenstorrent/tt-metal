@@ -16,7 +16,7 @@ namespace operation {
 
 using Hash = std::string; // TODO(arakhmati): switch to an integral type?
 
-using OverrideRuntimeArgsCallback = std::function<void(const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
+using OverrideRuntimeArgsCallback = std::function<void(const Program &program, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
 
 struct ProgramWithCallbacks {
     Program program{};

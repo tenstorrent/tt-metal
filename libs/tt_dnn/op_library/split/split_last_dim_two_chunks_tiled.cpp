@@ -18,6 +18,7 @@ namespace tt {
 namespace tt_metal {
 
 void setup_runtime(
+    const Program &program,
     const uint32_t &core_offset,
     const uint32_t &num_cores_r,
     const uint32_t &num_cores_c,
@@ -29,8 +30,8 @@ void setup_runtime(
     tt_metal::Buffer *in0_buffer,
     tt_metal::Buffer *out0_buffer,
     tt_metal::Buffer *out1_buffer,
-    tt_metal::DataMovementKernel *reader_kernel,
-    tt_metal::DataMovementKernel *writer_kernel) {
+    tt_metal::KernelID reader_kernel_id,
+    tt_metal::KernelID writer_kernel_id) {
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 
@@ -81,8 +82,8 @@ void setup_runtime(
                         (std::uint32_t) out0_only,
                         (std::uint32_t) out1_only
                     };
-                    tt_metal::SetRuntimeArgs(reader_kernel, core, reader_runtime_args);
-                    tt_metal::SetRuntimeArgs(writer_kernel, core, writer_runtime_args);
+                    tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+                    tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
                 }
             }
         }
@@ -194,34 +195,27 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     };
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     // Dummy compute kernel
     std::vector<uint32_t> compute_args = {0};  // dummy
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
-    auto dummy_compute_kernel = tt_metal::CreateComputeKernel(
+    auto dummy_compute_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/blank.cpp",
         all_cores,
-        compute_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode);
+        tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args});
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -229,6 +223,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         program, src0_cb_index, all_cores, num_input_tiles, num_input_tiles * single_tile_size, cb_data_format);
 
     setup_runtime(
+        program,
         0,
         num_cores_r,
         num_cores_c,
@@ -240,12 +235,12 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         in0_buffer,
         out0_buffer,
         out1_buffer,
-        reader_kernel,
-        writer_kernel);
+        reader_kernel_id,
+        writer_kernel_id);
 
     auto override_runtime_args_callback =
-        [reader_kernel, writer_kernel, num_cores_r, num_cores_c, start_core_x, start_core_y](
-            const std::vector<Buffer *> &input_buffers, const std::vector<Buffer *> &output_buffers) {
+        [reader_kernel_id, writer_kernel_id, num_cores_r, num_cores_c, start_core_x, start_core_y](
+            const Program &program, const std::vector<Buffer *> &input_buffers, const std::vector<Buffer *> &output_buffers) {
             auto src_dram_buffer = input_buffers.at(0);
 
             auto dst_0_dram_buffer = output_buffers.at(0);
@@ -256,16 +251,16 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
                     CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
                     {
-                        auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                        auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                         runtime_args[1] = src_dram_buffer->address();
-                        SetRuntimeArgs(reader_kernel, core, runtime_args);
+                        SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                     }
 
                     {
-                        auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                        auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                         runtime_args[1] = dst_0_dram_buffer->address();
                         runtime_args[2] = dst_1_dram_buffer->address();
-                        SetRuntimeArgs(writer_kernel, core, runtime_args);
+                        SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                     }
                 }
             }

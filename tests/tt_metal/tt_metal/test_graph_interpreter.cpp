@@ -208,31 +208,24 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
             program,
             "tt_metal/kernels/dataflow/reader_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
             uint(num_tiles),
             uint(chain_length)
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         auto graph_interpreter_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/graph_interpreter.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
 
@@ -297,8 +290,8 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::SetRuntimeArgs(unary_reader_kernel, core, unary_reader_args);
-        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, unary_writer_args);
+        tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, unary_reader_args);
+        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
 
         tt_metal::WriteRuntimeArgsToDevice(device, program);
 
@@ -464,31 +457,24 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
             program,
             "tt_metal/kernels/dataflow/reader_binary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
             uint(num_tiles),
             uint(chain_length)
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         auto graph_interpreter_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/graph_interpreter.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
 
@@ -564,8 +550,8 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::SetRuntimeArgs(binary_reader_kernel, core, binary_reader_args);
-        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, unary_writer_args);
+        tt_metal::SetRuntimeArgs(program, binary_reader_kernel, core, binary_reader_args);
+        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
 
         tt_metal::WriteRuntimeArgsToDevice(device, program);
 
@@ -730,31 +716,24 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             program,
             "tt_metal/kernels/dataflow/reader_nary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
             uint(num_tiles),
             uint(chain_length)
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         auto graph_interpreter_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/graph_interpreter.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
 
@@ -1064,8 +1043,8 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::SetRuntimeArgs(nary_reader_kernel, core, nary_reader_args);
-        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, unary_writer_args);
+        tt_metal::SetRuntimeArgs(program, nary_reader_kernel, core, nary_reader_args);
+        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
 
         tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);

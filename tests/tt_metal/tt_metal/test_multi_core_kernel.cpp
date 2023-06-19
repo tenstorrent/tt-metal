@@ -13,7 +13,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-tt_metal::Program create_program(
+std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_program(
     tt_metal::Device *device,
     uint32_t single_tile_size,
     const CoreRange &all_cores,
@@ -59,29 +59,22 @@ tt_metal::Program create_program(
         program,
         "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
         all_cores,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         all_cores,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_copy.cpp",
         all_cores,
-        eltwise_unary_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = eltwise_unary_args}
     );
 
-    return std::move(program);
+    return {std::move(program), reader_kernel, writer_kernel};
 }
 
 void compile_and_configure_program(
@@ -103,17 +96,25 @@ void compile_and_configure_program(
     tt_metal::ConfigureDeviceWithProgram(device, program);
 }
 
-void set_rt_args(tt_metal::Program &program, tt_metal::Kernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
+void set_rt_args(tt_metal::Program &program, tt_metal::KernelID kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
     for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
         for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
             CoreCoord core = CoreCoord(x, y);
-            tt_metal::SetRuntimeArgs(kernel, core, rt_args);
+            tt_metal::SetRuntimeArgs(program, kernel, core, rt_args);
         }
     }
 }
 
 void write_same_runtime_args_to_device(
-    tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range, int32_t num_tiles, tt_metal::Buffer &src_dram_buffer, tt_metal::Buffer &dst_dram_buffer) {
+    tt_metal::Device *device,
+    tt_metal::Program &program,
+    tt_metal::KernelID reader_kernel_id,
+    tt_metal::KernelID writer_kernel_id,
+    const CoreRange &core_range,
+    int32_t num_tiles,
+    tt_metal::Buffer &src_dram_buffer,
+    tt_metal::Buffer &dst_dram_buffer)
+{
     auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
     auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
@@ -129,19 +130,16 @@ void write_same_runtime_args_to_device(
     (std::uint32_t)dram_dst_noc_xy.y,
     (std::uint32_t)num_tiles};
 
-    for (auto dm_kernel : program.data_movement_kernels()) {
-        if (dm_kernel->name() == "reader_unary_push_4") {
-            set_rt_args(program, dm_kernel, core_range, unary_reader_args);
-        } else if (dm_kernel->name() == "writer_unary") {
-            set_rt_args(program, dm_kernel, core_range, unary_writer_args);
-        }
-    }
+    set_rt_args(program, reader_kernel_id, core_range, unary_reader_args);
+    set_rt_args(program, writer_kernel_id, core_range, unary_writer_args);
     tt_metal::WriteRuntimeArgsToDevice(device, program);
 }
 
 void write_unique_writer_runtime_args_to_device(
     tt_metal::Device *device,
     tt_metal::Program &program,
+    tt_metal::KernelID reader_kernel_id,
+    tt_metal::KernelID writer_kernel_id,
     const CoreRange &core_range,
     const CoreRangeSet &core_blocks,
     int32_t num_tiles,
@@ -179,16 +177,11 @@ void write_unique_writer_runtime_args_to_device(
         (std::uint32_t)dram_dst_noc_xy.y,
         (std::uint32_t)num_tiles};
 
-    for (auto dm_kernel : program.data_movement_kernels()) {
-        if (dm_kernel->name() == "reader_unary_push_4") {
-            set_rt_args(program, dm_kernel, core_range, unary_reader_args);
-        } else if (dm_kernel->name() == "writer_unary") {
-            int core_range_idx = 0;
-            std::vector<std::vector<uint32_t>> rt_args = {unary_writer_args_1, unary_writer_args_2, unary_writer_args_3};
-            for (auto core_range : core_blocks.ranges()) {
-                set_rt_args(program, dm_kernel, core_range, rt_args.at(core_range_idx++));
-            }
-        }
+    set_rt_args(program, reader_kernel_id, core_range, unary_reader_args);
+    int core_range_idx = 0;
+    std::vector<std::vector<uint32_t>> rt_args = {unary_writer_args_1, unary_writer_args_2, unary_writer_args_3};
+    for (auto core_range : core_blocks.ranges()) {
+        set_rt_args(program, writer_kernel_id, core_range, rt_args.at(core_range_idx++));
     }
     tt_metal::WriteRuntimeArgsToDevice(device, program);
 }
@@ -225,14 +218,14 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile and Execute Program
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = create_program(device, single_tile_size, all_cores, compute_kernel_args);
+    auto [program, reader_kernel_id, writer_kernel_id] = create_program(device, single_tile_size, all_cores, compute_kernel_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer.size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
-    write_same_runtime_args_to_device(device, program, all_cores, num_tiles, src_dram_buffer, dst_dram_buffer);
+    write_same_runtime_args_to_device(device, program, reader_kernel_id, writer_kernel_id, all_cores, num_tiles, src_dram_buffer, dst_dram_buffer);
 
     tt_metal::LaunchKernels(device, program);
 
@@ -288,7 +281,7 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile and Execute Program
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = create_program(device, single_tile_size, all_cores, compute_kernel_args);
+    auto [program, reader_kernel_id, writer_kernel_id] = create_program(device, single_tile_size, all_cores, compute_kernel_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer.size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -296,7 +289,7 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
     write_unique_writer_runtime_args_to_device(
-        device, program, all_cores, core_blocks, num_tiles, src_dram_buffer, dst_dram_buffer_1, dst_dram_buffer_2, dst_dram_buffer_3);
+        device, program, reader_kernel_id, writer_kernel_id, all_cores, core_blocks, num_tiles, src_dram_buffer, dst_dram_buffer_1, dst_dram_buffer_2, dst_dram_buffer_3);
 
     tt_metal::LaunchKernels(device, program);
 

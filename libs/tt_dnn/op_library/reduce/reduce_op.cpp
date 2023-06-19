@@ -28,17 +28,20 @@ string dim_to_kernel_name(ReduceOpDim::Enum reduce_dim, ReduceOpMath::Enum reduc
     return kernel_name;
 }
 
-void add_defines(ComputeKernel * reduce_kernel, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim){
+std::map<string, string> get_defines(ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim){
+    std::map<string, string> defines;
     // TOOD(AP): need a sync with Reduce::Max from HLK headers
     bool do_max = reduce_op == ReduceOpMath::MAX;
-    reduce_kernel->add_define("REDUCE_OP", do_max ? "PoolType::MAX" : "PoolType::SUM");
+    string reduce_dim_str;
     switch(reduce_dim) {
-        case ReduceOpDim::W: reduce_kernel->add_define("REDUCE_DIM", "ReduceDim::REDUCE_ROW"); break;
-        case ReduceOpDim::H: reduce_kernel->add_define("REDUCE_DIM", "ReduceDim::REDUCE_COL"); break;
-        case ReduceOpDim::HW: reduce_kernel->add_define("REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"); break;
+        case ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
+        case ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
+        case ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
         default: TT_ASSERT(false && "Invalid reduce_op!");
     }
-    return;
+    defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
+    defines["REDUCE_DIM"] = reduce_dim_str;
+    return defines;
 }
 
 } // namespace reduce_op_utils

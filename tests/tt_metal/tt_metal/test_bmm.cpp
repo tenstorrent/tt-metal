@@ -111,12 +111,14 @@ int main(int argc, char **argv) {
         auto reader = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
-            core, reader_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
         auto writer = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
-            core, writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
         vector<uint32_t> compute_kernel_args = {
             B, // batch
@@ -125,16 +127,11 @@ int main(int argc, char **argv) {
             Nt // Nt
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/bmm.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
         pass &= tt_metal::CompileProgram(device, program);
@@ -146,11 +143,11 @@ int main(int argc, char **argv) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         uint32_t do_bcast = 0;
         tt_metal::SetRuntimeArgs(
-            reader, core,
+            program, reader, core,
             {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, do_bcast}
         );
         tt_metal::SetRuntimeArgs(
-            writer, core,
+            program, writer, core,
             {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
         );
         tt_metal::WriteRuntimeArgsToDevice(device, program);

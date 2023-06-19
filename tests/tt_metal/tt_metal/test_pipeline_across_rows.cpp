@@ -222,8 +222,8 @@ int main(int argc, char **argv) {
 
 
         // create kernels
-        vector<tt_metal::DataMovementKernel*> receiver_kernels;
-        vector<tt_metal::DataMovementKernel*> sender_kernels;
+        vector<tt_metal::KernelID> receiver_kernels;
+        vector<tt_metal::KernelID> sender_kernels;
         for (int core_id = 0; core_id < num_cores; core_id++) {
 
             string receiver_kernel_name;
@@ -238,9 +238,7 @@ int main(int argc, char **argv) {
                 program,
                 receiver_kernel_name,
                 cores[core_id],
-                receiver_kernel_compile_time_args,
-                tt_metal::DataMovementProcessor::RISCV_1,
-                tt_metal::NOC::RISCV_1_default));
+                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = receiver_kernel_compile_time_args}));
 
             string sender_kernel_name;
             if (core_id == num_cores - 1) {
@@ -253,9 +251,7 @@ int main(int argc, char **argv) {
                 program,
                 sender_kernel_name,
                 cores[core_id],
-                sender_kernel_compile_time_args,
-                tt_metal::DataMovementProcessor::RISCV_0,
-                tt_metal::NOC::RISCV_0_default));
+                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = sender_kernel_compile_time_args}));
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -283,6 +279,7 @@ int main(int argc, char **argv) {
         for (int core_id = 0; core_id < num_cores; core_id++) {
             if (core_id == 0) {
                 tt_metal::SetRuntimeArgs(
+                    program,
                     receiver_kernels[core_id],
                     cores[core_id],
                     {src_address,
@@ -292,6 +289,7 @@ int main(int argc, char **argv) {
                     (uint32_t)num_repetitions});
             } else {
                 tt_metal::SetRuntimeArgs(
+                    program,
                     receiver_kernels[core_id],
                     cores[core_id],
                     {(uint32_t)device->worker_core_from_logical_core(cores[core_id-1]).x,
@@ -304,6 +302,7 @@ int main(int argc, char **argv) {
 
             if (core_id == num_cores - 1) {
                 tt_metal::SetRuntimeArgs(
+                    program,
                     sender_kernels[core_id],
                     cores[core_id],
                     {dst_address,
@@ -313,6 +312,7 @@ int main(int argc, char **argv) {
                     (uint32_t)num_repetitions});
             } else {
                 tt_metal::SetRuntimeArgs(
+                    program,
                     sender_kernels[core_id],
                     cores[core_id],
                     {(uint32_t)device->worker_core_from_logical_core(cores[core_id+1]).x,

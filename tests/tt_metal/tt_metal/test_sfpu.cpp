@@ -116,8 +116,7 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
                 "tt_metal/kernels/dataflow/reader_unary_8bank.cpp" :
                 "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -125,29 +124,21 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
                 "tt_metal/kernels/dataflow/writer_unary_8bank.cpp" :
                 "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
             uint(num_tiles),
             1
         };
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = true;
         string hlk_kernel_name = "tt_metal/kernels/compute/eltwise_sfpu.cpp";
+        // defines macro expands per SFPU ops
+        const string hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
             hlk_kernel_name,
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.math_approx_mode = true, .compile_args = compute_kernel_args, .defines = {{"SFPU_OP_AND_PACK", hlk_op_name}}}
         );
-
-        const string hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
-        // this macro expands per SFPU ops
-        eltwise_unary_kernel->add_define("SFPU_OP_AND_PACK", hlk_op_name);
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
@@ -165,6 +156,7 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_reader_kernel,
             core,
             {
@@ -177,6 +169,7 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
         );
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_writer_kernel,
             core,
             {

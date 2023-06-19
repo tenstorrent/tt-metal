@@ -242,21 +242,18 @@ int main(int argc, char **argv) {
             program,
             reader_name,
             core,
-            reader_compile_time_args,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             multibank ? "tt_metal/kernels/dataflow/writer_unary_8bank.cpp"
                       : "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
-
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         uint32_t nc1 = 0;
         tt_metal::SetRuntimeArgs(
+            program,
             binary_reader_kernel,
             core,
             {dram_buffer_src0_addr, // 0
@@ -269,6 +266,7 @@ int main(int argc, char **argv) {
             num_bcast_tiles, NC*Ht*Wt, NC, Ht, Wt, nc1}); // 7 8 9 10 11 12
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -282,21 +280,17 @@ int main(int argc, char **argv) {
             uint(Wt)
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
+        std::map<string, string> compute_defines = {
+            {"BCAST_DIM", bdim_to_llkdim_define[bcast_dim]},
+            {"BCAST_OP", op_id_to_op_define[bcast_op]},
+            {"BCAST_LLKOP", op_id_to_llkop_define[bcast_op]}
+        };
         auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
             program,
             get_compute_name(bcast_dim),
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = compute_defines}
         );
-
-        eltwise_binary_kernel->add_define("BCAST_DIM", bdim_to_llkdim_define[bcast_dim]);
-        eltwise_binary_kernel->add_define("BCAST_OP", op_id_to_op_define[bcast_op]);
-        eltwise_binary_kernel->add_define("BCAST_LLKOP", op_id_to_llkop_define[bcast_op]);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application

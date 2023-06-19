@@ -112,19 +112,17 @@ bool get_op_approx_mode(UnaryOpType::Enum op_type) {
 }
 
 static
-void add_defines_impl(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type, std::string op_name){
-    eltwise_unary_kernel->add_define("SFPU_OP_AND_PACK", op_name);
-    return;
+std::map<string, string> get_defines_impl(UnaryOpType::Enum op_type, std::string op_name){
+    return std::map<string, string>{{"SFPU_OP_AND_PACK", op_name}};
 }
 
 string get_op_name(UnaryOpType::Enum op_type,std::optional<float> param0) {
    return is_parametrized_type(op_type) ? get_op_name_parameterized(op_type, param0.value()) : get_op_name_default(op_type);
 }
 
-void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type,std::optional<float> param0) {
-    std::string op_name = get_op_name(op_type,param0);
-    add_defines_impl(eltwise_unary_kernel,op_type,op_name);
-    return;
+std::map<string, string> get_defines(UnaryOpType::Enum op_type,std::optional<float> param0) {
+    std::string op_name = get_op_name(op_type, param0);
+    return get_defines_impl(op_type, op_name);
 }
 
 

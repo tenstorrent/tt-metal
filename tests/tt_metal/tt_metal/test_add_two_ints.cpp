@@ -45,8 +45,9 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> first_runtime_args = {101, 202};
         std::vector<uint32_t> second_runtime_args = {303, 606};
 
-        tt_metal::DataMovementKernel *add_two_ints_kernel = tt_metal::CreateDataMovementKernel(
-            program, "tt_metal/kernels/riscv_draft/add_two_ints.cpp", core, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
+        tt_metal::KernelID add_two_ints_kernel = tt_metal::CreateDataMovementKernel(
+            program, "tt_metal/kernels/riscv_draft/add_two_ints.cpp", core,
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
@@ -59,7 +60,7 @@ int main(int argc, char **argv) {
         if (getDeviceProfilerState() == false){
             StartDebugPrintServer(device, {{1,1}});
         }
-        tt_metal::SetRuntimeArgs(add_two_ints_kernel, core, first_runtime_args);
+        tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, first_runtime_args);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         tt_metal::WriteRuntimeArgsToDevice(device, program);
@@ -73,7 +74,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                  Update Runtime Args and Re-run Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::SetRuntimeArgs(add_two_ints_kernel, core, second_runtime_args);
+        tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, second_runtime_args);
 
         tt_metal::WriteRuntimeArgsToDevice(device, program);
 

@@ -13,7 +13,8 @@ using namespace tt::constants;
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
-void add_defines(ComputeKernel* eltwise_binary_kernel, BinaryOpType::Enum op_type) {
+std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
+    std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_code = "1";
     string compare = "1";
@@ -42,12 +43,13 @@ void add_defines(ComputeKernel* eltwise_binary_kernel, BinaryOpType::Enum op_typ
         case BinaryOpType::NE: compare_init = eltwise_unary_op_utils::get_op_name(UnaryOpType::NEZ); break;
         default: TT_ASSERT(false && "Undefined op type");
     }
-    eltwise_binary_kernel->add_define("ELTWISE_OP", op_name.c_str());
-    eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_code.c_str());
+    defines["ELTWISE_OP"] = op_name.c_str();
+    defines["ELTWISE_OP_CODE"] = op_code.c_str();
     if ( compare == "1" ) {
-      eltwise_binary_kernel->add_define("ELTWISE_COMPARE_BINARY_OP", compare);
-      eltwise_binary_kernel->add_define("SFPU_OP_AND_PACK", compare_init);
+        defines["ELTWISE_COMPARE_BINARY_OP"] = compare;
+        defines["SFPU_OP_AND_PACK"] = compare_init;
     }
+    return defines;
 }
 
 

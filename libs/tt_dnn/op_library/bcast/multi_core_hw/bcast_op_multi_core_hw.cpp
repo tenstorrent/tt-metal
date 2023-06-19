@@ -98,21 +98,23 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
         (std::uint32_t) dst_is_dram
     };
 
-	tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+	std::map<string, string> reader_defines;
+	std::map<string, string> bcast_compute_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
+	if(bnc1) {
+		reader_defines["BCAST_SCALAR"] = "1";
+		bcast_compute_defines["BCAST_SCALAR"] = "1";
+	}
+	KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
 		program,
 		reader_name,
 		all_cores,
-		reader_compile_time_args,
-		tt_metal::DataMovementProcessor::RISCV_1,
-		tt_metal::NOC::RISCV_1_default);
+		tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines});
 
-	tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+	KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
 		program,
 		"tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
 		all_cores,
-		writer_compile_time_args,
-		tt_metal::DataMovementProcessor::RISCV_0,
-		tt_metal::NOC::RISCV_0_default);
+		tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
 	// TODO(AP): add dimensions and op params
 	// Ignore Ht and just read num_tiles_per_core
@@ -122,22 +124,12 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		num_tiles_per_core_group_1  // Wt
 	};
 
-	bool fp32_dest_acc_en = false;
-	bool math_approx_mode = false;
-	auto bcast_kernel_group_1 = tt_metal::CreateComputeKernel(
+	auto bcast_kernel_group_1_id = tt_metal::CreateComputeKernel(
 		program,
 		compute_name,
 		core_group_1,
-		compute_kernel_args_group_1,
-		MathFidelity::HiFi4,
-		fp32_dest_acc_en,
-		math_approx_mode
+		tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1, .defines = bcast_compute_defines}
 	);
-	bcast_op_utils::add_defines(bcast_kernel_group_1, bcast_dim, bcast_math);
-	if(bnc1) {
-		binary_reader_kernel->add_define("BCAST_SCALAR", "1");
-		bcast_kernel_group_1->add_define("BCAST_SCALAR", "1");
-	}
 	if (!core_group_2.ranges().empty()) {
 		// TODO(AP): add dimensions and op params
 		// Ignore Ht and just read num_tiles_per_core
@@ -146,19 +138,12 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 			1, // Ht
 			num_tiles_per_core_group_2  // Wt
 		};
-		auto bcast_kernel_group_2 = tt_metal::CreateComputeKernel(
+		auto bcast_kernel_group_2_id = tt_metal::CreateComputeKernel(
 			program,
 			compute_name,
 			core_group_2,
-			compute_kernel_args_group_2,
-			MathFidelity::HiFi4,
-			fp32_dest_acc_en,
-			math_approx_mode
+			tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2, .defines = bcast_compute_defines}
 		);
-		bcast_op_utils::add_defines(bcast_kernel_group_2, bcast_dim, bcast_math);
-		if(bnc1) {
-			bcast_kernel_group_2->add_define("BCAST_SCALAR", "1");
-		}
 	}
 
 	for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
@@ -173,7 +158,8 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		}
 
 		tt_metal::SetRuntimeArgs(
-			binary_reader_kernel,
+			program,
+			binary_reader_kernel_id,
 			core,
 			{
 				a.buffer()->address(), // 0
@@ -187,7 +173,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		);
 
 		tt_metal::SetRuntimeArgs(
-			unary_writer_kernel, core,
+			program, unary_writer_kernel_id, core,
 			{
 				output.buffer()->address(),
 				num_tensor_tiles_per_core,
@@ -198,12 +184,13 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 	}
 
     auto override_runtime_args_callback = [
-            binary_reader_kernel,
-            unary_writer_kernel,
+            binary_reader_kernel_id,
+            unary_writer_kernel_id,
             num_cores,
             num_cores_y
         ]
     (
+		const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -218,16 +205,16 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(binary_reader_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer_a->address();
                 runtime_args[1] = src_dram_buffer_b->address();
-                SetRuntimeArgs(binary_reader_kernel, core, runtime_args);
+                SetRuntimeArgs(program, binary_reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+                SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
         }
     };

@@ -284,55 +284,57 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_receiver_semaphore);
     }
 
-    auto mm_kernel_in0_sender = tt_metal::CreateDataMovementKernel(
+    std::map<string, string> mm_kernel_defines;
+    std::map<string, string> mm_kernel_in1_sender_writer_defines;
+    std::map<string, string> mm_kernel_in1_receiver_writer_defines;
+    std::map<string, string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
+    if (bias_buffer != nullptr) {
+        mm_kernel_defines["FUSE_BIAS"] = "1";
+        mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
+        mm_kernel_in1_receiver_writer_defines["FUSE_BIAS"] = "1";
+        mm_kernel_in1_receiver_writer_other_noc_setup_defines["FUSE_BIAS"] = "1";
+    }
+    if (fuse_gelu_activation) {
+        mm_kernel_defines["FUSE_GELU_ACTIVATION"] = "1";
+    }
+
+    auto mm_kernel_in0_sender_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         left_column,
-        in0_sender_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in0_sender_compile_time_args});
 
-    auto mm_kernel_in1_sender_writer = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         top_row,
-        in1_sender_writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
 
-    auto mm_kernel_in1_receiver_writer = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_receiver_writer_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
         /* in0_sender_in1_receiver, // If not using half-half noc setup */
         (CoreRangeSet) (std::set<CoreRange>) {in0_sender_in1_receiver, in0_receiver_in1_receiver_left_half},
-        in1_receiver_writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_defines});
 
-    auto mm_kernel_in0_receiver = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in0_receiver_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
         /* in0_receiver_in1_sender, // If not using half-half noc setup */
         (CoreRangeSet) (std::set<CoreRange>) {in0_receiver_in1_sender, in0_receiver_in1_receiver_left_half},
-        in0_receiver_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in0_receiver_compile_time_args});
 
-    auto mm_kernel_in1_receiver_writer_other_noc_setup = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
         in0_receiver_in1_receiver_right_half,
-        in1_receiver_writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines});
 
-    auto mm_kernel_in0_receiver_other_noc_setup = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
         in0_receiver_in1_receiver_right_half,
-        in0_receiver_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in0_receiver_compile_time_args});
 
     /* Checkerboard logic
     auto mm_kernel_in0_receiver_ckb_white = tt_metal::CreateDataMovementKernel(
@@ -425,20 +427,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores,
-        compute_kernel_args,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args, .defines = mm_kernel_defines}
     );
-    if (bias_buffer != nullptr) {
-        mm_kernel->add_define("FUSE_BIAS", 1);
-        mm_kernel_in1_sender_writer->add_define("FUSE_BIAS", 1);
-        mm_kernel_in1_receiver_writer->add_define("FUSE_BIAS", 1);
-        mm_kernel_in1_receiver_writer_other_noc_setup->add_define("FUSE_BIAS", 1);
-    }
-    if (fuse_gelu_activation) {
-        mm_kernel->add_define("FUSE_GELU_ACTIVATION", 1);
-    }
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -515,8 +505,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
-    std::vector<DataMovementKernel*> reader_kernels;
-    std::vector<DataMovementKernel*> writer_kernels;
+    std::vector<KernelID> reader_kernel_ids;
+    std::vector<KernelID> writer_kernel_ids;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
@@ -580,10 +570,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back((std::uint32_t)  top_core_plus_one_physical.x); // in1_mcast_dest_noc_end_x
                 }
 
-                tt_metal::SetRuntimeArgs(mm_kernel_in0_sender, core, mm_in0_sender_args); // RISCV_0_default
-                tt_metal::SetRuntimeArgs(mm_kernel_in1_sender_writer, core, mm_in1_sender_writer_args); // RISCV_1_default
-                reader_kernels.push_back(mm_kernel_in0_sender);
-                writer_kernels.push_back(mm_kernel_in1_sender_writer);
+                tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args); // RISCV_1_default
+                reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
+                writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
             }
             // in0 sender and in1 receiver
             else if (core_idx_x == 0 and core_idx_y != 0) {
@@ -637,10 +627,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_receiver_writer_args.push_back((std::uint32_t)  top_core_physical.x); // in1_mcast_sender_noc_x
                 }
 
-                tt_metal::SetRuntimeArgs(mm_kernel_in0_sender, core, mm_in0_sender_args); // RISCV_0_default
-                tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer, core, mm_in1_receiver_writer_args); // RISCV_1_default
-                reader_kernels.push_back(mm_kernel_in0_sender);
-                writer_kernels.push_back(mm_kernel_in1_receiver_writer);
+                tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args); // RISCV_1_default
+                reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
+                writer_kernel_ids.push_back(mm_kernel_in1_receiver_writer_id);
             }
             // in0 receiver and in 1 sender
             else if (core_idx_x != 0 and core_idx_y == 0) {
@@ -695,10 +685,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back((std::uint32_t)  bottom_core_physical.x); // in1_mcast_dest_noc_start_x
                     mm_in1_sender_writer_args.push_back((std::uint32_t)  top_core_plus_one_physical.x); // in1_mcast_dest_noc_end_x
                 }
-                tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver, core, mm_in0_receiver_args); // RISCV_1_default
-                tt_metal::SetRuntimeArgs(mm_kernel_in1_sender_writer, core, mm_in1_sender_writer_args); // RISCV_0_default
-                reader_kernels.push_back(mm_kernel_in0_receiver);
-                writer_kernels.push_back(mm_kernel_in1_sender_writer);
+                tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args); // RISCV_0_default
+                reader_kernel_ids.push_back(mm_kernel_in0_receiver_id);
+                writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
             }
             // in0 receiver and in 1 receiver
             else {
@@ -762,17 +752,17 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
                 // left half
                 if (core_idx_x <= 4) {
-                    tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver, core, mm_in0_receiver_args);
-                    tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer, core, mm_in1_receiver_writer_args);
-                    reader_kernels.push_back(mm_kernel_in0_receiver);
-                    writer_kernels.push_back(mm_kernel_in1_receiver_writer);
+                    tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
+                    tt_metal::SetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args);
+                    reader_kernel_ids.push_back(mm_kernel_in0_receiver_id);
+                    writer_kernel_ids.push_back(mm_kernel_in1_receiver_writer_id);
                 }
                 // right half
                 else {
-                    tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver_other_noc_setup, core, mm_in0_receiver_args);
-                    tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer_other_noc_setup, core, mm_in1_receiver_writer_args);
-                    reader_kernels.push_back(mm_kernel_in0_receiver_other_noc_setup);
-                    writer_kernels.push_back(mm_kernel_in1_receiver_writer_other_noc_setup);
+                    tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_other_noc_setup_id, core, mm_in0_receiver_args);
+                    tt_metal::SetRuntimeArgs(program, mm_kernel_in1_receiver_writer_other_noc_setup_id, core, mm_in1_receiver_writer_args);
+                    reader_kernel_ids.push_back(mm_kernel_in0_receiver_other_noc_setup_id);
+                    writer_kernel_ids.push_back(mm_kernel_in1_receiver_writer_other_noc_setup_id);
                 }
                 /* Checkerboard logic
                 // white
@@ -796,14 +786,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     auto override_runtime_args_callback = [
-            reader_kernels,
-            writer_kernels,
+            reader_kernel_ids,
+            writer_kernel_ids,
             num_cores_r,
             num_cores_c,
             start_core_x,
             start_core_y
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -824,59 +815,59 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 // in0 sender and in1 sender
                 if (core_idx_x == 0 and core_idx_y == 0) {
                     {
-                        auto reader_kernel = reader_kernels.at(i);
-                        auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                        auto reader_kernel_id = reader_kernel_ids.at(i);
+                        auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                         runtime_args[0] = src_dram_buffer_a->address();
-                        SetRuntimeArgs(reader_kernel, core, runtime_args);
+                        SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                     }
 
                     {
-                        auto writer_kernel = writer_kernels.at(i);
-                        auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                        auto writer_kernel_id = writer_kernel_ids.at(i);
+                        auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                         runtime_args[0] = src_dram_buffer_b->address();
                         runtime_args[4] = dst_dram_buffer->address();
                         if (bias_dram_buffer != nullptr) {
                             runtime_args[14] = bias_dram_buffer->address();
                         }
-                        SetRuntimeArgs(writer_kernel, core, runtime_args);
+                        SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                     }
                 }
                 // in0 sender and in1 receiver
                 else if (core_idx_x == 0 and core_idx_y != 0) {
                     {
-                        auto reader_kernel = reader_kernels.at(i);
-                        auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                        auto reader_kernel_id = reader_kernel_ids.at(i);
+                        auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                         runtime_args[0] = src_dram_buffer_a->address();
-                        SetRuntimeArgs(reader_kernel, core, runtime_args);
+                        SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                     }
 
                     {
-                        auto writer_kernel = writer_kernels.at(i);
-                        auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                        auto writer_kernel_id = writer_kernel_ids.at(i);
+                        auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                         runtime_args[1] = dst_dram_buffer->address();
-                        SetRuntimeArgs(writer_kernel, core, runtime_args);
+                        SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                     }
                 }
                 // in0 receiver and in1 sender
                 else if (core_idx_x != 0 and core_idx_y == 0) {
                     {
-                        auto writer_kernel = writer_kernels.at(i);
-                        auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                        auto writer_kernel_id = writer_kernel_ids.at(i);
+                        auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                         runtime_args[0] = src_dram_buffer_b->address();
                         runtime_args[4] = dst_dram_buffer->address();
                         if (bias_dram_buffer != nullptr) {
                             runtime_args[14] = bias_dram_buffer->address();
                         }
-                        SetRuntimeArgs(writer_kernel, core, runtime_args);
+                        SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                     }
                 }
                 // in0 receiver and in1 receiver
                 else {
                     {
-                        auto writer_kernel = writer_kernels.at(i);
-                        auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                        auto writer_kernel_id = writer_kernel_ids.at(i);
+                        auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                         runtime_args[1] = dst_dram_buffer->address();
-                        SetRuntimeArgs(writer_kernel, core, runtime_args);
+                        SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                     }
                 }
 

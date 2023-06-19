@@ -69,24 +69,24 @@ operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const 
     };
 
     // Tilized reader
-    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/unpad_dims_rm_interleaved.cpp",
         core,
-        compile_time_args_vec,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = compile_time_args_vec});
 
 
     tt_metal::SetRuntimeArgs(
-        unary_reader_kernel,
+        program,
+        unary_reader_kernel_id,
         core,
         reader_kernel_args
     );
 
     auto override_runtime_args_callback = [
-        reader_writer_kernel=unary_reader_kernel
+        reader_writer_kernel_id=unary_reader_kernel_id
     ](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -97,10 +97,10 @@ operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const 
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_writer_kernel_id, core);
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = dst_buffer->address();
-            SetRuntimeArgs(reader_writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_writer_kernel_id, core, runtime_args);
         }
     };
 
@@ -178,23 +178,23 @@ operation::ProgramWithCallbacks unpad_tile(const Tensor &a, Tensor& output, cons
     };
 
     // Tilized reader
-    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/unpad_dims_interleaved.cpp",
         core,
-        compile_time_args_vec,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = compile_time_args_vec});
 
     tt_metal::SetRuntimeArgs(
-        unary_reader_kernel,
+        program,
+        unary_reader_kernel_id,
         core,
         reader_kernel_args
     );
 
     auto override_runtime_args_callback = [
-        reader_writer_kernel=unary_reader_kernel
+        reader_writer_kernel_id=unary_reader_kernel_id
     ](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -205,10 +205,10 @@ operation::ProgramWithCallbacks unpad_tile(const Tensor &a, Tensor& output, cons
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_writer_kernel_id, core);
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = dst_buffer->address();
-            SetRuntimeArgs(reader_writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_writer_kernel_id, core, runtime_args);
         }
     };
 

@@ -90,22 +90,12 @@ bool dram_reader_cb_writer_dram(
         program,
         reader_kernel_name,
         cfg.target_core,
-        {
-            cb_id,
-            uint32_t(input_dram_buffer.page_size()),
-        },
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::NOC_0);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0, .compile_args = {cb_id,  uint32_t(input_dram_buffer.page_size())}});
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         writer_kernel_name,
         cfg.target_core,
-        {
-            cb_id,
-            uint32_t(output_dram_buffer.page_size()),
-        },
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::NOC_1);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_1, .compile_args = {cb_id,  uint32_t(output_dram_buffer.page_size())}});
 
     if (banked_reader) {
         reader_runtime_args = {
@@ -141,8 +131,8 @@ bool dram_reader_cb_writer_dram(
     tt_metal::WriteToBuffer(input_dram_buffer, input_packed);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    tt_metal::SetRuntimeArgs(reader_kernel, cfg.target_core, reader_runtime_args);
-    tt_metal::SetRuntimeArgs(writer_kernel, cfg.target_core, writer_runtime_args);
+    tt_metal::SetRuntimeArgs(program, reader_kernel, cfg.target_core, reader_runtime_args);
+    tt_metal::SetRuntimeArgs(program, writer_kernel, cfg.target_core, writer_runtime_args);
     tt_metal::WriteRuntimeArgsToDevice(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
 

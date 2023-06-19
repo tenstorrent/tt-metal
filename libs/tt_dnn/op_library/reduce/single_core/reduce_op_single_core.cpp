@@ -68,21 +68,19 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     );
     // no need to create c_in2 buffer since we pass scaler=0 to reader
 
-    tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         reduce_dim == ReduceOpDim::H ?
             "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp" :
             "tt_metal/kernels/dataflow/reader_unary_8bank_reduce.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(*reinterpret_cast<uint32_t*>(&scaler)), // scaler
@@ -96,20 +94,15 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
 
     string compute_kernel_name = reduce_op_utils::dim_to_kernel_name(reduce_dim, reduce_op);
 
-    auto reduce_compute_kernel = tt_metal::CreateComputeKernel(
+    auto reduce_compute_kernel_id = tt_metal::CreateComputeKernel(
         program,
         compute_kernel_name,
         core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)}
     );
 
-    reduce_op_utils::add_defines(reduce_compute_kernel, reduce_op, reduce_dim);
-
     tt_metal::SetRuntimeArgs(
-        reader_kernel, core,
+        program, reader_kernel_id, core,
         {
             a.buffer()->address(),
             0, // unused by multibank reader
@@ -128,7 +121,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     }
 
     tt_metal::SetRuntimeArgs(
-        writer_kernel, core,
+        program, writer_kernel_id, core,
         {
             output.buffer()->address(),
             0, // unused by multibank writer
@@ -137,7 +130,8 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         }
     );
 
-    auto override_runtime_args_callback = [reader_kernel, writer_kernel](
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -149,15 +143,15 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
-            SetRuntimeArgs(reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 

@@ -82,7 +82,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *> create_program(
+std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID, tt_metal::KernelID> create_program(
     tt_metal::Device *device,
     int start_core_x,
     int start_core_y,
@@ -174,22 +174,19 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
         program,
         "tt_metal/kernels/dataflow/reader_matmul_tile_layout_in0_mcast_sender.cpp",
         mcast_senders,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto mm_reader_kernel_receiver = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_matmul_tile_layout_in0_mcast_receiver.cpp",
         mcast_receivers,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_matmul_tile_layout.cpp",
         all_cores,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     int num_blocks = (K/in0_block_w);
 
@@ -220,16 +217,11 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
         uint(out_subblock_num_tiles)
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/matmul_large_block_zm.cpp",
         all_cores,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
     return {std::move(program), mm_reader_kernel_sender, mm_reader_kernel_receiver, unary_writer_kernel};
@@ -242,9 +234,9 @@ bool write_runtime_args_to_device(
     int start_core_y,
     int num_cores_r,
     int num_cores_c,
-    tt_metal::DataMovementKernel *mm_reader_kernel_sender,
-    tt_metal::DataMovementKernel *mm_reader_kernel_receiver,
-    tt_metal::DataMovementKernel *unary_writer_kernel,
+    tt_metal::KernelID mm_reader_kernel_sender,
+    tt_metal::KernelID mm_reader_kernel_receiver,
+    tt_metal::KernelID unary_writer_kernel,
     int M,
     int N,
     int K,
@@ -332,11 +324,11 @@ bool write_runtime_args_to_device(
             };
 
             if(core_idx_x == 0) {
-                tt_metal::SetRuntimeArgs(mm_reader_kernel_sender, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_sender, core, mm_reader_args);
             } else {
-                tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_receiver, core, mm_reader_args);
             }
-            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
         }
     }
     tt_metal::WriteRuntimeArgsToDevice(device, program);

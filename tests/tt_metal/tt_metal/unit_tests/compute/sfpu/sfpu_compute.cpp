@@ -185,32 +185,26 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
             program,
             "tt_metal/kernels/dataflow/reader_unary.cpp",
             test_config.cores,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
+        std::map<string, string> writer_defines;
+        // Enqueue apis only supported on gs so far
+        if (device->arch() == tt::ARCH::GRAYSKULL) {
+            writer_defines["TT_METAL_DEVICE_DISPATCH_MODE"] = "1";
+        }
         auto writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             test_config.cores,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = writer_defines});
 
-        // Enqueue apis only supported on gs so far
-        if (device->arch() == tt::ARCH::GRAYSKULL) {
-            writer_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
-        }
-
-        bool fp32_dest_acc_en = false;
+        std::map<string, string> sfpu_defines = {{"SFPU_OP_AND_PACK", sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op)}};
         auto sfpu_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/eltwise_sfpu.cpp",
             test_config.cores,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            test_config.approx_mode);
+            tt_metal::ComputeConfig{.math_approx_mode = test_config.approx_mode, .compile_args = compute_kernel_args, .defines = sfpu_defines});
 
-        sfpu_kernel->add_define("SFPU_OP_AND_PACK", sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op));
         int chip_id = 0;
         CoresInCoreRangeGenerator cores_in_core_range(
             core_range, device->cluster()->get_soc_desc(chip_id).worker_grid_size);
@@ -223,8 +217,8 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
             terminate = terminate_;
 
-            SetRuntimeArgs(writer_kernel, core_coord, writer_rt_args);
-            SetRuntimeArgs(reader_kernel, core_coord, reader_rt_args);
+            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
+            SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
         } while (not terminate);
     }
 

@@ -79,8 +79,7 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
@@ -96,7 +95,7 @@ int main(int argc, char **argv) {
         tt_metal::WriteToBuffer(dram_buffer, activations);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-        tt_metal::SetRuntimeArgs(mcast_reader_kernel, core, mcast_reader_args);
+        tt_metal::SetRuntimeArgs(program, mcast_reader_kernel, core, mcast_reader_args);
 
         tt_metal::WriteRuntimeArgsToDevice(device, program);
 

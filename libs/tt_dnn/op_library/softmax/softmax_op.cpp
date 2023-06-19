@@ -130,14 +130,28 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         src0_is_dram,
         block_size
     };
-    auto reader_kernels = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_cores, reader_compile_time_args,
-        DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+    std::map<string, string> softmax_defines;
+    if (scale != 0.0f) {
+        softmax_defines["FUSED_SCALE_MASK"] = "1";
+    }
+    auto reader_kernels_id = CreateDataMovementKernel(
+        program, "tt_metal/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args,
+            .defines = softmax_defines
+        });
         //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
 
-    auto writer_kernels = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp", all_cores, writer_compile_time_args,
-        DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+    auto writer_kernels_id = CreateDataMovementKernel(
+        program, "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp", all_cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args,
+            .defines = softmax_defines
+        });
         //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
 
     // for broadcasting in H direction we need to
@@ -145,16 +159,15 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
     // if wtpc >= Ht then tpc should be a multiple of Ht
     vector<uint32_t> compute_args = { wtpc, partHt, Wt, block_size };
-
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
-    auto softmax_kernels = CreateComputeKernel(
-        program, "kernels/compute/softmax.cpp", all_cores, compute_args,
-        MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
-    if (scale != 0.0f) {
-        reader_kernels->add_define("FUSED_SCALE_MASK", "1");
-        softmax_kernels->add_define("FUSED_SCALE_MASK", "1");
-    }
+    auto softmax_kernels_id = CreateComputeKernel(
+        program, "kernels/compute/softmax.cpp", all_cores,
+        tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,
+            .compile_args = compute_args,
+            .defines = softmax_defines
+        });
 
     // Create circular buffers
     // see softmax.cpp for which buffers are needed
@@ -178,17 +191,18 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         union { float f; uint32_t u; } s; s.f = scale; // scale for fused scale-mask-softmax
         // always in-place
         //                                                              0  1    2       3            4   5       6          7           8
-        SetRuntimeArgs(reader_kernels, core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
-        SetRuntimeArgs(writer_kernels, core, { src_addr, wtpc*Wt, tile_offset });
+        SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
+        SetRuntimeArgs(program, writer_kernels_id, core, { src_addr, wtpc*Wt, tile_offset });
     }
 
     auto override_runtime_args_callback = [
-            reader_kernel=reader_kernels,
-            writer_kernel=writer_kernels,
+            reader_kernel_id=reader_kernels_id,
+            writer_kernel_id=writer_kernels_id,
             num_cores,
             grid
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -201,18 +215,18 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
             auto core = grid.wrap_core(icore);
 
             {
-                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer->address();
                 if (mask_dram_buffer != nullptr) {
                     runtime_args[7] = mask_dram_buffer->address();
                 }
-                SetRuntimeArgs(reader_kernel, core, runtime_args);
+                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = src_dram_buffer->address();
-                SetRuntimeArgs(writer_kernel, core, runtime_args);
+                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };

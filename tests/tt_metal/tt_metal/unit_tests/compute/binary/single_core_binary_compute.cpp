@@ -101,32 +101,27 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         program,
         "tt_metal/kernels/dataflow/reader_binary.cpp",
         test_config.core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         test_config.core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(test_config.num_tiles),  // per_core_block_cnt
         1                                 // per_core_block_cnt
     };
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
+    std::map<string, string> defines = {
+        {"ELTWISE_OP_CODE", binary_op_name_to_op_code.at(test_config.binary_op)},
+        {"ELTWISE_OP", binary_op_name_to_op_kernel.at(test_config.binary_op)}
+    };
     auto binary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_binary.cpp",
         test_config.core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode);
-    binary_kernel->add_define("ELTWISE_OP_CODE", binary_op_name_to_op_code.at(test_config.binary_op));
-    binary_kernel->add_define("ELTWISE_OP", binary_op_name_to_op_kernel.at(test_config.binary_op));
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -165,6 +160,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::SetRuntimeArgs(
+        program,
         reader_kernel,
         test_config.core,
         {
@@ -177,6 +173,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
             (uint32_t)test_config.num_tiles,
         });
     tt_metal::SetRuntimeArgs(
+        program,
         writer_kernel,
         test_config.core,
         {

@@ -342,15 +342,13 @@ bool test_matmul_large_block(const tt::ARCH& arch, bool activations_rm, bool out
             program,
             "tt_metal/kernels/dataflow/reader_matmul_blocked.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             writer_kernel,
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         int num_blocks = (K/in0_block_w);
 
@@ -392,19 +390,13 @@ bool test_matmul_large_block(const tt::ARCH& arch, bool activations_rm, bool out
             uint(output_rm)
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
-
         string compute_kernel = "tt_metal/kernels/compute/matmul_large_block.cpp";
 
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,
             compute_kernel,
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
         ////////////////////////////////////////////////////////////////////////////
@@ -437,11 +429,13 @@ bool test_matmul_large_block(const tt::ARCH& arch, bool activations_rm, bool out
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         tt_metal::SetRuntimeArgs(
+            program,
             mm_reader_kernel,
             core,
             mm_reader_rt_args);
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_writer_kernel,
             core,
             writer_rt_args);

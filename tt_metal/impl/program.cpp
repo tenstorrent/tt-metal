@@ -19,41 +19,30 @@ std::atomic<u64> Program::program_counter = 0;
 
 Program::Program(): id(program_counter++),worker_crs_({}) {}
 
-std::vector<ComputeKernel *> Program::compute_kernels() const {
-    std::vector<ComputeKernel *> compute_kernels;
-    for (auto kernel : kernels_) {
-        if (auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel)) {
-            compute_kernels.push_back(compute_kernel);
-        }
-    }
-    return compute_kernels;
+void Program::add_kernel(Kernel *kernel) {
+    kernel_ids_.push_back(kernel->id());
+    kernel_by_id_[kernel->id()] = kernel;
 }
 
-std::vector<DataMovementKernel *> Program::data_movement_kernels() const {
-    std::vector<DataMovementKernel *> data_movement_kernels;
-    for (auto kernel : kernels_) {
-        if (auto data_movement_kernel = dynamic_cast<DataMovementKernel *>(kernel)) {
-            data_movement_kernels.push_back(data_movement_kernel);
-        }
-    }
-    return data_movement_kernels;
+Kernel *Program::get_kernel(KernelID kernel_id) const {
+    TT_ASSERT(this->kernel_by_id_.find(kernel_id) != this->kernel_by_id_.end(), "Expected Kernel with ID {} to be in Program {}", kernel_id, this->id);
+    return this->kernel_by_id_.at(kernel_id);
 }
 
 void populate_kernel_group(KernelGroup &kernel_group, Kernel *kernel) {
-    if (auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel)) {
-        kernel_group.compute = compute_kernel;
-    } else if (auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel)) {
-        if (dm_kernel->data_movement_processor() == DataMovementProcessor::RISCV_0) {
-            kernel_group.riscv_0 = dm_kernel;
-        } else {
-            kernel_group.riscv_1 = dm_kernel;
-        }
+    RISCV riscv_processor = kernel->processor();
+    switch (riscv_processor) {
+        case RISCV::BRISC: kernel_group.riscv0_id = kernel->id(); break;
+        case RISCV::NCRISC: kernel_group.riscv1_id = kernel->id(); break;
+        case RISCV::COMPUTE: kernel_group.compute_id = kernel->id(); break;
+        default:
+            TT_ASSERT(false, "Unsupported kernel processor!");
     }
 }
 
 KernelGroup Program::kernels_on_core(const CoreCoord &core) const {
     KernelGroup kernel_group;
-    for (auto kernel : kernels_) {
+    for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
         auto cores = kernel->logical_cores();
         if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
             populate_kernel_group(kernel_group, kernel);
@@ -65,7 +54,7 @@ KernelGroup Program::kernels_on_core(const CoreCoord &core) const {
 std::map<CoreCoord, KernelGroup> Program::core_to_kernel_group() const {
     std::map<CoreCoord, KernelGroup> core_to_kernel_group;
 
-    for (auto kernel : kernels_) {
+    for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
         for (auto core : kernel->logical_cores()) {
             KernelGroup &kernel_group = core_to_kernel_group[core];
             populate_kernel_group(kernel_group, kernel);
@@ -79,7 +68,8 @@ std::vector<std::string> Program::cores_to_ops() const {
     std::vector<std::string> ops;
 
     for (const auto &core : this->logical_cores()) {
-        for (auto kernel : kernels_) {
+        for (auto kernel_id : this->kernel_ids_) {
+        auto kernel = this->get_kernel(kernel_id);
         auto cores = kernel->logical_cores();
             if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
                 ops.push_back(kernel->name());
@@ -225,7 +215,7 @@ void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t
 std::vector<CoreCoord> Program::logical_cores() const {
     std::vector<CoreCoord> cores_in_program;
     std::set<CoreCoord> unique_cores;
-    for (auto kernel : kernels_) {
+    for (const auto &[kernel_id, kernel] : this->kernel_by_id_) {
         for (auto core : kernel->logical_cores()) {
             if (unique_cores.find(core) != unique_cores.end()) {
                 continue;
@@ -238,14 +228,13 @@ std::vector<CoreCoord> Program::logical_cores() const {
 }
 
 void Program::construct_core_range_set_for_worker_cores() {
-    for (auto kernel : kernels_ )
-    {
+    for (const auto &[kernel_id, kernel] : this->kernel_by_id_) {
         this->worker_crs_.merge ( kernel->core_range_set());
     }
 }
 
 Program::~Program() {
-    for (auto kernel : kernels_) {
+    for (const auto &[kernel_id, kernel] : this->kernel_by_id_) {
         delete kernel;
     }
 }

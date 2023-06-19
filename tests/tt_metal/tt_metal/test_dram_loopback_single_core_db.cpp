@@ -66,8 +66,7 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/dataflow/dram_copy_db.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
@@ -84,6 +83,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         tt_metal::SetRuntimeArgs(
+            program,
             dram_copy_kernel,
             core,
             {input_dram_buffer_addr,

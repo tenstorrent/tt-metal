@@ -188,15 +188,13 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             program,
             reader_kernel,
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
             1, // block_tile_dim, within block, how many tiles are on the K dim
@@ -209,9 +207,6 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             with_bias // whether or not to use bias
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
-
         string compute_kernel_name;
         compute_kernel_name = "tt_metal/kernels/compute/matmul_with_bias.cpp";
 
@@ -219,10 +214,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             program,
             compute_kernel_name,
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
         ////////////////////////////////////////////////////////////////////////////
@@ -285,11 +277,13 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         }
 
         tt_metal::SetRuntimeArgs(
+            program,
             mm_reader_kernel,
             core,
             reader_l1_args);
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_writer_kernel,
             core,
             {dst_dram_buffer.address(),

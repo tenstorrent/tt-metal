@@ -6,6 +6,7 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/device/tt_memory.h"
 #include "tt_metal/llrt/llrt.hpp"
+#include "tt_metal/detail/program.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -108,30 +109,23 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
             uint(num_tiles) // per_core_tile_cnt
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/eltwise_copy_3m.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
         ////////////////////////////////////////////////////////////////////////////
@@ -139,8 +133,13 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
         auto kernel_group = program.kernels_on_core(core);
-        for (auto kernel : program.kernels()) {
-            std::filesystem::remove_all(get_kernel_compile_outpath(device->pcie_slot()) + kernel->name());
+        TT_ASSERT(kernel_group.compute_id.has_value() and kernel_group.riscv0_id.has_value() and kernel_group.riscv1_id.has_value());
+        tt_metal::Kernel *compute_kernel = tt_metal::detail::GetKernel(program, kernel_group.compute_id.value());
+        tt_metal::Kernel *riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group.riscv0_id.value());
+        tt_metal::Kernel *riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group.riscv1_id.value());
+        std::vector<string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
+        for (auto kernel_name : kernel_names) {
+            std::filesystem::remove_all(get_kernel_compile_outpath(device->pcie_slot()) + kernel_name);
         }
 
         int num_compiles = 3;
@@ -151,26 +150,26 @@ int main(int argc, char **argv) {
         for (int i = 0; i < num_compiles; i++) {
             pass &= tt_metal::CompileProgram(device, program);
             if (i == 0) {
-                compute_binaries = kernel_group.compute->binaries();
+                compute_binaries = compute_kernel->binaries();
                 TT_ASSERT(compute_binaries.size() == 3, "Expected 3 Compute binaries!");
-                brisc_binaries = kernel_group.riscv_0->binaries();
+                brisc_binaries = riscv0_kernel->binaries();
                 TT_ASSERT(brisc_binaries.size() == 1, "Expected 1 BRISC binary!");
-                ncrisc_binaries = kernel_group.riscv_1->binaries();
+                ncrisc_binaries = riscv1_kernel->binaries();
                 TT_ASSERT(ncrisc_binaries.size() == 1, "Expected 1 NCRISC binary!");
             } else {
-                TT_ASSERT(kernel_group.compute->binaries() == compute_binaries);
-                TT_ASSERT(kernel_group.riscv_0->binaries() == brisc_binaries);
-                TT_ASSERT(kernel_group.riscv_1->binaries() == ncrisc_binaries);
+                TT_ASSERT(compute_kernel->binaries() == compute_binaries);
+                TT_ASSERT(riscv0_kernel->binaries() == brisc_binaries);
+                TT_ASSERT(riscv1_kernel->binaries() == ncrisc_binaries);
             }
-            std::string brisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), kernel_group.riscv_0) + "/brisc/brisc.hex";
+            std::string brisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), riscv0_kernel) + "/brisc/brisc.hex";
             ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, device->pcie_slot(), false);
             TT_ASSERT(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
-            std::string ncrisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), kernel_group.riscv_1) + "/ncrisc/ncrisc.hex";
+            std::string ncrisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), riscv1_kernel) + "/ncrisc/ncrisc.hex";
             ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, device->pcie_slot(), false);
             TT_ASSERT(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
-                std::string trisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), kernel_group.compute) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
+                std::string trisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), compute_kernel) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
                 ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, device->pcie_slot(), false);
                 TT_ASSERT(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
             }

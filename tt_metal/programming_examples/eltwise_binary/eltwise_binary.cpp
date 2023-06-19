@@ -29,7 +29,8 @@ struct BinaryOpType {
     static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
-void add_defines(ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_type){
+std::map<string, string> get_defines(BinaryOpType::Enum op_type){
+    std::map<string, string> defines;
     // TODO(AP): remove duplication
     string op_name, op_code;
     switch (op_type) {
@@ -38,8 +39,9 @@ void add_defines(ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_ty
         case BinaryOpType::MUL: op_name = "mul_tiles"; op_code = "2"; break;
         default: TT_ASSERT(false && "Undefined op type");
     }
-    eltwise_binary_kernel->add_define("ELTWISE_OP", op_name.c_str());
-    eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_code.c_str());
+    defines["ELTWISE_OP"] = op_name.c_str();
+    defines["ELTWISE_OP_CODE"] = op_code.c_str();
+    return defines;
 }
 
 int main(int argc, char **argv) {
@@ -114,19 +116,17 @@ int main(int argc, char **argv) {
          * Specify data movement kernels for reading/writing data to/from
          * DRAM.
          */
-        DataMovementKernel *binary_reader_kernel = CreateDataMovementKernel(
+        KernelID binary_reader_kernel_id = CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
             core,
-            DataMovementProcessor::RISCV_1,
-            NOC::RISCV_1_default);
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        DataMovementKernel *unary_writer_kernel = CreateDataMovementKernel(
+        KernelID unary_writer_kernel_id = CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            DataMovementProcessor::RISCV_0,
-            NOC::RISCV_0_default);
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
         /*
          * Set the parameters that the compute kernel will use.
@@ -143,16 +143,18 @@ int main(int argc, char **argv) {
          * Use the add_tiles operation available in the eltwise_binary
          * compute kernel.
          */
-        ComputeKernel *eltwise_binary_kernel = CreateComputeKernel(
+        KernelID eltwise_binary_kernel_id = CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            ComputeConfig{
+                .math_fidelity = MathFidelity::HiFi4,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .math_approx_mode = math_approx_mode,
+                .compile_args = compute_kernel_args,
+                .defines = get_defines(BinaryOpType::ADD)
+            }
         );
-        add_defines(eltwise_binary_kernel, BinaryOpType::ADD);
 
         /*
         * Compile kernels used during execution
@@ -178,7 +180,8 @@ int main(int argc, char **argv) {
         pass &= ConfigureDeviceWithProgram(device, program);
 
         SetRuntimeArgs(
-            binary_reader_kernel,
+            program,
+            binary_reader_kernel_id,
             core,
             {
                 src0_dram_buffer.address(),
@@ -194,7 +197,8 @@ int main(int argc, char **argv) {
         );
 
         SetRuntimeArgs(
-            unary_writer_kernel,
+            program,
+            unary_writer_kernel_id,
             core,
             {
                 dst_dram_buffer.address(),
@@ -250,34 +254,33 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
-        binary_reader_kernel = CreateDataMovementKernel(
+        binary_reader_kernel_id = CreateDataMovementKernel(
             program_mul,
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
             core,
-            DataMovementProcessor::RISCV_1,
-            NOC::RISCV_1_default);
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        unary_writer_kernel = CreateDataMovementKernel(
+        unary_writer_kernel_id = CreateDataMovementKernel(
             program_mul,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            DataMovementProcessor::RISCV_0,
-            NOC::RISCV_0_default);
-
-        eltwise_binary_kernel = CreateComputeKernel(
-            program_mul,
-            "tt_metal/kernels/compute/eltwise_binary.cpp",
-            core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
-        );
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
         /*
          * But now let's do an eltwise mul!
          */
-        add_defines(eltwise_binary_kernel, BinaryOpType::MUL);
+        eltwise_binary_kernel_id = CreateComputeKernel(
+            program_mul,
+            "tt_metal/kernels/compute/eltwise_binary.cpp",
+            core,
+            ComputeConfig{
+                .math_fidelity = MathFidelity::HiFi4,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .math_approx_mode = math_approx_mode,
+                .compile_args = compute_kernel_args,
+                .defines = get_defines(BinaryOpType::MUL)
+            }
+        );
 
         /*
          * Compile kernels.
@@ -300,7 +303,8 @@ int main(int argc, char **argv) {
          * Configure program and runtime kernel arguments.
          */
         SetRuntimeArgs(
-            binary_reader_kernel,
+            program_mul,
+            binary_reader_kernel_id,
             core,
             {
                 src0_dram_buffer.address(),
@@ -316,7 +320,8 @@ int main(int argc, char **argv) {
         );
 
         SetRuntimeArgs(
-            unary_writer_kernel,
+            program_mul,
+            unary_writer_kernel_id,
             core,
             {
                 dst_dram_buffer.address(),

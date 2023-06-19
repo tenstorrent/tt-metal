@@ -330,15 +330,13 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
         program,
         writer_kernel_name,
         cfg.core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_matmul_blocked.cpp",
         cfg.core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     int num_blocks = (cfg.K / cfg.in0_block_w);
     int in0_num_subblocks = (cfg.M / cfg.out_subblock_h);
@@ -386,16 +384,11 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
         uint(cfg.activations_rm),
         uint(cfg.outputs_rm)};
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto matmul_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/matmul_large_block.cpp",
         cfg.core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode);
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -441,8 +434,8 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(input1_dram_readback_packed), 32);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    tt_metal::SetRuntimeArgs(reader_kernel, cfg.core, reader_rt_args);
-    tt_metal::SetRuntimeArgs(writer_kernel, cfg.core, writer_rt_args);
+    tt_metal::SetRuntimeArgs(program, reader_kernel, cfg.core, reader_rt_args);
+    tt_metal::SetRuntimeArgs(program, writer_kernel, cfg.core, writer_rt_args);
 
     tt_metal::WriteRuntimeArgsToDevice(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
@@ -512,35 +505,19 @@ bool single_tile_matmul(tt_metal::Device* device) {
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/reader_binary.cpp",
         core,
-        {
-            in0_cb_index,
-            in1_cb_index,
-        },
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {in0_cb_index, in1_cb_index}});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
-        {out_cb_index},
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = {out_cb_index}});
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto simple_matmul_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/single_tile_compute.cpp",
         core,
-        {
-            in0_cb_index,
-            in1_cb_index,
-            out_cb_index,
-        },
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode);
+        tt_metal::ComputeConfig{.compile_args = {in0_cb_index, in1_cb_index, out_cb_index}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -568,6 +545,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::SetRuntimeArgs(
+        program,
         reader_kernel,
         core,
         {
@@ -580,6 +558,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
             (uint32_t)1,  // num_tiles
         });
     tt_metal::SetRuntimeArgs(
+        program,
         writer_kernel,
         core,
         {
@@ -643,31 +622,19 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
         core,
-        {
-            in0_cb_index,
-            in1_cb_index,
-        },
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {in0_cb_index, in1_cb_index}});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
-        {out_cb_index},
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = {out_cb_index}});
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto simple_matmul_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/multi_tile_compute.cpp",
         core,
-        {in0_cb_index, in1_cb_index, out_cb_index, M * K, K * N, M * N, M, N, K},
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode);
+        tt_metal::ComputeConfig{.compile_args = {in0_cb_index, in1_cb_index, out_cb_index, M * K, K * N, M * N, M, N, K}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -698,6 +665,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::SetRuntimeArgs(
+        program,
         reader_kernel,
         core,
         {
@@ -714,6 +682,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
             (uint32_t)in1_byte_size,  // in1_block_size_bytes
         });
     tt_metal::SetRuntimeArgs(
+        program,
         writer_kernel,
         core,
         {
@@ -789,31 +758,19 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
         core,
-        {
-            in0_cb_index,
-            in1_cb_index,
-        },
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {in0_cb_index, in1_cb_index}});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
-        {out_cb_index},
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = {out_cb_index}});
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto simple_matmul_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
         core,
-        {in0_cb_index, in1_cb_index, out_cb_index, partials_cb_index, M * K, K * N, M * N, M, N, K, num_blocks},
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode);
+        tt_metal::ComputeConfig{.compile_args = {in0_cb_index, in1_cb_index, out_cb_index, partials_cb_index, M * K, K * N, M * N, M, N, K, num_blocks}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -844,6 +801,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::SetRuntimeArgs(
+        program,
         reader_kernel,
         core,
         {
@@ -860,6 +818,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
             (uint32_t)in1_byte_size,  // in1_block_size_bytes
         });
     tt_metal::SetRuntimeArgs(
+        program,
         writer_kernel,
         core,
         {

@@ -91,33 +91,24 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
             (std::uint32_t) in0_c, // in0_c
     };
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_tm_tile_layout_concat_heads.cpp",
         all_cores,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_0_default);
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
+    auto writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_tm_tile_layout_concat_heads.cpp",
         all_cores,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
 
     // Dummy compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     std::vector<uint32_t> compute_args = {0}; // dummy
-    auto compute_kernel = tt_metal::CreateComputeKernel(
+    auto compute_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/blank.cpp",
         all_cores,
-        compute_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_args}
     );
 
     // Create circular buffers
@@ -146,20 +137,21 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
                 (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles, // out_tensor_tile_id
             };
 
-            tt_metal::SetRuntimeArgs(reader_kernel, core, reader_runtime_args);
-            tt_metal::SetRuntimeArgs(writer_kernel, core, writer_runtime_args);
+            tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
     }
 
     auto override_runtime_args_callback = [
-            reader_kernel,
-            writer_kernel,
+            reader_kernel_id,
+            writer_kernel_id,
             num_cores_r,
             num_cores_c,
             start_core_x,
             start_core_y
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -173,15 +165,15 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
                 CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
                 {
-                    auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer->address();
-                    SetRuntimeArgs(reader_kernel, core, runtime_args);
+                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                 }
 
                 {
-                    auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
-                    SetRuntimeArgs(writer_kernel, core, runtime_args);
+                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                 }
             }
         }

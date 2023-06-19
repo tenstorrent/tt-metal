@@ -39,16 +39,18 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
         num_cb_tiles, num_cb_tiles * single_tile_size,
         cb_data_format);
 
-    tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program, "tt_metal/kernels/dataflow/fill_rm_8bank.cpp",
-        core, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::RISCV_1_default);
+        core,
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     tt_metal::SetRuntimeArgs(
-        binary_reader_kernel, core,
+        program, binary_reader_kernel_id, core,
         { dst_dram_buffer->address(), u32(N*C), u32(H), u32(W), u32(hFill), u32(wFill), u32(bfloat16(val_hi).to_uint16()), u32(bfloat16(val_lo).to_uint16()) }
     );
 
-    auto override_runtime_args_callback = [kernel=binary_reader_kernel](
+    auto override_runtime_args_callback = [kernel_id=binary_reader_kernel_id](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -58,9 +60,9 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(kernel, core, runtime_args);
+            SetRuntimeArgs(program, kernel_id, core, runtime_args);
         }
     };
 

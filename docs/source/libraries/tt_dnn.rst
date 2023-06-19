@@ -107,7 +107,8 @@ In order for an op to be cachable, it needs to implement the following:
 
             // ...
 
-            auto override_runtime_args_callback = [unary_reader_kernel, unary_writer_kernel](
+            auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+                const Program &program,
                 const std::vector<Buffer*>& input_buffers,
                 const std::vector<Buffer*>& output_buffers
             ) {
@@ -118,15 +119,15 @@ In order for an op to be cachable, it needs to implement the following:
                 CoreCoord core = {0, 0};
 
                 {
-                    auto runtime_args = GetRuntimeArgs(unary_reader_kernel, core);
+                    auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer->address();
-                    SetRuntimeArgs(unary_reader_kernel, core, runtime_args);
+                    SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
                 }
 
                 {
-                    auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+                    auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
-                    SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+                    SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
                 }
             };
 

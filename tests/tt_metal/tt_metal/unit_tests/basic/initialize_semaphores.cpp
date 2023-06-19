@@ -47,30 +47,23 @@ void initialize_and_compile_program(tt_metal::Device *device, tt_metal::Program 
         program,
         "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
         core_range,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core_range,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
         uint(num_tiles) // per_core_tile_cnt
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_copy_3m.cpp",
         core_range,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
     tt_metal::CompileProgram(device, program);

@@ -86,57 +86,43 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         all_cores,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args_group_1 = {
         num_tiles_per_core_group_1, // per_core_block_cnt
         1 // per_core_block_size
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_binary_kernel_group_1 = tt_metal::CreateComputeKernel(
+    std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(op_type);
+    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_binary.cpp",
         core_group_1,
-        compute_kernel_args_group_1,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1, .defines = eltwise_defines}
     );
 
-    eltwise_binary_op_utils::add_defines(eltwise_binary_kernel_group_1, op_type);
     if(!core_group_2.ranges().empty()){
         vector<uint32_t> compute_kernel_args_group_2 = {
             num_tiles_per_core_group_2, // per_core_block_cnt
             1 // per_core_block_size
         };
 
-        auto eltwise_binary_kernel_group_2 = tt_metal::CreateComputeKernel(
+        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             core_group_2,
-            compute_kernel_args_group_2,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2, .defines = eltwise_defines}
         );
-
-        eltwise_binary_op_utils::add_defines(eltwise_binary_kernel_group_2, op_type);
     }
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
@@ -150,7 +136,8 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         tt_metal::SetRuntimeArgs(
-            binary_reader_kernel,
+            program,
+            binary_reader_kernel_id,
             core,
             {
                 src0_buffer->address(),
@@ -161,7 +148,8 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         );
 
         tt_metal::SetRuntimeArgs(
-            unary_writer_kernel,
+            program,
+            unary_writer_kernel_id,
             core,
             {
                 dst_buffer->address(),
@@ -173,12 +161,13 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     }
 
     auto override_runtime_args_callback = [
-            binary_reader_kernel,
-            unary_writer_kernel,
+            binary_reader_kernel_id,
+            unary_writer_kernel_id,
             num_cores,
             num_cores_y
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -193,16 +182,16 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(binary_reader_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
                 runtime_args[0] = src_buffer_a->address();
                 runtime_args[1] = src_buffer_b->address();
-                SetRuntimeArgs(binary_reader_kernel, core, runtime_args);
+                SetRuntimeArgs(program, binary_reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
-                SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+                SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
         }
     };

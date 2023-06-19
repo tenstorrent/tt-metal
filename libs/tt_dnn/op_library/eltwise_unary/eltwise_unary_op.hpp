@@ -161,6 +161,6 @@ using namespace tt::tt_metal;
 
 bool get_op_approx_mode(UnaryOpType::Enum op_type);
 string get_op_name(UnaryOpType::Enum op_type, std::optional<float> param={});
-void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type, std::optional<float> param={});
+std::map<string, string> get_defines(UnaryOpType::Enum op_type, std::optional<float> param={});
 
 } // namespace eltwise_unary_op_utils

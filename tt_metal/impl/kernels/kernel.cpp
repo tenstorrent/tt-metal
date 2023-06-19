@@ -1,15 +1,20 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+#include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+#include "llrt/llrt.hpp"
 
 #include <fmt/ranges.h>
 #include <set>
 #include <unordered_set>
 
-#include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
-#include "llrt/llrt.hpp"
+#include "third_party/magic_enum/magic_enum.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string> &defines) :
+    id_(reinterpret_cast<uintptr_t>(this)), kernel_path_file_name_(kernel_path_file_name), core_range_set_(core_range_set), compile_time_args_(compile_args), defines_(defines) {}
 
 std::string Kernel::name() const {
     auto pos_of_name = kernel_path_file_name_.rfind("/") + 1;
@@ -37,27 +42,38 @@ bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.core_coord_in_core_ranges(logical_core);
 }
 
+uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
+
+uint8_t ComputeKernel::expected_num_binaries() const {
+    // Compute kernels generate binaries for all three TRISC processors
+    return 3;
+}
+
 std::vector<ll_api::memory> const &Kernel::binaries() const {
-    const static std::map<KernelType, int> kernel_type_to_expected_num_binaries = {
-        {KernelType::Compute, 3},
-        {KernelType::DataMovement, 1}
-    };
-    int expected_num_binaries = kernel_type_to_expected_num_binaries.at(this->kernel_type_);
+    int expected_num_binaries = this->expected_num_binaries();
     if (not this->binaries_.empty() and this->binaries_.size() != expected_num_binaries) {
-        std::stringstream identifier;
-        identifier << this->kernel_type_;
         TT_THROW("Expected " + std::to_string(expected_num_binaries) + " binaries but have "
-                    + std::to_string(this->binaries_.size()) + " for " + identifier.str() + " kernel " + this->name());
+                    + std::to_string(this->binaries_.size()) + " for kernel " + this->name());
     }
     return this->binaries_;
 }
 
-std::string Kernel::compile_time_args_hash() const {
-    return fmt::format("{}", fmt::join(this->compile_time_args_, "_"));
+std::string DataMovementKernel::config_hash() const {
+    return fmt::format("{}", magic_enum::enum_name(this->config_.noc));
 }
 
-size_t Kernel::define_args_hash() const {
-    return KernelDefinesHash{}(defines_);
+std::string ComputeKernel::config_hash() const {
+    return fmt::format("{}_{}_{}", magic_enum::enum_name(this->config_.math_fidelity), this->config_.fp32_dest_acc_en, this->config_.math_approx_mode);
+}
+
+std::string Kernel::compute_hash() const {
+    return fmt::format(
+        "{}_{}_{}_{}",
+        std::hash<std::string>{}(this->name()),
+        fmt::join(this->compile_time_args_, "_"),
+        KernelDefinesHash{}(this->defines_),
+        this->config_hash()
+    );
 }
 
 std::vector<uint32_t> const &Kernel::runtime_args(const CoreCoord &logical_core) {
@@ -66,23 +82,35 @@ std::vector<uint32_t> const &Kernel::runtime_args(const CoreCoord &logical_core)
     return this->core_to_runtime_args_[logical_core];
 }
 
+std::pair<u64, u64> DataMovementKernel::get_runtime_args_range() const {
+    std::pair<u64, u64> arg_base_to_result_base;
+    switch (this->config_.processor) {
+        case DataMovementProcessor::RISCV_0: {
+            arg_base_to_result_base = {BRISC_L1_ARG_BASE, BRISC_L1_RESULT_BASE};
+        }
+        break;
+        case DataMovementProcessor::RISCV_1: {
+            arg_base_to_result_base = {NCRISC_L1_ARG_BASE, NCRISC_L1_RESULT_BASE};
+        }
+        break;
+        default:
+            arg_base_to_result_base = {BRISC_L1_ARG_BASE, BRISC_L1_RESULT_BASE};
+        break;
+    }
+    return arg_base_to_result_base;
+}
+
+std::pair<u64, u64> ComputeKernel::get_runtime_args_range() const {
+    log_assert(false, "Compute kernels do not support runtime args!");
+    return {0, 0};
+}
+
 void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
     auto validate_runtime_args_size = [&]() {
         uint32_t runtime_args_size = runtime_args.size() * sizeof(uint32_t);
-        uint64_t l1_arg_base;
-        uint64_t result_base;
-        switch (this->kernel_type_) {
-            case KernelType::DataMovement:
-                l1_arg_base = BRISC_L1_ARG_BASE;
-                result_base = BRISC_L1_RESULT_BASE;
-                break;
-            default:
-                log_assert(false, "Only data movement kernels have runtime arg support");
-        }
+        auto[l1_arg_base, result_base] = this->get_runtime_args_range();
         if (l1_arg_base + runtime_args_size >= result_base) {
-            std::stringstream identifier;
-            identifier << this->kernel_type_;
-            TT_THROW(std::to_string(runtime_args_size / 1024) + "KB " + identifier.str()  + " runtime args targeting " + logical_core.str() + " are too large.\
+            TT_THROW(std::to_string(runtime_args_size / 1024) + "KB runtime args targeting kernel " + this->name() + " on " + logical_core.str() + " are too large.\
                 Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
         }
     };
@@ -96,70 +124,109 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
     set_rt_args = runtime_args;
 }
 
-void Kernel::read_binaries(int pcie_slot) {
-    std::vector<ll_api::memory> binaries;
-    TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
-    switch (this->kernel_type_) {
-        case KernelType::Compute: {
-            for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-                std::string trisc_id_str = std::to_string(trisc_id);
-                std::string hex_path = binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                ll_api::memory binary_mem = llrt::get_risc_binary(hex_path, pcie_slot, false);
-                binaries.push_back(binary_mem);
-            }
+void DataMovementKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
+    switch (this->config_.processor) {
+        case DataMovementProcessor::RISCV_0: {
+            build_options.brisc_kernel_file_name = this->kernel_path_file_name_;
+            build_options.brisc_defines = this->defines_;
         }
         break;
-        case KernelType::DataMovement: {
-            auto dm_kernel = dynamic_cast<DataMovementKernel *>(this);
-            TT_ASSERT(dm_kernel != nullptr);
-            uint32_t riscv_id;
-            std::string binary_path_suffix;
-            switch (dm_kernel->data_movement_processor()) {
-                case (DataMovementProcessor::RISCV_0): {
-                    riscv_id = 0;
-                    binary_path_suffix = "/brisc/brisc.hex";
-                }
-                break;
-                case (DataMovementProcessor::RISCV_1): {
-                    riscv_id = 1;
-                    binary_path_suffix = "/ncrisc/ncrisc.hex";
-                }
-                break;
-                default:
-                    TT_ASSERT(false, "Unsupported data movement processor!");
-            }
-            ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, pcie_slot, false);
-            binaries.push_back(binary_mem);
+        case DataMovementProcessor::RISCV_1: {
+            build_options.ncrisc_kernel_file_name = this->kernel_path_file_name_;
+            build_options.ncrisc_defines = this->defines_;
         }
         break;
         default:
-            TT_ASSERT(false, "Unsupported kernel type");
-    };
-    if (not this->binaries_.empty()) {
-        TT_ASSERT(this->binaries_ == binaries);
-    } else {
-    this->binaries_ = std::move(binaries);
+            TT_ASSERT(false, "Unsupported data movement processor!");
+        break;
     }
 }
 
-RISCV Kernel::processor() const {
-    switch (this->kernel_type_) {
-        case KernelType::Compute: return RISCV::COMPUTE;
-        case KernelType::DataMovement: {
-            auto dm_kernel = dynamic_cast<const DataMovementKernel *>(this);
-            log_assert(dm_kernel != nullptr, "Expected data movement kernel");
-            switch (dm_kernel->data_movement_processor()) {
-                case DataMovementProcessor::RISCV_0: return RISCV::BRISC;
-                case DataMovementProcessor::RISCV_1: return RISCV::NCRISC;
-                default:
-                    log_assert(false, "Unsupported data movement processor");
-            }
+void ComputeKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
+    build_options.set_hlk_file_name_all_cores(this->kernel_path_file_name_);
+    build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
+    build_options.set_hlk_math_approx_mode_all_cores(this->config_.math_approx_mode);
+    build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
+    build_options.hlk_defines = this->defines_;
+}
+
+void DataMovementKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
+    std::string arch_name = tt::get_string_lowercase(device->arch());
+    detail::GenerateBankToNocCoordHeaders(device, build_options, op_path_suffix);
+    switch (this->config_.processor) {
+        case DataMovementProcessor::RISCV_0: {
+            generate_binary_for_brisc(build_options, op_path_suffix, arch_name, this->config_.noc, this->compile_time_args_);
         }
+        break;
+        case DataMovementProcessor::RISCV_1: {
+            generate_binary_for_ncrisc(build_options, op_path_suffix, arch_name, this->config_.noc, this->compile_time_args_);
+        }
+        break;
         default:
-            log_assert(false, "Unsupported kernel type");
+            log_assert(false, "Unsupported data movement processor!");
+    }
+}
+
+void ComputeKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
+    std::string arch_name = tt::get_string_lowercase(device->arch());
+    generate_binaries_for_triscs(build_options, op_path_suffix, arch_name, this->compile_time_args_);
+}
+
+void Kernel::set_binaries(std::vector<ll_api::memory> &&binaries) {
+    if (not this->binaries_.empty()) {
+        TT_ASSERT(this->binaries_ == binaries);
+    } else {
+        this->binaries_ = std::move(binaries);
+    }
+}
+
+void DataMovementKernel::read_binaries(int pcie_slot) {
+    TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
+    std::vector<ll_api::memory> binaries;
+    uint32_t riscv_id;
+    std::string binary_path_suffix;
+    switch (this->config_.processor) {
+        case (DataMovementProcessor::RISCV_0): {
+            riscv_id = 0;
+            binary_path_suffix = "/brisc/brisc.hex";
+        }
+        break;
+        case (DataMovementProcessor::RISCV_1): {
+            riscv_id = 1;
+            binary_path_suffix = "/ncrisc/ncrisc.hex";
+        }
+        break;
+        default:
+            TT_ASSERT(false, "Unsupported data movement processor!");
+    }
+    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, pcie_slot, false);
+    binaries.push_back(binary_mem);
+    this->set_binaries(std::move(binaries));
+}
+
+void ComputeKernel::read_binaries(int pcie_slot) {
+    TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
+    std::vector<ll_api::memory> binaries;
+    for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
+        std::string trisc_id_str = std::to_string(trisc_id);
+        std::string hex_path = binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
+        ll_api::memory binary_mem = llrt::get_risc_binary(hex_path, pcie_slot, false);
+        binaries.push_back(binary_mem);
+    }
+    this->set_binaries(std::move(binaries));
+}
+
+RISCV DataMovementKernel::processor() const {
+    switch (this->config_.processor) {
+        case DataMovementProcessor::RISCV_0: return RISCV::BRISC;
+        case DataMovementProcessor::RISCV_1: return RISCV::NCRISC;
+        default:
+            log_assert(false, "Unsupported data movement processor");
     }
     return RISCV::BRISC;
 }
+
+RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 
 void init_run_mailbox(Device *device, const CoreCoord &core, uint64_t run_mailbox_addr) {
     std::vector<uint32_t> run_mailbox_init_val = {INIT_VALUE};
@@ -183,7 +250,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     ll_api::memory binary_mem = this->binaries().at(0);
 
     int riscv_id;
-    switch (processor_) {
+    switch (this->config_.processor) {
         case (DataMovementProcessor::RISCV_0): {
             riscv_id = 0;
             init_run_mailbox(device, worker_core, RUN_MAILBOX_ADDR);
@@ -234,55 +301,13 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const KernelType& type) {
-    switch (type) {
-        case KernelType::DataMovement: os << "DataMovement"; break;
-        case KernelType::Compute: os << "Compute"; break;
-        default: TT_THROW("Unknown kernel type");
-    }
-    return os;
-}
-
-std::string kernel_attributes_str(Kernel *kernel) {
-    std::string attr_str = "{";
-    if (not kernel->compile_time_args().empty()) {
-        attr_str += "Compile args: [";
-        for (const auto compile_arg : kernel->compile_time_args()) {
-            attr_str += std::to_string(compile_arg) + " ";
-        }
-        attr_str += "] ";
-    }
-    if (not kernel->defines().empty()) {
-        attr_str += "Defines: {";
-        for (const auto &[k, v] : kernel->defines()) {
-            attr_str += "{ " + k + " - " + v + " } ";
-        }
-        attr_str += "} ";
-    }
-    if (kernel->kernel_type() == KernelType::DataMovement) {
-        auto data_movement_kernel = dynamic_cast<DataMovementKernel *>(kernel);
-        attr_str += "NOC: " + std::to_string(data_movement_kernel->noc()) + " ";
-    } else {
-        auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel);
-        std::stringstream math_fidel_str;
-        math_fidel_str << compute_kernel->math_fidelity();
-        attr_str += "Math fidelity: " + math_fidel_str.str() + " ";
-        string fp32_en_str = compute_kernel->fp32_dest_acc_en() ? "Y" : "N";
-        attr_str += "FP32 dest accumulate enabled: " + fp32_en_str + " ";
-        string math_approx_str = compute_kernel->math_approx_mode() ? "Y" : "N";
-        attr_str += "Math approx mode enabled: " + math_approx_str + " ";
-    }
-
-    attr_str += "}";
-    return attr_str;
-}
-
 size_t KernelDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {
     size_t hash_value = 0;
     for (auto it = c_defines.begin(); it != c_defines.end(); ++it)
         boost::hash_combine(hash_value, std::hash<std::string>{}(it->first + it->second));
     return hash_value;
 }
+
 
 }  // namespace tt_metal
 

@@ -112,33 +112,24 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const
             (std::uint32_t) out_HtWt, // out_HtWt
     };
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_tm_tile_layout_create_qkv_heads.cpp",
         all_cores,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_0_default);
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
+    auto writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_tm_tile_layout_create_qkv_heads.cpp",
         all_cores,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
 
     // Dummy compute kernel
     std::vector<uint32_t> compute_args = {num_tiles_per_tensor};
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto compute_kernel = tt_metal::CreateComputeKernel(
+    auto compute_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/transpose_wh.cpp",
         all_cores,
-        compute_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_args}
     );
 
     // Create circular buffers
@@ -191,20 +182,21 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const
                 core_idx_x + core_idx_y * out_CHtWt, // out_tensor_tile_id_with_transpose
             };
 
-            tt_metal::SetRuntimeArgs(reader_kernel, core, reader_runtime_args);
-            tt_metal::SetRuntimeArgs(writer_kernel, core, writer_runtime_args);
+            tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
     }
 
     auto override_runtime_args_callback = [
-            reader_kernel,
-            writer_kernel,
+            reader_kernel_id,
+            writer_kernel_id,
             num_cores_r,
             num_cores_c,
             start_core_x,
             start_core_y
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -220,17 +212,17 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const
                 CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
                 {
-                    auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer->address();
-                    SetRuntimeArgs(reader_kernel, core, runtime_args);
+                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                 }
 
                 {
-                    auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer_query->address();
                     runtime_args[1] = dst_dram_buffer_key->address();
                     runtime_args[2] = dst_dram_buffer_value->address();
-                    SetRuntimeArgs(writer_kernel, core, runtime_args);
+                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                 }
             }
         }

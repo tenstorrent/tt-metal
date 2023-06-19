@@ -80,7 +80,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMovementKernel *> create_program(
+std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_program(
     tt_metal::Device *device,
     int num_cores_r,
     int num_cores_c,
@@ -151,31 +151,24 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
         program,
         "tt_metal/kernels/dataflow/reader_copy_tile_layout.cpp",
         all_cores,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_copy_tile_layout.cpp",
         all_cores,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     std::vector<uint32_t> compute_kernel_args = {
         uint(block_num_tiles),
         uint(num_blocks_per_core)
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto compute_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_copy_block.cpp",
         all_cores,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
     return {program, reader_kernel, writer_kernel};
@@ -186,8 +179,8 @@ bool write_runtime_args_to_device(
     tt_metal::Program &program,
     int num_cores_r,
     int num_cores_c,
-    tt_metal::DataMovementKernel *reader_kernel,
-    tt_metal::DataMovementKernel *writer_kernel,
+    tt_metal::KernelID reader_kernel,
+    tt_metal::KernelID writer_kernel,
     int tensor_num_tiles,
     int block_num_tiles,
     int Ht,
@@ -281,8 +274,8 @@ bool write_runtime_args_to_device(
             // log_info(LogTest, "dst_stride_x = {}", 1);
             // log_info(LogTest, "dst_stride_y = {}", N);
 
-            tt_metal::SetRuntimeArgs(mm_reader_kernel, core, mm_reader_args);
-            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
         }
     }
     tt_metal::WriteRuntimeArgsToDevice(device, program);

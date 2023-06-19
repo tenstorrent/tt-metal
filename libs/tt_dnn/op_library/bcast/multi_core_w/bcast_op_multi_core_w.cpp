@@ -93,40 +93,31 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)dst_is_dram};
 
-	tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+	KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
 		program,
 		reader_name,
 		all_cores,
-		reader_compile_time_args,
-		tt_metal::DataMovementProcessor::RISCV_1,
-		tt_metal::NOC::RISCV_1_default);
+		tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-	tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+	KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
 		program,
 		"tt_metal/kernels/dataflow/writer_unary_8bank_input_cols_batched.cpp",
 		all_cores,
-		writer_compile_time_args,
-		tt_metal::DataMovementProcessor::RISCV_0,
-		tt_metal::NOC::RISCV_0_default);
+		tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
+	std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
 	// TODO(AP): add dimensions and op params
 	vector<uint32_t> compute_kernel_args_group_1 = {
 		NC, // B
 		Ht, // Ht
 		Wt_per_core_group_1  // Wt
 	};
-	bool fp32_dest_acc_en = false;
-	bool math_approx_mode = false;
-	auto bcast_kernel_group_1 = tt_metal::CreateComputeKernel(
+	auto bcast_kernel_group_1_id = tt_metal::CreateComputeKernel(
 		program,
 		compute_name,
 		core_group_1,
-		compute_kernel_args_group_1,
-		MathFidelity::HiFi4,
-		fp32_dest_acc_en,
-		math_approx_mode
+		tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1, .defines = bcast_defines}
 	);
-	bcast_op_utils::add_defines(bcast_kernel_group_1, bcast_dim, bcast_math);
 
 	if (!core_group_2.ranges().empty()) {
 		// TODO(AP): add dimensions and op params
@@ -135,16 +126,12 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 			Ht, // Ht
 			Wt_per_core_group_2  // Wt
 		};
-		auto bcast_kernel_group_2 = tt_metal::CreateComputeKernel(
+		auto bcast_kernel_group_2_id = tt_metal::CreateComputeKernel(
 			program,
 			compute_name,
 			core_group_2,
-			compute_kernel_args_group_2,
-			MathFidelity::HiFi4,
-			fp32_dest_acc_en,
-			math_approx_mode
+			tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2, .defines = bcast_defines}
 		);
-		bcast_op_utils::add_defines(bcast_kernel_group_2, bcast_dim, bcast_math);
 	}
 
 	for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores; i++){
@@ -161,7 +148,8 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
         uint32_t Wt_skip = Wt - Wt_per_core;
 
         tt_metal::SetRuntimeArgs(
-            binary_reader_kernel,
+			program,
+            binary_reader_kernel_id,
             core,
             {
 				a.buffer()->address(), // 0
@@ -184,7 +172,7 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 		);
 
         tt_metal::SetRuntimeArgs(
-            unary_writer_kernel, core,
+            program, unary_writer_kernel_id, core,
             {
                 output.buffer()->address(),
                 0,
@@ -201,12 +189,13 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 	}
 
     auto override_runtime_args_callback = [
-            binary_reader_kernel,
-            unary_writer_kernel,
+            binary_reader_kernel_id,
+            unary_writer_kernel_id,
             num_cores,
             num_cores_y
         ]
     (
+		const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -221,16 +210,16 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(binary_reader_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer_a->address();
                 runtime_args[4] = src_dram_buffer_b->address();
-                SetRuntimeArgs(binary_reader_kernel, core, runtime_args);
+                SetRuntimeArgs(program, binary_reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+                auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+                SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
         }
     };

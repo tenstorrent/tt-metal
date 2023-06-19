@@ -31,28 +31,25 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int pci_express_s
 
     CoreCoord core = {0, 0};
 
-    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/test_compile_args.cpp",
         core,
-        compile_args_vec,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = compile_args_vec});
 
 
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp",
-        core, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
+        core,
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_args = {
         0 // dummy
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program, "tt_metal/kernels/compute/blank.cpp",
-        core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
+        core, tt_metal::ComputeConfig{.compile_args = compute_args});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application

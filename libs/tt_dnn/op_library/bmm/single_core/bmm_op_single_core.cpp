@@ -80,15 +80,17 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)dst_is_dram};
 
-    auto reader = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
-        core, reader_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        core,
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto writer = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
-        core, writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        core,
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_args = {
         B, // B
@@ -96,32 +98,28 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
         Kt, // Kt
         Nt // Nt
     };
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm.cpp",
         core,
-        compute_args,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args}
     );
 
     tt_metal::SetRuntimeArgs(
-        reader, core,
+        program, reader_id, core,
         {src0_addr, src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, uint32_t(bcast_batch ? 1 : 0)}
     );
     tt_metal::SetRuntimeArgs(
-        writer, core,
+        program, writer_id, core,
         {dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
     );
 
     auto override_runtime_args_callback = [
-        reader_kernel=reader,
-        writer_kernel=writer
+        reader_kernel_id=reader_id,
+        writer_kernel_id=writer_id
     ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -134,16 +132,16 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer_a->address();
             runtime_args[1] = src_dram_buffer_b->address();
-            SetRuntimeArgs(reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 

@@ -386,12 +386,11 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             static_cast<uint32_t>(in1_df)
         };
     }
-    auto reader = CreateDataMovementKernel(
+    auto reader_id = CreateDataMovementKernel(
         program,                            // program
         reader_kernel,                      // file name
         core_range,                         // core
-        DataMovementProcessor::RISCV_1,     // processor type
-        NOC::RISCV_1_default                // noc
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
     );
 
     // number of data elements along height of an in0 block
@@ -433,12 +432,12 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             static_cast<uint32_t>(out_df)
         };
     }
-    auto writer = CreateDataMovementKernel(
+    auto writer_id = CreateDataMovementKernel(
         program,                        // program
         writer_kernel,                  // file name
         core_range,                     // core
-        DataMovementProcessor::RISCV_0, // processor type
-        NOC::RISCV_0_default);          // noc
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
+    );
 
     // Compute kernel
     std::string compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
@@ -460,27 +459,25 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         tilize_in0,
         untilize_out
     };
-    auto bmm_compute = CreateComputeKernel(
+    auto bmm_compute_id = CreateComputeKernel(
         program,
         compute_kernel,
         core_range,
-        compute_comptime_args,
-        MathFidelity::HiFi4,
-        false,  // fp32_dest_acc_en
-        false   // math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_comptime_args}
     );
 
     // Reader rt args
-    SetRuntimeArgs(reader, core_range, reader_rt_args);
+    SetRuntimeArgs(program, reader_id, core_range, reader_rt_args);
     // Writer rt args
-    SetRuntimeArgs(writer, core_range, writer_rt_args);
+    SetRuntimeArgs(program, writer_id, core_range, writer_rt_args);
 
     // Compile and launch
     bool pass = CompileProgram(device, program);
 
     TT_ASSERT(pass);
 
-    auto override_runtime_args_callback = [kernel_reader = reader, kernel_writer = writer](
+    auto override_runtime_args_callback = [kernel_reader_id = reader_id, kernel_writer_id = writer_id](
+                                            const Program &program,
                                             const std::vector<Buffer*>& input_buffers,
                                             const std::vector<Buffer*>& output_buffers) {
         auto in0_dram_buffer = input_buffers.at(0);
@@ -488,15 +485,15 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         auto out_dram_buffer = output_buffers.at(0);
         CoreCoord core = {0, 0};
         {
-            auto runtime_args = GetRuntimeArgs(kernel_reader, core);
+            auto runtime_args = GetRuntimeArgs(program, kernel_reader_id, core);
             runtime_args[0] = in0_dram_buffer->address();
             runtime_args[9] = in1_dram_buffer->address();
-            SetRuntimeArgs(kernel_reader, core, runtime_args);
+            SetRuntimeArgs(program, kernel_reader_id, core, runtime_args);
         }
         {
-            auto runtime_args = GetRuntimeArgs(kernel_writer, core);
+            auto runtime_args = GetRuntimeArgs(program, kernel_writer_id, core);
             runtime_args[0] = out_dram_buffer->address();
-            SetRuntimeArgs(kernel_writer, core, runtime_args);
+            SetRuntimeArgs(program, kernel_writer_id, core, runtime_args);
         }
     };
 

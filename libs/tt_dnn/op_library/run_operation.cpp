@@ -33,6 +33,7 @@ static Device* get_device(const std::vector<Tensor>& input_tensors, const std::v
 
 void override_runtime_args(
     const OverrideRuntimeArgsCallback& override_runtime_args_callback,
+    const Program &program,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<Tensor>& output_tensors
@@ -51,7 +52,7 @@ void override_runtime_args(
         output_buffers.push_back(tensor.buffer());
     }
 
-    override_runtime_args_callback(input_buffers, output_buffers);
+    override_runtime_args_callback(program, input_buffers, output_buffers);
 }
 
 void setup_profiler(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
@@ -124,12 +125,12 @@ std::vector<Tensor> run_with_program_cache(
         operation, input_tensors, optional_input_tensors, output_tensors, device
     );
 
+    auto& program = program_with_callbacks.program;
+
     override_runtime_args(
         program_with_callbacks.override_runtime_args_callback,
-        input_tensors, optional_input_tensors, output_tensors
+        program, input_tensors, optional_input_tensors, output_tensors
     );
-
-    auto& program = program_with_callbacks.program;
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {

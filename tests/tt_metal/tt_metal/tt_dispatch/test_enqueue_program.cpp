@@ -55,37 +55,29 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         tt::DataFormat::Float16_b,
         output_cb_addr);
 
+    std::map<string, string> defines = {{"TT_METAL_DEVICE_DISPATCH_MODE", "1"}};
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
-
-    unary_writer_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = defines});
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_8bank.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     vector<uint32_t> compute_kernel_args = {
         NUM_TILES,  // per_core_block_cnt
         1,          // per_core_block_size
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_copy.cpp",
         core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode);
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
     tt_metal::CompileProgram(device, program);
     return program;
@@ -113,8 +105,8 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         Buffer out(device, NUM_TILES * 2048, 0, 2048, BufferType::DRAM);
 
         // Absolutely disgusting way to query for the kernel I want to set runtime args for... needs to be cleaned up
-        SetRuntimeArgs(program.kernels_on_core(worker_core).riscv_0, worker_core, {out.address(), 0, 0, NUM_TILES});
-        SetRuntimeArgs(program.kernels_on_core(worker_core).riscv_1, worker_core, {buf.address(), 0, 0, NUM_TILES});
+        SetRuntimeArgs(program, program.kernels_on_core(worker_core).riscv0_id.value(), worker_core, {out.address(), 0, 0, NUM_TILES});
+        SetRuntimeArgs(program, program.kernels_on_core(worker_core).riscv1_id.value(), worker_core, {buf.address(), 0, 0, NUM_TILES});
 
         EnqueueWriteBuffer(cq, buf, inp, false);
         EnqueueProgram(cq, program, false);

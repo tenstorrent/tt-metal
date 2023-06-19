@@ -91,16 +91,14 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/dataflow/dram_loader_sync.cpp",
             loader_logical_core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         // Writer (consumer kernel) running on NCRISC on logical core {0, 1}
         auto consumer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/remote_read_remote_write_sync.cpp",
             writer_logical_core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application

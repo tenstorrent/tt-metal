@@ -14,8 +14,9 @@ struct BinaryOpType {
     static const vector<Enum> all() { return { ADD, SUB, MUL }; }
 };
 
-void add_defines(tt_metal::ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_type){
+std::map<string, string> get_defines(BinaryOpType::Enum op_type){
     // TODO(AP): remove duplication
+    std::map<string, string> defines;
     string op_name, op_code;
     switch (op_type) {
         case BinaryOpType::ADD: op_name = "add_tiles"; op_code = "0"; break;
@@ -23,12 +24,13 @@ void add_defines(tt_metal::ComputeKernel * eltwise_binary_kernel, BinaryOpType::
         case BinaryOpType::MUL: op_name = "mul_tiles"; op_code = "2"; break;
         default: TT_ASSERT(false && "Undefined op type");
     }
-    eltwise_binary_kernel->add_define("ELTWISE_OP", op_name.c_str());
-    eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_code.c_str());
+    defines["ELTWISE_OP"] = op_name.c_str();
+    defines["ELTWISE_OP_CODE"] = op_code.c_str();
+    return defines;
 }
 
 
-tt_metal::Program setup_program_one(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
+std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_program_one(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t src0_cb_index = 0;
@@ -67,38 +69,31 @@ tt_metal::Program setup_program_one(tt_metal::Device *device, const CoreCoord &c
         program,
         "tt_metal/kernels/dataflow/reader_binary.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
         1, // per_core_block_cnt
         1 // per_core_block_size
     };
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
+    std::map<string, string> binary_defines = get_defines(BinaryOpType::ADD);
+    binary_defines["ELTWISE_OP"] = "add_tiles";
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_binary.cpp",
         core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines}
     );
-    eltwise_binary_kernel->add_define("ELTWISE_OP", "add_tiles");
-    add_defines(eltwise_binary_kernel, BinaryOpType::ADD);
 
-    return std::move(program);
+    return {std::move(program), binary_reader_kernel, unary_writer_kernel};
 }
 
-tt_metal::Program setup_program_two(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
+std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_program_two(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t src0_cb_index = 0;
@@ -137,15 +132,13 @@ tt_metal::Program setup_program_two(tt_metal::Device *device, const CoreCoord &c
         program,
         "tt_metal/kernels/dataflow/reader_matmul_small_block.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
         1, // block_tile_dim
@@ -157,24 +150,21 @@ tt_metal::Program setup_program_two(tt_metal::Device *device, const CoreCoord &c
         1 // out_block_tile_cnt
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/matmul.cpp",
         core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
-    return std::move(program);
+    return {std::move(program), mm_reader_kernel, unary_writer_kernel};
 }
 
 void write_program_runtime_args_to_device(
     tt_metal::Device *device,
     tt_metal::Program &program,
+    tt_metal::KernelID reader_kernel_id,
+    tt_metal::KernelID writer_kernel_id,
     const CoreCoord &core,
     uint32_t num_tiles,
     tt_metal::Buffer &src0_dram_buffer,
@@ -185,26 +175,26 @@ void write_program_runtime_args_to_device(
     auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
     auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
-    for (auto dm_kernel : program.data_movement_kernels()) {
-        if (dm_kernel->name() == "reader_binary" or dm_kernel->name() == "reader_matmul_small_block") {
-            tt_metal::SetRuntimeArgs(
-                dm_kernel, core,
-                {src0_dram_buffer.address(),
-                (std::uint32_t)dram_src0_noc_xy.x,
-                (std::uint32_t)dram_src0_noc_xy.y,
-                src1_dram_buffer.address(),
-                (std::uint32_t)dram_src1_noc_xy.x,
-                (std::uint32_t)dram_src1_noc_xy.y,
-                num_tiles});
-        } else if (dm_kernel->name() == "writer_unary") {
-            tt_metal::SetRuntimeArgs(
-                dm_kernel, core,
-                {dst_dram_buffer.address(),
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
-                num_tiles});
-        }
-    }
+
+    tt_metal::SetRuntimeArgs(
+        program, reader_kernel_id, core,
+        {src0_dram_buffer.address(),
+        (std::uint32_t)dram_src0_noc_xy.x,
+        (std::uint32_t)dram_src0_noc_xy.y,
+        src1_dram_buffer.address(),
+        (std::uint32_t)dram_src1_noc_xy.x,
+        (std::uint32_t)dram_src1_noc_xy.y,
+        num_tiles}
+    );
+
+    tt_metal::SetRuntimeArgs(
+        program, writer_kernel_id, core,
+        {dst_dram_buffer.address(),
+        (std::uint32_t)dram_dst_noc_xy.x,
+        (std::uint32_t)dram_dst_noc_xy.y,
+        num_tiles}
+    );
+
     tt_metal::WriteRuntimeArgsToDevice(device, program);
 }
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -250,9 +240,9 @@ int main(int argc, char **argv) {
         auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
         auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        tt_metal::Program program1 = setup_program_one(device, core, single_tile_size);
+        auto [program1, reader1_kernel_id, writer1_kernel_id] = setup_program_one(device, core, single_tile_size);
 
-        tt_metal::Program program2 = setup_program_two(device, core, single_tile_size);
+        auto [program2, reader2_kernel_id, writer2_kernel_id] = setup_program_two(device, core, single_tile_size);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Applications
@@ -280,7 +270,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program1);
 
-        write_program_runtime_args_to_device(device, program1, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
+        write_program_runtime_args_to_device(device, program1, reader1_kernel_id, writer1_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
 
         pass &= tt_metal::LaunchKernels(device, program1);
 
@@ -308,7 +298,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program2);
 
-        write_program_runtime_args_to_device(device, program2, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
+        write_program_runtime_args_to_device(device, program2, reader2_kernel_id, writer2_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
 
         pass &= tt_metal::LaunchKernels(device, program2);
 

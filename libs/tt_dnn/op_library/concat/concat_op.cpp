@@ -88,16 +88,15 @@ inline operation::ProgramWithCallbacks concat2_dim3_single_core(const Tensor &a,
         };
 
         // read contents of tensors A, B, into CB ID 0 one tile at a time.
-        tt_metal::DataMovementKernel *concat_read_kernel = tt_metal::CreateDataMovementKernel(
+        tt_metal::KernelID concat_read_kernel_id = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/concat1d_reader.cpp",
             core,
-            reader_compile_time_args,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
         tt_metal::SetRuntimeArgs(
-            concat_read_kernel,
+            program,
+            concat_read_kernel_id,
             core,
             {2,  // 2-buffers
              a.shape()[0] * a.shape()[1] * a.shape()[2] / TILE_HEIGHT, // Number of rows is equal for all tensors for concat last dim
@@ -113,38 +112,33 @@ inline operation::ProgramWithCallbacks concat2_dim3_single_core(const Tensor &a,
             (std::uint32_t) is_dst_dram
         };
 
-        tt_metal::DataMovementKernel *concat_write_kernel = tt_metal::CreateDataMovementKernel(
+        tt_metal::KernelID concat_write_kernel_id = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/concat1d_writer.cpp",
             core,
-            writer_compile_time_args,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
         tt_metal::SetRuntimeArgs(
-            concat_write_kernel,
+            program,
+            concat_write_kernel_id,
             core,
             {cb_id_out_0,
              dst_dram_buffer->address(),
              num_tiles});
 
         // eltwise copy kernel
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         auto per_core_tile_cnt = num_tiles;
         std::vector<std::uint32_t> compute_kernel_args = {per_core_tile_cnt};
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/eltwise_copy.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode);
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
         TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
-        auto override_runtime_args_callback = [core, concat_read_kernel, concat_write_kernel](
+        auto override_runtime_args_callback = [core, concat_read_kernel_id, concat_write_kernel_id](
+                                                  const tt_metal::Program &program,
                                                   const std::vector<Buffer *> &input_buffers,
                                                   const std::vector<Buffer *> &output_buffers) {
             auto srcA_dram_buffer = input_buffers.at(0);
@@ -152,20 +146,20 @@ inline operation::ProgramWithCallbacks concat2_dim3_single_core(const Tensor &a,
             auto dst_0_dram_buffer = output_buffers.at(0);
 
             {
-                auto runtime_args = GetRuntimeArgs(concat_read_kernel, core.start);
+                auto runtime_args = GetRuntimeArgs(program, concat_read_kernel_id, core.start);
                 runtime_args[3] = srcA_dram_buffer->address();
                 runtime_args[5] = srcB_dram_buffer->address();
 
-                tt_metal::SetRuntimeArgs(concat_read_kernel, core, runtime_args);
+                tt_metal::SetRuntimeArgs(program, concat_read_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(concat_write_kernel, core.start);
+                auto runtime_args = GetRuntimeArgs(program, concat_write_kernel_id, core.start);
                 runtime_args[1] = dst_0_dram_buffer->address();
-                SetRuntimeArgs(concat_write_kernel, core, runtime_args);
+                SetRuntimeArgs(program, concat_write_kernel_id, core, runtime_args);
             }
 
-            auto runtime_args = GetRuntimeArgs(concat_write_kernel, core.start);
+            auto runtime_args = GetRuntimeArgs(program, concat_write_kernel_id, core.start);
         };
         return {std::move(program), override_runtime_args_callback};
     } else {

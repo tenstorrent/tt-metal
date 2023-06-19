@@ -89,8 +89,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     dst_noc_xy = dst_buffer.noc_coordinates();
 
     // create kernels
-    vector<tt_metal::DataMovementKernel*> receiver_kernels;
-    vector<tt_metal::DataMovementKernel*> sender_kernels;
+    vector<tt_metal::KernelID> receiver_kernels;
+    vector<tt_metal::KernelID> sender_kernels;
     for (int core_id = 0; core_id < num_cores; core_id++) {
         string receiver_kernel_name;
         if (core_id == 0) {
@@ -104,9 +104,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
             program,
             receiver_kernel_name,
             cores[core_id],
-            receiver_kernel_compile_time_args,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default));
+            DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = receiver_kernel_compile_time_args}));
 
         string sender_kernel_name;
         if (core_id == num_cores - 1) {
@@ -115,25 +113,18 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
             sender_kernel_name = "tt_metal/kernels/dataflow/sender_intermediate_stage.cpp";
         }
         std::vector<u32> sender_kernel_compile_time_args = {cb_index, block_size_tiles};
+        std::map<string, string> sender_defines = {{"TT_METAL_DEVICE_DISPATCH_MODE", "1"}};
         sender_kernels.push_back(tt_metal::CreateDataMovementKernel(
             program,
             sender_kernel_name,
             cores[core_id],
-            sender_kernel_compile_time_args,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default));
-
-        sender_kernels.at(sender_kernels.size() - 1)->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
+            DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = sender_kernel_compile_time_args, .defines = sender_defines}));
 
         // Add blank compute kernel
         tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/blank.cpp",
-            cores[core_id],
-            {},
-            MathFidelity::HiFi4,
-            false,
-            false
+            cores[core_id]
         );
     }
 
@@ -168,13 +159,13 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         auto l1_valid_value_addr = sems[core].at(2);
 
         if (core_id == 0) {
-            SetRuntimeArgs(receiver_kernels.at(core_id), core, {src_address,
+            SetRuntimeArgs(program, receiver_kernels.at(core_id), core, {src_address,
                 (u32)src_noc_xy.x,
                 (u32)src_noc_xy.y,
                 (u32)num_tiles,
                 (u32)num_repetitions});
         } else {
-            SetRuntimeArgs(receiver_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id-1]).x,
+            SetRuntimeArgs(program, receiver_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id-1]).x,
                 (u32)device->worker_core_from_logical_core(cores[core_id-1]).y,
                 (u32)num_tiles,
                 (u32)sender_semaphore_addr,
@@ -183,13 +174,13 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         }
 
         if (core_id == num_cores - 1) {
-            SetRuntimeArgs(sender_kernels.at(core_id), core, {dst_address,
+            SetRuntimeArgs(program, sender_kernels.at(core_id), core, {dst_address,
                 (u32)dst_noc_xy.x,
                 (u32)dst_noc_xy.y,
                 (u32)num_tiles,
                 (u32)num_repetitions});
         } else {
-            SetRuntimeArgs(sender_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id+1]).x,
+            SetRuntimeArgs(program, sender_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id+1]).x,
                 (u32)device->worker_core_from_logical_core(cores[core_id+1]).y,
                 (u32)num_tiles,
                 (u32)sender_semaphore_addr,

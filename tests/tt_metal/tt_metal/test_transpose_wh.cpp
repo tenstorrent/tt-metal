@@ -117,31 +117,24 @@ int main(int argc, char **argv) {
             //"tt_metal/kernels/dataflow/reader_unary_transpose_wh.cpp",
             "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             //"tt_metal/kernels/dataflow/writer_unary.cpp",
             "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
             uint(Ht*Wt*NC)
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         auto reduce_w_compute_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/transpose_wh.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
         ////////////////////////////////////////////////////////////////////////////
@@ -160,6 +153,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         tt_metal::SetRuntimeArgs(
+            program,
             reader_kernel,
             core,
             {
@@ -172,6 +166,7 @@ int main(int argc, char **argv) {
         );
 
         tt_metal::SetRuntimeArgs(
+            program,
             unary_writer_kernel,
             core,
             {

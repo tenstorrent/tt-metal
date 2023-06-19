@@ -8,6 +8,7 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/semaphore.hpp"
+#include "tt_metal/detail/program.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -20,10 +21,11 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                 auto logical_core = CoreCoord{x, y};
-                for (auto kernel : program.kernels()) {
+                for (auto kernel_id : program.kernel_ids()) {
+                    tt_metal::Kernel *kernel = tt_metal::detail::GetKernel(program, kernel_id);
                     TT_ASSERT(kernel->is_on_logical_core(logical_core));
                     // Check that compute kernel compile time args are mapped to the correct cores
-                    if (kernel->kernel_type() == tt_metal::KernelType::Compute) {
+                    if (kernel->processor() == tt::RISCV::COMPUTE) {
                         auto kernel_compile_time_args = kernel->compile_time_args();
                         TT_ASSERT(kernel_compile_time_args == compute_kernel_args);
                     }
@@ -107,31 +109,24 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         program,
         "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
         core_range_set,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core_range_set,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     // Each core range shares the same compute kernel args
     vector<uint32_t> compute_kernel_args = {
         uint(num_tiles) // per_core_tile_cnt
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_copy_3m.cpp",
         core_range_set,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
     auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
@@ -165,12 +160,14 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     for (const auto &[core, dst_l1_buffer] : core_to_l1_buffer) {
         tt_metal::SetRuntimeArgs(
+            program,
             unary_reader_kernel,
             core,
             reader_rt_args);
 
         auto l1_dst_noc_xy = dst_l1_buffer.noc_coordinates();
         tt_metal::SetRuntimeArgs(
+            program,
             unary_writer_kernel,
             core,
             {dst_l1_buffer.address(),
@@ -192,10 +189,6 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     return pass;
 }
-
-
-
-
 
 int main(int argc, char **argv) {
     bool pass = true;

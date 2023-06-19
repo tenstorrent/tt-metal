@@ -55,6 +55,6 @@ using namespace tt::tt_metal;
 
 string dim_to_kernel_name(ReduceOpDim::Enum reduce_dim, ReduceOpMath::Enum reduce_op);
 
-void add_defines(ComputeKernel * reduce_kernel, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim);
+std::map<string, string> get_defines(ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim);
 
 } // namespace reduce_op_utils

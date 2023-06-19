@@ -1,7 +1,13 @@
 #pragma once
 #include <mutex>
+#include <variant>
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
+#include "tt_metal/build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/detail/program.hpp"
 
 using std::unique_lock;
 using std::mutex;
@@ -200,7 +206,67 @@ namespace tt::tt_metal{
             );
         }
 
+        inline DataMovementConfig GetDataMovementConfig(const Program &program, const std::string &file_name, const CoreRangeSet &core_ranges, const std::optional<DataMovementConfig> &dm_config) {
+            bool riscv0_in_use = false; bool riscv1_in_use = false;
+            bool noc0_in_use = false; bool noc1_in_use = false;
 
+            auto set_global_and_local_noc_usage = [&](KernelID kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
+                const auto kernel = detail::GetKernel(program, kernel_id);
+                auto kernel_config = std::get<DataMovementConfig>(kernel->config());
+                auto noc_value = magic_enum::enum_integer(kernel_config.noc);
+                noc0_in_use, local_noc0_usage = noc_value == 0;
+                noc1_in_use, local_noc1_usage = noc_value == 1;
+            };
 
+            for (const auto &core_range : core_ranges.ranges()) {
+                for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+                    for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                        auto kernel_group = program.kernels_on_core(CoreCoord(x, y));
+                        bool local_noc0_in_use = false; bool local_noc1_in_use = false;
+                        if (kernel_group.riscv0_id.has_value()) {
+                            riscv0_in_use = true;
+                            set_global_and_local_noc_usage(kernel_group.riscv0_id.value(), local_noc0_in_use, local_noc1_in_use);
+                        }
+                        if (kernel_group.riscv1_id.has_value()) {
+                            riscv1_in_use = true;
+                            set_global_and_local_noc_usage(kernel_group.riscv1_id.value(), local_noc0_in_use, local_noc1_in_use);
+                        }
+                        if (kernel_group.riscv0_id.has_value() and kernel_group.riscv1_id.has_value()) {
+                            TT_ASSERT(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!");
+                        }
+                    }
+                }
+            }
+
+            TT_ASSERT(not (riscv0_in_use and riscv1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because both data movement processors are in use!", file_name);
+            TT_ASSERT(not (noc0_in_use and noc1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified cores because both NOCs are in use!", file_name);
+
+            if (dm_config.has_value()) {
+                return dm_config.value();
+            }
+
+            DataMovementProcessor processor = riscv0_in_use ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0;
+            NOC noc = noc0_in_use ? NOC::NOC_1 : NOC::NOC_0;
+            return DataMovementConfig{.processor = processor, .noc = noc};
+        }
+
+        inline CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
+            return std::visit(
+                [](auto&& core_spec) -> CoreRangeSet
+                {
+                    using T = std::decay_t<decltype(core_spec)>;
+                    if constexpr (std::is_same_v<T, CoreCoord>) {
+                        return CoreRangeSet({CoreRange{.start=core_spec, .end=core_spec}});
+                    }
+                    else if constexpr (std::is_same_v<T, CoreRange>) {
+                        return CoreRangeSet({core_spec});
+                    }
+                    else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                        return core_spec;
+                    }
+                },
+                specified_core_spec
+            );
+        }
     }
 }

@@ -81,8 +81,7 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/dataflow/dram_copy_sticks.cpp",
             all_cores,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
@@ -103,6 +102,7 @@ int main(int argc, char **argv) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t) j, (std::size_t) i};
                 tt_metal::SetRuntimeArgs(
+                    program,
                     unary_reader_kernel,
                     core,
                     {core_to_l1_addr.at(core),

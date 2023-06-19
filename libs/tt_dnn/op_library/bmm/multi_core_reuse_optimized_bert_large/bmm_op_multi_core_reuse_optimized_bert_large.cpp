@@ -103,41 +103,33 @@ operation::ProgramWithCallbacks create_program(
     };
 
     // left half
-    auto mm_kernel_in0_reader = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in0_reader_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         left_half,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_0_default
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args}
     );
 
-    auto mm_kernel_in1_reader_writer = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_reader_writer_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         left_half,
-        reader_writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_1_default
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_writer_compile_time_args}
     );
 
     // right half
-    auto mm_kernel_in0_reader_other_noc_setup = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in0_reader_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         right_half,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args}
     );
 
-    auto mm_kernel_in1_reader_writer_other_noc_setup = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_reader_writer_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         right_half,
-        reader_writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_writer_compile_time_args}
     );
 
     vector<uint32_t> compute_kernel_args_group_1 = {
@@ -177,25 +169,17 @@ operation::ProgramWithCallbacks create_program(
     };
 
     // Create compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto mm_kernel_group_1 = tt_metal::CreateComputeKernel(
+    auto mm_kernel_group_1_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm_mixed_precision.cpp",
         core_group_1,
-        compute_kernel_args_group_1,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args_group_1}
     );
-    auto mm_kernel_group_2 = tt_metal::CreateComputeKernel(
+    auto mm_kernel_group_2_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm_mixed_precision.cpp",
         core_group_2,
-        compute_kernel_args_group_2,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args_group_2}
     );
 
     // Create circular buffers
@@ -230,8 +214,8 @@ operation::ProgramWithCallbacks create_program(
         output_data_format
     );
 
-    std::vector<DataMovementKernel*> reader_kernels;
-    std::vector<DataMovementKernel*> writer_kernels;
+    std::vector<KernelID> reader_kernel_ids;
+    std::vector<KernelID> writer_kernel_ids;
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
         uint32_t core_idx_x = i / core_range.y;
         uint32_t core_idx_y = i % core_range.y;
@@ -289,19 +273,19 @@ operation::ProgramWithCallbacks create_program(
 
         // left half
         if (core_idx_x <= 5) {
-            tt_metal::SetRuntimeArgs(mm_kernel_in0_reader, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end());
-            tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer, core, mm_reader_args);
-            reader_kernels.push_back(mm_kernel_in0_reader);
-            writer_kernels.push_back(mm_kernel_in1_reader_writer);
+            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_reader_writer_id, core, mm_reader_args);
+            reader_kernel_ids.push_back(mm_kernel_in0_reader_id);
+            writer_kernel_ids.push_back(mm_kernel_in1_reader_writer_id);
         }
         // right half
         else {
-            tt_metal::SetRuntimeArgs(mm_kernel_in0_reader_other_noc_setup, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_other_noc_setup_id, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end());
-            tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer_other_noc_setup, core, mm_reader_args);
-            reader_kernels.push_back(mm_kernel_in0_reader_other_noc_setup);
-            writer_kernels.push_back(mm_kernel_in1_reader_writer_other_noc_setup);
+            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_reader_writer_other_noc_setup_id, core, mm_reader_args);
+            reader_kernel_ids.push_back(mm_kernel_in0_reader_other_noc_setup_id);
+            writer_kernel_ids.push_back(mm_kernel_in1_reader_writer_other_noc_setup_id);
         }
         /* Checkerboard logic
         // white
@@ -380,12 +364,13 @@ operation::ProgramWithCallbacks create_program(
     }
 
     auto override_runtime_args_callback = [
-            reader_kernels,
-            writer_kernels,
+            reader_kernel_ids,
+            writer_kernel_ids,
             num_cores,
             core_range
         ]
     (
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -401,20 +386,20 @@ operation::ProgramWithCallbacks create_program(
             CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
 
             {
-                auto reader_kernel = reader_kernels.at(i);
-                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                auto reader_kernel_id = reader_kernel_ids.at(i);
+                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer_a->address();
                 runtime_args[8] = src_dram_buffer_b->address();
-                SetRuntimeArgs(reader_kernel, core, runtime_args);
+                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto writer_kernel = writer_kernels.at(i);
-                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                auto writer_kernel_id = writer_kernel_ids.at(i);
+                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = src_dram_buffer_a->address();
                 runtime_args[8] = src_dram_buffer_b->address();
                 runtime_args[21] = dst_dram_buffer->address();
-                SetRuntimeArgs(writer_kernel, core, runtime_args);
+                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };

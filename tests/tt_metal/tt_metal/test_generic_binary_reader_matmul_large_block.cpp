@@ -259,8 +259,7 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/dataflow/generic_binary_reader_blocked.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         std::vector<uint32_t> writer_rt_args{
             dst_dram_buffer.address(),
@@ -278,8 +277,7 @@ int main(int argc, char **argv) {
             program,
             "tt_metal/kernels/dataflow/writer_unswizzle.cpp",
             core,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         int in0_num_subblocks = (M/out_subblock_h);
         int in0_block_num_tiles = out_subblock_h*in0_block_w*in0_num_subblocks;
@@ -308,16 +306,11 @@ int main(int argc, char **argv) {
             uint(out_subblock_num_tiles)
         };
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/matmul_large_block_zm.cpp",
             core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
         ////////////////////////////////////////////////////////////////////////////
@@ -345,11 +338,13 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         tt_metal::SetRuntimeArgs(
+            program,
             generic_binary_reader_kernel,
             core,
             generic_binary_reader_args);
 
          tt_metal::SetRuntimeArgs(
+            program,
             unary_writer_kernel,
             core,
             writer_rt_args);

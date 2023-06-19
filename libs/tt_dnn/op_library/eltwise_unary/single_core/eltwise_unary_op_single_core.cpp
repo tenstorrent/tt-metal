@@ -58,21 +58,17 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args = {
         num_tiles, // per_core_block_cnt
@@ -81,21 +77,22 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = eltwise_unary_op_utils::get_op_approx_mode(op_type);
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+    auto eltwise_unary_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_kernel_args,
+            .defines = eltwise_unary_op_utils::get_defines(op_type, param)
+        }
     );
 
-    eltwise_unary_op_utils::add_defines(eltwise_unary_kernel, op_type, param);
-
-
     SetRuntimeArgs(
-        unary_reader_kernel,
+        program,
+        unary_reader_kernel_id,
         core,
         {
             src_buffer->address(),
@@ -104,7 +101,8 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
     );
 
     SetRuntimeArgs(
-        unary_writer_kernel,
+        program,
+        unary_writer_kernel_id,
         core,
         {
             dst_buffer->address(),
@@ -112,7 +110,8 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         }
     );
 
-    auto override_runtime_args_callback = [unary_reader_kernel, unary_writer_kernel](
+    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -124,15 +123,15 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(unary_reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
-            SetRuntimeArgs(unary_reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 

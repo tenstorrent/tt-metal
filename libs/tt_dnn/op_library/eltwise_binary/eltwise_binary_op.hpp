@@ -77,6 +77,6 @@ inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor&
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
-void add_defines(ComputeKernel *eltwise_binary_kernel, BinaryOpType::Enum op_type);
+std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type);
 
 }  // namespace eltwise_binary_op_utils

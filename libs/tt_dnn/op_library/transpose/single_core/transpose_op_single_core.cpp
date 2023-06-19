@@ -67,38 +67,32 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         cb_data_format
     );
 
-    tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_args = {
         Ht*Wt*NC // NHtWt
     };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/transpose_wh.cpp",
         core,
-        compute_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.compile_args = compute_args}
     );
 
     tt_metal::SetRuntimeArgs(
-        reader_kernel,
+        program,
+        reader_kernel_id,
         core,
         {
             src0_dram_buffer->address(),
@@ -110,7 +104,8 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
     );
 
     tt_metal::SetRuntimeArgs(
-        writer_kernel,
+        program,
+        writer_kernel_id,
         core,
         {
             dst_dram_buffer->address(),
@@ -120,7 +115,8 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         }
     );
 
-    auto override_runtime_args_callback = [reader_kernel, writer_kernel](
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -134,19 +130,19 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
             runtime_args[1] = uint32_t(src_dram_noc_xy.x);
             runtime_args[2] = uint32_t(src_dram_noc_xy.y);
-            SetRuntimeArgs(reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
             runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
             runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
-            SetRuntimeArgs(writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 
@@ -206,23 +202,21 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/transpose_hc_8bank.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
-        reader_kernel,
+        program,
+        reader_kernel_id,
         core,
         {
             src0_dram_buffer->address(),
@@ -233,7 +227,8 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
     );
 
     tt_metal::SetRuntimeArgs(
-        writer_kernel,
+        program,
+        writer_kernel_id,
         core,
         {
             dst_dram_buffer->address(),
@@ -241,7 +236,8 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         }
     );
 
-    auto override_runtime_args_callback = [reader_kernel, writer_kernel](
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -254,17 +250,17 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
             runtime_args[1] = uint32_t(src_dram_noc_xy.x);
             runtime_args[2] = uint32_t(src_dram_noc_xy.y);
-            SetRuntimeArgs(reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 
@@ -324,23 +320,21 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/transpose_cn_8bank.cpp",
         core,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
-        reader_kernel,
+        program,
+        reader_kernel_id,
         core,
         {
             src0_dram_buffer->address(),
@@ -349,7 +343,8 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
     );
 
     tt_metal::SetRuntimeArgs(
-        writer_kernel,
+        program,
+        writer_kernel_id,
         core,
         {
             dst_dram_buffer->address(),
@@ -357,7 +352,8 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
         }
     );
 
-    auto override_runtime_args_callback = [reader_kernel, writer_kernel](
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
+        const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -369,15 +365,15 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
-            SetRuntimeArgs(reader_kernel, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(writer_kernel, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 

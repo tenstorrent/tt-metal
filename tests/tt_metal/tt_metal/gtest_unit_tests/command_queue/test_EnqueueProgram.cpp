@@ -24,24 +24,16 @@ struct DummyProgramConfig {
 namespace local_test_functions {
 
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
+    std::map<string, string> defines = {{"TT_METAL_DEVICE_DISPATCH_MODE", "1"}};
     auto dummy_reader_kernel = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     auto dummy_writer_kernel = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto dummy_compute_kernel = CreateComputeKernel(
-        program,
-        "tt_metal/kernels/compute/blank.cpp",
-        cr_set,
-        {},
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode);
-
-    dummy_writer_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
+    auto dummy_compute_kernel = CreateComputeKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set);
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
@@ -211,7 +203,8 @@ TEST_F(CommandQueueHarness, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode
     // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
     // added separately
     auto dummy_reader_kernel = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     CompileProgram(this->device, program);
 

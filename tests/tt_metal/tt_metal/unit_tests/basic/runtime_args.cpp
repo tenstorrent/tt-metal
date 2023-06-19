@@ -6,6 +6,7 @@
 #include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/program.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -19,8 +20,7 @@ Program init_compile_and_configure_program(Device *device, const CoreRangeSet &c
         program,
         "tt_metal/kernels/riscv_draft/add_two_ints.cpp",
         core_range_set,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}
     );
 
     CompileProgram(device, program);
@@ -31,21 +31,13 @@ bool verify_result(Device *device, const Program &program, const std::map<CoreCo
     bool pass = true;
     auto get_runtime_arg_addr = [](Kernel *kernel) {
         uint32_t result_base = 0;
-        switch (kernel->kernel_type()) {
-            case KernelType::DataMovement: {
-                auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel);
-                switch (dm_kernel->data_movement_processor()) {
-                    case DataMovementProcessor::RISCV_0: {
-                        result_base = BRISC_L1_ARG_BASE;
-                    }
-                    break;
-                    case DataMovementProcessor::RISCV_1: {
-                        result_base = NCRISC_L1_ARG_BASE;
-                    }
-                    break;
-                    default:
-                        log_assert(false, "Unsupported data movement processor");
-                    }
+        switch (kernel->processor()) {
+            case tt::RISCV::BRISC: {
+                result_base = BRISC_L1_ARG_BASE;
+            }
+            break;
+            case tt::RISCV::NCRISC: {
+                result_base = NCRISC_L1_ARG_BASE;
             }
             break;
             default:
@@ -54,11 +46,13 @@ bool verify_result(Device *device, const Program &program, const std::map<CoreCo
         return result_base;
     };
 
-    CHECK(program.kernels().size() == 3); //2 Blanks get auto-populated even though we added 1 kernel into program
-    auto processor = program.kernels().at(0)->processor();
-    auto rt_arg_addr = get_runtime_arg_addr(program.kernels().at(0));
+    CHECK(program.kernel_ids().size() == 3); //2 Blanks get auto-populated even though we added 1 kernel into program
+    tt_metal::Kernel *kernel = tt_metal::detail::GetKernel(program, program.kernel_ids().at(0));
+    auto processor = kernel->processor();
+    auto rt_arg_addr = get_runtime_arg_addr(kernel);
 
-    for (const auto &kernel : program.kernels()) {
+    for (auto kernel_id : program.kernel_ids()) {
+        const auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
         auto processor = kernel->processor();
         for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
             auto expected_rt_args = core_to_rt_args.at(logical_core);
@@ -84,9 +78,9 @@ TEST_SUITE(
         CoreRange second_core_range = {.start = CoreCoord(3, 3), .end = CoreCoord(5, 5)};
         CoreRangeSet core_range_set({first_core_range, second_core_range});
         auto program = unit_tests::runtime_args::init_compile_and_configure_program(this->device_, core_range_set);
-        REQUIRE(program.kernels().size() == 3); //2 Blanks get auto-populated even though we added 1 kernel into program
+        REQUIRE(program.kernel_ids().size() == 3); //2 Blanks get auto-populated even though we added 1 kernel into program
         std::vector<uint32_t> initial_runtime_args = {101, 202};
-        SetRuntimeArgs(program.kernels().at(0), core_range_set, initial_runtime_args);
+        SetRuntimeArgs(program, program.kernel_ids().at(0), core_range_set, initial_runtime_args);
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
@@ -102,7 +96,7 @@ TEST_SUITE(
 
         SUBCASE("Legal modification of RT args") {
             std::vector<uint32_t> second_runtime_args = {303, 606};
-            SetRuntimeArgs(program.kernels().at(0), first_core_range, second_runtime_args);
+            SetRuntimeArgs(program, program.kernel_ids().at(0), first_core_range, second_runtime_args);
             WriteRuntimeArgsToDevice(this->device_, program);
             for (auto x = first_core_range.start.x; x <= first_core_range.end.x; x++) {
                 for (auto y = first_core_range.start.y; y <= first_core_range.end.y; y++) {
@@ -116,7 +110,7 @@ TEST_SUITE(
         SUBCASE("Illegal modification of RT args") {
             std::vector<uint32_t> invalid_runtime_args = {303, 404, 505};
             CHECK_THROWS_WITH(
-                SetRuntimeArgs(program.kernels().at(0), first_core_range, invalid_runtime_args),
+                SetRuntimeArgs(program, program.kernel_ids().at(0), first_core_range, invalid_runtime_args),
                 doctest::Contains("Illegal Runtime Args")
             );
         }

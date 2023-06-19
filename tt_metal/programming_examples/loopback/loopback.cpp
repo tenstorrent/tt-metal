@@ -30,12 +30,11 @@ int main(int argc, char **argv) {
 
         constexpr CoreCoord core = {0, 0};
 
-        DataMovementKernel *dram_copy_kernel = CreateDataMovementKernel(
+        KernelID dram_copy_kernel_id = CreateDataMovementKernel(
             program,
             "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
             core,
-            DataMovementProcessor::RISCV_0,
-            NOC::RISCV_0_default
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
         );
 
         constexpr uint32_t single_tile_size = 2 * (32 * 32);
@@ -54,7 +53,11 @@ int main(int argc, char **argv) {
         * Compile kernels used during execution
         */
 
+       std::cout << "about to compile " << std::endl;
+
         pass &= CompileProgram(device, program);
+
+        std::cout << "done compiling " << std::endl;
 
         /*
         * Create input data and runtime arguments, then execute
@@ -76,11 +79,16 @@ int main(int argc, char **argv) {
             l1_buffer.size()
         };
 
+        std::cout << "done creating runtime args " << std::endl;
+
         SetRuntimeArgs(
-            dram_copy_kernel,
+            program,
+            dram_copy_kernel_id,
             core,
             runtime_args
         );
+
+        std::cout << "done setting runtime args " << std::endl;
 
         WriteRuntimeArgsToDevice(device, program);
 

@@ -222,25 +222,19 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         sections.at(current_section_idx).size_in_bytes += 16;
     };
 
-    // TODO(agrebenisan): Once Almeet gets rid of kernel polymorphism,
-    // need to come back and clean this up. Ideally this should be as
-    // simple as just getting the type from the kernel.
     initialize_section();
-    for (Kernel* kernel : program.kernels()) {
-        vector<TransferType> riscv_type;
-        switch (kernel->kernel_type()) {
-            case (KernelType::DataMovement): {
-                auto dm_kernel = dynamic_cast<DataMovementKernel*>(kernel);
-                switch (dm_kernel->data_movement_processor()) {
-                    case (DataMovementProcessor::RISCV_0): riscv_type = {TransferType::B}; break;
-                    case (DataMovementProcessor::RISCV_1): riscv_type = {TransferType::N}; break;
-                    default: TT_THROW("Invalid kernel type");
-                }
-            } break;
-            case (KernelType::Compute): riscv_type = {TransferType::T0, TransferType::T1, TransferType::T2}; break;
-            default: TT_THROW("Invalid kernel type");
-        }
+    const static std::map<tt::RISCV, vector<TransferType>> processor_to_transfer_type = {
+        {tt::RISCV::BRISC, {TransferType::B}},
+        {tt::RISCV::NCRISC, {TransferType::N}},
+        {tt::RISCV::TRISC0, {TransferType::T0}},
+        {tt::RISCV::TRISC1, {TransferType::T1}},
+        {tt::RISCV::TRISC2, {TransferType::T2}},
+        {tt::RISCV::COMPUTE, {TransferType::T0, TransferType::T1, TransferType::T2}},
+    };
 
+    for (KernelID kernel_id : program.kernel_ids()) {
+        auto kernel = detail::GetKernel(program, kernel_id);
+        vector<TransferType> riscv_type = processor_to_transfer_type.at(kernel->processor());
         write_program_kernel_transfer(kernel, riscv_type);
     }
 
@@ -584,23 +578,23 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     Program dispatch_program = Program();
     CoreCoord dispatch_logical_core = {0, 9};
+    vector<CoreCoord> pcie_cores = device->cluster()->get_soc_desc(device->pcie_slot()).pcie_cores;
+    TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
+    std::map<string, string> dispatch_defines = {
+        {"IS_DISPATCH_KERNEL", ""},
+        {"PCIE_NOC_X", std::to_string(pcie_cores[0].x)},
+        {"PCIE_NOC_Y", std::to_string(pcie_cores[0].y)},
+    };
+    const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
+    if (DISPATCH_MAP_DUMP) {
+        dispatch_defines["TT_METAL_DISPATCH_MAP_DUMP"] = "";
+    }
     auto dispatch_kernel = tt::tt_metal::CreateDataMovementKernel(
         dispatch_program,
         "tt_metal/kernels/dataflow/dispatch/command_queue.cpp",
         dispatch_logical_core,
-        tt::tt_metal::DataMovementProcessor::RISCV_0,
-        tt::tt_metal::NOC::RISCV_0_default
+        tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default, .defines = dispatch_defines}
     );
-    dispatch_kernel->add_define("IS_DISPATCH_KERNEL", "");
-    vector<CoreCoord> pcie_cores = device->cluster()->get_soc_desc(device->pcie_slot()).pcie_cores;
-    TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
-    dispatch_kernel->add_define("PCIE_NOC_X", pcie_cores[0].x);
-    dispatch_kernel->add_define("PCIE_NOC_Y", pcie_cores[0].y);
-
-    const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
-    if (DISPATCH_MAP_DUMP) {
-        dispatch_kernel->add_define("TT_METAL_DISPATCH_MAP_DUMP", "");
-    }
 
     CompileProgram(device, dispatch_program);
     tt::tt_metal::ConfigureDeviceWithProgram(device, dispatch_program);
@@ -737,7 +731,8 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
     auto get_current_runtime_args = [&program]() {
         RuntimeArgs runtime_args;
-        for (const auto kernel : program.kernels()) {
+        for (const auto kernel_id : program.kernel_ids()) {
+            const auto kernel = detail::GetKernel(program, kernel_id);
             tt::RISCV processor = kernel->processor();
             for (const auto& [logical_core, rt_args] : kernel->runtime_args()) {
                 u32 padding = (align(rt_args.size() * sizeof(u32), 32) / sizeof(u32)) - rt_args.size();

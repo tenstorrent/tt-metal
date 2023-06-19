@@ -199,118 +199,30 @@ void StartDebugPrintServer(Device *device, const std::vector<CoreCoord> & cores)
     tt_start_debug_print_server(device->cluster(), {0}, cores);
 }
 
-DataMovementKernel *CreateDataMovementKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreCoord &core,
-    const std::vector<uint32_t> &compile_args,
-    DataMovementProcessor processor_type,
-    NOC noc) {
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core, compile_args, processor_type, noc);
+KernelID CreateDataMovementKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<DataMovementConfig> &config) {
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
+    auto dm_config = detail::GetDataMovementConfig(program, file_name, core_ranges, config);
+    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
+    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
+        // This triggers the firmware to do logic only needed for fast dispatch
+        dm_config.defines["TT_METAL_DEVICE_DISPATCH_MODE"]  = "1";
+    }
+    auto kernel = new DataMovementKernel(file_name, core_ranges, dm_config);
     detail::AddKernel(program, kernel);
-    return kernel;
+    return kernel->id();
 }
 
-DataMovementKernel *CreateDataMovementKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreCoord &core,
-    DataMovementProcessor processor_type,
-    NOC noc) {
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core, processor_type, noc);
+KernelID CreateComputeKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<ComputeConfig> &config) {
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
+    auto compute_config = config.has_value() ? config.value() : ComputeConfig{};
+    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
+    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
+        // This triggers the firmware to do logic only needed for fast dispatch
+        compute_config.defines["TT_METAL_DEVICE_DISPATCH_MODE"]  = "1";
+    }
+    auto kernel = new ComputeKernel(file_name, core_ranges, compute_config);
     detail::AddKernel(program, kernel);
-    return kernel;
-}
-
-DataMovementKernel *CreateDataMovementKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreRange &core_range,
-    const std::vector<uint32_t> &compile_args,
-    DataMovementProcessor processor_type,
-    NOC noc) {
-    TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, compile_args, processor_type, noc);
-    detail::AddKernel(program, kernel);
-    return kernel;
-}
-
-DataMovementKernel *CreateDataMovementKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreRange &core_range,
-    DataMovementProcessor processor_type,
-    NOC noc) {
-    TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, processor_type, noc);
-    detail::AddKernel(program, kernel);
-    return kernel;
-}
-
-DataMovementKernel *CreateDataMovementKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreRangeSet &core_range_set,
-    const std::vector<uint32_t> &compile_args,
-    DataMovementProcessor processor_type,
-    NOC noc) {
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, compile_args, processor_type, noc);
-    detail::AddKernel(program, kernel);
-    return kernel;
-}
-
-DataMovementKernel *CreateDataMovementKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreRangeSet &core_range_set,
-    DataMovementProcessor processor_type,
-    NOC noc) {
-    DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, processor_type, noc);
-    detail::AddKernel(program, kernel);
-    return kernel;
-}
-
-ComputeKernel *CreateComputeKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreCoord &core,
-    const std::vector<uint32_t> &compile_args,
-    MathFidelity math_fidelity,
-    bool fp32_dest_acc_en,
-    bool math_approx_mode) {
-    ComputeKernel *kernel =
-        new ComputeKernel(file_name, core, compile_args, math_fidelity, fp32_dest_acc_en, math_approx_mode);
-    detail::AddKernel(program, kernel);
-    return kernel;
-}
-
-ComputeKernel *CreateComputeKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreRange &core_range,
-    const std::vector<uint32_t> &compile_args,
-    MathFidelity math_fidelity,
-    bool fp32_dest_acc_en,
-    bool math_approx_mode) {
-    TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
-    ComputeKernel *kernel =
-        new ComputeKernel(file_name, core_range, compile_args, math_fidelity, fp32_dest_acc_en, math_approx_mode);
-    detail::AddKernel(program, kernel);
-    return kernel;
-}
-
-ComputeKernel *CreateComputeKernel(
-    Program &program,
-    const std::string &file_name,
-    const CoreRangeSet &core_range_set,
-    const std::vector<uint32_t> &compile_args,
-    MathFidelity math_fidelity,
-    bool fp32_dest_acc_en,
-    bool math_approx_mode) {
-    ComputeKernel *kernel =
-        new ComputeKernel(file_name, core_range_set, compile_args, math_fidelity, fp32_dest_acc_en, math_approx_mode);
-    detail::AddKernel(program, kernel);
-    return kernel;
+    return kernel->id();
 }
 
 const CircularBuffer &CreateCircularBuffer(
@@ -505,45 +417,14 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
-bool GenerateBinaries(
-    Device *device,
-    build_kernel_for_riscv_options_t *build_options,
-    const std::string &op_path_suffix,
-    Kernel *kernel) {
+void GenerateBinaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix, Kernel *kernel) {
     std::string arch_name = tt::get_string_lowercase(device->arch());
-
     generate_descriptors(build_options, op_path_suffix);
     try {
-        if (auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel)) {
-            detail::GenerateBankToNocCoordHeaders(device, build_options, op_path_suffix);
-            switch (dm_kernel->data_movement_processor()) {
-                case (DataMovementProcessor::RISCV_0): {
-                    generate_binary_for_brisc(
-                        build_options,
-                        op_path_suffix,
-                        arch_name,
-                        dm_kernel->noc(),
-                        dm_kernel->compile_time_args());
-                }
-                break;
-                case (DataMovementProcessor::RISCV_1): {
-                    generate_binary_for_ncrisc(
-                        build_options,
-                        op_path_suffix,
-                        arch_name,
-                        dm_kernel->noc(),
-                        dm_kernel->compile_time_args());
-                } break;
-                default: TT_ASSERT(false, "Unsupported data movement processor!");
-            }
-        } else if (auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel)) {
-            generate_binaries_for_triscs(
-                build_options, op_path_suffix, arch_name, compute_kernel->compile_time_args());
-        }
+        kernel->generate_binaries(device, build_options, op_path_suffix);
     } catch (std::runtime_error &ex) {
         log_error(tt::LogMetal, "EXCEPTION in GenerateBinaries: ", ex.what());
     }
-    return true;
 }
 
 void SetCircularBufferDataFormat(
@@ -565,22 +446,7 @@ void SetCircularBufferDataFormat(
 size_t KernelCompileHash(
     Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &pcie_slot) {
     string compile_hash_str = std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc));
-    compile_hash_str += kernel->compile_time_args_hash();
-    compile_hash_str += std::to_string(kernel->define_args_hash());
-    compile_hash_str += std::to_string(std::hash<std::string>{}(kernel->name()));
-
-    if (kernel->kernel_type() == KernelType::DataMovement) {
-        auto data_movement_kernel = dynamic_cast<DataMovementKernel *>(kernel);
-        TT_ASSERT(data_movement_kernel != nullptr);
-        compile_hash_str += std::to_string(size_t(data_movement_kernel->noc()));
-    } else {
-        auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel);
-        TT_ASSERT(compute_kernel != nullptr);
-        compile_hash_str += std::to_string(std::hash<MathFidelity>{}(compute_kernel->math_fidelity()));
-        compile_hash_str += std::to_string(size_t(compute_kernel->fp32_dest_acc_en()));
-        compile_hash_str += std::to_string(size_t(compute_kernel->math_approx_mode()));
-    }
-
+    compile_hash_str += kernel->compute_hash();
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
 #ifdef GENERATE_HASH_LOG
@@ -588,49 +454,20 @@ size_t KernelCompileHash(
     static std::mutex mutex_;
     {
         unique_lock<mutex> lock;
-        f << kernel->name() << " :: " << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compile_time_args_hash() << " :: " << kernel->define_args_hash()
-          << " :: " << std::hash<std::string>{}(kernel->name()) << " :: ";
-        if (auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel)) {
-            f << dm_kernel->noc() << " :: ";
-        } else {
-            auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel);
-            f << compute_kernel->math_fidelity() << " :: " << compute_kernel->fp32_dest_acc_en()
-              << " :: " << compute_kernel->math_approx_mode() << " :: ";
-        }
-        f << compile_hash_str f << compile_hash << std::endl << std::flush;
+        f << kernel->name() << " :: "
+          << std::hash<tt_hlk_desc>{}(build_options.hlk_desc) << " :: "
+          << kernel->compute_hash() << " :: "
+          << compile_hash_str << " "
+          << compile_hash << std::endl << std::flush;
     }
 #endif
     return compile_hash;
 }
 
-void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &build_options) {
-    if (auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel)) {
-        build_options.set_hlk_file_name_all_cores(compute_kernel->kernel_path_file_name());
-        build_options.set_hlk_math_fidelity_all_cores(compute_kernel->math_fidelity());
-        build_options.set_hlk_math_approx_mode_all_cores(compute_kernel->math_approx_mode());
-        build_options.fp32_dest_acc_en = compute_kernel->fp32_dest_acc_en();
-        build_options.hlk_defines = compute_kernel->defines();
-    } else {
-        auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel);
-        switch (dm_kernel->data_movement_processor()) {
-            case (DataMovementProcessor::RISCV_0): {
-                build_options.brisc_kernel_file_name = dm_kernel->kernel_path_file_name();
-                build_options.brisc_defines = dm_kernel->defines();
-            } break;
-            case (DataMovementProcessor::RISCV_1): {
-                build_options.ncrisc_kernel_file_name = dm_kernel->kernel_path_file_name();
-                build_options.ncrisc_defines = dm_kernel->defines();
-            } break;
-            default: TT_ASSERT(false, "Unsupported data movement processor!");
-        }
-    }
-}
-
 void CompileKernel(Device *device, Program &program, Kernel *kernel) {
     build_kernel_for_riscv_options_t build_options(device->pcie_slot(), kernel->name());
 
-    SetBuildKernelOptions(kernel, build_options);
+    kernel->set_build_options(build_options);
     SetCircularBufferDataFormat(device, program, kernel, build_options);
 
     auto kernel_hash = KernelCompileHash(kernel, build_options, device->pcie_slot());
@@ -657,54 +494,48 @@ void AddBlankKernels(Device *device, Program &program) {
     std::set<CoreRange> unique_core_ranges_without_brisc_kernel,
                         unique_core_ranges_without_ncrisc_kernel,
                         unique_core_ranges_without_compute_kernel ;
-    vector<Kernel *> blanks;
+    vector<KernelID> blank_ids;
     for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
         CoreRange core_range = {.start = logical_core, .end = logical_core};
-        if (kernel_group.riscv_0 == nullptr)
+        if (not kernel_group.riscv0_id.has_value())
             unique_core_ranges_without_brisc_kernel.insert(core_range);
-        if (kernel_group.riscv_1 == nullptr)
+        if (not kernel_group.riscv1_id.has_value())
             unique_core_ranges_without_ncrisc_kernel.insert(core_range);
-        if (kernel_group.compute == nullptr)
+        if (not kernel_group.compute_id.has_value())
             unique_core_ranges_without_compute_kernel.insert(core_range);
     }
 
     if (not unique_core_ranges_without_brisc_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_brisc_kernel);
-        auto blank_kernel = CreateDataMovementKernel(
-            program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
-        blanks.push_back(blank_kernel);
+        KernelID blank_kernel_id = CreateDataMovementKernel(
+            program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        blank_ids.push_back(blank_kernel_id);
     }
 
     if (not unique_core_ranges_without_ncrisc_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_ncrisc_kernel);
-        auto blank_kernel = CreateDataMovementKernel(
-            program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
-
-        blanks.push_back(blank_kernel);
+        KernelID blank_kernel_id = CreateDataMovementKernel(
+            program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        blank_ids.push_back(blank_kernel_id);
     }
+
     if (not unique_core_ranges_without_compute_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_compute_kernel);
-        auto blank_kernel = CreateComputeKernel(
-            program, "tt_metal/kernels/compute/blank.cpp", core_range_set, {0}, MathFidelity::HiFi4, false, false);
-
-        blanks.push_back(blank_kernel);
+        KernelID blank_kernel_id = CreateComputeKernel(program, "tt_metal/kernels/compute/blank.cpp", core_range_set);
+        blank_ids.push_back(blank_kernel_id);
     }
 
-    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
-    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        for (const auto &blank_kernel : blanks) {
-            blank_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", 1);
-        }
-    }
-
-    for (const auto &blank_kernel : blanks) {
+    for (const auto &blank_kernel_id : blank_ids) {
+        Kernel *blank_kernel = detail::GetKernel(program, blank_kernel_id);
         CompileKernel(device, program, blank_kernel);
         blank_kernel->read_binaries(device->pcie_slot());
     }
 }
 
 bool CompileProgram(Device *device, Program &program) {
-    log_assert(
+    TT_ASSERT(
         device->is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
         "dependent on information that is set during device initialization.",
@@ -726,24 +557,11 @@ bool CompileProgram(Device *device, Program &program) {
 
         tf.emplace([device, &program] { AddBlankKernels(device, program); });
 
-        // Currently we want to support both slow and fast dispatch until we
-        // fully move over to fast, so using this env var method to set all
-        // the kernels to using fast dispatch mode. Need to be done after adding
-        // blanks to ensure that they get the define, too.
-
-        if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-            for (auto kernel : program.kernels()) {
-                tf.emplace([kernel, device, &program] {
-                    kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", 1);
-                    CompileKernel(device, program, kernel);
-                });
-            }
-        } else {
-            for (auto kernel : program.kernels()) {
-                tf.emplace([kernel, device, &program] {
-                    CompileKernel(device, program, kernel);
-                });
-            }
+        for (auto kernel_id : program.kernel_ids()) {
+            auto kernel = detail::GetKernel(program, kernel_id);
+            tf.emplace ( [kernel, device, &program] {
+                CompileKernel(device, program, kernel);
+            } );
         }
 
         GetExecutor().run(tf).wait();
@@ -751,8 +569,9 @@ bool CompileProgram(Device *device, Program &program) {
     {
         tf::Taskflow tf;
 
-        for (auto kernel : program.kernels()) {
-            tf.emplace([kernel, device] { kernel->read_binaries(device->pcie_slot()); });
+        for (auto kernel_id : program.kernel_ids()) {
+            auto kernel = detail::GetKernel(program, kernel_id);
+            tf.emplace ( [kernel, device] { kernel->read_binaries(device->pcie_slot()); });
         }
         GetExecutor().run(tf).wait();
     }
@@ -767,24 +586,14 @@ bool CompileProgram(Device *device, Program &program) {
     return pass;
 }
 
-void ValidateKernelGroup(const KernelGroup &kernel_group, const CoreCoord &logical_core) {
-    if (kernel_group.riscv_0 != nullptr and kernel_group.riscv_1 != nullptr) {
-        if (kernel_group.riscv_0->noc() == kernel_group.riscv_1->noc() and kernel_group.riscv_0->name() != "blank") {
-            TT_THROW(
-                "Data movement kernels on RISCV_0 and RISCV_1 on core " + logical_core.str() +
-                " cannot use the same NOC, doing so results in a hang!");
-        }
+void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_group, Device *device, const CoreCoord &logical_core) {
+    if (kernel_group.compute_id.has_value()) {
+        detail::GetKernel(program, kernel_group.compute_id.value())->configure(device, logical_core);
     }
-}
-
-void ConfigureKernelGroup(const KernelGroup &kernel_group, Device *device, const CoreCoord &logical_core) {
-    if (kernel_group.compute != nullptr) {
-        kernel_group.compute->configure(device, logical_core);
+    if (kernel_group.riscv1_id.has_value()) {
+        detail::GetKernel(program, kernel_group.riscv1_id.value())->configure(device, logical_core);
     }
-    if (kernel_group.riscv_1 != nullptr) {
-        kernel_group.riscv_1->configure(device, logical_core);
-    }
-    kernel_group.riscv_0->configure(device, logical_core);
+    detail::GetKernel(program, kernel_group.riscv0_id.value())->configure(device, logical_core);
 }
 
 bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
@@ -797,7 +606,6 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     auto pcie_slot = device->pcie_slot();
 
     for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
-        ValidateKernelGroup(kernel_group, logical_core);
         auto worker_core = device->worker_core_from_logical_core(logical_core);
         worker_cores.push_back(worker_core);
 
@@ -811,7 +619,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
         llrt::disable_ncrisc(cluster, pcie_slot, worker_core);     // PROF_BEGIN("CONF_DISABLE_NCTR")
         llrt::disable_triscs(cluster, pcie_slot, worker_core);     // PROF_END("CONF_DISABLE_NCTR")
 
-        ConfigureKernelGroup(kernel_group, device, logical_core);  // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
+        ConfigureKernelGroup(program, kernel_group, device, logical_core); // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
 
         // Initialize registers to INVALID
         constexpr static uint32_t INVALID = 0x4321;  // PROF_BEGIN("WRITE_HEX")
@@ -857,28 +665,27 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     return pass;
 }
 
-void SetRuntimeArgs(Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
-    TT_ASSERT(kernel->kernel_type() != KernelType::Compute, "Compute kernels do not support runtime args");
-    kernel->set_runtime_args(logical_core, runtime_args);
+void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
+    detail::GetKernel(program, kernel_id)->set_runtime_args(logical_core, runtime_args);
 }
 
-void SetRuntimeArgs(Kernel *kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args) {
+void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args) {
     for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
         for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
             CoreCoord logical_core(x, y);
-            SetRuntimeArgs(kernel, logical_core, runtime_args);
+            SetRuntimeArgs(program, kernel_id, logical_core, runtime_args);
         }
     }
 }
 
-void SetRuntimeArgs(Kernel *kernel, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &runtime_args) {
+void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &runtime_args) {
     for (auto core_range : core_range_set.ranges()) {
-        SetRuntimeArgs(kernel, core_range, runtime_args);
+        SetRuntimeArgs(program, kernel_id, core_range, runtime_args);
     }
 }
 
-std::vector<uint32_t> GetRuntimeArgs(Kernel *kernel, const CoreCoord &logical_core) {
-    return kernel->runtime_args(logical_core);
+std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core) {
+    return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
 }
 
 void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
@@ -899,7 +706,8 @@ void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
         return l1_arg_base;
     };
 
-    for (const auto &kernel : program.kernels()) {
+    for (auto kernel_id : program.kernel_ids()) {
+        const auto kernel = detail::GetKernel(program, kernel_id);
         auto processor = kernel->processor();
         for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
             auto worker_core = device->worker_core_from_logical_core(logical_core);
@@ -910,12 +718,12 @@ void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
 
 bool core_runs_ncrisc(const Program &program, const CoreCoord &logical_core) {
     auto kernel_group = program.kernels_on_core(logical_core);
-    return kernel_group.riscv_1 != nullptr;
+    return kernel_group.riscv1_id.has_value();
 }
 
 bool core_runs_triscs(const Program &program, const CoreCoord &logical_core) {
     auto kernel_group = program.kernels_on_core(logical_core);
-    return kernel_group.compute != nullptr;
+    return kernel_group.compute_id.has_value();
 }
 
 llrt::TensixRiscsOptions GetRiscOptionFromCoreConfig(bool core_runs_ncrisc, bool core_runs_triscs) {

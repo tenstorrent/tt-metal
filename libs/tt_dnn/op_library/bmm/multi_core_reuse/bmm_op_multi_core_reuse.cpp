@@ -112,33 +112,24 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)out_is_dram};
 
     // Create reader and writer kernels per core
-    auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout.cpp",
         all_cores,
-        reader_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_1,
-        tt_metal::NOC::RISCV_1_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
-        writer_compile_time_args,
-        tt_metal::DataMovementProcessor::RISCV_0,
-        tt_metal::NOC::RISCV_0_default);
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     // Create compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::CreateComputeKernel(
+    auto mm_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
-        compute_kernel_args,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args}
     );
 
     for(int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
@@ -195,21 +186,22 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                 (std::uint32_t) B // batch
             };
 
-            tt_metal::SetRuntimeArgs(mm_reader_kernel, core, mm_reader_args);
-            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(program, mm_reader_kernel_id, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_args);
 
             num_blocks_read++;
         }
     }
 
     auto override_runtime_args_callback = [
-        reader_kernel=mm_reader_kernel,
-        writer_kernel=unary_writer_kernel,
+        reader_kernel_id=mm_reader_kernel_id,
+        writer_kernel_id=unary_writer_kernel_id,
         num_cores_x,
         num_blocks_y,
         num_blocks_x
     ]
     (
+        const tt_metal::Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -227,16 +219,16 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                 CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
 
                 {
-                    auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer_a->address();
                     runtime_args[8] = src_dram_buffer_b->address();
-                    SetRuntimeArgs(reader_kernel, core, runtime_args);
+                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                 }
 
                 {
-                    auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
-                    SetRuntimeArgs(writer_kernel, core, runtime_args);
+                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                 }
                 num_blocks_read++;
             }
