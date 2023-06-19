@@ -4,8 +4,9 @@ import re
 """
 Commit msg must be in the format:
 """
-FORMAT_MSG = "#<GH ISSUE NUMBER>: <non-empty message>"
-MATCHING_REGEX = "^(#\d+\:\ .)"
+FORMAT_MSG = "#<GH ISSUE NUMBER> or MET-<JIRA ISSUE NUMBER>: <non-empty message>"
+VALID_PREFIXES = "|".join(["#", "MET-"])
+MATCHING_REGEX = f"^({VALID_PREFIXES})(\d+\:\ .)"
 
 
 def print_commit_msg(commit_msg_whole):
