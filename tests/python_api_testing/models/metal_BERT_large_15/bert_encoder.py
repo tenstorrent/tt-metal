@@ -167,18 +167,13 @@ class TtBertEncoder(torch.nn.Module):
         self, mha_res, attention_output_weight, attention_output_bias
     ):
         # profiler.start("__op11_mm_plus_bias")
-        output = run_matmul_with_dataformat(
+        mha_out = run_matmul_with_dataformat(
             ttl.tensor.bert_large_selfout_matmul,
             ttl.tensor.DataType.BFLOAT16,
             self.device,
             mha_res,
             attention_output_weight,
-        )
-        mha_out = ttl.tensor.bcast(
-            output,
             attention_output_bias,
-            ttl.tensor.BcastOpMath.ADD,
-            ttl.tensor.BcastOpDim.H,
         )
         # profiler.end("__op11_mm_plus_bias")
 

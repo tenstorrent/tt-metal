@@ -118,9 +118,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             device,
             activation,
             qkv_weight,
-        )
-        qkv = ttl.tensor.bcast(
-            qkv, qkv_bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
+            qkv_bias
         )
         # profiler.end("___op1_qkv_fused")
 

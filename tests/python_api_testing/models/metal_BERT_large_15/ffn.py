@@ -32,17 +32,15 @@ def feed_forward(
     # output = [1, 9, 384, 4096]
     def op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
         # profiler.start("___op13_MM_bias_gelu")
-        output = run_matmul_with_dataformat(
+        output_plus_bias_act = run_matmul_with_dataformat(
             ttl.tensor.bert_large_ff1_matmul,
             ttl.tensor.DataType.BFLOAT16,
             device,
             activation,
             ff1_weighta,
+            ff1_biasa,
+            True
         )
-        output_plus_bias = ttl.tensor.bcast(
-            output, ff1_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
-        )
-        output_plus_bias_act = ttl.tensor.gelu(output_plus_bias)
         # profiler.end("___op13_MM_bias_gelu")
 
         return output_plus_bias_act
@@ -52,15 +50,13 @@ def feed_forward(
     # output = [1, 9, 384, 1024]
     def op14_MM_bias(activation, ff2_weighta, ff2_biasa):
         # profiler.start("___op14_MM_bias")
-        output = run_matmul_with_dataformat(
+        output_plus_bias = run_matmul_with_dataformat(
             ttl.tensor.bert_large_ff2_matmul,
             ttl.tensor.DataType.BFLOAT16,
             device,
             activation,
             ff2_weighta,
-        )
-        output_plus_bias = ttl.tensor.bcast(
-            output, ff2_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
+            ff2_biasa
         )
         # profiler.end("___op14_MM_bias")
 

@@ -25,16 +25,27 @@ def convert_to_datatype_on_device(x, target_dtype, host, device):
     return x
 
 
-def run_matmul_with_dataformat(matmul, target_dtype, device, *args):
-    assert len(args) == 2
-    in0, in1 = args[0], args[1]
+def run_matmul_with_dataformat(matmul, target_dtype, device, in0, in1, bias=None, gelu_activation=False):
+
+    assert isinstance(in0, ttl.tensor.Tensor)
+    assert isinstance(in1, ttl.tensor.Tensor)
+    if bias is not None:
+        assert isinstance(bias, ttl.tensor.Tensor)
     host = ttl.device.GetHost()
 
     assert in0.layout() == ttl.tensor.Layout.TILE
     assert in1.layout() == ttl.tensor.Layout.TILE
     assert in0.dtype() == in1.dtype()
+    if bias is not None:
+        assert bias.layout() == ttl.tensor.Layout.TILE
+        assert in0.dtype() == bias.dtype()
     if in0.dtype() == target_dtype:
-        return matmul(in0, in1)
+        matmul_args = [in0, in1]
+        if bias is not None:
+            matmul_args.append(bias)
+        if gelu_activation:
+            matmul_args.append(gelu_activation)
+        return matmul(*matmul_args)
 
     src_dtype = in0.dtype()
 
@@ -69,8 +80,29 @@ def run_matmul_with_dataformat(matmul, target_dtype, device, *args):
         .to(ttl.tensor.Layout.TILE)
         .to(device, mem_config)
     )
+    if bias is not None:
+        logger.warning(
+            f"Converting tensor {bias.shape()} from {bias.dtype()} to {target_dtype}!"
+        )
+        mem_config = ttl.tensor.MemoryConfig(True, -1, bias.buffer_type())
+        bias = bias.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+        bias = (
+            ttl.tensor.Tensor(
+                bias.data(),
+                bias.shape(),
+                target_dtype,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(device, mem_config)
+        )
 
-    output = matmul(in0, in1)
+    matmul_args = [in0, in1]
+    if bias is not None:
+        matmul_args.append(bias)
+    if gelu_activation:
+        matmul_args.append(gelu_activation)
+    output = matmul(*matmul_args)
 
     logger.warning(
         f"Converting tensor {output.shape()} from {output.dtype()} to {src_dtype}!"
