@@ -238,8 +238,8 @@ Program layernorm_(
     return program;
 }
 
-void ResidualLayerNorm::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    TT_ASSERT(input_tensors.size() > 0 and input_tensors.size() <= 4, "Must have between 1 to 4 input tensors");
+void ResidualLayerNorm::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const {
+    TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
 }
 
 std::vector<Shape> ResidualLayerNorm::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {

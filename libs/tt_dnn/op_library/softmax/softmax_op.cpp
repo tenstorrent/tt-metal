@@ -186,8 +186,8 @@ Program scale_mask_softmax_(const Tensor &input_tensor, const std::optional<std:
 } // scale_mask_softmax_
 
 
-void AttentionSoftmaxInPlace::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    TT_ASSERT(input_tensors.size() > 0 and input_tensors.size() <= 2, "Must have 1 or 2 input tensors");
+void AttentionSoftmaxInPlace::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const {
+    TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 1, "Must have 1 or 2 input tensors");
 }
 
 std::vector<Shape> AttentionSoftmaxInPlace::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
