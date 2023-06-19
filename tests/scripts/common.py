@@ -166,7 +166,10 @@ def run_single_test(namespace: str, test_entry: TestEntry, timeout, tt_arch="gra
 
     if reset_tensix:
         logger.warning("Detected error on test that uses silicon - resetting")
-        run_process_and_get_result("./device/bin/silicon/tensix-reset")
+        if tt_arch == "grayskull":
+            run_process_and_get_result("tt-smi -tr all")
+        else:
+            run_process_and_get_result("tt-smi -wr all")
         logger.warning("Silicon reset complete - returning status of FAILURE for this test")
 
     return completed_process

@@ -186,7 +186,7 @@ def pytest_runtest_makereport(item, call):
 
 
 @pytest.fixture(scope="function")
-def reset_tensix(request):
+def reset_tensix(request, silicon_arch_name):
     yield
 
     report = request.node.stash[phase_report_key]
@@ -194,10 +194,17 @@ def reset_tensix(request):
     test_failed = ("call" not in report) or report["call"].failed
 
     if test_failed:
-        logger.debug("Test failed - resetting with tensix-reset script")
-        result = run_process_and_get_result(
-            "./tt_metal/device/bin/silicon/tensix-reset"
-        )
+        logger.debug("Test failed - resetting with smi")
+        if silicon_arch_name == "grayskull":
+            result = run_process_and_get_result(
+                "tt-smi -tr all"
+            )
+        elif silicon_arch_name == "wormhole_b0":
+            result = run_process_and_get_result(
+                "tt-smi -wr all"
+            )
+        else:
+            raise Exception("tt-smi reset had an error")
         assert result.returncode == 0, "Tensix reset script raised error"
 
 
