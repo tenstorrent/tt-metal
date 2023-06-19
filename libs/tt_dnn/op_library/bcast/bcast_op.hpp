@@ -49,7 +49,7 @@ inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, 
     else if (bcast_dim == BcastOpDim::H) {
         TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[3]);
     }
-    return operation::run_with_autopad(EltwiseBinaryBroadcast{bcast_op, bcast_dim}, input_tensor_a, input_tensor_b);
+    return operation::run_with_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim}, input_tensor_a, input_tensor_b);
 }
 
 

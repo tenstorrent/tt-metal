@@ -302,7 +302,7 @@ Tensor unpad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output
         log_warning("Perf warning: unpadding called on tensor with same shape as target shape.");
         return input_tensor_a;
     }
-    return operation::run_without_autopad(Unpad(output_tensor_start, output_tensor_end), input_tensor_a);
+    return operation::run_without_autoformat(Unpad(output_tensor_start, output_tensor_end), input_tensor_a);
 
 }
 

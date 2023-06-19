@@ -25,7 +25,7 @@ std::vector<Tensor> generic_create_output_tensors(
 
 
 template<typename ConcreteOperation>
-static Tensor run_without_autopad(ConcreteOperation&& concrete_op, const Tensor &input_tensor, float pad_value = 0) {
+static Tensor run_without_autoformat(ConcreteOperation&& concrete_op, const Tensor &input_tensor) {
     const Operation op = Operation(concrete_op);
 
     Device* device;
@@ -45,7 +45,7 @@ static Tensor run_without_autopad(ConcreteOperation&& concrete_op, const Tensor 
 }
 
 template<typename ConcreteOperation>
-static Tensor run_with_autopad(ConcreteOperation&& concrete_op, const Tensor &input_tensor, float pad_value = 0, bool pad_c=false) {
+static Tensor run_with_autoformat(ConcreteOperation&& concrete_op, const Tensor &input_tensor, float pad_value = 0, bool pad_c=false) {
     const Operation op = Operation(concrete_op);
 
     Device* device;
@@ -70,7 +70,7 @@ static Tensor run_with_autopad(ConcreteOperation&& concrete_op, const Tensor &in
 
 
 template<typename ConcreteOperation>
-static Tensor run_with_autopad(ConcreteOperation&& concrete_op, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float pad_value = 0) {
+static Tensor run_with_autoformat(ConcreteOperation&& concrete_op, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float pad_value = 0) {
     const Operation op = Operation(concrete_op);
 
     Device* device;

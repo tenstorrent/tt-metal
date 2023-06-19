@@ -321,7 +321,7 @@ Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {
         input_tensor_a.reshape(N, C, H, W);
         return input_tensor_a;
     }
-    return operation::run_without_autopad(Reshape{N, C, H, W}, input_tensor_a);
+    return operation::run_without_autoformat(Reshape{N, C, H, W}, input_tensor_a);
 }
 
 } // namespace tt_metal

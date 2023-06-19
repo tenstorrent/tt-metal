@@ -34,15 +34,15 @@ struct EltwiseBinary {
 
 inline Tensor add(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-    return operation::run_with_autopad(EltwiseBinary{BinaryOpType::ADD}, input_tensor_a, input_tensor_b);
+    return operation::run_with_autoformat(EltwiseBinary{BinaryOpType::ADD}, input_tensor_a, input_tensor_b);
 }
 inline Tensor sub(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-    return operation::run_with_autopad(EltwiseBinary{BinaryOpType::SUB}, input_tensor_a, input_tensor_b);
+    return operation::run_with_autoformat(EltwiseBinary{BinaryOpType::SUB}, input_tensor_a, input_tensor_b);
 }
 inline Tensor mul(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-    return operation::run_with_autopad(EltwiseBinary{BinaryOpType::MUL}, input_tensor_a, input_tensor_b);
+    return operation::run_with_autoformat(EltwiseBinary{BinaryOpType::MUL}, input_tensor_a, input_tensor_b);
 }
 
 }  // namespace tt_metal

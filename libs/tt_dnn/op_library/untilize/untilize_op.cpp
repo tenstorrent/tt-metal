@@ -185,7 +185,7 @@ Tensor untilize(const Tensor &input_tensor_a) {
         log_warning("Perf warning: Trying to untilize non-tilized data.");
         return input_tensor_a;
     }
-    return operation::run_without_autopad(Untilize(), input_tensor_a);
+    return operation::run_without_autoformat(Untilize(), input_tensor_a);
 }
 
 
@@ -432,7 +432,7 @@ Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const std::array<ui
             TT_ASSERT(false, "Cannot untilize and unpad input which is not tilized");
         }
     }
-    return operation::run_without_autopad(UntilizeWithUnpadding(output_tensor_start, output_tensor_end), input_tensor_a);
+    return operation::run_without_autoformat(UntilizeWithUnpadding(output_tensor_start, output_tensor_end), input_tensor_a);
 }
 
 }  // namespace tt_metal

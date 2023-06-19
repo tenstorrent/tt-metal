@@ -206,7 +206,7 @@ Tensor tilize(const Tensor &input_tensor_a) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return input_tensor_a;
     }
-    return operation::run_without_autopad(Tilize(), input_tensor_a);
+    return operation::run_without_autoformat(Tilize(), input_tensor_a);
 }
 
 Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
@@ -389,7 +389,7 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return input_tensor_a;
     }
-    return operation::run_without_autopad(TilizeWithZeroPadding(), input_tensor_a);
+    return operation::run_without_autoformat(TilizeWithZeroPadding(), input_tensor_a);
 }
 
 Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
@@ -632,7 +632,7 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<ui
     }else {
         TT_ASSERT((input_tensor_a.layout() == Layout::ROW_MAJOR), "Can only tilize row major data");
     }
-    return operation::run_without_autopad(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
+    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
 
 }
 
