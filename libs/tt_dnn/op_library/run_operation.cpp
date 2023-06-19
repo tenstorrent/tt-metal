@@ -92,6 +92,16 @@ void write_eltwise_unary_runtime_args(Device* device, Program& program, const Te
     tt_metal::WriteRuntimeArgsToDevice(device, program);
 }
 
+void validate(
+    const Operation& op,
+    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+) {
+    if (optional_input_tensors.empty()) {
+        return op.validate(input_tensors);
+    }
+    return op.validate(input_tensors, optional_input_tensors);
+}
 
 Program create_program(
     const Operation& op,
@@ -111,7 +121,7 @@ std::vector<Tensor> run_without_program_cache(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
-    op.validate(input_tensors);
+    validate(op, input_tensors, optional_input_tensors);
 
     auto device = detail::get_device(input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
@@ -131,7 +141,7 @@ std::vector<Tensor> run_with_program_cache(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
-    op.validate(input_tensors);
+    validate(op, input_tensors, optional_input_tensors);
 
     auto device = detail::get_device(input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);

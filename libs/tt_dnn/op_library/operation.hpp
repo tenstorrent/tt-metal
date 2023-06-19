@@ -19,6 +19,31 @@ public:
 };
 
 template<class T, class... Args>
+using has_validate_t = decltype(std::declval<T>().validate(std::declval<Args>()...));
+
+template<class T>
+constexpr bool implements_validate() {
+    return std::experimental::is_detected<
+        has_validate_t,
+        T,
+        const std::vector<std::reference_wrapper<const Tensor>>
+    >{};
+}
+
+template<class T, class... Args>
+using has_validate_with_optional_input_tensors_t = decltype(std::declval<T>().validate(std::declval<Args>()...));
+
+template<class T>
+constexpr bool implements_validate_with_optional_input_tensors() {
+    return std::experimental::is_detected<
+        has_validate_with_optional_input_tensors_t,
+        T,
+        const std::vector<std::reference_wrapper<const Tensor>>,
+        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>
+    >{};
+}
+
+template<class T, class... Args>
 using hashable_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
 
 template<class T>
@@ -61,6 +86,11 @@ class Operation {
 
         virtual void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
 
+        virtual void validate(
+            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+            const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+        ) const = 0;
+
         virtual std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
 
         virtual std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
@@ -93,7 +123,24 @@ class Operation {
         }
 
         void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
-            return this->object.validate(input_tensors);
+            if constexpr (implements_validate<T>()) {
+                return this->object.validate(input_tensors);
+            } else {
+                static_assert(implements_validate_with_optional_input_tensors<T>());
+                throw NotImplemented("this operation must take optional input tensors!");
+            }
+        }
+
+        void validate(
+            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+            const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+        ) const override {
+            if constexpr (implements_validate_with_optional_input_tensors<T>()) {
+                return this->object.validate(input_tensors, optional_input_tensors);
+            } else {
+                static_assert(implements_validate<T>());
+                throw NotImplemented("this operation does not take optional input tensors!");
+            }
         }
 
         std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
@@ -149,6 +196,13 @@ class Operation {
 
     void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
         return this->implementation_->validate(input_tensors);
+    }
+
+    void validate(
+        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+        const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+    ) const {
+        return this->implementation_->validate(input_tensors, optional_input_tensors);
     }
 
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
