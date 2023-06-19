@@ -28,6 +28,10 @@ struct p_gpr_unpack
     constexpr static uint TILE_OFFSET       = 15;   // Tile offset address used by untilize llk
     constexpr static uint PERF_FIRST_UNP_LO = 32;   // timestamp for first-unpack-instruction (low 32b)
     constexpr static uint PERF_FIRST_UNP_HI = 33;   // timestamp for first-unpack-instruction (high 32b)
+    constexpr static uint PERF_UNPACK_NUM_TILES_0 = 34;   // num tiles for input operands 0-1
+    constexpr static uint PERF_UNPACK_NUM_TILES_1 = 35;   // num tiles for input operands 2-3
+    constexpr static uint PERF_UNPACK_NUM_TILES_2 = 36;   // num tiles for input operands 4-5
+    constexpr static uint PERF_UNPACK_NUM_TILES_3 = 37;   // num tiles for input operands 6-7
 };
 
 // Math GPR thread
@@ -70,6 +74,7 @@ struct p_gpr_pack
     constexpr static uint BFP8_EXP_SEC_SIZE = 48;  // holds packer 0-3 exp section size for bfp8 format
     constexpr static uint BFP4_EXP_SEC_SIZE = 52;  // holds packer 0-3 exp section size for bfp4 format
     constexpr static uint BFP2_EXP_SEC_SIZE = 56;  // holds packer 0-3 exp section size for bfp2 format
+    constexpr static uint PERF_PACK_NUM_TILES = 60; // output operand num tiles
 };
 
 } // namespace ckernel
