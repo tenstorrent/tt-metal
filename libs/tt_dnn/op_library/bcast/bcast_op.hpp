@@ -45,9 +45,29 @@ struct EltwiseBinaryBroadcast {
 inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim) {
     if (bcast_dim == BcastOpDim::W) {
         TT_ASSERT(input_tensor_a.shape()[2] == input_tensor_b.shape()[2]);
+        if (input_tensor_b.layout() == Layout::TILE) {
+            TT_ASSERT(input_tensor_b.shape()[3] == TILE_WIDTH);
+        } else if (input_tensor_b.layout() == Layout::ROW_MAJOR || input_tensor_b.layout() == Layout::CHANNELS_LAST) {
+            TT_ASSERT(input_tensor_b.shape()[3] == 1 || input_tensor_b.shape()[3] == TILE_WIDTH);
+        } else {
+            TT_ASSERT(false, "Unsupported layout");
+        }
     }
     else if (bcast_dim == BcastOpDim::H) {
         TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[3]);
+        if (input_tensor_b.layout() == Layout::TILE) {
+            TT_ASSERT(input_tensor_b.shape()[2] == TILE_HEIGHT);
+        } else if (input_tensor_b.layout() == Layout::ROW_MAJOR || input_tensor_b.layout() == Layout::CHANNELS_LAST) {
+            TT_ASSERT(input_tensor_b.shape()[2] == 1 || input_tensor_b.shape()[2] == TILE_HEIGHT);
+        } else {
+            TT_ASSERT(false, "Unsupported layout");
+        }
+    } else if (bcast_dim == BcastOpDim::HW) {
+        if (input_tensor_b.layout() == Layout::TILE) {
+            TT_ASSERT(input_tensor_b.shape()[2] == TILE_HEIGHT && input_tensor_b.shape()[3] == TILE_WIDTH);
+        } else if (input_tensor_b.layout() == Layout::ROW_MAJOR || input_tensor_b.layout() == Layout::CHANNELS_LAST) {
+            TT_ASSERT((input_tensor_b.shape()[2] == 1 && input_tensor_b.shape()[3] == 1) || (input_tensor_b.shape()[2] == TILE_HEIGHT && input_tensor_b.shape()[3] == TILE_WIDTH));
+        }
     }
     return operation::run_with_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim}, input_tensor_a, input_tensor_b);
 }
