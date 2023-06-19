@@ -15,7 +15,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-namespace unit_tests::single_core_dram {
+namespace unit_tests::dram::direct {
 /// @brief Does Dram --> Reader --> L1 on a single core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
@@ -42,7 +42,7 @@ bool reader_only(
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/dram_to_l1_copy.cpp",
+        "tt_metal/kernels/dataflow/unit_tests/dram/direct_reader_dram_to_l1.cpp",
         reader_core,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -69,7 +69,7 @@ bool reader_only(
     pass &= tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> dest_core_data;
-    tt_metal::ReadFromDeviceL1(device, reader_core, l1_byte_address, byte_size, dest_core_data);
+    tt_metal::ReadFromBuffer(l1_buffer, dest_core_data);
     pass &= (dest_core_data == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << reader_core.str() << std::endl;
@@ -103,7 +103,7 @@ bool writer_only(
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/l1_to_dram_copy.cpp",
+        "tt_metal/kernels/dataflow/unit_tests/dram/direct_writer_l1_to_dram.cpp",
         writer_core,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
@@ -113,7 +113,7 @@ bool writer_only(
     ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::CompileProgram(device, program);
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    tt_metal::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
+    tt_metal::WriteToBuffer(l1_buffer, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::WriteRuntimeArgsToDevice(
@@ -138,6 +138,112 @@ bool writer_only(
     return pass;
 }
 
+struct ReaderWriterConfig {
+    size_t num_tiles = 0;
+    size_t tile_byte_size = 0;
+    size_t output_dram_channel = 0;
+    size_t output_dram_byte_address = 0;
+    size_t input_dram_channel = 0;
+    size_t input_dram_byte_address = 0;
+    size_t l1_byte_address = 0;
+    tt::DataFormat l1_data_format = tt::DataFormat::Invalid;
+    CoreCoord core = {};
+};
+/// @brief Does Dram --> Reader --> CB --> Writer --> Dram on a single core
+/// @param device
+/// @param test_config - Configuration of the test -- see struct
+/// @return
+bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_config) {
+    bool pass = true;
+
+    const uint32_t cb_index = 0;
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Application Setup
+    ////////////////////////////////////////////////////////////////////////////
+    const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
+    tt_metal::Program program = tt_metal::Program();
+    auto input_dram_buffer = tt_metal::Buffer(
+        device,
+        byte_size,
+        test_config.input_dram_byte_address,
+        test_config.input_dram_channel,
+        byte_size,
+        tt_metal::BufferType::DRAM);
+    auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
+    auto output_dram_buffer = tt_metal::Buffer(
+        device,
+        byte_size,
+        test_config.output_dram_byte_address,
+        test_config.output_dram_channel,
+        byte_size,
+        tt_metal::BufferType::DRAM);
+    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
+
+    auto l1_cb = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        cb_index,
+        test_config.core,
+        test_config.num_tiles,
+        byte_size,
+        test_config.l1_byte_address,
+        test_config.l1_data_format);
+
+    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+        test_config.core,
+        {cb_index},
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_1_default);
+
+    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+        test_config.core,
+        {cb_index},
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_0_default);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Stimulus Generation
+    ////////////////////////////////////////////////////////////////////////////
+    std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Compile and Execute Application
+    ////////////////////////////////////////////////////////////////////////////
+    pass &= tt_metal::CompileProgram(device, program);
+    tt_metal::WriteToBuffer(input_dram_buffer, inputs);
+
+    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+    pass &= tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        reader_kernel,
+        test_config.core,
+        {
+            (uint32_t)test_config.input_dram_byte_address,
+            (uint32_t)input_dram_noc_xy.x,
+            (uint32_t)input_dram_noc_xy.y,
+            (uint32_t)test_config.num_tiles,
+        });
+    pass &= tt_metal::WriteRuntimeArgsToDevice(
+        device,
+        writer_kernel,
+        test_config.core,
+        {
+            (uint32_t)test_config.output_dram_byte_address,
+            (uint32_t)output_dram_noc_xy.x,
+            (uint32_t)output_dram_noc_xy.y,
+            (uint32_t)test_config.num_tiles,
+        });
+    pass &= tt_metal::LaunchKernels(device, program);
+
+    std::vector<uint32_t> dest_buffer_data;
+    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    pass &= inputs == dest_buffer_data;
+    return pass;
+}
 struct ReaderDatacopyWriterConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
@@ -157,6 +263,9 @@ struct ReaderDatacopyWriterConfig {
 /// @return
 bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriterConfig& test_config) {
     bool pass = true;
+
+    const uint32_t input0_cb_index = 0;
+    const uint32_t output_cb_index = 16;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -182,7 +291,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     auto l1_input_cb = tt_metal::CreateCircularBuffer(
         program,
         device,
-        0,
+        input0_cb_index,
         test_config.core,
         test_config.num_tiles,
         byte_size,
@@ -191,7 +300,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     auto l1_output_cb = tt_metal::CreateCircularBuffer(
         program,
         device,
-        16,
+        output_cb_index,
         test_config.core,
         test_config.num_tiles,
         byte_size,
@@ -200,15 +309,17 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary.cpp",
+        "tt_metal/kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         test_config.core,
+        {input0_cb_index},
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         test_config.core,
+        {output_cb_index},
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -265,25 +376,43 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     pass &= inputs == dest_buffer_data;
     return pass;
 }
-}  // namespace unit_tests::single_core_dram
+}  // namespace unit_tests::dram::direct
 
-TEST_SUITE("SingleCoreDram") {
+TEST_SUITE("SingleCoreDirectDram") {
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "ReaderOnly") {
-        REQUIRE(unit_tests::single_core_dram::reader_only(device_, 1 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
-        REQUIRE(unit_tests::single_core_dram::reader_only(device_, 2 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
-        REQUIRE(unit_tests::single_core_dram::reader_only(device_, 16 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::reader_only(device_, 1 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::reader_only(device_, 2 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::reader_only(device_, 16 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
     }
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "WriterOnly") {
-        REQUIRE(unit_tests::single_core_dram::writer_only(device_, 1 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
-        REQUIRE(unit_tests::single_core_dram::writer_only(device_, 2 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
-        REQUIRE(unit_tests::single_core_dram::writer_only(device_, 16 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::writer_only(device_, 1 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::writer_only(device_, 2 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::writer_only(device_, 16 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
     }
-
-    // FIXME: We should add two test variants --
-    //    1. Single Core Dram Mechanic -- Reader -> CB --> Writer
-    //    2. Single Core Compute Datacopy -- WriteToDeviceL1 --> Datacopy (Unpack/Math/Pack) --> ReadFromDeviceL1
+    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "ReaderWriter") {
+        unit_tests::dram::direct::ReaderWriterConfig test_config = {
+            .num_tiles = 1,
+            .tile_byte_size = 2 * 32 * 32,
+            .output_dram_channel = 0,
+            .output_dram_byte_address = 0,
+            .input_dram_channel = 0,
+            .input_dram_byte_address = 16 * 32 * 32,
+            .l1_byte_address = UNRESERVED_BASE,
+            .l1_data_format = tt::DataFormat::Float16_b,
+            .core = {.x = 0, .y = 0}};
+        SUBCASE("SingleTile") {
+            test_config.num_tiles = 1;
+            REQUIRE(unit_tests::dram::direct::reader_writer(device_, test_config));
+        }
+        SUBCASE("MultiTile") {
+            test_config.num_tiles = 4;
+            REQUIRE(unit_tests::dram::direct::reader_writer(device_, test_config));
+            test_config.num_tiles = 8;
+            REQUIRE(unit_tests::dram::direct::reader_writer(device_, test_config));
+        }
+    }
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "ReaderDatacopyWriter") {
-        unit_tests::single_core_dram::ReaderDatacopyWriterConfig test_config = {
+        unit_tests::dram::direct::ReaderDatacopyWriterConfig test_config = {
             .num_tiles = 1,
             .tile_byte_size = 2 * 32 * 32,
             .output_dram_channel = 0,
@@ -297,13 +426,13 @@ TEST_SUITE("SingleCoreDram") {
             .core = {.x = 0, .y = 0}};
         SUBCASE("SingleTile") {
             test_config.num_tiles = 1;
-            REQUIRE(reader_datacopy_writer(device_, test_config));
+            REQUIRE(unit_tests::dram::direct::reader_datacopy_writer(device_, test_config));
         }
         SUBCASE("MultiTile") {
             test_config.num_tiles = 4;
-            REQUIRE(reader_datacopy_writer(device_, test_config));
+            REQUIRE(unit_tests::dram::direct::reader_datacopy_writer(device_, test_config));
             test_config.num_tiles = 8;
-            REQUIRE(reader_datacopy_writer(device_, test_config));
+            REQUIRE(unit_tests::dram::direct::reader_datacopy_writer(device_, test_config));
         }
     }
 }

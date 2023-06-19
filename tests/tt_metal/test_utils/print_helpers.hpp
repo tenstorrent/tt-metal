@@ -14,5 +14,19 @@ void print_vec(const std::vector<T>& vec) {
     }
     std::cout << std::endl;
 }
+/// @brief generic vector printer with fixed numel per row
+/// @tparam T
+/// @param const std::vector<T>& vec
+template <typename T>
+void print_vec_fixed_numel_per_row(const std::vector<T>& vec, const size_t numel) {
+    int idx = 0;
+    for (int i = 0; i < vec.size(); i++) {
+        if ((i%numel) == 0) {
+            std::cout << std::endl;
+        }
+        std::cout << vec.at(i) << ", ";
+    }
+    std::cout << std::endl;
+}
 }  // namespace test_utils
 }  // namespace tt

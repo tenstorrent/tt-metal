@@ -29,6 +29,7 @@ struct AllocatorConfig {
     //! DRAM specific configuration
     size_t num_dram_channels = 0;
     size_t dram_bank_size = 0;
+    std::vector<size_t> dram_bank_offsets = {};
     //! worker specific configuration
     CoreCoord worker_grid_size = {};
     size_t worker_l1_size = 0;
@@ -57,7 +58,7 @@ using BankIdToRelativeAddress = std::unordered_map<u32, AddressDescriptor>;
 struct BankDescriptor {
     u32 offset_bytes = 0;
     u32 size_bytes = 0;
-    // This is to store offsets for any banks that share a core (storage core), so we can view all banks similarly on storage cores
+    // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all banks using only bank_id
     // set to 0 for cores with only 1 bank
     i32 bank_offset_bytes = 0;
 };

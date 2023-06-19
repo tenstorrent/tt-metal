@@ -37,7 +37,7 @@ class BankManager {
     u32 size(u32 bank_id) const;
 
     u32 offset(u32 bank_id) const;
-    i32 l1_bank_offset(u32 bank_id) const;
+    i32 bank_offset(u32 bank_id) const;
 
     BankIdToRelativeAddress allocate_buffer(
         u32 starting_bank_id, u32 size, u32 page_size, bool bottom_up,
@@ -65,7 +65,7 @@ class BankManager {
 
     bool initialized_;
     std::unordered_map<u32, u32> bank_id_to_offset_;
-    std::unordered_map<u32, u32> bank_id_to_l1_bank_offset_;
+    std::unordered_map<u32, u32> bank_id_to_bank_offset_;
     std::unordered_map<u32, std::unique_ptr<Algorithm>> bank_id_to_allocator_;
 
     void validate_bank_id(u32 bank_id) const;
@@ -97,6 +97,8 @@ u32 dram_channel_from_bank_id(const Allocator &allocator, u32 bank_id);
 CoreCoord logical_core_from_bank_id(const Allocator &allocator, u32 bank_id);
 
 i32 l1_bank_offset_from_bank_id(const Allocator &allocator, u32 bank_id);
+
+i32 dram_bank_offset_from_bank_id(const Allocator &allocator, u32 bank_id);
 
 std::vector<u32> bank_ids_from_dram_channel(const Allocator &allocator, u32 dram_channel);
 

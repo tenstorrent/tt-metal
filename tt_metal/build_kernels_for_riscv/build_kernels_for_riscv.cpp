@@ -903,6 +903,7 @@ void generate_math_approx_mode_descriptor(build_kernel_for_riscv_options_t* buil
 
 std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<CoreCoord>& dram_bank_map,
+    std::vector<i32>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<i32>& l1_bank_offset_map
 ) {
@@ -928,15 +929,17 @@ std::string generate_bank_to_noc_coord_descriptor_string(
         ss << "#define IS_NOT_POW2_NUM_L1_BANKS 1" << endl;
     }
     ss << endl;
-    ss << "// This is to store offsets for any banks that share a core (storage core), so we can view all banks similarly on storage cores" << endl;
+    ss << "// This is to store offsets for any banks that share a noc node (dram on wh) or core (storage core), so we can view all banks similarly using banks" << endl;
     ss << "// for cores with only 1 bank, this is set to 0 and ignored" << endl;
     ss << "int32_t bank_to_l1_offset[NUM_L1_BANKS];" << endl;
+    ss << "int32_t bank_to_dram_offset[NUM_DRAM_BANKS];" << endl;
     ss << endl;
     ss << "//! Assumes consumer of the bank coords are always sequential" << endl;
     ss << "inline void init_dram_bank_coords(uint8_t dram_bank_to_noc_x[], uint8_t dram_bank_to_noc_y[]) {" << endl;
     for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
         ss << "    dram_bank_to_noc_x[" << bank_id << "] = " << dram_bank_map[bank_id].x << ";" << endl;
         ss << "    dram_bank_to_noc_y[" << bank_id << "] = " << dram_bank_map[bank_id].y << ";" << endl;
+        ss << "    bank_to_dram_offset[" << bank_id << "] = " << dram_bank_offset_map[bank_id]<< ";" << endl;
     }
     ss << "}" << endl;
     ss << "//! Assumes consumer of the bank coords are always sequential" << endl;
@@ -953,10 +956,11 @@ void generate_bank_to_noc_coord_descriptor(
     build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
     string out_dir_path,
     std::vector<CoreCoord>& dram_bank_map,
+    std::vector<i32>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<i32>& l1_bank_offset_map
 ) {
-    string output_string = generate_bank_to_noc_coord_descriptor_string(dram_bank_map, l1_bank_map, l1_bank_offset_map);
+    string output_string = generate_bank_to_noc_coord_descriptor_string(dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map);
 
     string full_path = get_kernel_compile_outpath() + out_dir_path;
     fs::create_directories(full_path + "/brisc");
@@ -1065,6 +1069,7 @@ void generate_default_bank_to_noc_coord_descriptor(
     tt::ARCH arch
 ) {
     std::vector<CoreCoord> dram_bank_map;
+    std::vector<int32_t> dram_bank_offset_map;
     std::vector<CoreCoord> l1_bank_map;
     std::vector<int32_t> l1_bank_offset_map;
     unsigned int bank_id = 0;
@@ -1080,6 +1085,7 @@ void generate_default_bank_to_noc_coord_descriptor(
                 {.x = 10, .y = 0},
                 {.x = 10, .y = 6},
             });
+            dram_bank_offset_map = std::vector<int32_t>(8, 0);
             l1_bank_map = std::vector<CoreCoord> (128, {.x=0, .y=0});
             for (unsigned int r = 0; r < 10; r++) {
                 for (unsigned int c = 0; c < 12; c++) {
@@ -1104,6 +1110,20 @@ void generate_default_bank_to_noc_coord_descriptor(
                 {.x = 5, .y = 5},
                 {.x = 5, .y = 7},
             });
+            dram_bank_offset_map = std::vector<int32_t>({
+                0,
+                1 * 1024 *1024,
+                0,
+                1 * 1024 *1024,
+                0,
+                1 * 1024 *1024,
+                0,
+                1 * 1024 *1024,
+                0,
+                1 * 1024 *1024,
+                0,
+                1 * 1024 *1024,
+            });
             l1_bank_map = std::vector<CoreCoord> (128, {.x=0, .y=0});
             for (unsigned int r = 0; r < 10; r++) {
                 for (unsigned int c = 0; c < 8; c++) {
@@ -1117,7 +1137,7 @@ void generate_default_bank_to_noc_coord_descriptor(
             log_fatal("Unsupported arch in generate_default_bank_to_noc_coord_descriptor");
             break;
     }
-    string output_string = generate_bank_to_noc_coord_descriptor_string(dram_bank_map, l1_bank_map, l1_bank_offset_map);
+    string output_string = generate_bank_to_noc_coord_descriptor_string(dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map);
     string full_path = get_kernel_compile_outpath() + out_dir_path;
     fs::create_directories(full_path + "/brisc");
     ofstream file_stream_br(full_path + "/brisc/generated_bank_to_noc_coord_mapping.h");

@@ -62,6 +62,8 @@ class Device {
 
     i32 l1_bank_offset_from_bank_id(uint32_t bank_id) const;
 
+    i32 dram_bank_offset_from_bank_id(uint32_t bank_id) const;
+
     CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
     std::vector<uint32_t> bank_ids_from_dram_channel(uint32_t dram_channel) const;

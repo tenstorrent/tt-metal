@@ -13,7 +13,7 @@ BankManager::BankManager(const std::vector<BankDescriptor> &bank_descriptors) : 
     unsigned int bank_id = 0;
     for (const auto bank_descriptor : bank_descriptors) {
         this->bank_id_to_offset_.insert({bank_id, bank_descriptor.offset_bytes});
-        this->bank_id_to_l1_bank_offset_.insert({bank_id, bank_descriptor.bank_offset_bytes});
+        this->bank_id_to_bank_offset_.insert({bank_id, bank_descriptor.bank_offset_bytes});
         auto allocator = std::make_unique<FreeList>(
             bank_descriptor.size_bytes,
             this->min_allocation_size_bytes_,
@@ -27,7 +27,7 @@ BankManager::BankManager(const std::vector<BankDescriptor> &bank_descriptors) : 
 BankManager::BankManager(const std::unordered_map<u32, BankDescriptor> &bank_id_to_descriptor) : initialized_(true) {
     for (const auto &[bank_id, bank_descriptor] : bank_id_to_descriptor) {
         this->bank_id_to_offset_.insert({bank_id, bank_descriptor.offset_bytes});
-        this->bank_id_to_l1_bank_offset_.insert({bank_id, bank_descriptor.bank_offset_bytes});
+        this->bank_id_to_bank_offset_.insert({bank_id, bank_descriptor.bank_offset_bytes});
         auto allocator = std::make_unique<FreeList>(
             bank_descriptor.size_bytes,
             this->min_allocation_size_bytes_,
@@ -52,14 +52,14 @@ u32 BankManager::offset(u32 bank_id) const {
     this->validate_bank_id(bank_id);
     return this->bank_id_to_offset_.at(bank_id);
 }
-i32 BankManager::l1_bank_offset(u32 bank_id) const {
+i32 BankManager::bank_offset(u32 bank_id) const {
     this->validate_bank_id(bank_id);
-    return this->bank_id_to_l1_bank_offset_.at(bank_id);
+    return this->bank_id_to_bank_offset_.at(bank_id);
 }
 
 void BankManager::validate_bank_id(u32 bank_id) const {
     TT_ASSERT(this->bank_id_to_offset_.find(bank_id) != this->bank_id_to_offset_.end());
-    TT_ASSERT(this->bank_id_to_l1_bank_offset_.find(bank_id) != this->bank_id_to_l1_bank_offset_.end());
+    TT_ASSERT(this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end());
     TT_ASSERT(this->bank_id_to_allocator_.find(bank_id) != this->bank_id_to_allocator_.end());
 }
 
@@ -264,13 +264,14 @@ void populate_candidate_address_ranges(
 
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config) {
     u32 bank_offset = 0;
-    std::vector<BankDescriptor> bank_descriptors (
-        alloc_config.num_dram_channels,
-        {
+    std::vector<BankDescriptor> bank_descriptors (alloc_config.num_dram_channels);
+    for (u32 channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
+        bank_descriptors.at(channel_id) = {
             .offset_bytes = bank_offset,
             .size_bytes = static_cast<u32>(alloc_config.dram_bank_size),
-            .bank_offset_bytes = 0,
-        });
+            .bank_offset_bytes = static_cast<i32>(alloc_config.dram_bank_offsets.at(channel_id)),
+        };
+    }
     allocator.dram_manager = BankManager(bank_descriptors);
     for (u32 bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
@@ -325,7 +326,11 @@ CoreCoord logical_core_from_bank_id(const Allocator &allocator, u32 bank_id) {
 }
 
 i32 l1_bank_offset_from_bank_id(const Allocator &allocator, u32 bank_id) {
-    return allocator.l1_manager.l1_bank_offset(bank_id);
+    return allocator.l1_manager.bank_offset(bank_id);
+}
+
+i32 dram_bank_offset_from_bank_id(const Allocator &allocator, u32 bank_id) {
+    return allocator.dram_manager.bank_offset(bank_id);
 }
 
 std::vector<u32> bank_ids_from_dram_channel(const Allocator &allocator, u32 dram_channel) {

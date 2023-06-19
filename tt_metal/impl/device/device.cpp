@@ -34,6 +34,7 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator, const
     AllocatorConfig config({
         .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
         .dram_bank_size = soc_desc.dram_bank_size,
+        .dram_bank_offsets = {},
         .worker_grid_size = this->post_harvested_worker_grid_size_,
         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
         .storage_core_l1_bank_size = static_cast<size_t>(soc_desc.storage_core_l1_bank_size),
@@ -41,6 +42,10 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator, const
         .logical_to_routing_coord_lookup_table=this->logical_to_routing_coord_lookup_table_,
         .l1_bank_remap = l1_bank_remap,
     });
+    // Initialize dram_offsets from soc_descriptor
+    for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
+        config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
+    }
     // Initialize core_type_from_noc_coord_table table
     for (const auto& core: soc_desc.cores) {
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
@@ -253,6 +258,11 @@ CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
 int32_t Device::l1_bank_offset_from_bank_id(uint32_t bank_id) const {
     this->check_allocator_is_initialized();
     return allocator::l1_bank_offset_from_bank_id(*this->allocator_, bank_id);
+}
+
+int32_t Device::dram_bank_offset_from_bank_id(uint32_t bank_id) const {
+    this->check_allocator_is_initialized();
+    return allocator::dram_bank_offset_from_bank_id(*this->allocator_, bank_id);
 }
 
 CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {
