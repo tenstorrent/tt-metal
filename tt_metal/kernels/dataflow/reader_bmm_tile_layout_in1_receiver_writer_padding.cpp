@@ -55,6 +55,20 @@ void kernel_main() {
     constexpr uint32_t MtNt                               = get_compile_time_arg_val(16); // if 0
     // Don't need batch; same as batch from READER args
 
+    #ifdef FUSE_BIAS
+        // in3 mcast args
+        uint32_t in3_mcast_sender_noc_x             = get_arg_val<uint32_t>(10);
+
+        // in3 block args
+        constexpr uint32_t in3_block_w                        = get_compile_time_arg_val(17);
+
+        // in3 mcast args
+        constexpr uint32_t in3_mcast_sender_noc_y             = get_compile_time_arg_val(18);
+        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(19);
+        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(20);
+        constexpr uint32_t cb_id_in3 = 3;
+        volatile uint32_t* in3_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in3_mcast_receiver_semaphore_addr);
+    #endif
 
     // WRITER
     // const args for tile-based bank-swizzled layout
@@ -109,6 +123,23 @@ void kernel_main() {
 
             cb_push_back(cb_id_in1, in1_block_num_tiles);
         }
+
+        #ifdef FUSE_BIAS
+            // Operand 2
+            cb_reserve_back(cb_id_in3, in3_block_w);
+
+            // Set in1 semaphore value to INVALID
+            noc_semaphore_set(in3_mcast_receiver_semaphore_addr_ptr, INVALID);
+
+            // Atomic increment source core counter
+            uint64_t in3_mcast_sender_semaphore_noc_addr = get_noc_addr(in3_mcast_sender_noc_x, in3_mcast_sender_noc_y, in3_mcast_sender_semaphore_addr);
+            noc_semaphore_inc(in3_mcast_sender_semaphore_noc_addr, 1);
+
+            // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
+            noc_semaphore_wait(in3_mcast_receiver_semaphore_addr_ptr, VALID);
+
+            cb_push_back(cb_id_in3, in3_block_w);
+        #endif
 
         // WRITER
         uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;

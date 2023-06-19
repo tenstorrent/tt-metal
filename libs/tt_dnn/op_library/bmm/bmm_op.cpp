@@ -1,3 +1,4 @@
+#include <optional>
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -398,9 +399,17 @@ Program BatchedMatmul::create_program(const std::vector<std::reference_wrapper<c
 /*
  * BERT LARGE MATMUL AND BMM
  */
-void BertLargeMatmul::validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
+void BertLargeMatmul::validate(
+    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+) const {
+
+    TT_ASSERT(input_tensors.size() == 2);
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
+
+    TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Unsupported input layout");
+    TT_ASSERT(input_tensor_b.layout() == Layout::TILE, "Unsupported input layout");
 
     switch (this->bert_large_matmul_op_type) {
         case BertLargeMatmulOpType::FUSED_QKV:
@@ -430,6 +439,21 @@ void BertLargeMatmul::validate(const std::vector<std::reference_wrapper<const Te
             break;
         default:
             TT_ASSERT(false, "Unknown bert large matmul op in validate!");
+    }
+    TT_ASSERT(optional_input_tensors.size() == 1);
+    const auto& optional_bias = optional_input_tensors.at(0);
+    if (
+        this->bert_large_matmul_op_type == BertLargeMatmulOpType::PRE_SOFTMAX_BMM ||
+        this->bert_large_matmul_op_type == BertLargeMatmulOpType::POST_SOFTMAX_BMM
+    ) {
+        TT_ASSERT(!optional_bias.has_value(), "Specified matmul does not take bias");
+    }
+    else {
+        if (optional_bias.has_value()) {
+            const auto& bias = optional_bias.value().get();
+            TT_ASSERT(bias.layout() == Layout::TILE, "Unsupported input layout");
+            TT_ASSERT(bias.shape() == Shape({1, 1, TILE_HEIGHT, input_tensor_b.shape()[3]}), "Unsupported bias shape");
+        }
     }
 }
 
@@ -465,9 +489,14 @@ std::vector<Tensor> BertLargeMatmul::create_output_tensors(const std::vector<std
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
-Program BertLargeMatmul::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+Program BertLargeMatmul::create_program(
+    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
+    std::vector<Tensor> &output_tensors
+) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
+    const auto bias = optional_input_tensors.empty() ? std::nullopt : optional_input_tensors.at(0);
     auto ashape = input_tensor_a.shape();
     const auto& bshape = input_tensor_b.shape();
     auto& output_tensor = output_tensors.at(0);
@@ -488,7 +517,7 @@ Program BertLargeMatmul::create_program(const std::vector<std::reference_wrapper
             out_subblock_w = 2;
             per_core_M = 12;
             per_core_N = 8;
-            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
             break;
         case BertLargeMatmulOpType::FF1:
             compute_and_storage_grid_size = {12, 9};
@@ -498,7 +527,7 @@ Program BertLargeMatmul::create_program(const std::vector<std::reference_wrapper
             out_subblock_w = 1;
             per_core_M = 12;
             per_core_N = 11;
-            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, this->fuse_gelu_activation);
             break;
         case BertLargeMatmulOpType::FF2:
             compute_and_storage_grid_size = {11, 9};
@@ -508,7 +537,7 @@ Program BertLargeMatmul::create_program(const std::vector<std::reference_wrapper
             out_subblock_w = 1;
             per_core_M = 12;
             per_core_N = 3;
-            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
             break;
         case BertLargeMatmulOpType::SELFOUT:
             compute_and_storage_grid_size = {11, 9};
@@ -518,7 +547,7 @@ Program BertLargeMatmul::create_program(const std::vector<std::reference_wrapper
             out_subblock_w = 1;
             per_core_M = 12;
             per_core_N = 3;
-            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
             break;
         case BertLargeMatmulOpType::PRE_SOFTMAX_BMM:
             compute_and_storage_grid_size = {12, 9};

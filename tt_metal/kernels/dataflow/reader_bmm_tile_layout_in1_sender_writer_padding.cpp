@@ -70,6 +70,28 @@ void kernel_main() {
     constexpr uint32_t MtNt                               = get_compile_time_arg_val(26); // if 0
     // Don't need batch; same as batch from READER args
 
+    #ifdef FUSE_BIAS
+        // in3 mcast args
+        uint32_t in3_tensor_addr                    = get_arg_val<uint32_t>(14);
+        uint32_t in3_tensor_start_tile_id           = get_arg_val<uint32_t>(15);
+        uint32_t in3_mcast_dest_noc_start_x         = get_arg_val<uint32_t>(16);
+        uint32_t in3_mcast_dest_noc_end_x           = get_arg_val<uint32_t>(17);
+        // in3 mcast args
+        constexpr uint32_t in3_is_dram                        = get_compile_time_arg_val(27);
+        constexpr uint32_t in3_tensor_stride_w                = get_compile_time_arg_val(28);
+        constexpr uint32_t in3_mcast_dest_noc_start_y         = get_compile_time_arg_val(29);
+        constexpr uint32_t in3_mcast_dest_noc_end_y           = get_compile_time_arg_val(30);
+        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(31);
+        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(32);
+        constexpr uint32_t in3_mcast_num_dests                = get_compile_time_arg_val(33);
+
+        constexpr uint32_t cb_id_in3 = 3;
+
+        constexpr bool in3_is_dram_bool = in3_is_dram == 1;
+        uint32_t l1_write_addr_in3;
+        volatile uint32_t* in3_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in3_mcast_receiver_semaphore_addr);
+        volatile uint32_t* in3_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in3_mcast_sender_semaphore_addr);
+    #endif
 
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different
@@ -106,6 +128,13 @@ void kernel_main() {
         .page_size = single_tile_size_bytes,
         .data_format = DataFormat::Float16
     };
+    #ifdef FUSE_BIAS
+        const InterleavedAddrGenFast<in3_is_dram_bool> s3 = {
+            .bank_base_address = in3_tensor_addr,
+            .page_size = single_tile_size_bytes,
+            .data_format = DataFormat::Float16
+        };
+    #endif
     // WRITER
     const InterleavedAddrGenFast<out_is_dram_bool> s = {
         .bank_base_address = out_tensor_addr,
@@ -118,6 +147,13 @@ void kernel_main() {
         .page_size = single_tile_size_bytes,
         .data_format = DataFormat::Bfp8_b
     };
+    #ifdef FUSE_BIAS
+        const InterleavedAddrGenFast<in3_is_dram_bool> s3 = {
+            .bank_base_address = in3_tensor_addr,
+            .page_size = single_tile_size_bytes,
+            .data_format = DataFormat::Bfp8_b
+        };
+    #endif
     // WRITER
     const InterleavedAddrGenFast<out_is_dram_bool> s = {
         .bank_base_address = out_tensor_addr,
@@ -189,6 +225,62 @@ void kernel_main() {
 
             cb_push_back(cb_id_in1, in1_block_num_tiles);
         }
+        #ifdef FUSE_BIAS
+            *(in3_mcast_receiver_semaphore_addr_ptr) = VALID;
+            // Operand 1
+            cb_reserve_back(cb_id_in3, in1_block_w);
+            l1_write_addr_in3 = get_write_ptr(cb_id_in3);
+
+            uint32_t in3_start_address = l1_write_addr_in3; // copy start address of block, to be used for mcasting
+            uint32_t in3_block_size_bytes = 0; // can be optimized later, pass it to kernel
+
+            // Copy in1 block into CB, as the default kernel
+            uint32_t in3_tensor_tile_id = in3_tensor_start_tile_id;
+            for(uint32_t w = 0; w < in1_block_w; w++) {
+                if (w < last_block_w) {
+                    //uint64_t in1_tile_noc_address = get_noc_addr(in1_tensor_tile_id, s1);
+                    //noc_async_read(in1_tile_noc_address, l1_write_addr_in1, single_tile_size_bytes);
+                    noc_async_read_tile(in3_tensor_tile_id, s3, l1_write_addr_in3);
+                }
+                else
+                    noc_async_read(l1_zeros_addr_in2, l1_write_addr_in3, single_tile_size_bytes);
+                l1_write_addr_in3 += single_tile_size_bytes;
+                in3_tensor_tile_id += in3_tensor_stride_w;
+                in3_block_size_bytes += single_tile_size_bytes;
+            }
+            // Barrier! make sure the reads are done
+            noc_async_read_barrier();
+
+            // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
+            // the semaphore_addr value back to zero for the next block
+            noc_semaphore_wait(in3_mcast_sender_semaphore_addr_ptr, in3_mcast_num_dests);
+            noc_semaphore_set(in3_mcast_sender_semaphore_addr_ptr, 0);
+
+            // Now we have the block in the CB address, we can mcast to dests!
+            uint64_t in3_multicast_data_addr = get_noc_multicast_addr(
+            in3_mcast_dest_noc_start_x,
+            in3_mcast_dest_noc_start_y,
+            in3_mcast_dest_noc_end_x,
+            in3_mcast_dest_noc_end_y,
+            in3_start_address);
+            // num_dests must not include source, since we are NOT really doing a local copy!
+            noc_async_write_multicast(in3_start_address, in3_multicast_data_addr, in3_block_size_bytes, in3_mcast_num_dests);
+
+            // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+            // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+
+            // We should also multicast the flag to destinations
+            uint64_t in3_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
+            in3_mcast_dest_noc_start_x,
+            in3_mcast_dest_noc_start_y,
+            in3_mcast_dest_noc_end_x,
+            in3_mcast_dest_noc_end_y,
+            in3_mcast_receiver_semaphore_addr);
+            // num_dests must not include source, since we are NOT really doing a local copy!
+            noc_semaphore_set_multicast(in3_mcast_receiver_semaphore_addr, in3_mcast_receiver_semaphore_noc_addr, in3_mcast_num_dests);
+
+            cb_push_back(cb_id_in3, in1_block_w);
+        #endif
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;
         }

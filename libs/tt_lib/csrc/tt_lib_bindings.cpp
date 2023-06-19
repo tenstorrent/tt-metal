@@ -1734,19 +1734,19 @@ void TensorModule(py::module &m_tensor) {
 
     // Custom BERT matmuls/bmms
     m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_fused_qkv non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_ff1_matmul", &bert_large_ff1_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("fuse_gelu_activation") = false, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_ff1 non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_ff2_matmul", &bert_large_ff2_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_ff2 non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_selfout_matmul", &bert_large_selfout_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_selfout non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_pre_softmax_bmm", &bert_large_pre_softmax_bmm,
