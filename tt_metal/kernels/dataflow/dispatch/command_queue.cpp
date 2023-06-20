@@ -8,7 +8,7 @@ void kernel_main() {
     // Read command from host command queue... l1 read addr since
     // pulling in the actual command into l1
     static constexpr u32 command_start_addr = UNRESERVED_BASE; // Space between UNRESERVED_BASE -> data_start is for commands
-    static constexpr u32 data_start_addr = 150 * 1024;  // Hard-coded for now
+    static constexpr u32 data_start_addr = DEVICE_COMMAND_DATA_ADDR;  // Hard-coded for now
 
     // These are totally temporary until PK checks in his changes for
     // separating kernels from firmware
@@ -21,6 +21,7 @@ void kernel_main() {
 
     // For time being, while true is here until Paul's changes,
     // in which while true loop will be in the firmware
+
     while (true) {
         volatile u32* command_ptr = reinterpret_cast<volatile u32*>(command_start_addr);
         cq_wait_front();
