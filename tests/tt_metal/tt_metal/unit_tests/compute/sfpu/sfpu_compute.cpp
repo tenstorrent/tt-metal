@@ -550,14 +550,6 @@ TEST_SUITE("SfpuCompute" * doctest::description("Eltwise unary SFPU tests") * do
             }
 
             SUBCASE("MultiTile") {
-                // TODO(agrebenisan): Figure out cause of stack smashing
-
-                // WARN([]() {
-                //     log_assert(false, "SFPU on two contiguous cores results in stack smashing");
-                //     return false;
-                // });
-                // return;
-
                 test_config.num_tiles = 4;
 
                 SUBCASE("relu") {
@@ -595,9 +587,6 @@ TEST_SUITE("SfpuCompute" * doctest::description("Eltwise unary SFPU tests") * do
             }
         }
         SUBCASE("Eltwise unary sfpu on all worker cores") {
-            // TODO(agrebenisan): Figure out cause of stack smashing
-            WARN_AND_EXIT("SFPU on all worker cores results in stack smashing")
-
             auto arch = this->arch_;
 
             if (arch != tt::ARCH::GRAYSKULL) {
@@ -616,70 +605,70 @@ TEST_SUITE("SfpuCompute" * doctest::description("Eltwise unary SFPU tests") * do
                 test_config.num_tiles = 1;
                 SUBCASE("relu") {
                     test_config.sfpu_op = "relu";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("exponential") {
                     test_config.sfpu_op = "exponential";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("reciprocal") {
                     test_config.sfpu_op = "reciprocal";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("gelu") {
                     test_config.sfpu_op = "gelu";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("sqrt") {
                     test_config.sfpu_op = "sqrt";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("sigmoid") {
                     test_config.sfpu_op = "sigmoid";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("log") {
                     test_config.sfpu_op = "log";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("tanh") {
                     test_config.sfpu_op = "tanh";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
             }
             SUBCASE("MultiTile") {
                 test_config.num_tiles = 4;
                 SUBCASE("relu") {
                     test_config.sfpu_op = "relu";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("exponential") {
                     test_config.sfpu_op = "exponential";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("reciprocal") {
                     test_config.sfpu_op = "reciprocal";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("gelu") {
                     test_config.sfpu_op = "gelu";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("sqrt") {
                     test_config.sfpu_op = "sqrt";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("sigmoid") {
                     test_config.sfpu_op = "sigmoid";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("log") {
                     test_config.sfpu_op = "log";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
                 SUBCASE("tanh") {
                     test_config.sfpu_op = "tanh";
-                    WARN(run_sfpu_all_same_buffer(device_, test_config));
+                    CHECK(run_sfpu_all_same_buffer(device_, test_config));
                 }
             }
         }
