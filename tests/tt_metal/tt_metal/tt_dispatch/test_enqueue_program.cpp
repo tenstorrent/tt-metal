@@ -5,14 +5,6 @@ using namespace tt;
 
 u32 NUM_TILES = 2048;
 
-void zero_out_sysmem(Device *device) {
-    // Prior to running anything, need to clear out system memory
-    // to prevent anything being stale. Potentially make it a static
-    // method on command queue
-    vector<u32> zeros(1024 * 1024 * 1024 / sizeof(u32), 0);
-    device->cluster()->write_sysmem_vec(zeros, 0, 0);
-}
-
 tt_metal::Program generate_eltwise_unary_program(Device *device) {
     // TODO(agrebenisan): This is directly copy and pasted from test_eltwise_binary.
     // We need to think of a better way to generate test data, so this section needs to be heavily refactored.
@@ -114,7 +106,6 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
     tt_metal::Program program = create_program(device);
 
     CoreCoord worker_core(0, 0);
-    zero_out_sysmem(device);
     vector<u32> inp = create_random_vector_of_bfloat16(NUM_TILES * 2048, 100, 0);
 
     vector<u32> out_vec;

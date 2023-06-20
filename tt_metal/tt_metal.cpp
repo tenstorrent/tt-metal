@@ -891,6 +891,41 @@ void AddBlankDataMovementKernel(Device *device, Program &program, bool profile_k
 }
 
 bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
+    // Currently we want to support both slow and fast dispatch until we
+    // fully move over to fast, so using this env var method to set all
+    // the kernels to using fast dispatch mode.
+    const char *DEVICE_DISPATCH_MODE = std::getenv("DEVICE_DISPATCH_MODE");
+
+    if (DEVICE_DISPATCH_MODE != nullptr) {
+        // Ensure that none of the kernels have core ranges that include the
+        // dispatch cores/storage cores
+
+        for (auto kernel : program.kernels()) {
+            const auto &core_range_set = kernel->core_range_set();
+
+            /*
+            Need way to cleanly ensure that no kernels/cbs/sem configs allocated on a
+            dispatch core
+
+            int chip_id = 0;  // TODO(agrebenisan): No hard-coding
+            auto &soc_desc = device->cluster()->get_soc_desc(chip_id);
+
+            // Need way to automatically get these. Hardcoding for now.
+            CoreCoord dispatch1 = {0, 9};
+            CoreCoord dispatch2 = {6, 9};
+
+            log_assert(
+                not(core_range_set.core_coord_in_core_ranges(dispatch1) or
+                    core_range_set.core_coord_in_core_ranges(dispatch2)),
+                "Cannot target a dispatch core as part of worker core core_range_set");
+            */
+
+            // This triggers the firmware to do logic only needed for fast
+            // dispatch
+            kernel->add_define("DEVICE_DISPATCH_MODE", 1);
+        }
+    }
+
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
     std::vector< std::future<void> > wait_events;
