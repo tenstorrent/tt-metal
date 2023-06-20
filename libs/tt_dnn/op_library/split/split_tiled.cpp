@@ -74,9 +74,9 @@ std::vector<Tensor> SplitTiled::create_output_tensors(
     return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
-Program SplitTiled::create_program(
+operation::ProgramWithCallbacks SplitTiled::create_program(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, std::vector<Tensor> &output_tensors) const {
-    return Program();
+    return {};
 }
 
 }  // namespace tt_metal

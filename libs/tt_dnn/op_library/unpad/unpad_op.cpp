@@ -274,16 +274,16 @@ std::vector<Tensor> Unpad::create_output_tensors(const std::vector<std::referenc
 
 // TODO: If unpad is called on a tile and output is not tile, we could untilize then unpad, and output is RM
 // Currently calling unpad on a tile requires the output unpad shape to be tile
-Program Unpad::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Unpad::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        return unpad_rm(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+        return {unpad_rm(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end)};
     } else if (input_tensor_a.layout() == Layout::TILE) {
-        return unpad_tile(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+        return {unpad_tile(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end)};
     } else {
         TT_ASSERT(false, "Unsupported layout for unpad");
-        return tt_metal::Program();
+        return {};
     }
 }
 

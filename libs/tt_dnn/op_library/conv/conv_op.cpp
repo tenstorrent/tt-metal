@@ -769,12 +769,12 @@ std::vector<Tensor> Conv::create_output_tensors(const std::vector<std::reference
     return output_tensors;
 }
 
-Program Conv::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor>& output_tensors) const {
+operation::ProgramWithCallbacks Conv::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
-    return conv_single_core(input_tensor_a, input_tensor_b, conv_params, in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, untilize_out, output_tensor);
+    return {conv_single_core(input_tensor_a, input_tensor_b, conv_params, in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, untilize_out, output_tensor)};
 }
 
 }  // namespace tt_metal

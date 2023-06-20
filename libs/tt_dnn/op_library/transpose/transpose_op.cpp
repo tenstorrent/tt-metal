@@ -67,19 +67,19 @@ std::vector<Tensor> Transpose::create_output_tensors(const std::vector<std::refe
     return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
-Program Transpose::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Transpose::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
 
     switch (transpose_op_utils::get_parallelization_strategy(input_tensor_a, this->dim)) {
         case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
-            return transpose_wh_multi_core(input_tensor_a, output_tensor);
+            return {transpose_wh_multi_core(input_tensor_a, output_tensor)};
             break;
         case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
-            return transpose_hc_multi_core(input_tensor_a, output_tensor);
+            return {transpose_hc_multi_core(input_tensor_a, output_tensor)};
             break;
         default:
-            return transpose_single_core(input_tensor_a, output_tensor, this->dim);
+            return {transpose_single_core(input_tensor_a, output_tensor, this->dim)};
     }
 }
 

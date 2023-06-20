@@ -51,7 +51,7 @@ std::vector<Tensor> BertLargeTM::create_output_tensors(const std::vector<std::re
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
-Program BertLargeTM::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
 
@@ -62,23 +62,19 @@ Program BertLargeTM::create_program(const std::vector<std::reference_wrapper<con
     Program program;
     switch (this->bert_large_tm_op_type) {
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
-            program = multi_core_split_fused_qkv(input_tensor_a, output_tensors, compute_and_storage_grid_size);
-            break;
+            return {multi_core_split_fused_qkv(input_tensor_a, output_tensors, compute_and_storage_grid_size)};
         // Q and V heads use transpose_hw=false, while K head requires the additional transpose with transpose_hw=true.
         case BertLargeTMOpType::CREATE_Q_HEAD:
         case BertLargeTMOpType::CREATE_V_HEAD:
-            program = multi_core_create_qkv_heads(input_tensor_a, output_tensor, compute_and_storage_grid_size, /*transpose_hw=*/false);
-            break;
+            return {multi_core_create_qkv_heads(input_tensor_a, output_tensor, compute_and_storage_grid_size, /*transpose_hw=*/false)};
         case BertLargeTMOpType::CREATE_K_HEAD:
-            program = multi_core_create_qkv_heads(input_tensor_a, output_tensor, compute_and_storage_grid_size, /*transpose_hw=*/true);
-            break;
+            return {multi_core_create_qkv_heads(input_tensor_a, output_tensor, compute_and_storage_grid_size, /*transpose_hw=*/true)};
         case BertLargeTMOpType::CONCAT_HEADS:
-            program = multi_core_concat_heads(input_tensor_a, output_tensor, compute_and_storage_grid_size);
-            break;
+            return {multi_core_concat_heads(input_tensor_a, output_tensor, compute_and_storage_grid_size)};
         default:
             TT_ASSERT(false, "Unknown bert large tm op in create_program!");
     }
-    return program;
+    return {};
 }
 
 } // namespace tt_metal

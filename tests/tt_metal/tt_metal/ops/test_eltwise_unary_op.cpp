@@ -1,6 +1,7 @@
 #include "tt_metal/host_api.hpp"
 
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_dnn/op_library/operation_cache.hpp"
 #include "tt_numpy/functions.hpp"
 
 #include "tensor/tensor.hpp"
@@ -44,9 +45,7 @@ Tensor device_function(const Tensor& input_tensor, Host* host, Device* device) {
 }
 
 template<auto HostFunction, auto DeviceFunction, typename ... Args>
-bool run_test(Host* host, Device* device, float low, float high, Args ...  args) {
-    tt::numpy::random::seed(1234);
-    std::array<uint32_t, 4> shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+bool run_test(Host* host, Device* device, const std::array<uint32_t, 4>& shape, float low, float high, Args ...  args) {
     auto input_tensor = tt::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     auto host_output = HostFunction(input_tensor);
@@ -56,6 +55,9 @@ bool run_test(Host* host, Device* device, float low, float high, Args ...  args)
 }
 
 int main(int argc, char **argv) {
+    using tt::constants::TILE_HEIGHT;
+    using tt::constants::TILE_WIDTH;
+
     bool pass = true;
 
     try {
@@ -65,16 +67,56 @@ int main(int argc, char **argv) {
 
         pass &= tt::tt_metal::InitializeDevice(device);
 
-        pass &= run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, 0.0f, 1.0f, 1e-1f, 1e-5f);
-        pass &= run_test<host_function<detail::exp>, device_function<tt::tt_metal::exp>>(host, device, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        pass &= run_test<host_function<detail::recip>, device_function<tt::tt_metal::recip>>(host, device, 1.0f, 10.0f, 1e-1f, 1e-5f);
-        pass &= run_test<host_function<detail::gelu>, device_function<tt::tt_metal::gelu>>(host, device, 1.0f, 10.0f, 1e-1f, 1e-3f);
-        pass &= run_test<host_function<detail::relu>, device_function<tt::tt_metal::relu>>(host, device, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        pass &= run_test<host_function<detail::sigmoid>, device_function<tt::tt_metal::sigmoid>>(host, device, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        pass &= run_test<host_function<detail::log>, device_function<tt::tt_metal::log>>(host, device, 0.0f, 1.0f, 1e-1f, 1e-2f);
-        pass &= run_test<host_function<detail::tanh>, device_function<tt::tt_metal::tanh>>(host, device, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto shape = std::array<uint32_t, 4>{1, 1, TILE_HEIGHT, TILE_WIDTH};
+        pass &= run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        pass &= run_test<host_function<detail::exp>, device_function<tt::tt_metal::exp>>(host, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        pass &= run_test<host_function<detail::recip>, device_function<tt::tt_metal::recip>>(host, device, shape, 1.0f, 10.0f, 1e-1f, 1e-5f);
+        pass &= run_test<host_function<detail::gelu>, device_function<tt::tt_metal::gelu>>(host, device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        pass &= run_test<host_function<detail::relu>, device_function<tt::tt_metal::relu>>(host, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        pass &= run_test<host_function<detail::sigmoid>, device_function<tt::tt_metal::sigmoid>>(host, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        pass &= run_test<host_function<detail::log>, device_function<tt::tt_metal::log>>(host, device, shape, 0.0f, 1.0f, 1e-1f, 1e-2f);
+        pass &= run_test<host_function<detail::tanh>, device_function<tt::tt_metal::tanh>>(host, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
 
-        pass &= tt::tt_metal::CloseDevice(device);
+
+        auto run_tests = [&]() {
+            // Program Cache Miss
+            run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+
+            // Program Cache Hit
+            run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+
+            // Program Cache Miss
+            run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+
+            // Program Cache Miss
+            run_test<host_function<detail::exp>,  device_function<tt::tt_metal::exp>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+
+            // Program Cache Hit
+            run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+
+            // Allocate a tensor to show that the addresses aren't cached
+            auto input_tensor = tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
+
+            // Program Cache Hit
+            run_test<host_function<detail::exp>,  device_function<tt::tt_metal::exp>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+
+            // Program Cache Miss
+            run_test<host_function<detail::gelu>, device_function<tt::tt_metal::gelu>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
+
+            // Program Cache Hit
+            run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+
+            // Program Cache Hit
+            run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        };
+
+        tt::tt_metal::operation_cache::enable();
+        run_tests();
+
+        TT_ASSERT(tt::tt_metal::CloseDevice(device));
+
+        TT_ASSERT(tt::tt_metal::operation_cache::num_cached_programs() == 4);
+
 
     } catch (const std::exception &e) {
         pass = false;

@@ -281,16 +281,16 @@ std::vector<Tensor> Pad::create_output_tensors(const std::vector<std::reference_
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
 // Currently calling pad on a tile requires the output pad shape to be tile
-Program Pad::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Pad::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        return pad_rm(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+        return {pad_rm(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
     } else if (input_tensor_a.layout() == Layout::TILE) {
-        return pad_tile(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+        return {pad_tile(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
     } else {
         TT_ASSERT(false, "Unsupported layout for pad");
-        return tt_metal::Program();
+        return {};
     }
 }
 

@@ -23,6 +23,7 @@ std::vector<Tensor> generic_create_output_tensors(
     const MemoryConfig &output_mem_config = MemoryConfig{.interleaved = true}
 );
 
+Hash hash_tensor(const Tensor& tensor);
 
 template<typename ConcreteOperation>
 static Tensor run_without_autoformat(ConcreteOperation&& concrete_op, const Tensor &input_tensor) {

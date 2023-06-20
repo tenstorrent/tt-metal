@@ -51,18 +51,18 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(const std::vector<std::
 }
 
 
-Program EltwiseBinary::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
     switch (eltwise_binary_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b)){
         case BinaryOpParallelizationStrategy::MULTI_CORE:
-            return eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
+            return {eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type)};
             break;
         case BinaryOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return eltwise_binary_single_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
+            return {eltwise_binary_single_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type)};
     }
 
 }

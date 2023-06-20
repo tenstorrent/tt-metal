@@ -200,14 +200,14 @@ std::vector<Tensor> AttentionSoftmaxInPlace::create_output_tensors(const std::ve
     return {};
 }
 
-Program AttentionSoftmaxInPlace::create_program(
+operation::ProgramWithCallbacks AttentionSoftmaxInPlace::create_program(
     const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
     std::vector<Tensor> &output_tensors
 ) const {
     auto& input_tensor = input_tensors.at(0);
     const auto mask = optional_input_tensors.at(0);
-    return scale_mask_softmax_(input_tensor, mask, this->scale);
+    return {scale_mask_softmax_(input_tensor, mask, this->scale)};
 
 }
 

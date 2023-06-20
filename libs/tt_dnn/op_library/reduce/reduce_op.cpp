@@ -80,18 +80,18 @@ std::vector<Tensor> Reduce::create_output_tensors(const std::vector<std::referen
     return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
-Program Reduce::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Reduce::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
 
     switch (reduce_op_utils::get_parallelization_strategy(input_tensor, this->dim)){
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
-            return reduce_multi_core_h(input_tensor, output_tensor, this->math_op, this->dim, this->scaler);
+            return {reduce_multi_core_h(input_tensor, output_tensor, this->math_op, this->dim, this->scaler)};
         case ReduceOpParallelizationStrategy::MULTI_CORE_W:
-            return reduce_multi_core_w(input_tensor, output_tensor, this->math_op, this->dim, this->scaler);
+            return {reduce_multi_core_w(input_tensor, output_tensor, this->math_op, this->dim, this->scaler)};
         case ReduceOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return reduce_single_core(input_tensor, output_tensor, this->math_op, this->dim, this->scaler);
+            return {reduce_single_core(input_tensor, output_tensor, this->math_op, this->dim, this->scaler)};
     }
 
 }

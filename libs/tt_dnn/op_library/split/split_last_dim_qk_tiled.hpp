@@ -12,7 +12,7 @@ struct SplitLastDimQKTiled : public SplitTiled {
     // setting dim = 3 (last dim)
     // num_chunks = 2
     SplitLastDimQKTiled() : SplitTiled{3, 2} { ; }
-    Program create_program(
+    operation::ProgramWithCallbacks create_program(
         const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
 };

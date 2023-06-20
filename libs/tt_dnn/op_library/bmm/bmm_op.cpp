@@ -303,36 +303,36 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<std::referen
     return output_tensors;
 }
 
-Program Matmul::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Matmul::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
     switch (bmm_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b)){
         case BmmOpParallelizationStrategy::MULTI_CORE:
-            return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor);
+            return {matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE:
-            return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor);
+            return {matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
-            return matmul_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor);
+            return {matmul_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
-            return matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor);
+            return {matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
-            return matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor);
+            return {matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
-            return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor);
+            return {matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
-            return matmul_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor);
+            return {matmul_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return matmul_single_core(input_tensor_a, input_tensor_b, output_tensor);
+            return {matmul_single_core(input_tensor_a, input_tensor_b, output_tensor)};
     }
 
 }
@@ -361,36 +361,36 @@ std::vector<Tensor> BatchedMatmul::create_output_tensors(const std::vector<std::
     return output_tensors;
 }
 
-Program BatchedMatmul::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks BatchedMatmul::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
     switch (bmm_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b)){
         case BmmOpParallelizationStrategy::MULTI_CORE:
-            return bmm_multi_core(input_tensor_a, input_tensor_b, output_tensor);
+            return {bmm_multi_core(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE:
-            return bmm_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor);
+            return {bmm_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
-            return bmm_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor);
+            return {bmm_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
-            return bmm_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor);
+            return {bmm_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
-            return bmm_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor);
+            return {bmm_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
-            return bmm_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor);
+            return {bmm_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
-            return bmm_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor);
+            return {bmm_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor)};
             break;
         case BmmOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return bmm_single_core(input_tensor_a, input_tensor_b, output_tensor);
+            return {bmm_single_core(input_tensor_a, input_tensor_b, output_tensor)};
     }
 
 }
@@ -489,7 +489,7 @@ std::vector<Tensor> BertLargeMatmul::create_output_tensors(const std::vector<std
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
-Program BertLargeMatmul::create_program(
+operation::ProgramWithCallbacks BertLargeMatmul::create_program(
     const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
     std::vector<Tensor> &output_tensors
@@ -573,7 +573,7 @@ Program BertLargeMatmul::create_program(
         default:
             TT_ASSERT(false, "Unknown bert large matmul op in create_program!");
     }
-    return program;
+    return {std::move(program)};
 }
 
 

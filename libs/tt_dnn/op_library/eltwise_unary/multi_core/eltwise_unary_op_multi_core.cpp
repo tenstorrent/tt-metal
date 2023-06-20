@@ -3,7 +3,7 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 
-#include "tt_dnn/op_library/program_cache.hpp"
+#include "tt_dnn/op_library/operation_cache.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -14,7 +14,7 @@ namespace tt {
 
 namespace tt_metal {
 
-tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param /* = {} */) {
+operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param /* = {} */) {
     tt_metal::Program program{};
 
     // TODO: Build some sort of dispatcher based on location of op operands
@@ -127,7 +127,7 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
         eltwise_unary_op_utils::add_defines(eltwise_unary_kernel_group_2, op_type, param);
     }
 
-    if (not program_cache::is_enabled()) {
+    if (not operation_cache::is_enabled()) {
 
         tt_metal::Buffer *src0_dram_buffer = a.buffer();
         auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
@@ -136,40 +136,92 @@ tt_metal::Program eltwise_unary_multi_core(const Tensor &a, Tensor &output, Unar
         TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
         auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
-        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            uint32_t num_tiles_per_core;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
-                num_tiles_per_core = num_tiles_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
-                num_tiles_per_core = num_tiles_per_core_group_2;
-            } else {
-                TT_ASSERT(false, "Core not in specified core ranges");
-            }
-            tt_metal::SetRuntimeArgs(
-                unary_reader_kernel,
-                core,
-                {src0_dram_buffer->address(),
-                uint32_t(dram_src0_noc_xy.x),
-                uint32_t(dram_src0_noc_xy.y),
-                num_tiles_per_core,
-                num_tiles_written, 0 /*disable scaler*/ }
-            );
 
-            tt_metal::SetRuntimeArgs(
-                unary_writer_kernel,
-                core,
-                {dst_dram_buffer->address(),
-                uint32_t(dram_dst_noc_xy.x),
-                uint32_t(dram_dst_noc_xy.y),
-                num_tiles_per_core,
-                num_tiles_written }
-            );
-            num_tiles_written+=num_tiles_per_core;
-        }
     }
 
-    return program;
+    auto src_dram_buffer = a.buffer();
+    auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
+
+    auto dst_dram_buffer = output.buffer();
+    auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+
+    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        uint32_t num_tiles_per_core;
+        if (core_group_1.core_coord_in_core_ranges(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
+        }
+
+        tt_metal::SetRuntimeArgs(
+            unary_reader_kernel,
+            core,
+            {
+                src_dram_buffer->address(),
+                uint32_t(src_dram_noc_xy.x),
+                uint32_t(src_dram_noc_xy.y),
+                num_tiles_per_core,
+                num_tiles_written,
+                0 /*disable scaler*/
+            }
+        );
+
+        tt_metal::SetRuntimeArgs(
+            unary_writer_kernel,
+            core,
+            {
+                dst_dram_buffer->address(),
+                uint32_t(dst_dram_noc_xy.x),
+                uint32_t(dst_dram_noc_xy.y),
+                num_tiles_per_core,
+                num_tiles_written
+            }
+        );
+        num_tiles_written+=num_tiles_per_core;
+    }
+
+    auto override_runtime_args_callback = [
+            unary_reader_kernel,
+            unary_writer_kernel,
+            num_cores,
+            num_cores_y
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
+
+        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+
+        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+            {
+                auto runtime_args = GetRuntimeArgs(unary_reader_kernel, core);
+                runtime_args[0] = src_dram_buffer->address();
+                runtime_args[1] = uint32_t(src_dram_noc_xy.x);
+                runtime_args[2] = uint32_t(src_dram_noc_xy.y);
+                SetRuntimeArgs(unary_reader_kernel, core, runtime_args);
+            }
+
+            {
+                auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+                runtime_args[0] = dst_dram_buffer->address();
+                runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
+                runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
+                SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 }  // namespace tt_metal

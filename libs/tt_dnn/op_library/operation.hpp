@@ -11,6 +11,16 @@ namespace tt::tt_metal {
 
 namespace operation {
 
+using Hash = std::string; // TODO(arakhmati): switch to an integral type?
+
+using OverrideRuntimeArgsCallback = std::function<void(const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
+
+struct ProgramWithCallbacks {
+    Program program{};
+    OverrideRuntimeArgsCallback override_runtime_args_callback = [](auto&& ... args) {};
+};
+
+
 // TODO: move 'NotImplemented' to a library file
 class NotImplemented : public std::logic_error
 {
@@ -82,8 +92,6 @@ class Operation {
     struct Interface {
         virtual ~Interface() {}
 
-        virtual ProgramHash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
-
         virtual void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
 
         virtual void validate(
@@ -95,16 +103,18 @@ class Operation {
 
         virtual std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
 
-        virtual Program create_program(
+        virtual ProgramWithCallbacks create_program(
             const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
             std::vector<Tensor> &output_tensors
         ) const = 0;
 
-        virtual Program create_program(
+        virtual ProgramWithCallbacks create_program(
             const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
             const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
             std::vector<Tensor> &output_tensors
         ) const = 0;
+
+        virtual operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
 
         virtual bool supports_program_caching() const = 0;
     };
@@ -113,14 +123,6 @@ class Operation {
     struct Implementation : Interface {
 
         Implementation(const T& t) : object(t) {}
-
-        ProgramHash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
-            if constexpr (implements_compute_program_hash<T>()) {
-                return this->object.compute_program_hash(input_tensors);
-            } else {
-                throw NotImplemented("this operation does not implement compute_program_hash!");
-            }
-        }
 
         void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
             if constexpr (implements_validate<T>()) {
@@ -151,7 +153,7 @@ class Operation {
             return this->object.create_output_tensors(input_tensors);
         }
 
-        Program create_program(
+        ProgramWithCallbacks create_program(
             const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
             std::vector<Tensor> &output_tensors
         ) const override {
@@ -163,7 +165,7 @@ class Operation {
             }
         }
 
-        Program create_program(
+        ProgramWithCallbacks create_program(
             const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
             const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
             std::vector<Tensor> &output_tensors
@@ -173,6 +175,14 @@ class Operation {
             } else {
                 static_assert(implements_create_program<T>());
                 throw NotImplemented("this operation does not take optional input tensors!");
+            }
+        }
+
+        operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
+            if constexpr (implements_compute_program_hash<T>()) {
+                return this->object.compute_program_hash(input_tensors);
+            } else {
+                throw NotImplemented("this operation does not implement compute_program_hash!");
             }
         }
 
@@ -189,10 +199,6 @@ class Operation {
   public:
     template <typename T>
     Operation(T&& operation): implementation_(std::make_unique<Implementation<T>>(std::forward<T>(operation))) {}
-
-    ProgramHash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-        return this->implementation_->compute_program_hash(input_tensors);
-    }
 
     void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
         return this->implementation_->validate(input_tensors);
@@ -213,19 +219,23 @@ class Operation {
         return this->implementation_->create_output_tensors(input_tensors);
     }
 
-    Program create_program(
+    ProgramWithCallbacks create_program(
         const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
         std::vector<Tensor> &output_tensors
     ) const {
         return this->implementation_->create_program(input_tensors, output_tensors);
     }
 
-    Program create_program(
+    ProgramWithCallbacks create_program(
         const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
         const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const {
         return this->implementation_->create_program(input_tensors, optional_input_tensors, output_tensors);
+    }
+
+    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+        return this->implementation_->compute_program_hash(input_tensors);
     }
 
     bool supports_program_caching() const {

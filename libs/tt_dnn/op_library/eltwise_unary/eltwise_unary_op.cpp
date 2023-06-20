@@ -2,6 +2,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 using namespace tt::constants;
 
 namespace eltwise_unary_op_utils {
@@ -130,37 +132,6 @@ string get_op_name_default(UnaryOpType::Enum op_type) {
     return op_name;
 }
 
-static std::string op_type_to_string(UnaryOpType::Enum op_type) {
-    switch (op_type) {
-        case UnaryOpType::EXP: return "EXP";
-        case UnaryOpType::RECIP: return "RECIP";
-        case UnaryOpType::GELU: return "GELU";
-        case UnaryOpType::RELU: return "RELU";
-        case UnaryOpType::SQRT: return "SQRT";
-        case UnaryOpType::SIGMOID: return "SIGMOID";
-        case UnaryOpType::LOG: return "LOG";
-        case UnaryOpType::TANH: return "TANH";
-        case UnaryOpType::LOG10: return "LOG10";
-        case UnaryOpType::LOG2: return "LOG2";
-
-        case UnaryOpType::SIN: return "SIN";
-        case UnaryOpType::COS: return "COS";
-        case UnaryOpType::ABS: return "ABS";
-        case UnaryOpType::SIGN: return "SIGN";
-        case UnaryOpType::SQUARE: return "SQUARE";
-        case UnaryOpType::EQZ: return "EQZ";
-        case UnaryOpType::NEZ: return "NEZ";
-        case UnaryOpType::GTZ: return "GTZ";
-        case UnaryOpType::LTZ: return "LTZ";
-        case UnaryOpType::GEZ: return "GEZ";
-        case UnaryOpType::LEZ: return "LEZ";
-        case UnaryOpType::RELU_MIN: return "RELU_MIN";
-        case UnaryOpType::RELU_MAX: return "RELU_MAX";
-        case UnaryOpType::POWER: return "POWER";
-    }
-    throw std::runtime_error("Undefined op type");
-}
-
 bool get_op_approx_mode(UnaryOpType::Enum op_type) {
     switch (op_type) {
         case UnaryOpType::GELU:
@@ -208,14 +179,6 @@ namespace tt {
 
 namespace tt_metal {
 
-ProgramHash EltwiseUnary::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
-    const auto& input_shape = input_tensor.shape();
-
-    auto op_type = eltwise_unary_op_utils::op_type_to_string(this->op_type);
-    return fmt::format("{}_[{},{},{},{}]", op_type, input_shape[0], input_shape[1], input_shape[2], input_shape[3]);
-}
-
 void EltwiseUnary::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {}
 
 std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
@@ -227,7 +190,7 @@ std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<std::r
     return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
-Program EltwiseUnary::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
     switch (eltwise_unary_op_utils::get_parallelization_strategy(input_tensor)){
@@ -238,6 +201,16 @@ Program EltwiseUnary::create_program(const std::vector<std::reference_wrapper<co
         default:
             return eltwise_unary_single_core(input_tensor, output_tensor, this->op_type,param);
     }
+}
+
+operation::Hash EltwiseUnary::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+
+    return fmt::format(
+        "eltwise_unary_{}_{}",
+         magic_enum::enum_name(this->op_type),
+         operation::hash_tensor(input_tensor)
+    );
 }
 
 }  // namespace tt_metal

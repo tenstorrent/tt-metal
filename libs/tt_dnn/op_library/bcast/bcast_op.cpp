@@ -132,24 +132,24 @@ std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vec
     return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
-Program EltwiseBinaryBroadcast::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
     switch (bcast_op_utils::get_parallelization_strategy(input_tensor_a, this->dim)) {
         case BcastOpParallelizationStrategy::MULTI_CORE_H:
-            return bcast_multi_core_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
+            return {bcast_multi_core_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim)};
             break;
         case BcastOpParallelizationStrategy::MULTI_CORE_W:
-            return bcast_multi_core_w(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
+            return {bcast_multi_core_w(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim)};
             break;
         case BcastOpParallelizationStrategy::MULTI_CORE_HW:
-            return bcast_multi_core_hw(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
+            return {bcast_multi_core_hw(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim)};
             break;
         case BcastOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return bcast_single_core(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
+            return {bcast_single_core(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim)};
     }
 }
 

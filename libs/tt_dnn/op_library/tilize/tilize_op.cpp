@@ -192,10 +192,10 @@ std::vector<Tensor> Tilize::create_output_tensors(const std::vector<std::referen
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
 }
 
-Program Tilize::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Tilize::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
-    return tilize_single_core(input_tensor_a, output_tensor);
+    return {tilize_single_core(input_tensor_a, output_tensor)};
 }
 
 Tensor tilize(const Tensor &input_tensor_a) {
@@ -373,10 +373,10 @@ std::vector<Tensor> TilizeWithZeroPadding::create_output_tensors(const std::vect
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
 }
 
-Program TilizeWithZeroPadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks TilizeWithZeroPadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
-    return tilize_with_zero_padding_single_core(input_tensor_a, output_tensor);
+    return {tilize_with_zero_padding_single_core(input_tensor_a, output_tensor)};
 }
 
 Tensor tilize_with_zero_padding(const Tensor &input_tensor_a) {
@@ -607,10 +607,10 @@ std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vecto
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
 // Currently calling pad on a tile requires the output pad shape to be tile
-Program TilizeWithValPadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks TilizeWithValPadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
-    return tilize_with_val_padding(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+    return {tilize_with_val_padding(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
 }
 
 Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {

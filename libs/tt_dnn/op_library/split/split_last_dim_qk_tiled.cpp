@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Program split_last_dim_qk_tiled(const Tensor &input_tensor, std::vector<Tensor> &output_tensors) {
+operation::ProgramWithCallbacks split_last_dim_qk_tiled(const Tensor &input_tensor, std::vector<Tensor> &output_tensors) {
     SplitLastDimQKTiled op;
     uint32_t dim = op.dim;
     uint32_t num_chunks = op.num_chunks;
@@ -170,10 +170,10 @@ Program split_last_dim_qk_tiled(const Tensor &input_tensor, std::vector<Tensor> 
         }
     }
 
-    return program;
+    return {std::move(program)};
 }
 
-Program SplitLastDimQKTiled::create_program(
+operation::ProgramWithCallbacks SplitLastDimQKTiled::create_program(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto &input_tensor = input_tensors.at(0).get();
     return split_last_dim_qk_tiled(input_tensor, output_tensors);

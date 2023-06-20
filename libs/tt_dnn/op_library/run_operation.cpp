@@ -1,8 +1,8 @@
 #include <libs/tensor/tensor.hpp>
 #include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/program_cache.hpp"
+#include "tt_dnn/op_library/operation_cache.hpp"
 
-#include "tt_dnn/op_library/work_split.hpp"
+#include "third_party/magic_enum/magic_enum.hpp"
 
 namespace tt::tt_metal::operation {
 
@@ -19,77 +19,21 @@ static Device* get_device(const std::vector<std::reference_wrapper<const Tensor>
     return device;
 }
 
-
-void write_eltwise_unary_runtime_args(Device* device, Program& program, const Tensor &input_tensor, Tensor &output_tensor) {
-
-    tt_metal::Buffer *src0_dram_buffer = input_tensor.buffer();
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-
-    tt_metal::Buffer *dst_dram_buffer = output_tensor.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-
-    if (num_tiles == 1) {
-        CoreCoord core = {0, 0};
-
-        tt_metal::SetRuntimeArgs(
-            program.data_movement_kernels().at(0),
-            core,
-            {src0_dram_buffer->address(),
-            uint32_t(dram_src0_noc_xy.x),
-            uint32_t(dram_src0_noc_xy.y),
-            num_tiles, 0,0,0,0,0 } // TODO(AP): [8] is scaler
-        );
-
-        tt_metal::SetRuntimeArgs(
-            program.data_movement_kernels().at(1),
-            core,
-            {dst_dram_buffer->address(),
-            uint32_t(dram_dst_noc_xy.x),
-            uint32_t(dram_dst_noc_xy.y),
-            num_tiles }
-        );
-    } else {
-        auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
-        uint32_t num_cores_x = compute_and_storage_grid_size.x;
-        uint32_t num_cores_y = compute_and_storage_grid_size.y;
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_and_storage_grid_size, num_tiles);
-
-        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            uint32_t num_tiles_per_core;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
-                num_tiles_per_core = num_tiles_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
-                num_tiles_per_core = num_tiles_per_core_group_2;
-            } else {
-                TT_ASSERT(false, "Core not in specified core ranges");
-            }
-            tt_metal::SetRuntimeArgs(
-                program.data_movement_kernels().at(0),
-                core,
-                {src0_dram_buffer->address(),
-                uint32_t(dram_src0_noc_xy.x),
-                uint32_t(dram_src0_noc_xy.y),
-                num_tiles_per_core,
-                num_tiles_written, 0 /*disable scaler*/ }
-            );
-
-            tt_metal::SetRuntimeArgs(
-                program.data_movement_kernels().at(1),
-                core,
-                {dst_dram_buffer->address(),
-                uint32_t(dram_dst_noc_xy.x),
-                uint32_t(dram_dst_noc_xy.y),
-                num_tiles_per_core,
-                num_tiles_written }
-            );
-            num_tiles_written+=num_tiles_per_core;
-        }
+void override_runtime_args(
+    const OverrideRuntimeArgsCallback& override_runtime_args_callback,
+    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+    const std::vector<Tensor> &output_tensors
+) {
+    std::vector<Buffer*> input_buffers;
+    for (auto& tensor : input_tensors) {
+        input_buffers.push_back(tensor.get().buffer());
     }
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+    std::vector<Buffer*> output_buffers;
+    for (auto& tensor : output_tensors) {
+        output_buffers.push_back(tensor.buffer());
+    }
+
+    override_runtime_args_callback(input_buffers, output_buffers);
 }
 
 void validate(
@@ -103,7 +47,7 @@ void validate(
     return op.validate(input_tensors, optional_input_tensors);
 }
 
-Program create_program(
+ProgramWithCallbacks create_program(
     const Operation& op,
     const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
@@ -126,11 +70,13 @@ std::vector<Tensor> run_without_program_cache(
     auto device = detail::get_device(input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
 
-    auto program = create_program(op, input_tensors, optional_input_tensors, output_tensors);
-    tt_metal::CompileProgram(device, program);
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
-    tt_metal::LaunchKernels(device, program);
+    auto program_with_callbacks = create_program(op, input_tensors, optional_input_tensors, output_tensors);
+
+    auto& program = program_with_callbacks.program;
+    CompileProgram(device, program);
+    ConfigureDeviceWithProgram(device, program);
+    WriteRuntimeArgsToDevice(device, program);
+    LaunchKernels(device, program);
 
     return output_tensors;
 }
@@ -146,14 +92,16 @@ std::vector<Tensor> run_with_program_cache(
     auto device = detail::get_device(input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
 
-    Program& program = program_cache::get_or_create(op, input_tensors, output_tensors, device);
+    auto& program_with_callbacks = operation_cache::get_or_create(op, input_tensors, output_tensors, device);
 
-    auto program_hash = op.compute_program_hash(input_tensors);
-    write_eltwise_unary_runtime_args(device, program, input_tensors.at(0).get(), output_tensors.at(0));
+    override_runtime_args(
+        program_with_callbacks.override_runtime_args_callback,
+        input_tensors, output_tensors);
 
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
-    tt_metal::LaunchKernels(device, program);
+    auto& program = program_with_callbacks.program;
+    ConfigureDeviceWithProgram(device, program);
+    WriteRuntimeArgsToDevice(device, program);
+    LaunchKernels(device, program);
 
     return output_tensors;
 }
@@ -165,7 +113,7 @@ std::vector<Tensor> run(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
 ) {
-    if (program_cache::is_enabled() and op.supports_program_caching()) {
+    if (operation_cache::is_enabled() and op.supports_program_caching()) {
         return detail::run_with_program_cache(op, input_tensors, optional_input_tensors);
     } else {
         return detail::run_without_program_cache(op, input_tensors, optional_input_tensors);
@@ -175,7 +123,7 @@ std::vector<Tensor> run(
 std::vector<Tensor> generic_create_output_tensors(
     const Operation& op,
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-    Layout output_layout = tt::tt_metal::Layout::TILE,
+    Layout output_layout = Layout::TILE,
     const MemoryConfig &output_mem_config = MemoryConfig{.interleaved = true}
 ) {
     const auto& input_tensor = input_tensors.at(0).get();
@@ -186,9 +134,22 @@ std::vector<Tensor> generic_create_output_tensors(
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(output_shapes.size());
     for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(tt_metal::Tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), output_mem_config));
+        output_tensors.emplace_back(Tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), output_mem_config));
     }
     return output_tensors;
+}
+
+Hash hash_tensor(const Tensor& tensor) {
+    const auto shape = tensor.shape();
+    return fmt::format(
+        "{}_{}_{}_{}_{}_{}",
+         shape[0],
+         shape[1],
+         shape[2],
+         shape[3],
+         magic_enum::enum_name(tensor.dtype()),
+         magic_enum::enum_name(tensor.layout())
+    );
 }
 
 }

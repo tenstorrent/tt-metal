@@ -251,7 +251,7 @@ std::vector<Tensor> ResidualLayerNorm::create_output_tensors(const std::vector<s
     return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
-Program ResidualLayerNorm::create_program(
+operation::ProgramWithCallbacks ResidualLayerNorm::create_program(
     const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
     std::vector<Tensor> &output_tensors
@@ -261,7 +261,7 @@ Program ResidualLayerNorm::create_program(
     const auto gamma = optional_input_tensors.at(1);
     const auto beta = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
-    return layernorm_(a, b, gamma, beta, output_tensor, this->eps, this->out_dram);
+    return {layernorm_(a, b, gamma, beta, output_tensor, this->eps, this->out_dram)};
 
 }
 

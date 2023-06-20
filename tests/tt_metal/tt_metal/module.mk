@@ -8,7 +8,6 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/dtx/collapse_transformations \
 		 tests/tt_metal/ops/test_eltwise_binary_op \
 		 tests/tt_metal/ops/test_eltwise_unary_op \
-		 tests/tt_metal/ops/test_eltwise_unary_op_program_cache \
 		 tests/tt_metal/ops/test_softmax_op \
 		 tests/tt_metal/ops/test_layernorm_op \
 		 tests/tt_metal/ops/test_transpose_op \

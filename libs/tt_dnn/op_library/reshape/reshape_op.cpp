@@ -292,16 +292,16 @@ std::vector<Tensor> Reshape::create_output_tensors(const std::vector<std::refere
     return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
 }
 
-Program Reshape::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Reshape::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        return reshape_rm_single_core(input_tensor_a, output_tensor, this->N, this->C, this->H, this->W);
+        return {reshape_rm_single_core(input_tensor_a, output_tensor, this->N, this->C, this->H, this->W)};
     } else if (input_tensor_a.layout() == Layout::TILE) {
-        return reshape_tile_single_core(input_tensor_a, output_tensor, this->N, this->C, this->H, this->W);
+        return {reshape_tile_single_core(input_tensor_a, output_tensor, this->N, this->C, this->H, this->W)};
     } else {
         TT_ASSERT(false, "Unsupported layout for reshape");
-        return Program();
+        return {};
     }
 }
 

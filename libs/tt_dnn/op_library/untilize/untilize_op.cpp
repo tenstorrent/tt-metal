@@ -19,7 +19,7 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreCoord core = {0, 0};
 
     uint32_t single_tile_size = 2 * TILE_HW; // Assuming bfloat16 dataformat
 
@@ -62,7 +62,7 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
         device,
         src0_cb_index,
@@ -74,7 +74,7 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
-    auto cb_output = tt_metal::CreateCircularBuffers(
+    auto cb_output = tt_metal::CreateCircularBuffer(
         program,
         device,
         ouput_cb_index,
@@ -171,10 +171,10 @@ std::vector<Tensor> Untilize::create_output_tensors(const std::vector<std::refer
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
 }
 
-Program Untilize::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Untilize::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
-    return untilize_single_core(input_tensor_a, output_tensor);
+    return {untilize_single_core(input_tensor_a, output_tensor)};
 }
 
 Tensor untilize(const Tensor &input_tensor_a) {
@@ -196,7 +196,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
 
     tt_metal::Program program = tt_metal::Program();
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreCoord core = {0, 0};
 
     uint32_t single_tile_size = a.element_size() * TILE_HW; // Assuming bfloat16 dataformat
 
@@ -254,7 +254,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
         device,
         src0_cb_index,
@@ -266,7 +266,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
-    auto cb_output = tt_metal::CreateCircularBuffers(
+    auto cb_output = tt_metal::CreateCircularBuffer(
         program,
         device,
         ouput_cb_index,
@@ -278,7 +278,7 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
 
     uint32_t temp_buffer_size = alignment + block_row_size;
 
-    auto l1_bank_ids = device->bank_ids_from_logical_core(core.start);
+    auto l1_bank_ids = device->bank_ids_from_logical_core(core);
     TT_ASSERT(not l1_bank_ids.empty());
     auto l1_bank_id = l1_bank_ids.at(0);
 
@@ -405,10 +405,10 @@ std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vect
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
 }
 
-Program UntilizeWithUnpadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
-    return untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+    return {untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end)};
 }
 
 Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
