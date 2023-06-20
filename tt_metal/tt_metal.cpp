@@ -879,22 +879,41 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
     kernel->set_binaries(kernel_path_suffix);
 }
 
-void AddBlankDataMovementKernel(Device *device, Program &program, bool profile_kernel) {
+void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
     // This can be smarter by combining core ranges into maximal rectangles but this code can be removed once we load BRISC FW separately from the kernel binary
-    std::set<CoreRange> unique_core_ranges_without_brisc_kernel;
+    std::set<CoreRange> unique_core_ranges_without_brisc_kernel,
+                        unique_core_ranges_without_ncrisc_kernel,
+                        unique_core_ranges_without_compute_kernel ;
     for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
         CoreRange core_range = {.start = logical_core, .end = logical_core};
-        if (kernel_group.riscv_0 == nullptr and unique_core_ranges_without_brisc_kernel.find(core_range) == unique_core_ranges_without_brisc_kernel.end()) {
+        if (kernel_group.riscv_0 == nullptr)
             unique_core_ranges_without_brisc_kernel.insert(core_range);
-        }
+        if (kernel_group.riscv_1 == nullptr )
+            unique_core_ranges_without_ncrisc_kernel.insert(core_range);
+        if (kernel_group.compute == nullptr)
+            unique_core_ranges_without_compute_kernel.insert(core_range);
     }
 
     if (not unique_core_ranges_without_brisc_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_brisc_kernel);
-        auto blank_brisc_kernel = CreateDataMovementKernel(
+        auto b_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
-        CompileKernel(device, program, blank_brisc_kernel, profile_kernel);
+        CompileKernel(device, program, b_kernel, profile_kernel);
     }
+
+    if (not unique_core_ranges_without_ncrisc_kernel.empty()) {
+        CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_ncrisc_kernel);
+        auto b_kernel = CreateDataMovementKernel(
+            program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        CompileKernel(device, program, b_kernel, profile_kernel);
+    }
+    if (not unique_core_ranges_without_compute_kernel.empty()) {
+        CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_compute_kernel);
+        auto b_kernel = CreateComputeKernel(
+            program, "tt_metal/kernels/compute/blank.cpp", core_range_set, {0}, MathFidelity::HiFi4, false, false);
+        CompileKernel(device, program, b_kernel, profile_kernel);
+    }
+
 }
 
 bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
@@ -961,7 +980,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     //AddBlankDataMovementKernel(device, program, profile_kernel);
     // This can be removed when we load BRISC FW separately from kernel
     wait_events.push_back ( tt::tt_metal::GetExecutor().async( [device, &program, profile_kernel ] {
-                                        AddBlankDataMovementKernel(device, program, profile_kernel);
+                                        AddBlankKernels(device, program, profile_kernel);
                                        } ) );
 
     for (auto & f : wait_events)
