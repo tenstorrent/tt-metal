@@ -21,7 +21,7 @@ static constexpr u32 NUM_DISPATCH_CORES = 108;  // TODO(agrebenisan): Need to fi
 // The beginning of data section for dispatcher
 static constexpr u32 DEVICE_COMMAND_DATA_ADDR = 150 * 1024;
 
-static constexpr u32 DEVICE_COMMAND_NUM_ENTRIES = 2816; // 11KB device command
+static constexpr u32 DEVICE_COMMAND_NUM_ENTRIES = 5632; // 22KB device command
 static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 11;
 static constexpr u32 CONTROL_SECTION_NUM_ENTRIES = 16;
 static constexpr u32 RELAY_BUFFER_NUM_ENTRIES = 4 * NUM_ENTRIES_PER_BUFFER_RELAY;

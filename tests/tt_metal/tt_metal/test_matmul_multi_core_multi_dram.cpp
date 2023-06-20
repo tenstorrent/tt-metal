@@ -2,10 +2,10 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -22,10 +22,10 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
-    for(auto r = 0; r < num_tiles_r; r++) {
-        for(auto c = 0; c < num_tiles_c; c++) {
-            for(auto j = 0; j < 32; j++) { // tile rows
-                for(auto i = 0; i < 32; i++) { // tile cols
+    for (auto r = 0; r < num_tiles_r; r++) {
+        for (auto c = 0; c < num_tiles_c; c++) {
+            for (auto j = 0; j < 32; j++) {      // tile rows
+                for (auto i = 0; i < 32; i++) {  // tile cols
                     // each row of tiles is 32x32 * num_tiles_c
                     // each row within the row of tiles is cols
                     // each col of tiles is 32
@@ -40,36 +40,36 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 }
 
 void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
-    std::cout<<name<<": "<<std::endl;
+    std::cout << name << ": " << std::endl;
     int index = 0;
-    for(int i = 0 ; i < rows ; i++) {
-        for(int j = 0 ; j < cols; j++) {
-            std::cout<<data.at(index).to_float()<<", ";
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            std::cout << data.at(index).to_float() << ", ";
             index++;
         }
-        std::cout<<std::endl;
+        std::cout << std::endl;
     }
-    std::cout<<std::endl;
+    std::cout << std::endl;
 }
 
 std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
-    if(N == K) {
+    if (N == K) {
         return data;
     }
     std::vector<bfloat16> result;
-    if(N > K) {
-        for(int i = 0; i < M * 32; i++) {
-            for(int j = 0; j < K * 32; j++) {
+    if (N > K) {
+        for (int i = 0; i < M * 32; i++) {
+            for (int j = 0; j < K * 32; j++) {
                 int offset = i * K * 32;
                 result.push_back(data.at(offset + j));
             }
-            for(int j = 0; j < (N - K) * 32; j++) {
+            for (int j = 0; j < (N - K) * 32; j++) {
                 result.push_back((float)0);
             }
         }
     } else {
-        for(int i = 0; i < M * 32; i++) {
-            for(int j = 0; j < N * 32; j++) {
+        for (int i = 0; i < M * 32; i++) {
+            for (int j = 0; j < N * 32; j++) {
                 int offset = i * K * 32;
                 result.push_back(data.at(offset + j));
             }
@@ -83,93 +83,77 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
     tt_metal::Device *device,
     int num_cores_r,
     int num_cores_c,
-    int M, int N, int K,
+    int M,
+    int N,
+    int K,
     int in0_block_w,
     int out_subblock_h,
     int out_subblock_w,
-    int per_core_M, int per_core_N) {
-
+    int per_core_M,
+    int per_core_N) {
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
+    uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size;  // double buffer
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
-    uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
+    uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size;  // double buffer
     uint32_t out_CB_tiles = per_core_M * per_core_N;
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
-    TT_ASSERT(in0_CB_size <= 130*1024);
-    TT_ASSERT(in1_CB_size <= 130*1024);
-    TT_ASSERT(out_CB_size <= 540*1024);
+    TT_ASSERT(in0_CB_size <= 130 * 1024);
+    TT_ASSERT(in1_CB_size <= 130 * 1024);
+    TT_ASSERT(out_CB_size <= 540 * 1024);
 
     CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
-    CoreRange all_cores{.start=start_core, .end=end_core};
+    CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
 
-    for(int i = 0; i < num_cores_r; i++) {
-        for(int j = 0; j < num_cores_c; j++) {
-            CoreCoord core = {(std::size_t) j, (std::size_t) i};
-            uint32_t l1_valid_address = 200 * 1024;
+    const CoreRange all_cores{.start = start_core, .end = end_core};
 
-            uint32_t src0_cb_index = 0;
-            uint32_t src0_cb_addr = l1_valid_address;
-            l1_valid_address += in0_CB_size;
-            uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
-            auto cb_src0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src0_cb_index,
-                core,
-                cb0_tiles,
-                cb0_tiles * single_tile_size,
-                src0_cb_addr,
-                tt::DataFormat::Float16_b
-            );
+    u32 src0_cb_index = 0;
+    u32 cb0_tiles = in0_block_tiles * 2;  // double buffer
 
-            uint32_t src1_cb_index = 1;
-            uint32_t src1_cb_addr = l1_valid_address;
-            l1_valid_address += in1_CB_size;
-            uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
-            auto cb_src1 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                src1_cb_index,
-                core,
-                cb1_tiles,
-                cb1_tiles * single_tile_size,
-                src1_cb_addr,
-                tt::DataFormat::Float16_b
-            );
 
-            uint32_t ouput_cb_index = 16; // output operands start at index 16
-            uint32_t output_cb_addr = l1_valid_address;
-            l1_valid_address += out_CB_size;
-            auto cb_output = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                ouput_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                output_cb_addr,
-                tt::DataFormat::Float16_b
-            );
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        cb0_tiles,
+        cb0_tiles * single_tile_size,
+        tt::DataFormat::Float16_b);
 
-            uint32_t interm0_cb_index = 24;
-            auto cb_interm0 = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                interm0_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                output_cb_addr,
-                tt::DataFormat::Float16_b
-            );
+    u32 src1_cb_index = 1;
+    uint32_t cb1_tiles = in1_block_tiles * 2;  // double buffer
 
-            TT_ASSERT(l1_valid_address < 1024 * 1024);
-        }
-    }
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src1_cb_index,
+        all_cores,
+        cb1_tiles,
+        cb1_tiles * single_tile_size,
+        tt::DataFormat::Float16_b);
+
+    uint32_t ouput_cb_index = 16;  // output operands start at index 16
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        tt::DataFormat::Float16_b);
+
+    uint32_t interm0_cb_index = 24;
+    auto cb_interm0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        interm0_cb_index,
+        all_cores,
+        out_CB_tiles,
+        out_CB_size,
+        cb_output->address(),
+        tt::DataFormat::Float16_b);
 
     auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -185,17 +169,19 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    int num_blocks = (K/in0_block_w);
+    unary_writer_kernel->add_define("DEVICE_DISPATCH_MODE", "1");
 
-    int in0_num_subblocks = (per_core_M/out_subblock_h);
-    int in0_block_num_tiles = out_subblock_h*in0_block_w*in0_num_subblocks;
+    int num_blocks = (K / in0_block_w);
+
+    int in0_num_subblocks = (per_core_M / out_subblock_h);
+    int in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
     int in0_subblock_num_tiles = out_subblock_h * in0_block_w;
 
-    int in1_num_subblocks = (per_core_N/out_subblock_w);
-    int in1_block_num_tiles = out_subblock_w*in0_block_w*in1_num_subblocks;
+    int in1_num_subblocks = (per_core_N / out_subblock_w);
+    int in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
     int in1_per_core_w = out_subblock_w * in1_num_subblocks;
 
-    int out_subblock_num_tiles = out_subblock_h*out_subblock_w;
+    int out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
     vector<uint32_t> compute_kernel_args = {
         uint(in0_block_w),
@@ -211,8 +197,7 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
 
         uint(out_subblock_h),
         uint(out_subblock_w),
-        uint(out_subblock_num_tiles)
-    };
+        uint(out_subblock_num_tiles)};
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
@@ -223,13 +208,12 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
         compute_kernel_args,
         MathFidelity::HiFi4,
         fp32_dest_acc_en,
-        math_approx_mode
-    );
+        math_approx_mode);
 
     return {std::move(program), mm_reader_kernel, unary_writer_kernel};
 }
 
-bool write_runtime_args_to_device(
+bool assign_runtime_args_to_program(
     tt_metal::Device *device,
     tt_metal::Program &program,
     int num_cores_r,
@@ -247,107 +231,117 @@ bool write_runtime_args_to_device(
     uint32_t in0_dram_addr,
     uint32_t in1_dram_addr,
     uint32_t out_dram_addr) {
-
     bool pass = true;
     uint32_t single_tile_size = 2 * 1024;
 
-    uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t dram_buffer_size_act =
+        single_tile_size * M * K;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t dram_buffer_size_weights =
+        single_tile_size * K * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t dram_buffer_size_out =
+        single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
     TT_ASSERT(in0_dram_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
     TT_ASSERT(in1_dram_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
     TT_ASSERT(out_dram_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
 
-    for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-        for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
+    for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+        for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+            CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t) in0_dram_addr, // in0_tensor_addr
-                (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
-                (std::uint32_t)  1, // in0_tensor_stride_w
-                (std::uint32_t)  K, // in0_tensor_stride_h
-                (std::uint32_t)  in0_block_w, // in0_tensor_next_block_stride
+                (std::uint32_t)in0_dram_addr,                // in0_tensor_addr
+                (std::uint32_t)K * per_core_M * core_idx_y,  // in0_tensor_start_tile_id
+                (std::uint32_t)1,                            // in0_tensor_stride_w
+                (std::uint32_t)K,                            // in0_tensor_stride_h
+                (std::uint32_t)in0_block_w,                  // in0_tensor_next_block_stride
 
-                (std::uint32_t)  in0_block_w, // in0_block_w
-                (std::uint32_t)  per_core_M, // in0_block_h
-                (std::uint32_t)  in0_block_w * per_core_M, //in0_block_num_tiles
+                (std::uint32_t)in0_block_w,                  // in0_block_w
+                (std::uint32_t)per_core_M,                   // in0_block_h
+                (std::uint32_t)in0_block_w * per_core_M,     // in0_block_num_tiles
 
-                (std::uint32_t)  in1_dram_addr, // in1_tensor_addr
-                (std::uint32_t)  per_core_N * core_idx_x, //in1_tensor_start_tile_id
-                (std::uint32_t)  1, // in1_tensor_stride_w
-                (std::uint32_t)  N, // in1_tensor_stride_h
-                (std::uint32_t)  in0_block_w * N, //in1_tensor_next_block_stride
+                (std::uint32_t)in1_dram_addr,                // in1_tensor_addr
+                (std::uint32_t)per_core_N * core_idx_x,      // in1_tensor_start_tile_id
+                (std::uint32_t)1,                            // in1_tensor_stride_w
+                (std::uint32_t)N,                            // in1_tensor_stride_h
+                (std::uint32_t)in0_block_w * N,              // in1_tensor_next_block_stride
 
-                (std::uint32_t)  per_core_N, // in1_block_w
-                (std::uint32_t)  in0_block_w, //in1_block_h
-                (std::uint32_t)  per_core_N * in0_block_w, // in1_block_num_tiles
+                (std::uint32_t)per_core_N,                   // in1_block_w
+                (std::uint32_t)in0_block_w,                  // in1_block_h
+                (std::uint32_t)per_core_N * in0_block_w,     // in1_block_num_tiles
 
-                (std::uint32_t)  K / in0_block_w // num_blocks
+                (std::uint32_t)K / in0_block_w               // num_blocks
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t) out_dram_addr, // out_tensor_addr
-                (std::uint32_t) core_idx_x * per_core_N + core_idx_y * per_core_M * N, // out_tensor_start_tile_id
-                (std::uint32_t) 1, // out_tensor_stride_w
-                (std::uint32_t) N,  // out_tensor_stride_h
-                (std::uint32_t) out_subblock_w, // out_tensor_next_subblock_stride_w
-                (std::uint32_t) out_subblock_h * N, // out_tensor_next_subblock_stride_h
+                (std::uint32_t)out_dram_addr,                                          // out_tensor_addr
+                (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
+                (std::uint32_t)1,                                                      // out_tensor_stride_w
+                (std::uint32_t)N,                                                      // out_tensor_stride_h
+                (std::uint32_t)out_subblock_w,                     // out_tensor_next_subblock_stride_w
+                (std::uint32_t)out_subblock_h * N,                 // out_tensor_next_subblock_stride_h
 
-                (std::uint32_t) out_subblock_w, // out_subblock_w
-                (std::uint32_t) out_subblock_h, // out_subblock_h
-                (std::uint32_t) (out_subblock_w * out_subblock_h), // out_subblocks_w * out_subblocks_h
-                (std::uint32_t) (per_core_N / out_subblock_w), // out_num_subblocks_w
-                (std::uint32_t) (per_core_M / out_subblock_h), // out_num_subblocks_h
+                (std::uint32_t)out_subblock_w,                     // out_subblock_w
+                (std::uint32_t)out_subblock_h,                     // out_subblock_h
+                (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+                (std::uint32_t)(per_core_N / out_subblock_w),      // out_num_subblocks_w
+                (std::uint32_t)(per_core_M / out_subblock_h),      // out_num_subblocks_h
             };
 
             tt_metal::SetRuntimeArgs(mm_reader_kernel, core, mm_reader_args);
             tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
         }
     }
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+    // tt_metal::WriteRuntimeArgsToDevice(device, program);
     return pass;
 }
 
-std::vector<bfloat16> get_row_slice(std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {
+std::vector<bfloat16> get_row_slice(
+    std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {
     std::vector<bfloat16> result;
     int rows_per_slice = rows / total_row_slices;
-    for(int i = rows_per_slice * row_slice_index * cols; i < rows_per_slice * (row_slice_index + 1) * cols; i++) {
+    for (int i = rows_per_slice * row_slice_index * cols; i < rows_per_slice * (row_slice_index + 1) * cols; i++) {
         result.push_back(data.at(i));
     }
     return result;
 }
 
-std::vector<bfloat16> get_col_slice(std::vector<bfloat16> data, int total_col_slices, int col_slice_index, int rows, int cols) {
+std::vector<bfloat16> get_col_slice(
+    std::vector<bfloat16> data, int total_col_slices, int col_slice_index, int rows, int cols) {
     std::vector<bfloat16> result;
     int cols_per_slice = cols / total_col_slices;
-    for(int r = 0; r < rows; r++) {
-        for(int c = cols_per_slice * col_slice_index; c < cols_per_slice * (col_slice_index + 1); c++) {
+    for (int r = 0; r < rows; r++) {
+        for (int c = cols_per_slice * col_slice_index; c < cols_per_slice * (col_slice_index + 1); c++) {
             result.push_back(data.at(r * cols + c));
         }
     }
     return result;
 }
 
-bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
+bool move_tiles_to_dram(
+    CommandQueue &cq,
+    Buffer &buffer,
+    std::vector<uint32_t> tensor,
+    int tiles_r,
+    int tiles_c) {
     bool pass = true;
-    int tile_size = 512; // 32*32 packed into u32
+    int tile_size = 512;  // 32*32 packed into u32
     int tile_size_bytes = 32 * 32 * 2;
     int start_index = 0;
     int tile_id = 0;
-    for(int i = 0; i < tiles_r; i++) {
-        for(int j = 0; j < tiles_c; j++) {
+
+    vector<u32> tiles;
+    for (int i = 0; i < tiles_r; i++) {
+        for (int j = 0; j < tiles_c; j++) {
             std::vector<uint32_t> tile;
             tile.insert(tile.end(), tensor.begin() + start_index, tensor.begin() + start_index + tile_size);
-            uint32_t dram_addr = (tile_id / 8) * tile_size_bytes + dram_buffer_addr;
-            int dram_channel = tile_id % 8;
 
-            pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_channel, dram_addr, tile);
+            tiles.insert(tiles.end(), tile.begin(), tile.end());
             start_index += tile_size;
-            tile_id++;
         }
     }
+
+    EnqueueWriteBuffer(cq, buffer, tiles, false);
     return pass;
 }
 
@@ -355,7 +349,7 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     try {
-        int num_cores_r = 10;
+        int num_cores_r = 9;
         int num_cores_c = 12;
         uint32_t M = 16 * num_cores_r;
         uint32_t K = 16 * 12;
@@ -366,18 +360,30 @@ int main(int argc, char **argv) {
         int per_core_M = M / num_cores_r;
         int per_core_N = N / num_cores_c;
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t in0_dram_addr = 0;
-        uint32_t in1_dram_addr = 400 * 1024 * 1024;
-        uint32_t out_dram_addr = 800 * 1024 * 1024;
         log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
         log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
         log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-        log_info(LogTest, "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}", per_core_M, in0_block_w, K / in0_block_w, per_core_M / out_subblock_h);
-        log_info(LogTest, "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}", in0_block_w, per_core_N, K / in0_block_w, per_core_N / out_subblock_w);
+        log_info(
+            LogTest,
+            "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
+            per_core_M,
+            in0_block_w,
+            K / in0_block_w,
+            per_core_M / out_subblock_h);
+        log_info(
+            LogTest,
+            "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
+            in0_block_w,
+            per_core_N,
+            K / in0_block_w,
+            per_core_N / out_subblock_w);
         SHAPE shape = {1, 1, M * 32, K * 32};
-        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 identity
-        auto golden = select_columns(tensor.get_values(), M, K, N);
+        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
+            shape,
+            tt::deprecated::Initialize::RANDOM,
+            100,
+            std::chrono::system_clock::now().time_since_epoch().count());
+        auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 identity
         ////////////////////////////////////////////////////////////////////////////
         //                      Initial Runtime Args Parse
         ////////////////////////////////////////////////////////////////////////////
@@ -386,7 +392,7 @@ int main(int argc, char **argv) {
         try {
             std::tie(arch_name, input_args) =
                 test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
         }
         const tt::ARCH arch = tt::get_arch_from_string(arch_name);
@@ -394,21 +400,34 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int pci_express_slot = 0;
-        tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
+        tt_metal::Device *device = tt_metal::CreateDevice(arch, pci_express_slot);
 
-        pass &= tt_metal::InitializeDevice(device);;
+        pass &= tt_metal::InitializeDevice(device);
+        ;
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, mm_reader_kernel, unary_writer_kernel]  = create_program(device, num_cores_r, num_cores_c, M, N, K, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N);
+        auto [program, mm_reader_kernel, unary_writer_kernel] = create_program(
+            device,
+            num_cores_r,
+            num_cores_c,
+            M,
+            N,
+            K,
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            per_core_M,
+            per_core_N);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        constexpr bool profile_device = true;
+        constexpr bool profile_device = false;
         pass &= tt_metal::CompileProgram(device, program, profile_device);
+
+        CommandQueue cq(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -417,32 +436,45 @@ int main(int argc, char **argv) {
         auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
         auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-        pass &= move_tiles_to_dram(device, activations, M, K, in0_dram_addr);
+
+        Buffer activation_buffer(device, activations.size() * sizeof(u32), 0, 1024 * 2, BufferType::DRAM);
+        pass &= move_tiles_to_dram(cq, activation_buffer, activations, M, K);
 
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        pass &= move_tiles_to_dram(device, weights, K, N, in1_dram_addr);
+
+        Buffer weight_buffer(device, weights.size() * sizeof(u32), 0, 1024 * 2, BufferType::DRAM);
+        pass &= move_tiles_to_dram(cq, weight_buffer, weights, K, N);
         log_info(LogTest, "Copying inputs to dram complete");
 
+        Buffer out_buffer(device, M * N * sizeof(u32) * 32 * 32, 0, 1024 * 2, BufferType::DRAM);
+        u32 out_dram_addr = out_buffer.address();
+
         log_info(LogTest, "Writing kernel runtime args to device");
-        pass &= write_runtime_args_to_device(
+        pass &= assign_runtime_args_to_program(
             device,
             program,
-            num_cores_r, num_cores_c,
-            mm_reader_kernel, unary_writer_kernel,
-            M, N, K,
+            num_cores_r,
+            num_cores_c,
+            mm_reader_kernel,
+            unary_writer_kernel,
+            M,
+            N,
+            K,
             in0_block_w,
-            out_subblock_h, out_subblock_w,
-            per_core_M, per_core_N,
-            in0_dram_addr, in1_dram_addr, out_dram_addr
-        );
+            out_subblock_h,
+            out_subblock_w,
+            per_core_M,
+            per_core_N,
+            activation_buffer.address(),
+            weight_buffer.address(),
+            out_dram_addr);
         log_info(LogTest, "Writing kernel runtime args to device complete");
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-        pass &= tt_metal::LaunchKernels(device, program);
-        if (profile_device){
+        EnqueueProgram(cq, program, false);
+        if (profile_device) {
             tt_metal::DumpDeviceProfileResults(device, program);
         }
 
@@ -451,24 +483,29 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");
 
+        vector<u32> result;
+        EnqueueReadBuffer(cq, out_buffer, result, true);
+        auto golden = select_columns(tensor.get_values(), M, K, N);
+
+        // Keeping this old code because took me too long to decipher. Matmul
+        // owner can refactor at a later time
+        auto result_iter = result.begin();
         for(int i = 0; i < M; i++) {
             auto row = get_row_slice(golden, M, i, M * 32, N * 32);
             for(int j = 0; j < N; j++) {
                 auto golden_tile = get_col_slice(row, N, j, 32, N * 32);
-                int tile_id = i * N + j;
-                int dram_bank = tile_id % 8;
-                uint32_t dram_address = ((tile_id / 8) * single_tile_size) + out_dram_addr;
                 std::vector<uint32_t> result_vec;
-                tt_metal::ReadFromDeviceDRAMChannel(device, dram_bank, dram_address, single_tile_size, result_vec);
-                tt_metal::DumpHostProfileResults("ReadFromDeviceDRAM_" + std::to_string(i) + "_" + std::to_string(j));
+                result_vec.insert(result_vec.end(), result_iter, result_iter + 512);
+                result_iter += 512;
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 auto result_flat_layout = convert_to_flat_layout(result_bfp16);
 
-                // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
-                // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
                 pass &= (golden_tile == result_flat_layout);
             }
         }
+
+
+
         log_info(LogTest, "Golden check complete");
 
         ////////////////////////////////////////////////////////////////////////////

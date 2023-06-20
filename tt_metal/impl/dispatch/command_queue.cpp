@@ -1,4 +1,5 @@
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/llrt/tt_debug_print_server.hpp"
 
 u64 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
@@ -49,6 +50,21 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
 
         for (TransferType transfer_type : transfer_types) {
+            u32 dst_code_location;
+            bool is_kernel = true;
+
+            string temp_for_debug;
+            switch (transfer_type) {
+                case TransferType::CB:
+                case TransferType::SEM: is_kernel = false; break;
+                case TransferType::B: dst_code_location = MEM_BRISC_INIT_LOCAL_L1_BASE; temp_for_debug = "brisc"; break;
+                case TransferType::N: dst_code_location = MEM_NCRISC_INIT_LOCAL_L1_BASE; temp_for_debug = "ncrisc"; break;
+                case TransferType::T0: dst_code_location = MEM_TRISC0_INIT_LOCAL_L1_BASE; temp_for_debug = "trisc0"; break;
+                case TransferType::T1: dst_code_location = MEM_TRISC1_INIT_LOCAL_L1_BASE; temp_for_debug = "trisc1"; break;
+                case TransferType::T2: dst_code_location = MEM_TRISC2_INIT_LOCAL_L1_BASE; temp_for_debug = "trisc2"; break;
+                default: TT_THROW("Invalid riscv type");
+            }
+
             const ll_api::memory& kernel_bin = kernel_bins.at(i);
             i++;
 
@@ -82,6 +98,10 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
                     u32 transfer_size_in_bytes = len * sizeof(u32);
 
+                    if (is_kernel) {
+                        addr = tt::llrt::relocate_dev_addr(addr, dst_code_location);
+                    }
+
                     sections.at(current_section_idx)
                         .at(transfer_type)
                         .push_back(std::make_tuple(
@@ -102,8 +122,8 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
             initialize_section();
         }
 
-        program_vector.push_back(cb->address());
-        program_vector.push_back(cb->size());
+        program_vector.push_back(cb->address() >> 4);
+        program_vector.push_back(cb->size() >> 4);
         program_vector.push_back(cb->num_tiles());
         program_vector.push_back(0);  // Padding
 
@@ -196,6 +216,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
     }
 
     TT_ASSERT(current_section_idx == 0, "Testing for just one section so far");
+
     return program_to_device_map;
 }
 
@@ -348,30 +369,13 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
         // Kernel section
         for (const auto& [transfer_type, transfer_info_vector] : section.section) {
             bool is_kernel = true;
-            switch (transfer_type) {
-                case TransferType::CB:
-                case TransferType::SEM: is_kernel = false; break;
-                case TransferType::B: dst_code_location = MEM_BRISC_INIT_LOCAL_L1_BASE; break;
-                case TransferType::N: dst_code_location = MEM_NCRISC_INIT_LOCAL_L1_BASE; break;
-                case TransferType::T0: dst_code_location = MEM_TRISC0_INIT_LOCAL_L1_BASE; break;
-                case TransferType::T1: dst_code_location = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
-                case TransferType::T2: dst_code_location = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
-                default: TT_THROW("Invalid riscv type");
-            }
 
             for (const auto& [dst_addr, src, size_in_bytes, noc_multicast_encoding, num_receivers] :
                  transfer_info_vector) {
-                // If kernel, we need to put it into the address that will be relocated upon deassert
-                u32 relocate_dst_addr;
-                if (is_kernel) {
-                    relocate_dst_addr = tt::llrt::relocate_dev_addr(dst_addr, dst_code_location);
-                } else {
-                    relocate_dst_addr = dst_addr;
-                }
 
                 TrailingWriteCommand trailing_write = {
                     .src = src,
-                    .dst = relocate_dst_addr,
+                    .dst = dst_addr,
                     .dst_noc = noc_multicast_encoding,
                     .transfer_size = size_in_bytes,
                     .num_receivers = num_receivers};
@@ -528,6 +532,7 @@ CommandQueue::CommandQueue(Device* device) {
     // in its own deassert. Easy fix, just need to do it.
     send_dispatch_kernel_to_device(device);
     this->device = device;
+
 }
 
 CommandQueue::~CommandQueue() {
