@@ -217,8 +217,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    pass &= tt_metal::WriteRuntimeArgsToDevice(
-        device,
+    tt_metal::SetRuntimeArgs(
         reader_kernel,
         test_config.core,
         {
@@ -226,9 +225,9 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
             (uint32_t)input_dram_noc_xy.x,
             (uint32_t)input_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
-        });
-    pass &= tt_metal::WriteRuntimeArgsToDevice(
-        device,
+        }
+    );
+    tt_metal::SetRuntimeArgs(
         writer_kernel,
         test_config.core,
         {
@@ -236,7 +235,9 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
             (uint32_t)output_dram_noc_xy.x,
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
-        });
+        }
+    );
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> dest_buffer_data;

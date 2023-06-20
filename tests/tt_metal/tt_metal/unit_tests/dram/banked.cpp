@@ -146,8 +146,9 @@ bool dram_reader_cb_writer_dram(
     tt_metal::WriteToBuffer(input_dram_buffer, input_packed);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-    pass &= tt_metal::WriteRuntimeArgsToDevice(device, reader_kernel, cfg.target_core, reader_runtime_args);
-    pass &= tt_metal::WriteRuntimeArgsToDevice(device, writer_kernel, cfg.target_core, writer_runtime_args);
+    tt_metal::SetRuntimeArgs(reader_kernel, cfg.target_core, reader_runtime_args);
+    tt_metal::SetRuntimeArgs(writer_kernel, cfg.target_core, writer_runtime_args);
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> output_packed;
