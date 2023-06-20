@@ -27,6 +27,9 @@ struct AttentionSoftmaxInPlace {
         const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
+    operation::Hash compute_program_hash(
+        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const;
 };
 
 } }  // namespace tt::tt_metal

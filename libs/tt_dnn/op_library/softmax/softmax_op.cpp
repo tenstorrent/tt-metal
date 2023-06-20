@@ -1,5 +1,7 @@
 #include "libs/tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "libs/tt_dnn/op_library/work_split.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
+
 
 #include "../op_config.hpp"
 
@@ -7,9 +9,6 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/tile_math.hpp"
 
-#include "tt_dnn/op_library/run_operation.hpp"
-
-#include <iostream>
 #include <optional>
 
 using u32 = std::uint32_t;
@@ -28,7 +27,7 @@ inline bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> in
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-Program scale_mask_softmax_(const Tensor &input_tensor, const std::optional<std::reference_wrapper<const Tensor>> mask, float scale) {
+operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, const std::optional<std::reference_wrapper<const Tensor>> mask, float scale) {
 
     const auto shape = input_tensor.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
@@ -182,7 +181,41 @@ Program scale_mask_softmax_(const Tensor &input_tensor, const std::optional<std:
         SetRuntimeArgs(writer_kernels, core, { src_addr, 0,   0, wtpc*Wt, tile_offset });
     }
 
-    return program;
+    auto override_runtime_args_callback = [
+            reader_kernel=reader_kernels,
+            writer_kernel=writer_kernels,
+            num_cores,
+            grid
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+        auto mask_dram_buffer = input_buffers.at(1);
+
+        for (uint32_t icore = 0; icore < num_cores; icore++) {
+            auto core = grid.wrap_core(icore);
+
+            {
+                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                runtime_args[0] = src_dram_buffer->address();
+                if (mask_dram_buffer != nullptr) {
+                    runtime_args[7] = mask_dram_buffer->address();
+                }
+                SetRuntimeArgs(reader_kernel, core, runtime_args);
+            }
+
+            {
+                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                runtime_args[0] = src_dram_buffer->address();
+                SetRuntimeArgs(writer_kernel, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 } // scale_mask_softmax_
 
 
@@ -207,8 +240,22 @@ operation::ProgramWithCallbacks AttentionSoftmaxInPlace::create_program(
 ) const {
     auto& input_tensor = input_tensors.at(0);
     const auto mask = optional_input_tensors.at(0);
-    return {scale_mask_softmax_(input_tensor, mask, this->scale)};
+    return scale_mask_softmax_(input_tensor, mask, this->scale);
 
+}
+
+operation::Hash AttentionSoftmaxInPlace::compute_program_hash(
+    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+
+    return fmt::format(
+        "attention_softmax_in_place_{}_{}_{}",
+         this->scale,
+         operation::hash_tensor(input_tensor),
+         optional_input_tensors.size()
+    );
 }
 
 Tensor scale_mask_softmax_in_place(float scale, std::optional<std::reference_wrapper<const Tensor>> mask, Tensor& input_tensor) {
