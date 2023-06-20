@@ -87,7 +87,6 @@ class BasicBlock(nn.Module):
 
         out += residual
         out = self.relu(out)
-
         return out
 
 
