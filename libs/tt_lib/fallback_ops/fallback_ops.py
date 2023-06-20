@@ -430,6 +430,80 @@ class Conv2d(torch.nn.Module):
         return self.pt_fallback(input)
 
 
+class BatchNorm2d(torch.nn.Module):
+    r"""
+    Applies Batch Normalization over a 4D input (a mini-batch of 2D inputs
+    with additional channel dimension) as described in the paper
+    `Batch Normalization: Accelerating Deep Network Training by Reducing
+    Internal Covariate Shift <https://arxiv.org/abs/1502.03167>`__ .
+
+    .. math::
+        y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta
+
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | Argument            | Description                                                          | Data type         | Valid range       | Required |
+    +=====================+======================================================================+===================+===================+==========+
+    | weights             | Weights tensor                                                       | Tensor            |                   | Yes      |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | biases              | Bias tensor                                                          | Tensor            |                   | Yes      |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | running_mean        | Tracked Running Mean tensor                                          | Tensor            |                   | Yes      |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | running_var         | Tracked Running Variances tensor                                     | Tensor            |                   | Yes      |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | num_batches_tracked | Number of Batches Tracked tensor                                     | Tensor            |                   | Yes      |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | num_features        | C from an expected input of size (N, C, H, W)                        | int               |                   | Yes      |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | eps                 | A value added to the denominator for numerical stability             | float             | default is 1e-05  | No       |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | momentum            | The value used for the running_mean and running_var computation.     | float/None        | default is 0.1    | No       |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | affine              | Controls initialization of weights and biases                        | bool              | default is `True` | No       |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    | track_running_stats | Whether to track the running mean and variance                       | bool              | default is `True` | No       |
+    +---------------------+----------------------------------------------------------------------+-------------------+-------------------+----------+
+    """
+
+    @convert_tt_tensors_wrapper
+    def __init__(
+        self,
+        weights: ttl_tensor.Tensor,
+        biases: ttl_tensor.Tensor,
+        running_mean: ttl_tensor.Tensor,
+        running_var: ttl_tensor.Tensor,
+        num_batches_tracked: ttl_tensor.Tensor,
+        num_features: int,
+        eps: float = 1e-05,
+        momentum: Optional[float] = 0.1,
+        affine: bool = True,
+        track_running_stats: bool = True,
+    ):
+        super().__init__()
+        weights = weights.reshape(
+            num_features,
+        )
+        biases = biases.reshape(
+            num_features,
+        )
+        running_mean = running_mean.reshape(num_features)
+        running_var = running_var.reshape(num_features)
+        num_batches_tracked = torch.tensor(num_batches_tracked.item())
+
+        self.pt_fallback = torch.nn.BatchNorm2d(
+            num_features, eps, momentum, affine, track_running_stats
+        )
+        self.pt_fallback.weight = torch.nn.Parameter(weights)
+        self.pt_fallback.bias = torch.nn.Parameter(biases)
+        self.pt_fallback.running_mean = running_mean
+        self.pt_fallback.running_var = running_var
+        self.pt_fallback.num_batches_tracked = num_batches_tracked
+
+    @convert_tt_tensors_wrapper
+    def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+        return self.pt_fallback(input)
+
+
 class GroupNorm(torch.nn.Module):
     r"""
     Applies Group Normalization over a mini-batch of inputs as described in
