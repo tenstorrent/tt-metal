@@ -133,11 +133,12 @@ def demo():
     # prompt = ["a photo of an astronaut riding a horse on mars"]
     # prompt = ["car"]
     prompt = ["oil painting frame of Breathtaking mountain range with a clear river running through it, surrounded by tall trees and misty clouds, serene, peaceful, mountain landscape, high detail"]
+    # prompt = ["Skull on Fire"] # guidance = 12
 
     height = 256                        # default height of Stable Diffusion
     width = 256                         # default width of Stable Diffusion
     num_inference_steps = 50           # Number of denoising steps
-    guidance_scale = 7.5                # Scale for classifier-free guidance
+    guidance_scale = 7.5               # Scale for classifier-free guidance
     generator = torch.manual_seed(174)    # 10233 Seed generator to create the inital latent noise
     batch_size = len(prompt)
 
