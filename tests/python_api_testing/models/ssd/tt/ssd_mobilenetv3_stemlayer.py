@@ -1,0 +1,61 @@
+from typing import Union
+import torch
+import torch.nn as nn
+import tt_lib
+from python_api_testing.models.ssd.tt.ssd_mobilenetv3_convlayer import (
+    TtMobileNetV3ConvLayer,
+)
+
+
+class TtMobileNetV3Stem(nn.Module):
+    def __init__(
+        self,
+        config,
+        in_channels: int,
+        expanded_channels: int,
+        out_channels: int,
+        kernel_size: int = 1,
+        padding: int = 1,
+        stride: int = 1,
+        dilation: int = 1,
+        use_activation: Union[bool, str] = False,
+        activation="",
+        state_dict=None,
+        base_address="",
+        device=None,
+        host=None,
+    ) -> None:
+        super().__init__()
+
+        self.conv_3x3 = TtMobileNetV3ConvLayer(
+            config,
+            in_channels=in_channels,
+            out_channels=expanded_channels,
+            kernel_size=3,
+            stride=stride,
+            padding=padding,
+            use_activation=True,
+            groups=expanded_channels,
+            state_dict=state_dict,
+            base_address=f"{base_address}.block.0",
+            device=device,
+            host=host,
+        )
+
+        self.reduce_1x1 = TtMobileNetV3ConvLayer(
+            config,
+            in_channels=expanded_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=0,
+            state_dict=state_dict,
+            base_address=f"{base_address}.block.1",
+            device=device,
+            host=host,
+        )
+
+    def forward(self, features: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        features = self.conv_3x3(features)
+        features = self.reduce_1x1(features)
+        return features
