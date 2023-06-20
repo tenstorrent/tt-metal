@@ -1,10 +1,9 @@
 #include "libs/tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "libs/tt_dnn/op_library/work_split.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "libs/tt_dnn/op_library/work_split.hpp"
-
-#include "tt_dnn/op_library/run_operation.hpp"
 
 #include "../op_config.hpp"
 
@@ -27,7 +26,7 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
-Program layernorm_(
+operation::ProgramWithCallbacks layernorm_(
     const Tensor &a,
     const std::optional<std::reference_wrapper<const Tensor>> b,
     const std::optional<std::reference_wrapper<const Tensor>> gamma,
@@ -235,7 +234,51 @@ Program layernorm_(
         SetRuntimeArgs(writer_kernels, core, { dst_addr, 0, 0, wtpc*Wt, tile_offset } );
     }
 
-    return program;
+    auto override_runtime_args_callback = [
+            reader_kernel=reader_kernels,
+            writer_kernel=writer_kernels,
+            num_cores,
+            grid
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_a_dram_buffer = input_buffers.at(0);
+        auto src_b_dram_buffer = input_buffers.at(1);
+        auto gamma_dram_buffer = input_buffers.at(2);
+        auto beta_dram_buffer = input_buffers.at(3);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        for (uint32_t icore = 0; icore < num_cores; icore++) {
+            auto core = grid.wrap_core(icore);
+
+            {
+                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                runtime_args[0] = src_a_dram_buffer->address();
+                if (src_b_dram_buffer != nullptr) {
+                    runtime_args[14] = src_b_dram_buffer->address();
+                }
+                if (gamma_dram_buffer != nullptr) {
+                    runtime_args[11] = gamma_dram_buffer->address();
+                }
+                if (beta_dram_buffer != nullptr) {
+                    runtime_args[13] = beta_dram_buffer->address();
+                }
+                SetRuntimeArgs(reader_kernel, core, runtime_args);
+            }
+
+            {
+                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                runtime_args[0] = dst_dram_buffer->address();
+                SetRuntimeArgs(writer_kernel, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 void ResidualLayerNorm::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const {
@@ -261,8 +304,23 @@ operation::ProgramWithCallbacks ResidualLayerNorm::create_program(
     const auto gamma = optional_input_tensors.at(1);
     const auto beta = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
-    return {layernorm_(a, b, gamma, beta, output_tensor, this->eps, this->out_dram)};
+    return layernorm_(a, b, gamma, beta, output_tensor, this->eps, this->out_dram);
 
+}
+
+operation::Hash ResidualLayerNorm::compute_program_hash(
+    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+
+    return fmt::format(
+        "residual_layer_norm_{}_{}_{}_{}",
+         this->eps,
+         this->out_dram,
+         operation::hash_tensor(input_tensor),
+         optional_input_tensors.size()
+    );
 }
 
 Tensor layernorm(const Tensor &a, float eps, bool out_dram) {
