@@ -23,7 +23,8 @@ from python_api_testing.models.llama.llama_mlp import TtLlamaMLP
 from python_api_testing.models.llama.llama_attention import TtLlamaAttention
 from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from utility_functions_new import comp_pcc
+from python_api_testing.models.llama_split.llama_split_utils import gen_position_ids
 
 
 class TtLlamaDecoderModelStacked(torch.nn.Module):
@@ -75,13 +76,16 @@ class TtLlamaDecoderModelStacked(torch.nn.Module):
         self.weight = torch2tt_tensor(self.state_dict[f"lm_head.weight"], self.device)
         self.bias = None
 
-    def forward(self, x, y, half=1, is_causal=False):
+    def forward(self, x, y, half=1, has_layer_norm=False, is_causal=False):
         result = x
         for idx, decoder_layer in enumerate(self.decoder_list):
             result = decoder_layer(hidden_states=result, position_ids=y)[0]
 
         if half == 2:
-            result = self.final_layernorm(result)
+            # add norm layer
+            if has_layer_norm:
+                result = self.final_layernorm(result)
+            # add linear
             if is_causal:
                 result = linear(result, self.weight, self.bias)
 
@@ -106,13 +110,14 @@ class PytorchLlamaDecoderModelStacked(torch.nn.Module):
         self.linear_layer = hf_reference_model.lm_head
         self.linear_layer.eval()
 
-    def forward(self, x, y, is_causal=False):
+    def forward(self, x, y, has_layer_norm=False, is_causal=False):
         result = x
         for idx, decoder_layer in enumerate(self.decoder_list):
             result = decoder_layer(hidden_states=result, position_ids=y)[0]
 
         # layer norm is always present in HF pytorch model
-        result = self.final_layer_norm(result)
+        if has_layer_norm:
+            result = self.final_layer_norm(result)
 
         if is_causal:
             result = self.linear_layer(result)
@@ -120,7 +125,7 @@ class PytorchLlamaDecoderModelStacked(torch.nn.Module):
         return result
 
 
-def run_llama_split_inference(
+def run_test_llama_decoder_split_inference(
     device,
     state_dict,
     configuration,
@@ -129,7 +134,9 @@ def run_llama_split_inference(
     num_decoders_start,
     num_decoders,
     x_input=None,
+    position_ids=None,
     half=1,
+    has_layer_norm=False,
     is_causal=False,
 ):
     if half == 1:
@@ -155,46 +162,83 @@ def run_llama_split_inference(
             num_decoders_start,
             num_decoders,
         )
-        tt_out = tt_llama_model(x=x_input, y=position_ids, half=2, is_causal=is_causal)
+        tt_out = tt_llama_model(
+            x=x_input,
+            y=position_ids,
+            half=2,
+            has_layer_norm=has_layer_norm,
+            is_causal=is_causal,
+        )
 
     tt_out = tt2torch_tensor(tt_out)
 
     return tt_out
 
 
-if __name__ == "__main__":
-    torch.manual_seed(1234)
-    # parameters
-    model_version = "decapoda-research/llama-7b-hf"
-    tokenizer_version = "hf-internal-testing/llama-tokenizer"
-    base_url = "model.layers"
-    batch = 1
-    seq_len = 128
-    max_position_embeddings = 2048
-    on_weka = False
-    pcc = 0.98
-    is_causal = False
+# parameters --------------------------------------------------
+_tokenizer_name = "huggyllama/llama-7b"
+_llama_model_name = "huggyllama/llama-7b"
+# base url from the model state dictionary
+_base_url = "model.layers"
+_batch = 1
+_seq_len = 32
+_max_position_embeddings = 2048
+# is causallm llama model (it has additional linear layer at the end)
+_on_weka = False
 
-    first_decoder_start = 0
-    second_decoder_start = 16
-    num_consecutive_decoders = 16
+# how many decoders to use
+# number of decoders to be stacked started from the selected id in the original llama model
+# e.g. stack 16 consecutive decoders
+_num_consecutive_decoders = 4
 
+# decoder id from which decoder stacking starts (the first half of the model)
+# e.g. start from 0 add use 3 decoders (0, 1, and 2)
+_first_decoder_start = 0
+
+# decoder id from which decoder stacking starts (the second half of the model)
+# e.g. start from 16 add use 3 decoders (16, 17, and 18)
+_second_decoder_start = _num_consecutive_decoders
+
+# has_layer_norm - add norm layer after stacked decoders
+# is_causal - add linear layer after decoders
+# parameters --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "pcc, has_layer_norm, is_causal",
+    (
+        (
+            0.98,
+            False,
+            False,
+        ),
+    ),
+)
+def test_llama_decoder_split_inference(
+    pcc,
+    has_layer_norm,
+    is_causal,
+):
+    # set parameters ================================================================
+    model_version = _llama_model_name
+    tokenizer_version = _tokenizer_name
+    base_url = _base_url
+    batch = _batch
+    seq_len = _seq_len
+    max_position_embeddings = _max_position_embeddings
+    on_weka = _on_weka
+    first_decoder_start = _first_decoder_start
+    second_decoder_start = _second_decoder_start
+    num_consecutive_decoders = _num_consecutive_decoders
+
+    # Set number
     decoder_stack_list = [i for i in range(2 * num_consecutive_decoders + 1)]
 
     # Prepare input =============================================================
     llama_input = (torch.rand(batch, seq_len, 4096) * 2) - 1
 
     # get positions_ids values
-    past_key_values_length = 0
-    seq_length = llama_input.shape[1]
-
-    position_ids = torch.arange(
-        past_key_values_length,
-        seq_length + past_key_values_length,
-        dtype=torch.long,
-        device=None,
-    )
-    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+    position_ids = gen_position_ids(llama_input)
 
     # Load hugging face model ========================================================
     model_name = model_version
@@ -218,12 +262,9 @@ if __name__ == "__main__":
     pytorch_out = pytorch_LlamaDecoder_model(
         x=llama_input, y=position_ids, is_causal=is_causal
     )
-    logger.info(f"PyTorch output shape: {pytorch_out.shape}")
 
     # TT hardware execution ============================================================
-    # TT execution ======================================================================
     # The first call --------------------------
-    first_call_start = time.time()
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
@@ -233,7 +274,7 @@ if __name__ == "__main__":
     tt_llama_input = llama_input.unsqueeze(1)
     tt_llama_input = torch2tt_tensor(tt_llama_input, device)
 
-    first_out = run_llama_split_inference(
+    first_out = run_test_llama_decoder_split_inference(
         device,
         state_dict=state_dict,
         configuration=configuration,
@@ -242,15 +283,13 @@ if __name__ == "__main__":
         num_decoders_start=first_decoder_start,
         num_decoders=num_consecutive_decoders,
         x_input=tt_llama_input,
+        position_ids=position_ids,
         half=1,
     )
 
     tt_lib.device.CloseDevice(device)
-    first_call_end = time.time()
-    logger.info(f"First call duration: {first_call_end - first_call_start}")
 
     # The second call -------------------------------------------------------
-    second_call_start = time.time()
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
@@ -258,7 +297,7 @@ if __name__ == "__main__":
     # send input tensor from host to tt device
     tt_input = torch2tt_tensor(first_out, device)
 
-    tt_out = run_llama_split_inference(
+    tt_out = run_test_llama_decoder_split_inference(
         device,
         state_dict=state_dict,
         configuration=configuration,
@@ -267,23 +306,21 @@ if __name__ == "__main__":
         num_decoders_start=second_decoder_start,
         num_decoders=num_consecutive_decoders,
         x_input=tt_input,
+        position_ids=position_ids,
         half=2,
+        has_layer_norm=has_layer_norm,
         is_causal=is_causal,
     )
 
     tt_lib.device.CloseDevice(device)
-    second_call_end = time.time()
-    logger.info(f"Second call duration: {second_call_end - second_call_start}")
 
+    # squeeze output
     tt_out = tt_out.squeeze(1)
 
-    logger.info(f"PY out shape: {pytorch_out.shape}")
-    logger.info(f"TT out shape: {tt_out.shape}")
+    logger.debug(f"Pytorch output shape: {pytorch_out.shape}")
+    logger.debug(f"Tenstorrent output shape: {tt_out.shape}")
 
     # check outputs ---------------------------------------------------------
-    pcc = 0.98
-    logger.info(comp_allclose(pytorch_out, tt_out))
-
     does_pass, pcc_value = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"PCC value: {pcc_value}")
 

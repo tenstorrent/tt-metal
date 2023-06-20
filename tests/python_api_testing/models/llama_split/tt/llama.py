@@ -1,30 +1,13 @@
-import math
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
-import math
-import time
-from abc import abstractmethod
 import torch
-from torch import nn
-import tt_lib
-from loguru import logger
-from python_api_testing.models.llama.llama_utils import (
-    tt2torch_tensor,
-    torch2tt_tensor,
-    linear,
-)
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
-from typing import List, Optional, Tuple, Union
 from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from python_api_testing.models.llama.llama_utils import (
+    torch2tt_tensor,
+    linear,
+    gen_position_ids,
+)
+from typing import List, Optional, Tuple, Union
+from loguru import logger
 
 
 # Copied from transformers.models.bart.modeling_bart._make_causal_mask
@@ -516,3 +499,87 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
             all_hidden_states,
             all_self_attns,
         )
+
+
+def _llama_first_half(
+    device,
+    state_dict,
+    base_url,
+    max_position_embeddings,
+    configuration,
+    num_decoders_start,
+    num_decoders,
+):
+    return TtLlamaModelFirstHFModel(
+        device,
+        state_dict,
+        base_url,
+        max_position_embeddings,
+        configuration,
+        num_decoders_start,
+        num_decoders,
+    )
+
+
+def llama_first_half(
+    device,
+    state_dict,
+    base_url,
+    max_position_embeddings,
+    configuration,
+    num_decoders_start,
+    num_decoders,
+) -> TtLlamaModelFirstHFModel:
+    return _llama_first_half(
+        device,
+        state_dict,
+        base_url,
+        max_position_embeddings,
+        configuration,
+        num_decoders_start,
+        num_decoders,
+    )
+
+
+def _llama_second_half(
+    device,
+    state_dict,
+    base_url,
+    max_position_embeddings,
+    configuration,
+    num_decoders_start,
+    num_decoders,
+    is_causallm=False,
+):
+    return TtLlamaModelSecondHFModel(
+        device,
+        state_dict,
+        base_url,
+        max_position_embeddings,
+        configuration,
+        num_decoders_start,
+        num_decoders,
+        is_causallm,
+    )
+
+
+def llama_second_half(
+    device,
+    state_dict,
+    base_url,
+    max_position_embeddings,
+    configuration,
+    num_decoders_start,
+    num_decoders,
+    is_causallm=False,
+) -> TtLlamaModelSecondHFModel:
+    return _llama_second_half(
+        device,
+        state_dict,
+        base_url,
+        max_position_embeddings,
+        configuration,
+        num_decoders_start,
+        num_decoders,
+        is_causallm,
+    )
