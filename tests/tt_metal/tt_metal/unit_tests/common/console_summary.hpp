@@ -10,7 +10,7 @@
 
 using namespace doctest;
 
-struct MyListener : public IReporter {
+struct ConsoleSummary : public IReporter {
     // caching pointers/references to objects of these types - safe to do
     std::ostream& stdout_stream;
     const ContextOptions& opt;
@@ -22,15 +22,27 @@ struct MyListener : public IReporter {
     std::string cur_subcase_filter;
     bool subcase_failed = false;
     std::vector<std::string> failed_filters;
+    std::vector<std::string> passed_filters;
 
     // constructor has to accept the ContextOptions by ref as a single argument
-    MyListener(const ContextOptions& in) : stdout_stream(*in.cout), opt(in) {}
+    ConsoleSummary(const ContextOptions& in) : stdout_stream(*in.cout), opt(in) {}
 
     void report_query(const QueryData& /*in*/) override {}
 
     void test_run_start() override { failed_filters.clear(); }
 
     void test_run_end(const TestRunStats& /*in*/) override {
+        if (passed_filters.size() > 0) {
+            std::sort(passed_filters.begin(), passed_filters.end());
+            passed_filters.erase(std::unique(passed_filters.begin(), passed_filters.end()), passed_filters.end());
+            stdout_stream << Color::Yellow
+                        << "================================ Passed Filters ===============================" << std::endl;
+            for (const auto& passed_filter : passed_filters) {
+                stdout_stream << Color::Green << passed_filter << " PASSED" << std::endl;
+            }
+            stdout_stream << Color::Yellow
+                        << "===============================================================================" << std::endl;
+        }
         if (failed_filters.size() > 0) {
             std::sort(failed_filters.begin(), failed_filters.end());
             failed_filters.erase(std::unique(failed_filters.begin(), failed_filters.end()), failed_filters.end());
@@ -80,6 +92,7 @@ struct MyListener : public IReporter {
             failed_filters.push_back(filter);
             stdout_stream << Color::Red << filter << " FAILED" << std::endl;
         } else {
+            passed_filters.push_back(filter);
             if ((not opt.minimal) and (not opt.quiet)) {
                 stdout_stream << Color::Grey << filter << " FINISHED" << std::endl;
             }
@@ -116,4 +129,4 @@ struct MyListener : public IReporter {
 };
 
 // FIXME: To enable, just uncomment line below
-// REGISTER_LISTENER("MyListener", 1, MyListener);
+REGISTER_LISTENER("Summary", 1, ConsoleSummary);
