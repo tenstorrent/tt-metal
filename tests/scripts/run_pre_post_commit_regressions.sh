@@ -28,7 +28,10 @@ if [ "$ARCH_NAME" == "grayskull" ]; then
   ./tests/scripts/run_python_api_unit_tests.sh
   env python tests/scripts/run_tt_metal.py
 else
-  echo "Skipping non-Grayskull Python small integration tests..."
+  ./build/test/tt_metal/test_bcast --arch $ARCH_NAME
+  ./build/test/tt_metal/test_reduce_hw --arch $ARCH_NAME
+  ./build/test/tt_metal/test_reduce_w --arch $ARCH_NAME
+  ./build/test/tt_metal/test_reduce_h --arch $ARCH_NAME
 fi
 
 ./build/test/tt_metal/unit_tests

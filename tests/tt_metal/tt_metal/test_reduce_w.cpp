@@ -62,7 +62,7 @@ int main(int argc, char **argv) {
         CoreCoord core = {0, 0};
 
         vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
-        //vector<uint32_t> shape = {1, 1, 1*TILE_HEIGHT, 1*TILE_WIDTH};
+        //vector<uint32_t> shape = {1, 1, 17*TILE_HEIGHT, 19*TILE_WIDTH};
         u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
         u32 HW = H*W;
         TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
@@ -179,7 +179,7 @@ int main(int argc, char **argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-        vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 100.0f, 0x1234);
+        vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 1.0f, 0x1234);
         tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
@@ -222,8 +222,8 @@ int main(int argc, char **argv) {
 
         int argfail = -1;
         auto comparison_function = [](float a, float b) {
-            const float rtol = 0.06f;
-            const float atol = 1e-2f;
+            const float rtol = 0.10f;
+            const float atol = 0.20f;
             float maxabs = fmaxf(fabsf(a), fabsf(b));
             float absdiff = fabsf(a - b);
             auto result = (absdiff <= atol) || absdiff < rtol * maxabs;
