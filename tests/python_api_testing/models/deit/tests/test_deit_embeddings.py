@@ -9,38 +9,46 @@ sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
 from typing import Optional, Set, Tuple, Union
+from PIL import Image
+import requests
 
 import torch
-import torch.utils.checkpoint
 from torch import nn
+from transformers import AutoImageProcessor,DeiTModel
+
 from loguru import logger
 
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
-from utility_functions_new import comp_pcc, comp_allclose_and_pcc
+from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc
 
 from deit_config import DeiTConfig
-
-from transformers import DeiTModel
-from deit_attention import TtDeiTAttention
-from activations import ACT2FN
+from deit_embeddings import TtDeiTEmbeddings
 
 
-def test_deit_attention_inference():
+def test_deit_embeddings_inference():
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'encoder.layer.0.attention'
-    torch_attention = model.encoder.layer[0].attention
+    base_address= 'embeddings'
+    torch_embeddings = model.embeddings
+    use_mask_token = False
+    bool_masked_pos = None
     head_mask = None
-    output_attentions = False
-    input_shape =  torch.Size([1, 1, 198, 768])
-    hidden_state = torch.randn(input_shape)
+    input_shape =  torch.Size([1, 3, 224, 224])
+    input_image_syn = torch.randn(input_shape)
 
-    torch_output = torch_attention(hidden_state.squeeze(0), head_mask, output_attentions)[0]
+    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+    image = Image.open(requests.get(url, stream=True).raw)
+    input_image = image_processor(images=image, return_tensors="pt")
+    input_image = input_image['pixel_values']
+
+    # torch_output = torch_embeddings(input_image_syn, bool_masked_pos)
+    torch_output = torch_embeddings(input_image, bool_masked_pos)
+
     print('\n in test torch output:', torch_output[0][0][0:10])
     print('in test torch output shape', torch_output.shape)
 
@@ -52,10 +60,12 @@ def test_deit_attention_inference():
 
     # setup tt model
 
-    tt_attention = TtDeiTAttention(DeiTConfig(), host, device, state_dict, base_address)
+    tt_embeddings = TtDeiTEmbeddings(DeiTConfig(), host, device, state_dict, base_address, use_mask_token= use_mask_token)
 
-    tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
-    tt_out = tt_attention(tt_input, head_mask, output_attentions)[0]
+    # tt_input = torch_to_tt_tensor_rm(input_image_syn, device, put_on_device=False)
+    tt_input = torch_to_tt_tensor_rm(input_image, device, put_on_device=False)
+
+    tt_out = tt_embeddings(tt_input, bool_masked_pos)
     tt_output = tt_to_torch_tensor(tt_out, host).squeeze(0)
     print('\n in test tt output:', tt_output[0][0][0:10])
     print('in test tt output shape', tt_output.shape)

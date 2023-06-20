@@ -8,7 +8,6 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
-from dataclasses import dataclass
 from typing import Optional, Set, Tuple, Union
 
 import torch
@@ -18,15 +17,16 @@ from activations import ACT2FN
 from deit_config import DeiTConfig
 
 import tt_lib
-from helper_funcs import make_linear
+from deit_helper_funcs import make_linear
 
 class TtDeiTIntermediate(nn.Module):
     def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address="") -> None:
         super().__init__()
 
-        dense_weight = state_dict[f"{base_address}.weight"]
-        dense_bias = state_dict[f"{base_address}.bias"]
-        self.dense = make_linear(config.hidden_size, config.intermediate_size, dense_weight, dense_bias, device)
+        # dense_weight = state_dict[f"{base_address}.dense.weight"]
+        # dense_bias = state_dict[f"{base_address}.dense.bias"]
+        # self.dense = make_linear(config.hidden_size, config.intermediate_size, dense_weight, dense_bias, device)
+        self.dense = make_linear(config.hidden_size, config.intermediate_size, "dense", state_dict, base_address, device)
 
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]

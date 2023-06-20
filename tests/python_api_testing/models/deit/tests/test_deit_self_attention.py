@@ -33,7 +33,7 @@ def test_deit_self_attention_inference():
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'encoder.layer.0.attention.attention'
+    base_address= 'encoder.layer.0.attention'
     torch_self_attention = model.encoder.layer[0].attention.attention
     head_mask = None
     output_attentions = False

@@ -8,35 +8,29 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
-import collections.abc
-import math
-from dataclasses import dataclass
+
 from typing import Optional, Set, Tuple, Union
 
 import torch
-import torch.utils.checkpoint
 from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from activations import ACT2FN
+import tt_lib
 from deit_config import DeiTConfig
-from deit_layer import DeiTLayer
+from deit_layer import TtDeiTLayer
 
 
-class DeiTEncoder(nn.Module):
-    def __init__(self, config: DeiTConfig,
-                state_dict = None,
-                base_address = "") -> None:
+class TtDeiTEncoder(nn.Module):
+    def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address="") -> None:
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([DeiTLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList([TtDeiTLayer(config, host, device, state_dict, f"{base_address}.layer.{_}") for _ in range(config.num_hidden_layers)])
+
         self.gradient_checkpointing = False
-        self.base_address_with_dot = "" if base_address=="" else f"{base_address}."
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        head_mask: Optional[torch.Tensor] = None,
+        hidden_states: tt_lib.tensor.Tensor,
+        head_mask: Optional[tt_lib.tensor.Tensor] = None,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
         return_dict: bool = True,
@@ -51,18 +45,7 @@ class DeiTEncoder(nn.Module):
             layer_head_mask = head_mask[i] if head_mask is not None else None
 
             if self.gradient_checkpointing and self.training:
-
-                def create_custom_forward(module):
-                    def custom_forward(*inputs):
-                        return module(*inputs, output_attentions)
-
-                    return custom_forward
-
-                layer_outputs = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(layer_module),
-                    hidden_states,
-                    layer_head_mask,
-                )
+                assert False, "No support for training yet!"
             else:
                 layer_outputs = layer_module(hidden_states, layer_head_mask, output_attentions)
 
@@ -74,10 +57,6 @@ class DeiTEncoder(nn.Module):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        if not return_dict:
-            return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
-        return BaseModelOutput(
-            last_hidden_state=hidden_states,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attentions,
-        )
+        output = tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
+
+        return output

@@ -12,11 +12,12 @@ sys.path.append(f"{f}/../../../../..")
 import torch
 from torch import nn
 from deit_config import DeiTConfig
+from typing import Union, Optional, Tuple, Dict, Set, List
 
 import tt_lib
-from helper_funcs import make_linear
+# from deit_layer import TtDeiTLayer
 from tt_lib.fallback_ops import fallback_ops
-from deit_helper_funcs import linear as TtLinear
+from deit_helper_funcs import make_linear
 from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
@@ -33,14 +34,19 @@ class TtDeiTSelfAttention(nn.Module):
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.weight"], device)
-        self.query_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.bias"], device)
+        # self.query_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.query.weight"], device)
+        # self.query_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.query.bias"], device)
 
-        self.key_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.weight"], device)
-        self.key_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.bias"], device)
+        # self.key_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.key.weight"], device)
+        # self.key_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.key.bias"], device)
 
-        self.value_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.weight"], device)
-        self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.bias"], device)
+        # self.value_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.value.weight"], device)
+        # self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.value.bias"], device)
+        # print('\nquery::::', f"{state_dict}.attention")
+
+        self.query = make_linear(config.hidden_size, self.all_head_size, "query", state_dict, base_address, device)
+        self.key = make_linear(config.hidden_size, self.all_head_size, "key", state_dict, base_address, device)
+        self.value = make_linear(config.hidden_size, self.all_head_size, "value", state_dict, base_address, device)
 
     def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         # x must be 4d originaly
@@ -55,9 +61,9 @@ class TtDeiTSelfAttention(nn.Module):
         return x
 
     def forward(self,hidden_states,head_mask, output_attentions):
-        key = TtLinear(hidden_states, self.key_weight, self.key_bias)
-        value = TtLinear(hidden_states, self.value_weight, self.value_bias)
-        mixed_query_layer = TtLinear(hidden_states, self.query_weight, self.query_bias)
+        key = self.key(hidden_states)
+        value = self.value(hidden_states)
+        mixed_query_layer = self.query(hidden_states)
 
         key_layer = self.transpose_for_scores(key)
         value_layer = self.transpose_for_scores(value)

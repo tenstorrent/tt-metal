@@ -13,14 +13,15 @@ from torch import nn
 from deit_config import DeiTConfig
 
 import tt_lib
-from helper_funcs import make_linear
+from deit_helper_funcs import make_linear
 
 class TtDeiTOutput(nn.Module):
     def __init__(self, config: DeiTConfig() , host, device, state_dict=None, base_address="") -> None:
         super().__init__()
-        dense_weight = state_dict[f"{base_address}.weight"]
-        dense_bias = state_dict[f"{base_address}.bias"]
-        self.dense = make_linear(config.intermediate_size, config.hidden_size, dense_weight, dense_bias, device)
+        # dense_weight = state_dict[f"{base_address}.dense.weight"]
+        # dense_bias = state_dict[f"{base_address}.dense.bias"]
+        # in_feature, out_feature,
+        self.dense = make_linear(config.intermediate_size, config.hidden_size,  'dense', state_dict, base_address, device)
 
     def forward(self, hidden_states, input_tensor):
         hidden_states = self.dense(hidden_states)

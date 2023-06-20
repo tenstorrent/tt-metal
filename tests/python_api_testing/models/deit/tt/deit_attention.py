@@ -10,18 +10,17 @@ sys.path.append(f"{f}/../../../../..")
 
 import torch
 from torch import nn
+from typing import Union, Optional, Tuple, Dict, Set, List
 from deit_config import DeiTConfig
 
 import tt_lib
-from helper_funcs import make_linear
 from tt_lib.fallback_ops import fallback_ops
 from deit_self_attention import TtDeiTSelfAttention
 from deit_self_output import TtDeiTSelfOutput
-from deit_helper_funcs import linear as TtLinear
 from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
-class DeiTAttention(nn.Module):
+class TtDeiTAttention(nn.Module):
     def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address="") -> None:
         super().__init__()
         self.attention = TtDeiTSelfAttention(config, host, device, state_dict, f"{base_address}.attention")

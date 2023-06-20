@@ -28,7 +28,7 @@ def test_deit_output_inference():
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'encoder.layer.0.output.dense'
+    base_address= 'encoder.layer.0.output'
     torch_output = model.encoder.layer[0].output
 
     hidden_state_shape =  torch.Size([1, 198, 3072])

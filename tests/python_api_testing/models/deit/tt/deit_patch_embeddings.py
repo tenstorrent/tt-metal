@@ -18,7 +18,6 @@ from torch import nn
 from deit_config import DeiTConfig
 
 import tt_lib
-from helper_funcs import make_linear
 from tt_lib.fallback_ops import fallback_ops
 
 

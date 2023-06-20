@@ -8,38 +8,46 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
-import collections.abc
-import math
-from dataclasses import dataclass
 from typing import Optional, Set, Tuple, Union
 
 import torch
-import torch.utils.checkpoint
 from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from activations import ACT2FN
+
+import tt_lib
+from tt_lib.fallback_ops import fallback_ops
+# from deit_helper_funcs import make_linear
+from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
 from deit_config import DeiTConfig
+from deit_attention import TtDeiTAttention
+from deit_intermediate import TtDeiTIntermediate
+from deit_output import TtDeiTOutput
 
-class DeiTLayer(nn.Module):
+class TtDeiTLayer(nn.Module):
     """This corresponds to the Block class in the timm implementation."""
 
-    def __init__(self, config: DeiTConfig) -> None:
+    def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address="") -> None:
         super().__init__()
-        self.chunk_size_feed_forward = config.chunk_size_feed_forward
-        self.seq_len_dim = 1
-        self.attention = DeiTAttention(config)
-        self.intermediate = DeiTIntermediate(config)
-        self.output = DeiTOutput(config)
-        self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        print()
+        self.attention = TtDeiTAttention(config, host, device, state_dict, base_address = f'{base_address}.attention')
+        self.intermediate = TtDeiTIntermediate(config, host, device, state_dict, base_address = f'{base_address}.intermediate')
+        self.output = TtDeiTOutput(config, host, device, state_dict, base_address = f'{base_address}.output')
+
+        ln_bw = state_dict[f"{base_address}.layernorm_before.weight"]
+        ln_bb = state_dict[f"{base_address}.layernorm_before.bias"]
+        self.layernorm_before = fallback_ops.LayerNorm(normalized_shape=config.hidden_size, weights=ln_bw, biases=ln_bb, eps=config.layer_norm_eps)
+
+        ln_aw = state_dict[f"{base_address}.layernorm_after.weight"]
+        ln_ab = state_dict[f"{base_address}.layernorm_after.bias"]
+        self.layernorm_after = fallback_ops.LayerNorm(normalized_shape=config.hidden_size, weights=ln_aw, biases=ln_ab, eps=config.layer_norm_eps)
+
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        head_mask: Optional[torch.Tensor] = None,
+        hidden_states: tt_lib.tensor.Tensor,
+        head_mask: Optional[tt_lib.tensor.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
+    ) -> Union[Tuple[tt_lib.tensor.Tensor, tt_lib.tensor.Tensor], Tuple[tt_lib.tensor.Tensor]]:
         self_attention_outputs = self.attention(
             self.layernorm_before(hidden_states),  # in DeiT, layernorm is applied before self-attention
             head_mask,
@@ -49,7 +57,7 @@ class DeiTLayer(nn.Module):
         outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
         # first residual connection
-        hidden_states = attention_output + hidden_states
+        hidden_states = tt_lib.tensor.add(attention_output , hidden_states)
 
         # in DeiT, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)

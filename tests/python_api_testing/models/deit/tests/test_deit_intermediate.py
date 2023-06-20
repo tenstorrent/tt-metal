@@ -24,7 +24,6 @@ from deit_config import DeiTConfig
 
 from transformers import DeiTModel
 from deit_intermediate import TtDeiTIntermediate
-from activations import ACT2FN
 
 
 def test_deit_intermediate_inference():
