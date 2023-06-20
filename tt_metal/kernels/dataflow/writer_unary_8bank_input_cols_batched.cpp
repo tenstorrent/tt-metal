@@ -16,11 +16,11 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
-    const InterleavedPow2AddrGen<true> s = {
+    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    const InterleavedAddrGenFast<true> s = {
         .bank_base_address = dst_addr,
-
-
-        .log_base_2_of_page_size = 11 // TODO(AP): refactor
+        .page_size = tile_bytes,
+        .data_format = data_format
     };
 
     uint32_t tile_id = 0;
@@ -29,12 +29,10 @@ void kernel_main() {
         tile_id = i_nc + Wt_read;
         for (uint32_t i = 0; i < Ht; i++) {
             for (uint32_t j = 0; j < Wt; j++) {
-                uint64_t dst_noc_addr = get_noc_addr(tile_id, s);
-
                 cb_wait_front(cb_id_out0, onetile);
                 uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-                noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
+                noc_async_write_tile(tile_id, s, l1_read_addr);
 
                 noc_async_write_barrier();
 

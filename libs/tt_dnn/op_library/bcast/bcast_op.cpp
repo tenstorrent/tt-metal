@@ -94,12 +94,10 @@ void EltwiseBinaryBroadcast::validate(const std::vector<std::reference_wrapper<c
     const auto input_shape_a = input_tensor_a.shape();;
     const auto input_shape_b = input_tensor_b.shape();
 
-    if (this->dim == BcastOpDim::W) {
-        TT_ASSERT(input_shape_a[2] == input_shape_b[2]);
-    }
-    else if (this->dim == BcastOpDim::H) {
-        TT_ASSERT(input_shape_a[3] == input_shape_b[3]);
-    }
+    TT_ASSERT(input_tensor_a.layout() == Layout::TILE);
+    TT_ASSERT(input_tensor_b.layout() == Layout::TILE);
+    TT_ASSERT(input_tensor_a.dtype() == input_tensor_b.dtype());
+    TT_ASSERT(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
 
     auto batch_size_a = input_shape_a[0];
     auto num_channels_a = input_shape_a[1];
