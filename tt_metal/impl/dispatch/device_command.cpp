@@ -3,20 +3,20 @@
 #include "tt_metal/common/logger.hpp"
 
 DeviceCommand::DeviceCommand() {
-    this->desc[this->finish_idx] = 0;
-    this->desc[this->num_workers_idx] = 0;
-    this->desc[this->data_size_in_bytes_idx] = 0;
-    this->desc[this->num_relay_buffer_reads_idx] = 0;
-    this->desc[this->num_relay_buffer_writes_idx] = 0;
-    this->desc[this->num_relay_program_writes_idx] = 0;
+    this->desc.at(this->finish_idx) = 0;
+    this->desc.at(this->num_workers_idx) = 0;
+    this->desc.at(this->data_size_in_bytes_idx) = 0;
+    this->desc.at(this->num_relay_buffer_reads_idx) = 0;
+    this->desc.at(this->num_relay_buffer_writes_idx) = 0;
+    this->desc.at(this->num_relay_program_writes_idx) = 0;
 }
 
-void DeviceCommand::finish() { this->desc[this->finish_idx] = 1; }
+void DeviceCommand::finish() { this->desc.at(this->finish_idx) = 1; }
 
-void DeviceCommand::set_num_workers(u32 num_workers) { this->desc[this->num_workers_idx] = num_workers; }
+void DeviceCommand::set_num_workers(u32 num_workers) { this->desc.at(this->num_workers_idx) = num_workers; }
 
 void DeviceCommand::set_worker_core_noc_coord(u32 noc_coord) {
-    this->desc[this->worker_launch_idx] = noc_coord;
+    this->desc.at(this->worker_launch_idx) = noc_coord;
     this->worker_launch_idx++;
 }
 
@@ -32,17 +32,17 @@ void DeviceCommand::add_buffer_relay(
     u32 remainder_burst_size,
     u32 num_pages_per_remainder_burst,
     u32 banking_enum) {
-    this->desc[this->relay_buffer_entry_idx] = addr0;
-    this->desc[this->relay_buffer_entry_idx + 1] = addr0_noc;
-    this->desc[this->relay_buffer_entry_idx + 2] = addr1;
-    this->desc[this->relay_buffer_entry_idx + 3] = addr1_noc_start;
-    this->desc[this->relay_buffer_entry_idx + 4] = num_bursts;
-    this->desc[this->relay_buffer_entry_idx + 5] = burst_size;
-    this->desc[this->relay_buffer_entry_idx + 6] = num_pages_per_burst;
-    this->desc[this->relay_buffer_entry_idx + 7] = page_size;
-    this->desc[this->relay_buffer_entry_idx + 8] = remainder_burst_size;
-    this->desc[this->relay_buffer_entry_idx + 9] = num_pages_per_remainder_burst;
-    this->desc[this->relay_buffer_entry_idx + 10] = banking_enum;
+    this->desc.at(this->relay_buffer_entry_idx) = addr0;
+    this->desc.at(this->relay_buffer_entry_idx + 1) = addr0_noc;
+    this->desc.at(this->relay_buffer_entry_idx + 2) = addr1;
+    this->desc.at(this->relay_buffer_entry_idx + 3) = addr1_noc_start;
+    this->desc.at(this->relay_buffer_entry_idx + 4) = num_bursts;
+    this->desc.at(this->relay_buffer_entry_idx + 5) = burst_size;
+    this->desc.at(this->relay_buffer_entry_idx + 6) = num_pages_per_burst;
+    this->desc.at(this->relay_buffer_entry_idx + 7) = page_size;
+    this->desc.at(this->relay_buffer_entry_idx + 8) = remainder_burst_size;
+    this->desc.at(this->relay_buffer_entry_idx + 9) = num_pages_per_remainder_burst;
+    this->desc.at(this->relay_buffer_entry_idx + 10) = banking_enum;
     this->relay_buffer_entry_idx += this->num_4B_words_in_relay_buffer_instruction;
 }
 
@@ -58,7 +58,7 @@ void DeviceCommand::add_read_buffer_instruction(
     u32 remainder_burst_size,
     u32 num_pages_per_remainder_burst,
     u32 banking_enum) {
-    this->desc[this->num_relay_buffer_reads_idx]++;
+    this->desc.at(this->num_relay_buffer_reads_idx)++;
     this->add_buffer_relay(
         dst,
         dst_noc,
@@ -85,7 +85,7 @@ void DeviceCommand::add_write_buffer_instruction(
     u32 remainder_burst_size,
     u32 num_pages_per_remainder_burst,
     u32 banking_enum) {
-    this->desc[this->num_relay_buffer_writes_idx]++;
+    this->desc.at(this->num_relay_buffer_writes_idx)++;
     this->add_buffer_relay(
         src,
         src_noc,
@@ -102,27 +102,27 @@ void DeviceCommand::add_write_buffer_instruction(
 
 void DeviceCommand::add_read_multi_write_instruction(
     u32 src, u32 src_noc, u32 transfer_size, vector<TrailingWriteCommand> write_commands) {
-    this->desc[this->num_relay_program_writes_idx]++;
+    this->desc.at(this->num_relay_program_writes_idx)++;
 
-    this->desc[this->relay_program_entry_idx] = src;
-    this->desc[this->relay_program_entry_idx + 1] = src_noc;
-    this->desc[this->relay_program_entry_idx + 2] = transfer_size;
-    this->desc[this->relay_program_entry_idx + 3] = write_commands.size();
+    this->desc.at(this->relay_program_entry_idx) = src;
+    this->desc.at(this->relay_program_entry_idx + 1) = src_noc;
+    this->desc.at(this->relay_program_entry_idx + 2) = transfer_size;
+    this->desc.at(this->relay_program_entry_idx + 3) = write_commands.size();
     this->relay_program_entry_idx += 4;
     for (const TrailingWriteCommand& write_command : write_commands) {
-        this->desc[this->relay_program_entry_idx] = write_command.src;
-        this->desc[this->relay_program_entry_idx + 1] = write_command.dst;
-        this->desc[this->relay_program_entry_idx + 2] = write_command.dst_noc;
-        this->desc[this->relay_program_entry_idx + 3] = write_command.transfer_size;
-        this->desc[this->relay_program_entry_idx + 4] = write_command.num_receivers;
+        this->desc.at(this->relay_program_entry_idx) = write_command.src;
+        this->desc.at(this->relay_program_entry_idx + 1) = write_command.dst;
+        this->desc.at(this->relay_program_entry_idx + 2) = write_command.dst_noc;
+        this->desc.at(this->relay_program_entry_idx + 3) = write_command.transfer_size;
+        this->desc.at(this->relay_program_entry_idx + 4) = write_command.num_receivers;
         this->relay_program_entry_idx += 5;
     }
 }
 
 void DeviceCommand::set_data_size_in_bytes(u32 data_size_in_bytes) {
-    this->desc[this->data_size_in_bytes_idx] = data_size_in_bytes;
+    this->desc.at(this->data_size_in_bytes_idx) = data_size_in_bytes;
 }
 
-u32 DeviceCommand::get_data_size_in_bytes() const { return this->desc[this->data_size_in_bytes_idx]; }
+u32 DeviceCommand::get_data_size_in_bytes() const { return this->desc.at(this->data_size_in_bytes_idx); }
 
 const array<u32, DEVICE_COMMAND_NUM_ENTRIES>& DeviceCommand::get_desc() const { return this->desc; }
