@@ -168,8 +168,10 @@ def run_single_test(namespace: str, test_entry: TestEntry, timeout, tt_arch="gra
         logger.warning("Detected error on test that uses silicon - resetting")
         if tt_arch == "grayskull":
             run_process_and_get_result("tt-smi -tr all")
-        else:
+        elif tt_arch == "wormhole_b0":
             run_process_and_get_result("tt-smi -wr all")
+        else:
+            raise Exception(f"Unrecognized arch for tensix-reset: {tt_arch}")
         logger.warning("Silicon reset complete - returning status of FAILURE for this test")
 
     return completed_process

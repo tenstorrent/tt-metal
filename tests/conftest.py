@@ -204,7 +204,7 @@ def reset_tensix(request, silicon_arch_name):
                 "tt-smi -wr all"
             )
         else:
-            raise Exception("tt-smi reset had an error")
+            raise Exception(f"Unrecognized arch for tensix-reset: {silicon_arch_name}")
         assert result.returncode == 0, "Tensix reset script raised error"
 
 
