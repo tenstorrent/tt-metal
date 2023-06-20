@@ -196,10 +196,13 @@ inline __attribute__((always_inline)) constexpr static std::int32_t GET_L1_TILE_
 
 inline __attribute__((always_inline)) constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
     switch (format & 0x1F) {
-        case ((uint8_t)DataFormat::Bfp8_b): return ((index << 10) + (index << 6));
-        case ((uint8_t)DataFormat::Float16): return (index << 11);
+        case ((uint8_t)DataFormat::Float16):
+        case ((uint8_t)DataFormat::Float16_b):
+            return (index << 11);
+        case ((uint8_t)DataFormat::Bfp8_b):
         // Keep default as Bfp8?
-        default: return ((index << 10) + (index << 6));
+        default:
+            return ((index << 10) + (index << 6));
     };
 }
 
