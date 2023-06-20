@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Program multi_core_create_qkv_heads(const Tensor &a, Tensor& output, CoreCoord compute_and_storage_grid_size, bool transpose_hw) {
+operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &a, Tensor& output, CoreCoord compute_and_storage_grid_size, bool transpose_hw) {
 
     const auto& ashape = a.shape();
 
@@ -196,7 +196,43 @@ Program multi_core_create_qkv_heads(const Tensor &a, Tensor& output, CoreCoord c
         }
     }
 
-    return program;
+    auto override_runtime_args_callback = [
+            reader_kernel,
+            writer_kernel,
+            num_cores_r,
+            num_cores_c,
+            start_core_x,
+            start_core_y
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+            for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+                CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+
+                {
+                    auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                    runtime_args[0] = src_dram_buffer->address();
+                    SetRuntimeArgs(reader_kernel, core, runtime_args);
+                }
+
+                {
+                    auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                    runtime_args[0] = dst_dram_buffer->address();
+                    SetRuntimeArgs(writer_kernel, core, runtime_args);
+                }
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 } // namespace tt_metal
