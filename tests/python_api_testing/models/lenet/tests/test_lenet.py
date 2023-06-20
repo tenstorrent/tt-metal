@@ -15,7 +15,7 @@ from loguru import logger
 from lenet_utils import load_torch_lenet, prepare_image
 from tt.lenet import lenet5
 from utility_functions_new import comp_pcc
-
+from utility_functions_new import torch2tt_tensor
 
 @pytest.mark.parametrize(
     "pcc",
@@ -45,11 +45,10 @@ def test_lenet_inference(
         torch_output = torch_LeNet(image).unsqueeze(1).unsqueeze(1)
         _, torch_predicted = torch.max(torch_output.data, -1)
 
-        tt_image = tt_lib.tensor.Tensor(
-            image.reshape(-1).tolist(),
-            image.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        tt_image = torch2tt_tensor(
+            image,
+            device,
+            tt_lib.tensor.Layout.ROW_MAJOR
         )
 
         tt_output = tt_lenet(tt_image)
@@ -60,6 +59,6 @@ def test_lenet_inference(
 
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
-        # assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
+        assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
 
     tt_lib.device.CloseDevice(device)

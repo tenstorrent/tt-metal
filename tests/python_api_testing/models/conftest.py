@@ -40,7 +40,7 @@ def imagenet_sample_input(model_location_generator):
 
 @pytest.fixture
 def mnist_sample_input(model_location_generator):
-    sample_path = "/mnt/MLPerf/tt_dnn-models/samples/torchvision_mnist_digit_7.jpg"
+    sample_path = "tt_dnn-models/samples/torchvision_mnist_digit_7.jpg"
     path = model_location_generator(sample_path)
     im = Image.open(path)
     return im

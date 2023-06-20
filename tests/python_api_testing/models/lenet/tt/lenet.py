@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 from loguru import logger
 
-from lenet_utils import torch_to_tt_tensor, tt_tensor_to_torch, load_torch_lenet
-
+from lenet_utils import load_torch_lenet
+from utility_functions_new import torch2tt_tensor, tt2torch_tensor
 
 class TtLeNet5(nn.Module):
     def __init__(self, num_classes, device, host, state_dict):
@@ -59,58 +59,70 @@ class TtLeNet5(nn.Module):
         self.maxp2 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         fc_weights = state_dict[f"fc.weight"]
-        self.fc_weights = torch_to_tt_tensor(
-            fc_weights.reshape(list((1, 1) + fc_weights.shape))
+        self.fc_weights = torch2tt_tensor(
+            fc_weights.reshape(list((1, 1) + fc_weights.shape)),
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR
         )
         fc_bias = state_dict[f"fc.bias"]
-        self.fc_bias = torch_to_tt_tensor(
-            fc_bias.reshape(list((1, 1, 1) + fc_bias.shape))
+        self.fc_bias = torch2tt_tensor(
+            fc_bias.reshape(list((1, 1, 1) + fc_bias.shape)),
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR
         )
 
         fc1_weights = state_dict[f"fc1.weight"]
-        self.fc1_weights = torch_to_tt_tensor(
-            fc1_weights.reshape(list((1, 1) + fc1_weights.shape))
+        self.fc1_weights = torch2tt_tensor(
+            fc1_weights.reshape(list((1, 1) + fc1_weights.shape)),
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR
         )
         fc1_bias = state_dict[f"fc1.bias"]
-        self.fc1_bias = torch_to_tt_tensor(
-            fc1_bias.reshape(list((1, 1, 1) + fc1_bias.shape))
+        self.fc1_bias = torch2tt_tensor(
+            fc1_bias.reshape(list((1, 1, 1) + fc1_bias.shape)),
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR
         )
 
         fc2_weights = state_dict[f"fc2.weight"]
-        self.fc2_weights = torch_to_tt_tensor(
-            fc2_weights.reshape(list((1, 1) + fc2_weights.shape))
+        self.fc2_weights = torch2tt_tensor(
+            fc2_weights.reshape(list((1, 1) + fc2_weights.shape)),
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR
         )
         fc2_bias = state_dict[f"fc2.bias"]
-        self.fc2_bias = torch_to_tt_tensor(
-            fc2_bias.reshape(list((1, 1, 1) + fc2_bias.shape))
+        self.fc2_bias = torch2tt_tensor(
+            fc2_bias.reshape(list((1, 1, 1) + fc2_bias.shape)),
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR
         )
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        x = tt_tensor_to_torch(x, self.host)
+        x = tt2torch_tensor(x, self.host)
 
         out = self.conv1(x)  # HOST
         out = self.batch_norm1(out)  # HOST
 
-        tt_tensor = torch_to_tt_tensor(out)
+        tt_tensor = torch2tt_tensor(out, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
 
         out = self.relu1(tt_tensor)  # DEVICE
 
-        out = tt_tensor_to_torch(out, self.host)
+        out = tt2torch_tensor(out, self.host)
 
         out = self.maxp1(out)  # HOST
         out = self.conv2(out)  # HOST
         out = self.batch_norm2(out)  # HOST
 
-        tt_tensor = torch_to_tt_tensor(out)
+        tt_tensor = torch2tt_tensor(out, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
 
         out = self.relu2(tt_tensor)  # DEVICE
 
-        out = tt_tensor_to_torch(out, self.host)
+        out = tt2torch_tensor(out, self.host)
 
         out = self.maxp2(out)  # HOST
         out = out.reshape(out.size(0), 1, 1, -1)  # HOST: modifed to have 4 dims
 
-        tt_tensor = torch_to_tt_tensor(out)
+        tt_tensor = torch2tt_tensor(out, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
 
         # fc
         weight_T = tt_lib.tensor.transpose(self.fc_weights)
