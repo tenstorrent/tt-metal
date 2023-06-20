@@ -111,7 +111,7 @@ struct CoresInCoreRangeGenerator {
 
         this->current = new_coord;
 
-        bool terminate = this->end < this->current;
+        bool terminate = this->end == coord;
 
         return {coord, terminate};
     }
