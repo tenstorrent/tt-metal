@@ -8,7 +8,7 @@ from python_api_testing.models.utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 from python_api_testing.models.swin.swin_helper_funcs import linear as TtLinear
-from python_api_testing.models.swin.tt.swin_utils import meshgrid
+from python_api_testing.models.swin.swin_utils import meshgrid
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
@@ -80,6 +80,9 @@ class TtSwinSelfAttention(nn.Module):
             state_dict[f"{base_address}.value.bias"], self.device
         )
 
+    def const_tensor(self, shape, value):
+        return fallback_ops.full(shape, value)
+
     def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         # x must be 4d originaly
         # 1 is appended to the beggining
@@ -115,7 +118,7 @@ class TtSwinSelfAttention(nn.Module):
 
         attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = fallback_ops.full(
+        attention_head_size_tt = self.const_tensor(
             attention_scores.shape(), self.attention_head_size
         )
         attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
@@ -192,12 +195,11 @@ class TtSwinSelfAttention(nn.Module):
         )
         context_layer = fallback_ops.reshape(
             context_layer,
+            1,
             new_context_layer_shape[0],
             new_context_layer_shape[1],
             new_context_layer_shape[2],
-            1,
         )
-        context_layer = tt_lib.tensor.permute(context_layer, 3, 0, 1, 2)
         outputs = (
             (context_layer, attention_probs) if output_attentions else (context_layer,)
         )

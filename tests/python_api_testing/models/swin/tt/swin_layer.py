@@ -10,7 +10,7 @@ from python_api_testing.models.utility_functions_new import (
 from python_api_testing.models.swin.tt.swin_attention import TtSwinAttention
 from python_api_testing.models.swin.tt.swin_intermediate import TtSwinIntermediate
 from python_api_testing.models.swin.tt.swin_output import TtSwinOutput
-from python_api_testing.models.swin.tt.swin_utils import (
+from python_api_testing.models.swin.swin_utils import (
     window_partition,
     window_reverse,
 )
