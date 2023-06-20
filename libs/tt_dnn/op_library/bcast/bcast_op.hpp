@@ -27,10 +27,10 @@ struct BcastOpParallelizationStrategy {
     static const vector<Enum> all() { return { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE }; }
 };
 
-Program bcast_single_core(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
-Program bcast_multi_core_h(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
-Program bcast_multi_core_w(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
-Program bcast_multi_core_hw(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
+operation::ProgramWithCallbacks bcast_single_core(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
+operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
+operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
+operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);
 
 struct EltwiseBinaryBroadcast {
     const BcastOpMath::Enum math_op;
@@ -40,6 +40,7 @@ struct EltwiseBinaryBroadcast {
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
 
 inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim) {

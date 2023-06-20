@@ -14,7 +14,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Program bcast_multi_core_hw(const Tensor &a, const Tensor &b, Tensor& output, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
+operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tensor &b, Tensor& output, BcastOpMath::Enum bcast_math, BcastOpDim::Enum bcast_dim) {
     TT_ASSERT(bcast_dim == BcastOpDim::HW);
 
     const auto ashape = a.shape();
@@ -195,7 +195,42 @@ Program bcast_multi_core_hw(const Tensor &a, const Tensor &b, Tensor& output, Bc
 		num_tiles_read += num_tensor_tiles_per_core;
 	}
 
-    return program;
+    auto override_runtime_args_callback = [
+            binary_reader_kernel,
+            unary_writer_kernel,
+            num_cores,
+            num_cores_y
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+            {
+                auto runtime_args = GetRuntimeArgs(binary_reader_kernel, core);
+                runtime_args[0] = src_dram_buffer_a->address();
+                runtime_args[4] = src_dram_buffer_b->address();
+                SetRuntimeArgs(binary_reader_kernel, core, runtime_args);
+            }
+
+            {
+                auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+                runtime_args[0] = dst_dram_buffer->address();
+                SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 }  // namespace tt_metal

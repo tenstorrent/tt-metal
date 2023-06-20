@@ -24,7 +24,7 @@ struct UnaryOpParallelizationStrategy {
 
 struct EltwiseUnary {
     const UnaryOpType::Enum op_type;
-    std::optional<float> param;
+    const std::optional<float> param;
 
     explicit EltwiseUnary(UnaryOpType::Enum op_type,std::optional<float> param_={}) : op_type{op_type}, param(param_) {}
 

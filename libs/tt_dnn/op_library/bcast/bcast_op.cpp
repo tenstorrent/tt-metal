@@ -4,6 +4,8 @@
 
 #include "tt_metal/common/constants.hpp"
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 namespace bcast_op_utils {
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -139,18 +141,28 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
 
     switch (bcast_op_utils::get_parallelization_strategy(input_tensor_a, this->dim)) {
         case BcastOpParallelizationStrategy::MULTI_CORE_H:
-            return {bcast_multi_core_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim)};
-            break;
+            return bcast_multi_core_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
         case BcastOpParallelizationStrategy::MULTI_CORE_W:
-            return {bcast_multi_core_w(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim)};
-            break;
+            return bcast_multi_core_w(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
         case BcastOpParallelizationStrategy::MULTI_CORE_HW:
-            return {bcast_multi_core_hw(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim)};
-            break;
+            return bcast_multi_core_hw(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
         case BcastOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return {bcast_single_core(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim)};
+            return bcast_single_core(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->dim);
     }
+}
+
+operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
+
+    return fmt::format(
+        "eltwise_binary_broadcast_{}_{}_{}_{}",
+         magic_enum::enum_name(this->math_op),
+         magic_enum::enum_name(this->dim),
+         operation::hash_tensor(input_tensor_a),
+         operation::hash_tensor(input_tensor_b)
+    );
 }
 
 }  // namespace tt_metal
