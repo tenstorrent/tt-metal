@@ -66,9 +66,13 @@ struct ConsoleSummary : public IReporter {
     // called when a test case is reentered because of unfinished subcases
     void test_case_reenter(const TestCaseData& /*in*/) override {}
 
-    void test_case_end(const CurrentTestCaseStats& /*in*/) override {
-        if ((not opt.minimal) and (not opt.quiet)) {
+    void test_case_end(const CurrentTestCaseStats& in) override {
+        if ((not opt.minimal) and (not opt.quiet) and in.testCaseSuccess) {
+            passed_filters.push_back(test_case_filter);
             stdout_stream << Color::Grey << test_case_filter << " FINISHED" << std::endl;
+        } else if (not in.testCaseSuccess) {
+            failed_filters.push_back(test_case_filter);
+            stdout_stream << Color::Red << test_case_filter << " FAILED" << std::endl;
         }
     }
 
