@@ -61,6 +61,7 @@ def test_conv2d_fallback(
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     w = torch.randn(weight_shape).bfloat16().float()
@@ -207,6 +208,7 @@ def test_Conv2d_fallback(
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     w = torch.randn(weight_shape).bfloat16().float()

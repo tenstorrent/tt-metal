@@ -39,6 +39,7 @@ def test_concat_fallback(input_shapes, dim, on_device):
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
 
     xs = [torch.randn(input_shape).bfloat16().float() for input_shape in input_shapes]
     pt_out = torch.concat(xs, dim)

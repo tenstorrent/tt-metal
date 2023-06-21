@@ -20,6 +20,7 @@ def test_repeat_interleave_fallback(input_shape, repeats, dim, on_device):
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     pt_out = torch.repeat_interleave(x, repeats, dim)

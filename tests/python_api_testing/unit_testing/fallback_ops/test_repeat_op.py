@@ -10,7 +10,8 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "input_shape", [torch.Size([6, 12, 6, 24]), torch.Size([24, 30, 6, 6]), torch.Size([1, 2, 1, 2])]
+    "input_shape",
+    [torch.Size([6, 12, 6, 24]), torch.Size([24, 30, 6, 6]), torch.Size([1, 2, 1, 2])],
 )
 @pytest.mark.parametrize("sizes", [[1, 2, 3, 4], [2, 2, 2, 2]])
 @pytest.mark.parametrize("on_device", [False, True])
@@ -19,6 +20,7 @@ def test_repeat_fallback(input_shape, sizes, on_device):
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     pt_out = x.repeat(sizes)

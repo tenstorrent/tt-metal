@@ -23,6 +23,7 @@ def test_pad_fallback(input_shape, pad, mode, value, on_device):
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
 
     value = torch.Tensor([value]).bfloat16().float().item()
     x = torch.randn(input_shape).bfloat16().float()
