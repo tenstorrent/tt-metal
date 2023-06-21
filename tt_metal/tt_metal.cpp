@@ -896,22 +896,22 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
 
     if (not unique_core_ranges_without_brisc_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_brisc_kernel);
-        auto b_kernel = CreateDataMovementKernel(
+        auto blank_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
-        CompileKernel(device, program, b_kernel, profile_kernel);
+        CompileKernel(device, program, blank_kernel, profile_kernel);
     }
 
     if (not unique_core_ranges_without_ncrisc_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_ncrisc_kernel);
-        auto b_kernel = CreateDataMovementKernel(
+        auto blank_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
-        CompileKernel(device, program, b_kernel, profile_kernel);
+        CompileKernel(device, program, blank_kernel, profile_kernel);
     }
     if (not unique_core_ranges_without_compute_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_compute_kernel);
-        auto b_kernel = CreateComputeKernel(
+        auto blank_kernel = CreateComputeKernel(
             program, "tt_metal/kernels/compute/blank.cpp", core_range_set, {0}, MathFidelity::HiFi4, false, false);
-        CompileKernel(device, program, b_kernel, profile_kernel);
+        CompileKernel(device, program, blank_kernel, profile_kernel);
     }
 
 }
