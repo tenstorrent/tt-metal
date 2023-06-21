@@ -144,4 +144,5 @@ std::pair<vector<uint32_t>, vector<uint32_t>> conv_transform(vector<int> activat
                                         uint32_t weight_block_w,
                                         uint32_t num_blocks_act_h,
                                         uint32_t num_blocks_weight_w,
-                                        uint32_t num_bytes_of_df);
+                                        uint32_t num_bytes_of_df,
+                                        bool skip_activation_transform);

@@ -232,7 +232,8 @@ std::pair<vector<uint32_t>, vector<uint32_t>> conv_transform(vector<int> activat
                                         uint32_t weight_block_w,
                                         uint32_t num_blocks_act_h,
                                         uint32_t num_blocks_weight_w,
-                                        uint32_t num_bytes_of_df) {
+                                        uint32_t num_bytes_of_df,
+                                        bool skip_activation_transform) {
     assert(activation_shape.size() == 3);
     assert(weight_shape.size() == 4);
     assert(conv_params.size() == 6);
@@ -254,7 +255,9 @@ std::pair<vector<uint32_t>, vector<uint32_t>> conv_transform(vector<int> activat
         conv_act_and_weight_address_maps.second = read_address_map_from_file(dtx_conv_weight_file);
         return conv_act_and_weight_address_maps;
     }
-    conv_act_and_weight_address_maps.first = conv_act_transform(activation_shape, conv_params, act_block_shape_yx, num_blocks_weight_w, num_bytes_of_df);
+    if(!skip_activation_transform) {
+        conv_act_and_weight_address_maps.first = conv_act_transform(activation_shape, conv_params, act_block_shape_yx, num_blocks_weight_w, num_bytes_of_df);
+    }
     conv_act_and_weight_address_maps.second = conv_weight_transform(weight_shape, conv_params, weight_block_shape_yx, num_blocks_act_h, num_bytes_of_df);
 
     // Save and cache dtx transform outputs to file

@@ -9,7 +9,7 @@ from tt_lib.fused_ops.conv import conv as TtConv
 def is_conv_supported_on_device(conv_params):
     K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
 
-    if (C%32 != 0 or K%32 != 0 or dilation != 1 or groups != 1):
+    if (K%32 != 0 or dilation != 1 or groups != 1):
         logger.warning("DOES NOT HAVE SUPPORT FOR Conv with following parameters -")
         logger.warning("K="+str(K)+" C="+str(C)+" R="+str(R)+" S="+str(S)+" U="+str(U)+" V="+str(V)+" PH="+str(P_H)+" PW="+str(P_W)+" dilation="+str(dilation)+" groups="+str(groups))
         return False

@@ -44,7 +44,7 @@ def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_
     A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
     b_weights_shape = [K,C,R,S]
     B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
-    
+
     # Parameters defining block dims
     act_block_h = 4
     act_block_w = 4
@@ -53,14 +53,14 @@ def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_
     OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
     OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
     mm_output_shape = [1,1,_nearest_y(OH*OW, 32*act_block_h),_nearest_y(K, 32*weight_block_w)]
-    
+
     # Prepare activations
     A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
     A_cl_data = A_cl.data()
     # Prepare weights
     B_tiled_ = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
     B_tiled_data = B_tiled_.data()
-    
+
     # Call DTX pass to transform A
     act_block_width_datums = act_block_w * 32
     act_block_height_datums = act_block_h * 32
@@ -80,7 +80,8 @@ def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_
                             weight_block_width_datums,
                             num_blocks_act_h,
                             num_blocks_weight_w,
-                            1)
+                            1,
+                            False)
 
     # Run host side CPU function
     out_pytorch = blocked_mm_with_conv_act(A_cl_data, B_tiled_data, act_address_map, weight_address_map, num_blocks_act_h, num_blocks_act_w,

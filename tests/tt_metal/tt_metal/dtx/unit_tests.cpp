@@ -551,7 +551,7 @@ bool test_run_conv_transform_no_evaluate() {
     uint32_t act_block_h = 32;
     uint32_t act_block_w = 32;
     uint32_t weight_block_w = 32;
-    auto address_map = conv_transform(act_shape, weight_shape, conv_params, act_block_h, act_block_w, weight_block_w, num_blocks_act_h, num_blocks_weight_w, 1);
+    auto address_map = conv_transform(act_shape, weight_shape, conv_params, act_block_h, act_block_w, weight_block_w, num_blocks_act_h, num_blocks_weight_w, 1, false);
     return true;
 }
 

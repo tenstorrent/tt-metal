@@ -2014,8 +2014,9 @@ void DTXModule(py::module &m_dtx) {
                                         uint32_t in1_block_w,
                                         uint32_t num_blocks_in0_h,
                                         uint32_t num_blocks_in1_w,
-                                        uint32_t num_bytes_of_df){
-        return conv_transform(activation_shape, weight_shape, conv_params, in0_block_h, in0_block_w, in1_block_w, num_blocks_in0_h, num_blocks_in1_w, num_bytes_of_df);
+                                        uint32_t num_bytes_of_df,
+                                        bool skip_activation_transform){
+        return conv_transform(activation_shape, weight_shape, conv_params, in0_block_h, in0_block_w, in1_block_w, num_blocks_in0_h, num_blocks_in1_w, num_bytes_of_df, skip_activation_transform);
     });
 }
 

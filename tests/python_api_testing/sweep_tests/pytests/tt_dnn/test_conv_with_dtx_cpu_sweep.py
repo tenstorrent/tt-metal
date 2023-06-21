@@ -38,7 +38,7 @@ def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_gol
     stride_w = ctp.stride_w
     pad_h = ctp.pad_h
     pad_w = ctp.pad_w
-    
+
     A_pyt = pytorch_inputs_and_golden[0]
     B_pyt = pytorch_inputs_and_golden[1]
 
@@ -50,7 +50,7 @@ def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_gol
     OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
     OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
     mm_output_shape = [1,1,_nearest_y(OH*OW, 32*act_block_h),_nearest_y(K, 32*weight_block_w)]
-    
+
     # Prepare activations
     A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
     A_cl_data = A_cl.data()
@@ -81,7 +81,8 @@ def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_gol
                             weight_block_width_datums,
                             num_blocks_act_h,
                             num_blocks_weight_w,
-                            1)
+                            1,
+                            False)
 
     # Run host side CPU function
     out_pytorch = blocked_mm_with_conv_act(A_cl_data, B_tiled_data, act_address_map, weight_address_map, num_blocks_act_h, num_blocks_act_w,

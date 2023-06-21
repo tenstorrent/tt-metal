@@ -305,6 +305,132 @@ vector<uint32_t> compute_conv_as_mm_shape(vector<int> shape, const std::vector<i
     return {1,num_rows_padded, num_cols_padded};
 }
 
+std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_activation_address_map(
+                            const std::array<uint32_t, 4>& activation_shape,
+                            const vector<int>& conv_params,
+                            uint32_t in0_block_h_datums,
+                            uint32_t in0_block_w_datums,
+                            uint32_t in1_block_w_datums,
+                            uint32_t num_blocks_in0_h,
+                            uint32_t num_blocks_in0_w,
+                            uint32_t num_blocks_in1_w,
+                            uint32_t num_bytes_df) {
+    vector<uint32_t> address_map;
+    vector<uint32_t> address_map_metadata;
+    uint32_t conv_input_x = activation_shape[3];
+    uint32_t conv_input_y = activation_shape[2];
+    uint32_t conv_input_z = activation_shape[1];
+    uint32_t R = conv_params[0];
+    uint32_t S = conv_params[1];
+    uint32_t U = conv_params[2];
+    uint32_t V = conv_params[3];
+    uint32_t Pad_H = conv_params[4];
+    uint32_t Pad_W = conv_params[5];
+    uint32_t src_dram_buffer_size_bytes = conv_input_x * conv_input_y * conv_input_z * num_bytes_df;
+    uint32_t dst_l1_buffer_size_bytes = in0_block_h_datums * in0_block_w_datums * num_bytes_df;
+    int conv_output_h = ((conv_input_x - R + (2 * Pad_H)) / U) + 1;
+    int conv_output_w = ((conv_input_y - S + (2 * Pad_W)) / V) + 1;
+    uint32_t matrix_height = conv_output_h * conv_output_w;
+    uint32_t matrix_width = conv_input_z * R * S;
+    uint32_t matrix_height_padded = (uint32_t) (ceil((double) matrix_height / (double) in0_block_h_datums ) * in0_block_h_datums);
+    uint32_t matrix_width_padded = (uint32_t) (ceil((double) matrix_width / (double) in0_block_w_datums ) * in0_block_w_datums);
+
+    uint32_t num_groups = num_blocks_in0_h * num_blocks_in0_w * num_blocks_in1_w;
+    uint32_t channel_stick_size = conv_input_z;
+    uint32_t address_map_current_group_dram_address_offset = 0;
+    address_map_metadata.push_back(num_groups);
+    for(uint32_t group_idx = 0; group_idx < num_groups; group_idx++) {
+        uint32_t block_idx_h = (uint32_t) (group_idx / num_blocks_in0_w) / (num_blocks_in1_w);
+        uint32_t block_idx_w = (uint32_t) (group_idx % num_blocks_in0_w);
+        uint32_t block_idx = (block_idx_h * num_blocks_in0_w) + block_idx_w;
+        uint32_t start_block_2d_index_h = block_idx_h * in0_block_h_datums;
+        uint32_t start_block_2d_index_w = block_idx_w * in0_block_w_datums;
+        uint32_t start_block_2d_index = (start_block_2d_index_h * in0_block_w_datums * num_blocks_in0_w) + start_block_2d_index_w;
+        assert(start_block_2d_index_w < matrix_width);
+        uint32_t address_map_current_group_size = 0;
+        for(uint32_t h_b = 0; h_b < in0_block_h_datums; h_b++) {
+            uint32_t h = start_block_2d_index_h + h_b;
+            uint32_t dst_address_offset_l1 = h_b * in0_block_w_datums * num_bytes_df;
+            if (h >= matrix_height) {
+                // pad (block shape padding for height dim)
+                uint32_t pad_size_bytes = in0_block_w_datums * num_bytes_df;
+                assert(dst_address_offset_l1 < dst_l1_buffer_size_bytes);
+                address_map.push_back(0); // src address not used
+                address_map.push_back(dst_address_offset_l1);
+                address_map.push_back(pad_size_bytes);
+                address_map.push_back(1); // pad = 1
+                address_map_current_group_size += 4;
+            }
+            else {
+                uint32_t w = start_block_2d_index_w;
+                uint32_t end_block_2d_index_w = start_block_2d_index_w + in0_block_w_datums - 1;
+                assert(end_block_2d_index_w < matrix_width_padded);
+                while (w < end_block_2d_index_w) {
+                    uint32_t src_address_offset_dram = 0;
+                    uint32_t read_size_bytes = 0;
+                    uint32_t pad = 0;
+                    if (w >= matrix_width) {
+                        // pad (block shape padding for width dim)
+                        assert(end_block_2d_index_w == matrix_width_padded-1);
+                        read_size_bytes = (end_block_2d_index_w - w + 1) * num_bytes_df;
+                        pad = 1;
+                    }
+                    else {
+                        uint32_t channel_stick_offset = w % channel_stick_size;
+                        uint32_t channel_stick_col_id = w / channel_stick_size;
+                        uint32_t channel_stick_row_id = h;
+                        assert(channel_stick_offset % (32/num_bytes_df) == 0); // DRAM read address must be aligned to 32 bytes
+                        uint32_t channel_stick_row_id_x = channel_stick_row_id % conv_output_w;
+                        uint32_t channel_stick_row_id_y = channel_stick_row_id / conv_output_w;
+                        uint32_t act_tensor_start_x = channel_stick_row_id_x * V;
+                        uint32_t act_tensor_start_y = channel_stick_row_id_y * U;
+                        uint32_t act_tensor_padded_x = act_tensor_start_x + (channel_stick_col_id % S);
+                        uint32_t act_tensor_padded_y = act_tensor_start_y + (channel_stick_col_id / S);
+                        uint32_t read_size = min(channel_stick_size - channel_stick_offset, in0_block_w_datums);
+                        read_size_bytes = read_size * num_bytes_df;
+                        if(act_tensor_padded_x < Pad_W || act_tensor_padded_x >= (Pad_W + conv_input_x) || act_tensor_padded_y < Pad_H || act_tensor_padded_y >= (Pad_H + conv_input_y)) {
+                            // pad (conv padding)
+                            pad = 1;
+                        }
+                        else {
+                            uint32_t act_tensor_x = act_tensor_padded_x - Pad_W;
+                            uint32_t act_tensor_y = act_tensor_padded_y - Pad_H;
+                            assert(act_tensor_x < conv_input_x && act_tensor_x >= 0 && act_tensor_y < conv_input_y && act_tensor_y >= 0);
+                            uint32_t act_tensor_channel_id = act_tensor_y * conv_input_x + act_tensor_x;
+                            src_address_offset_dram = ((act_tensor_channel_id * channel_stick_size) + channel_stick_offset) * num_bytes_df;
+                            assert(src_address_offset_dram % 32 == 0); // DRAM read address must be aligned to 32 bytes
+                        }
+                    }
+                    assert(read_size_bytes > 0);
+                    assert(pad == 0 || pad == 1);
+                    assert(src_address_offset_dram < src_dram_buffer_size_bytes);
+                    assert(dst_address_offset_l1 < dst_l1_buffer_size_bytes);
+                    address_map.push_back(src_address_offset_dram);
+                    address_map.push_back(dst_address_offset_l1);
+                    address_map.push_back(read_size_bytes);
+                    address_map.push_back(pad);
+                    address_map_current_group_size += 4;
+                    dst_address_offset_l1 += read_size_bytes;
+                    w += (read_size_bytes/num_bytes_df);
+                    assert(w <= end_block_2d_index_w+1);
+                }
+            }
+        }
+        // DRAM reads should be 32B aligned
+        assert(address_map_current_group_dram_address_offset%32 == 0);
+        address_map_metadata.push_back(address_map_current_group_dram_address_offset);
+        address_map_metadata.push_back(address_map_current_group_size);
+        // Pad 0s in address map buffer to ensure each read address is 32B aligned (32/sizeof(uint32_t) == 8 elements)
+        uint32_t address_map_current_group_size_padded = (uint32_t) (ceil((double) address_map_current_group_size / (double) 8) * 8);
+        if(address_map_current_group_size_padded != address_map_current_group_size) {
+            assert(address_map_current_group_size_padded > address_map_current_group_size);
+            address_map.insert(address_map.end(), address_map_current_group_size_padded - address_map_current_group_size, 0);
+        }
+        // update next group's dram read address offset (in bytes)
+        address_map_current_group_dram_address_offset += (address_map_current_group_size_padded*sizeof(uint32_t));
+    }
+    return make_pair(std::move(address_map), std::move(address_map_metadata));
+}
 std::pair<vector<uint32_t>, vector<uint32_t>> populate_address_map_vectors_for_reader_kernel(vector<uint32_t> address_map_raw) {
     // This function is called twice i.e., for activation and weight address maps
     // "address_map_raw" is the DTX address map vector returned from DTX "conv_transform" function.
@@ -425,16 +551,18 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
     uint32_t in1_block_h = in0_block_w;
     uint32_t in1_block_num_tiles = in1_block_w * in1_block_h;
 
-    // DTX conv activation transform
-    auto [act_address_map_raw, weight_address_map_raw]  = conv_transform(activation_shape, {(int) Wb, (int) activation_shape[0], (int) conv_params[0], (int) conv_params[1]}, conv_params,
+    // DTX conv activation transform data access pattern
+    auto [act_address_map, act_address_map_metadata] = generate_conv_activation_address_map(a.shape(), conv_params, in0_block_h_datums, in0_block_w_datums, in1_block_w_datums,
+                                                            num_blocks_in0_h, num_blocks_in0_w, num_blocks_in1_w, num_bytes_of_df);
+
+    // DTX conv weight transform data access pattern. Skip conv activation transform.
+    auto [_, weight_address_map_raw]  = conv_transform(activation_shape, {(int) Wb, (int) activation_shape[0], (int) conv_params[0], (int) conv_params[1]}, conv_params,
                             in0_block_h_datums, in0_block_w_datums, in1_block_w_datums,
-                            num_blocks_in0_h, num_blocks_in1_w, num_bytes_of_df);
+                            num_blocks_in0_h, num_blocks_in1_w, num_bytes_of_df, true);
 
     // sanity check
-    uint32_t num_dtx_groups = act_address_map_raw[0];
+    uint32_t num_dtx_groups = act_address_map_metadata[0];
     assert(weight_address_map_raw[0] == num_dtx_groups);
-
-    auto [act_address_map, act_address_map_metadata] = populate_address_map_vectors_for_reader_kernel(act_address_map_raw);
     auto [weight_address_map, weight_address_map_metadata] = populate_address_map_vectors_for_reader_kernel(weight_address_map_raw);
 
     // debug prints

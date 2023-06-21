@@ -17,7 +17,7 @@ import torch
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
         # # resnet18 convs
-        # # ~10 mins
+        #(64, 3, 224, 224, 7, 7, 2, 2, 3, 3),
         #(64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
         # #K=128 C=64 H=56 W=56 R=3 S=3 U=2 V=2 PH=1 PW=1 dilation=1 groups=1
         # (128, 64, 56, 56, 3, 3, 2, 2, 1, 1),
