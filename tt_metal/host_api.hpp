@@ -707,11 +707,48 @@ bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t ad
 //
 // ==================================================
 
-// Compiles all kernels within the program, and generates their binaries
-bool CompileProgram(
-    Device *device,                 // Device - device doesn't have to be initialized to compile the program.
-    Program &program,               // Program
-    bool profile_kernel = false);   // Set the compile flag for kernels to report profiling timer marks
+
+/**
+ * Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
+ *
+ * Return value: void
+ */
+void EnableCompileCache();
+
+/**
+ * Disables kernel compilation cache from being persistent across runs.
+ *
+ * Return value: void
+ */
+void DisableCompileCache();
+
+/**
+ * Returns bool indicating whether persistent caching is enabled.
+ *
+ * Return value: bool
+ */
+bool GetCompileCacheEnabled();
+
+/**
+ *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/kernels/<kernel name>/<kernel hash>`
+ *  Blank data movement kernel targeting RISCV_0 are placed onto cores that are missing a RISCV_0 kernel because RISCV_0 processor needs to run to enable Compute and RISCV_1 processors
+ *
+ *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously compiled kernels.
+ *  Kernel uniqueness is determined by the kernel hash which is computed based on compile time args, defines, and kernel type specific attributes such as NOC for data movement kernels and math fidelity for compute kernels
+ *  TODO: Kernel hash needs to account for device architecture as binaries are not the same across architectures.
+ *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
+ *  This cache is static is enabled for the duration of the running process.
+ *  By default the cache does not persistent across runs, but can be enabled by calling EnableCompileCache(). Setting this will skip compilation when output binary directory exists.
+ *
+ *  Return value: bool
+ *
+ * | Argument       | Description                                                      | Type      | Valid Range                                        | Required |
+ * |----------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
+ * | device         | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
+ * | program        | The program to compile                                           | Program & |                                                    | Yes      |
+ * | profile_kernel | Set the compile flag for kernels to report profiling timer marks | bool      | default false                                      | No       |
+ */
+bool CompileProgram(Device *device, Program &program, bool profile_kernel = false);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores

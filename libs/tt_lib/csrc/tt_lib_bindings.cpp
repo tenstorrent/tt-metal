@@ -31,10 +31,6 @@ namespace tt {
 
 namespace tt_metal {
 
-extern void EnableCompileCache();
-extern int  DisableCompileCache();
-extern bool GetCompileCacheEnabled();
-
 void TensorModule(py::module &m_tensor) {
     // ENUM SECTION
 
@@ -1900,9 +1896,15 @@ void DeviceModule(py::module &m_device) {
     m_device.def("StartDebugPrintServer", &StartDebugPrintServer);
     m_device.def("StartDebugPrintServerOnCores", &StartDebugPrintServerOnCores);
 
-    m_device.def("EnableCompileCache", &EnableCompileCache);
-    m_device.def("DisableCompileCache", &DisableCompileCache);
-    m_device.def("GetCompileCacheEnabled", &GetCompileCacheEnabled);
+    m_device.def("EnableCompileCache", &EnableCompileCache, R"doc(
+        Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
+    )doc");
+    m_device.def("DisableCompileCache", &DisableCompileCache, R"doc(
+        Disables kernel compilation cache from being persistent across runs
+    )doc");
+    m_device.def("GetCompileCacheEnabled", &GetCompileCacheEnabled, R"doc(
+        Returns bool indicating whether persistent kernel compilation cache is enabled
+    )doc");
 
     m_device.def("EnableCompilationReports", &EnableCompilationReports, R"doc(
         Enables tt-metal to generate reports of compilation statistics

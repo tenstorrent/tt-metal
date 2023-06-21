@@ -3,5 +3,5 @@ APIs
 
 .. toctree::
 
-   host_apis2
+   host_apis
    kernel_apis
