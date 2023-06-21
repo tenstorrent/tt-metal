@@ -53,7 +53,7 @@ bool verify_result(Device *device, const Program &program, const std::map<CoreCo
         return result_base;
     };
 
-    CHECK(program.kernels().size() == 1);
+    CHECK(program.kernels().size() == 3); //2 Blanks get auto-populated even though we added 1 kernel into program
     auto processor = program.kernels().at(0)->processor();
     auto rt_arg_addr = get_runtime_arg_addr(program.kernels().at(0));
 
@@ -83,7 +83,7 @@ TEST_SUITE(
         CoreRange second_core_range = {.start = CoreCoord(3, 3), .end = CoreCoord(5, 5)};
         CoreRangeSet core_range_set({first_core_range, second_core_range});
         auto program = unit_tests::runtime_args::init_compile_and_configure_program(this->device_, core_range_set);
-        REQUIRE(program.kernels().size() == 1);
+        REQUIRE(program.kernels().size() == 3); //2 Blanks get auto-populated even though we added 1 kernel into program
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         SetRuntimeArgs(program.kernels().at(0), core_range_set, initial_runtime_args);
 
