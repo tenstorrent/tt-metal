@@ -140,7 +140,7 @@ class Operation {
         ) const = 0;
 
         virtual bool supports_program_caching() const = 0;
-        virtual std::string get_op_name() const = 0 ;
+        virtual std::string get_type_name() const = 0 ;
     };
 
     template< typename T >
@@ -228,7 +228,7 @@ class Operation {
             return result;
         }
 
-        std::string get_op_name() const {
+        std::string get_type_name() const {
             return typeid(T).name();
         }
 
@@ -284,8 +284,8 @@ class Operation {
     bool supports_program_caching() const {
         return this->implementation_->supports_program_caching();
     }
-    std::string get_op_name() const {
-        return this->implementation_->get_op_name();
+    std::string get_type_name() const {
+        return this->implementation_->get_type_name();
     }
 
 

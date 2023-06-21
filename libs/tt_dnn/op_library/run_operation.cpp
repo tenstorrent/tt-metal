@@ -48,7 +48,7 @@ std::vector<Tensor> run_without_program_cache(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
-    auto profile_run_wo_program_cache = op_profiler::ProfileScope(op.get_op_name());
+    auto profile_run_wo_program_cache = op_profiler::ProfileScope(op.get_type_name());
 
     op.validate(input_tensors, optional_input_tensors);
 
