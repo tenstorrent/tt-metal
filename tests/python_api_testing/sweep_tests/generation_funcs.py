@@ -284,13 +284,13 @@ def sanitize_args(input_shapes, dtype_device_layout):
             (
                 dtype_device_layout["layout"] == ttl.tensor.Layout.TILE
                 and (shape[2] % 32 != 0 or shape[3] % 32 != 0)
-            )
-            or (  # Shape cannot be tilized
+            )  # Shape cannot be tilized
+            or (
                 dtype_device_layout["layout"] == ttl.tensor.Layout.CHANNELS_LAST
                 and dtype_device_layout["on_device"]
                 and shape[1] % 2 != 0
-            )
-            or (  # Shape cannot be placed as channels last on device
+            )  # Shape cannot be placed as channels last on device
+            or (
                 dtype_device_layout["layout"] == ttl.tensor.Layout.ROW_MAJOR
                 and dtype_device_layout["on_device"]
                 and shape[3] % 2 != 0
