@@ -154,7 +154,7 @@ Program split_last_dim_qk_tiled(const Tensor &input_tensor, std::vector<Tensor> 
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
             uint32_t core_id = core_idx_x + core_idx_y * num_cores_c;
 
-            std::vector<uint32_t> reader_runtime_args = {
+            std::vector<unsigned int> reader_runtime_args = {
                 core_id * per_core_tiles,
                 (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr
             };
@@ -165,8 +165,8 @@ Program split_last_dim_qk_tiled(const Tensor &input_tensor, std::vector<Tensor> 
                 (std::uint32_t)k_buffer->address(),  // second base addr
             };
 
-            tt_metal::WriteRuntimeArgsToDevice(device, reader_kernel, core, reader_runtime_args);
-            tt_metal::WriteRuntimeArgsToDevice(device, writer_kernel, core, writer_runtime_args);
+            tt_metal::SetRuntimeArgs(reader_kernel, core, reader_runtime_args);
+            tt_metal::SetRuntimeArgs(writer_kernel, core, writer_runtime_args);
         }
     }
 
@@ -185,23 +185,23 @@ std::vector<Tensor> split_last_dim_qk_tiled(const Tensor &input_tensor) {
     tt_metal::Device *device;
     // Get the device
     if (input_tensor.on_host()) {
-        device = AutoPad::GetDefaultDevice();
+        device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
         device = input_tensor.device();
     }
 
     auto input_shape = input_tensor.shape();
-    auto padded_input_shape = AutoPad::pad_to_tile_shape(input_shape);
-    if (AutoPad::check_input_tensor_format(input_tensor, padded_input_shape)) {
+    auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_shape);
+    if (AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {
         return std::move(operation::run(SplitLastDimQKTiled(), {std::cref(input_tensor)}));
     } else {
         auto device = input_tensor.device();
         auto output_shape = op.compute_output_shapes({std::cref(input_tensor)}).at(0);
-        const auto padded_tensor = AutoPad::format_input_tensor(input_tensor, device, padded_input_shape);
+        const auto padded_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape);
         auto output_tensors = std::move(operation::run(SplitLastDimQKTiled(), {std::cref(padded_tensor)}));
         for (auto &output_tensor : output_tensors) {
-            AutoPad::format_output_tensor(input_tensor, output_tensor, output_shape, device);
+            AutoFormat::format_output_tensor(output_tensor, output_shape, device);
         }
         return output_tensors;
     }
