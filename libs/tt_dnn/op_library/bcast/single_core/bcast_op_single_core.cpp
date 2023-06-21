@@ -22,19 +22,6 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
     uint32_t NC = N*C;
     uint32_t HW = H*W;
 
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && NC > 0);
-    TT_ASSERT(a.volume() % TILE_HW == 0);
-
-    TT_ASSERT((bN*bC == 1 || (bN == N && bC == C)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
-    // validate input dimensions
-    if (bcast_dim == BcastOpDim::W)
-        TT_ASSERT(H == bH && bW == TILE_WIDTH);
-    if (bcast_dim == BcastOpDim::H)
-        TT_ASSERT(W == bW && bH == TILE_HEIGHT);
-    if (bcast_dim == BcastOpDim::HW)
-        TT_ASSERT(bW == TILE_WIDTH && bH == TILE_HEIGHT);
-
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
 
@@ -50,10 +37,16 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
     TT_ASSERT(a.device() == b.device(), "Operands to bcast need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to bcast need to be allocated in buffers on device!");
 
-    uint32_t single_tile_size = 2 * 1024;
-
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
+
+    // TODO: CHANGE TO FUNCTION CONVERSION
+    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
+    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        cb_data_format = tt::DataFormat::Float16_b;
+    }
+
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -64,7 +57,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t src1_cb_index = 1;
@@ -75,7 +68,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -87,21 +80,25 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
+
+    std::vector<uint32_t> reader_writer_compile_time_args = {static_cast<uint32_t>(cb_data_format)};
 
     const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::SINGLE_CORE);
     tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         reader_name,
         core,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
         core,
+        reader_writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -146,7 +143,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         core,
         {
             output.buffer()->address(),
-            0, 0, num_tensor_tiles
+            0, 0, num_tensor_tiles, 0
         }
     );
 

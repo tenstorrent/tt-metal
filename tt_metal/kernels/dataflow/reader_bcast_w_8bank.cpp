@@ -26,18 +26,18 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t i_bcast = 0;
 
-    const InterleavedPow2AddrGen<true> s0 = {
+    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
+
+    const InterleavedAddrGenFast<true> s0 = {
         .bank_base_address = src0_addr,
-
-
-        .log_base_2_of_page_size = 11
+        .page_size = tile_bytes,
+        .data_format = data_format
     };
 
-    const InterleavedPow2AddrGen<true> s1 = {
+    const InterleavedAddrGenFast<true> s1 = {
         .bank_base_address = src1_addr,
-
-
-        .log_base_2_of_page_size = 11
+        .page_size = tile_bytes,
+        .data_format = data_format
     };
 
     for (uint32_t nc = 0; nc < NC; nc ++ ) {
@@ -46,19 +46,17 @@ void kernel_main() {
                 // only read one tile in H per W-line of tiles
                 // So we push a total of NC*H tiles from src1
                 cb_reserve_back(cb_id_in1, onetile);
-                uint64_t src1_noc_addr = get_noc_addr(i_bcast, s1);
                 l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read(src1_noc_addr, l1_write_addr_in1, tile_bytes);
+                noc_async_read_tile(i_bcast, s1, l1_write_addr_in1);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
                 i_bcast++;
             }
 
             for (uint32_t wt = 0; wt < Wt; wt++) {
-                uint64_t src0_noc_addr = get_noc_addr(i, s0);
                 cb_reserve_back(cb_id_in0, onetile);
                 l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read(src0_noc_addr, l1_write_addr_in0, tile_bytes);
+                noc_async_read_tile(i, s0, l1_write_addr_in0);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
                 i++;

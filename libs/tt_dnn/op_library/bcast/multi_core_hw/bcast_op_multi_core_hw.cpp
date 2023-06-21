@@ -36,6 +36,15 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
     tt_metal::Device *device = a.device();
 
+	// TODO: CHANGE TO FUNCTION CONVERSION
+    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
+    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        cb_data_format = tt::DataFormat::Float16_b;
+    }
+
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+
+
     auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
     uint32_t num_cores_x = compute_and_storage_grid_size.x;
     uint32_t num_cores_y = compute_and_storage_grid_size.y;
@@ -45,8 +54,6 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
     TT_ASSERT(a.device() != nullptr and b.device() != nullptr, "Operands to bcast need to be on device!");
     TT_ASSERT(a.device() == b.device(), "Operands to bcast need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to bcast need to be allocated in buffers on device!");
-
-    uint32_t single_tile_size = a.element_size() * TILE_HW;
 
     const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::MULTI_CORE_HW);
     const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
@@ -60,7 +67,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		all_cores,
 		num_input_tiles,
 		num_input_tiles * single_tile_size,
-		DataFormat::Float16_b
+		cb_data_format
 	);
 
 	uint32_t src1_cb_index = 1;
@@ -71,7 +78,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		all_cores,
 		num_input_tiles,
 		num_input_tiles * single_tile_size,
-		DataFormat::Float16_b
+		cb_data_format
 	);
 
 	uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -83,21 +90,15 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		all_cores,
 		num_output_tiles,
 		num_output_tiles * single_tile_size,
-		DataFormat::Float16_b
+		cb_data_format
 	);
 
-	bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-	std::vector<uint32_t> reader_writer_compile_time_args;
-	if (tile_size_is_power_of_two) {
-		// Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-		reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
-	} else {
-		reader_writer_compile_time_args = {0, 0};
-	}
+	std::vector<uint32_t> reader_writer_compile_time_args = {static_cast<uint32_t>(cb_data_format)};
 	tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
 		program,
 		reader_name,
 		all_cores,
+		reader_writer_compile_time_args,
 		tt_metal::DataMovementProcessor::RISCV_1,
 		tt_metal::NOC::RISCV_1_default);
 
