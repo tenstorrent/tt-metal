@@ -22,42 +22,24 @@ static Device* get_device(const std::vector<std::reference_wrapper<const Tensor>
 void override_runtime_args(
     const OverrideRuntimeArgsCallback& override_runtime_args_callback,
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
     const std::vector<Tensor> &output_tensors
 ) {
     std::vector<Buffer*> input_buffers;
     for (auto& tensor : input_tensors) {
         input_buffers.push_back(tensor.get().buffer());
     }
+    for (auto& tensor : optional_input_tensors) {
+        auto buffer = tensor.has_value() ? tensor.value().get().buffer() : nullptr;
+        input_buffers.push_back(buffer);
+    }
+
     std::vector<Buffer*> output_buffers;
     for (auto& tensor : output_tensors) {
         output_buffers.push_back(tensor.buffer());
     }
 
     override_runtime_args_callback(input_buffers, output_buffers);
-}
-
-void validate(
-    const Operation& op,
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
-) {
-    if (optional_input_tensors.empty()) {
-        return op.validate(input_tensors);
-    }
-    return op.validate(input_tensors, optional_input_tensors);
-}
-
-ProgramWithCallbacks create_program(
-    const Operation& op,
-    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors
-)
-{
-    if (optional_input_tensors.empty()) {
-        return op.create_program(input_tensors, output_tensors);
-    }
-    return op.create_program(input_tensors, optional_input_tensors, output_tensors);
 }
 
 std::vector<Tensor> run_without_program_cache(
@@ -67,12 +49,12 @@ std::vector<Tensor> run_without_program_cache(
 
     auto profile_run_wo_program_cache = op_profiler::ProfileScope(op.get_op_name());
 
-    validate(op, input_tensors, optional_input_tensors);
+    op.validate(input_tensors, optional_input_tensors);
 
     auto device = detail::get_device(input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
 
-    auto program_with_callbacks = create_program(op, input_tensors, optional_input_tensors, output_tensors);
+    auto program_with_callbacks = op.create_program(input_tensors, optional_input_tensors, output_tensors);
 
     auto& program = program_with_callbacks.program;
     auto do_profile = op_profiler::get_profiler_flag();
@@ -94,16 +76,19 @@ std::vector<Tensor> run_with_program_cache(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
-    validate(op, input_tensors, optional_input_tensors);
+    op.validate(input_tensors, optional_input_tensors);
 
     auto device = detail::get_device(input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
 
-    auto& program_with_callbacks = operation_cache::get_or_create(op, input_tensors, output_tensors, device);
+    auto& program_with_callbacks = operation_cache::get_or_create(
+        op, input_tensors, optional_input_tensors, output_tensors, device
+    );
 
     override_runtime_args(
         program_with_callbacks.override_runtime_args_callback,
-        input_tensors, output_tensors);
+        input_tensors, optional_input_tensors, output_tensors
+    );
 
     auto& program = program_with_callbacks.program;
     ConfigureDeviceWithProgram(device, program);

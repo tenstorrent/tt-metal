@@ -55,11 +55,28 @@ constexpr bool implements_validate_with_optional_input_tensors() {
 }
 
 template<class T, class... Args>
-using hashable_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
+using has_compute_program_hash_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
 
 template<class T>
 constexpr bool implements_compute_program_hash() {
-    return std::experimental::is_detected<hashable_t, T, const std::vector<std::reference_wrapper<const Tensor>>>{};
+    return std::experimental::is_detected<
+        has_compute_program_hash_t,
+        T,
+        const std::vector<std::reference_wrapper<const Tensor>>&
+    >{};
+}
+
+template<class T, class... Args>
+using has_compute_program_hash_with_optional_input_tensors_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
+
+template<class T>
+constexpr bool implements_compute_program_hash_with_optional_input_tensors() {
+    return std::experimental::is_detected<
+        has_compute_program_hash_with_optional_input_tensors_t,
+        T,
+        const std::vector<std::reference_wrapper<const Tensor>>&,
+        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>&
+    >{};
 }
 
 template<class T, class... Args>
@@ -70,7 +87,7 @@ constexpr bool implements_create_program() {
     return std::experimental::is_detected<
         has_create_program_t,
         T,
-        const std::vector<std::reference_wrapper<const Tensor>>,
+        const std::vector<std::reference_wrapper<const Tensor>>&,
         std::vector<Tensor>&
     >{};
 }
@@ -83,8 +100,8 @@ constexpr bool implements_create_program_with_optional_input_tensors() {
     return std::experimental::is_detected<
         has_create_program_with_optional_input_tensors_t,
         T,
-        const std::vector<std::reference_wrapper<const Tensor>>,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>,
+        const std::vector<std::reference_wrapper<const Tensor>>&,
+        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>&,
         std::vector<Tensor>&
     >{};
 }
@@ -115,7 +132,12 @@ class Operation {
             std::vector<Tensor> &output_tensors
         ) const = 0;
 
-        virtual operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
+        virtual Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
+
+        virtual Hash compute_program_hash(
+            const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+            const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+        ) const = 0;
 
         virtual bool supports_program_caching() const = 0;
         virtual std::string get_op_name() const = 0 ;
@@ -180,18 +202,32 @@ class Operation {
             }
         }
 
-        operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
+        Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
             if constexpr (implements_compute_program_hash<T>()) {
+                static_assert(implements_create_program<T>());
                 return this->object.compute_program_hash(input_tensors);
             } else {
                 throw NotImplemented("this operation does not implement compute_program_hash!");
             }
         }
 
-        bool supports_program_caching() const override {
-            return implements_compute_program_hash<T>();
+        Hash compute_program_hash(
+            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+            const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+        ) const {
+            if constexpr (implements_compute_program_hash_with_optional_input_tensors<T>()) {
+                static_assert(implements_create_program_with_optional_input_tensors<T>());
+                return this->object.compute_program_hash(input_tensors, optional_input_tensors);
+            } else {
+                throw NotImplemented("this operation does not implement compute_program_hash!");
+            }
         }
-        
+
+        bool supports_program_caching() const override {
+            constexpr auto result = implements_compute_program_hash<T>() or implements_compute_program_hash_with_optional_input_tensors<T>();
+            return result;
+        }
+
         std::string get_op_name() const {
             return typeid(T).name();
         }
@@ -206,14 +242,13 @@ class Operation {
     template <typename T>
     Operation(T&& operation): implementation_(std::make_unique<Implementation<T>>(std::forward<T>(operation))) {}
 
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-        return this->implementation_->validate(input_tensors);
-    }
-
     void validate(
         const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
         const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
     ) const {
+        if (optional_input_tensors.empty()) {
+            return this->implementation_->validate(input_tensors);
+        }
         return this->implementation_->validate(input_tensors, optional_input_tensors);
     }
 
@@ -227,21 +262,23 @@ class Operation {
 
     ProgramWithCallbacks create_program(
         const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-        std::vector<Tensor> &output_tensors
-    ) const {
-        return this->implementation_->create_program(input_tensors, output_tensors);
-    }
-
-    ProgramWithCallbacks create_program(
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
         const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const {
+        if (optional_input_tensors.empty()) {
+            return this->implementation_->create_program(input_tensors, output_tensors);
+        }
         return this->implementation_->create_program(input_tensors, optional_input_tensors, output_tensors);
     }
 
-    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-        return this->implementation_->compute_program_hash(input_tensors);
+    Hash compute_program_hash(
+        const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+    ) const {
+        if (optional_input_tensors.empty()) {
+            return this->implementation_->compute_program_hash(input_tensors);
+        }
+        return this->implementation_->compute_program_hash(input_tensors, optional_input_tensors);
     }
 
     bool supports_program_caching() const {

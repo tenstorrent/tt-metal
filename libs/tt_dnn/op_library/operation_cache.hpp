@@ -14,17 +14,18 @@ struct OperationCache {
     operation::ProgramWithCallbacks& get_or_create(
         const operation::Operation& op,
         const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+        const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors,
         Device* device
     ) {
-        auto program_hash = op.compute_program_hash(input_tensors);
-        if (this->cache_.count(program_hash) == 1) {
+        auto program_hash = op.compute_program_hash(input_tensors, optional_input_tensors);
+        if (this->cache_.count(program_hash) > 0) {
             tt::log_info(tt::LogOp, "Operation Cache: HIT - Getting program from the cache \"{}\"", program_hash);
             auto& program = this->cache_.at(program_hash);
             return program;
         } else {
             tt::log_info(tt::LogOp, "Operation Cache: MISS - Compiling new program \"{}\"", program_hash);
-            this->cache_[program_hash] = op.create_program(input_tensors, output_tensors);
+            this->cache_[program_hash] = op.create_program(input_tensors, optional_input_tensors, output_tensors);
             auto& program = this->cache_[program_hash].program;
             tt_metal::CompileProgram(device, program);
             return this->cache_[program_hash];
