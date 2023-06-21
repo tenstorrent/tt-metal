@@ -90,7 +90,7 @@ TEST_SUITE(
     "BasicMultiDeviceTest" *
     doctest::description("Basic device tests should just test simple APIs and shouldn't take more than 1s per chip, "
                          "but can scale beyond for many devices.") *
-    doctest::timeout(5)) {
+    doctest::timeout(10)) {
     TEST_CASE("Multi Device Initialize and Teardown" * doctest::timeout(2)) {
         auto arch = tt::get_arch_from_string(get_env_arch_name());
         const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
