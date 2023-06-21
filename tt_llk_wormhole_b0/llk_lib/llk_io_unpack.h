@@ -56,8 +56,11 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t tiles_received;
 
 #if defined(PERF_DUMP)
+#if OVERLAY_INPUT_DECOUPLE == 1
+    bool wait_for_tile_en = !is_input_operand_decoupled(operand); //operand_is_intermediate(operand);
+#else
     bool wait_for_tile_en = !(DECOUPLINGS_EN && operand_is_intermediate(operand));
-    
+#endif
     if (wait_for_tile_en) {
     #if PERF_DUMP_LEVEL > 0
         tiles_received = (std::uint16_t) reg_read((std::uint32_t)tiles_received_ptr);
@@ -102,6 +105,15 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
 }
 
+inline void update_tiles_acked_ptr(const std::int32_t operand, const std::int32_t num_tiles, std::uint32_t input) {
+    volatile std::uint32_t tt_reg_ptr * tiles_acked_ptr =
+        (volatile std::uint32_t tt_reg_ptr *)((((volatile std::uint32_t)get_operand_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
+    operands[input].f.tiles_acked += num_tiles;
+    TT_SETDMAREG(0, operands[input].f.tiles_acked, 0, LO_16(4));
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+    TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
+}
+
 // Pop N tiles from the incoming stream
 template <bool pop_blocks = false>
 inline void llk_pop_tiles(
@@ -116,19 +128,22 @@ inline void llk_pop_tiles(
         num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[input]);
     }
 
-#if defined(PERF_DUMP) && (SKIP_UNP)
-    if (!operand_is_intermediate(operand)) {
-        volatile std::uint32_t tt_reg_ptr * tiles_acked_ptr = get_operand_tiles_acked_ptr(operand);
-        operands[input].f.tiles_acked += num_tiles;
-        tiles_acked_ptr[0] = operands[input].f.tiles_acked & 0xffff;
-    }
+#if defined(PERF_DUMP)
+    #if SKIP_UNP == 1 
+        if (!operand_is_intermediate(operand)) {
+            volatile std::uint32_t tt_reg_ptr * tiles_acked_ptr = get_operand_tiles_acked_ptr(operand);
+            operands[input].f.tiles_acked += num_tiles;
+            tiles_acked_ptr[0] = operands[input].f.tiles_acked & 0xffff;
+        }
+    #elif OVERLAY_INPUT_DECOUPLE == 1
+        if (!is_input_operand_decoupled(operand)) {
+            update_tiles_acked_ptr(operand, num_tiles, input);
+        }
+    #else
+        update_tiles_acked_ptr(operand, num_tiles, input);
+    #endif
 #else
-    volatile std::uint32_t tt_reg_ptr * tiles_acked_ptr =
-        (volatile std::uint32_t tt_reg_ptr *)((((volatile std::uint32_t)get_operand_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
-    operands[input].f.tiles_acked += num_tiles;
-    TT_SETDMAREG(0, operands[input].f.tiles_acked, 0, LO_16(4));
-    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-    TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
+    update_tiles_acked_ptr(operand, num_tiles, input);
 #endif
 
     operands[input].f.fifo_rd_ptr += num_words;

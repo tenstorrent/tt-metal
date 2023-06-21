@@ -138,26 +138,4 @@ inline void record_latest_wait_for_tile() {
 #endif
 }
 
-#if defined(PERF_DUMP) && BRISC_TRISC_SYNC == 1
-inline void update_overlay_decoupling_mailbox() {
-   if (thread_id == 0) {
-      uint32_t trisc_epoch_id = PERF_RISC_MAILBOX_PTR->trisc_epoch_id;
-      record_mailbox_value_with_index(trisc_epoch_id & 0xff, trisc_epoch_id & 0xffff);
-      while (PERF_RISC_MAILBOX_PTR->brisc_epoch_id != trisc_epoch_id) {}
-      record_mailbox_value_with_index((PERF_RISC_MAILBOX_PTR->brisc_epoch_id + 10) & 0xff, PERF_RISC_MAILBOX_PTR->brisc_epoch_id & 0xffff);
-      PERF_RISC_MAILBOX_PTR->overlay_decouple_mask = overlay_decouple_mask;
-      PERF_RISC_MAILBOX_PTR->trisc_epoch_id++;
-   }
-}
-
-inline bool is_input_operand_decoupled(int operand) {
-   if (operand >= OPERAND_INPUT_PARAMS_START_INDEX) {
-      return false;
-   }
-   const uint8_t operand_mask = 1 << (operand & 0xff);
-   return overlay_decouple_mask & operand_mask;
-}
-
-#endif
-
 }

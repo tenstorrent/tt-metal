@@ -52,6 +52,16 @@ int32_t dram_dump_req_local;
 bool first_unpack_recorded __attribute__((section(".bss"))) = 0;
 volatile uint tt_l1_ptr *ncrisc_ack_addr = nullptr;
 uint32_t header;
+#if BRISC_TRISC_SYNC == 1
+inline void update_overlay_decoupling_mailbox() {
+   if (thread_id == 0) {
+      uint32_t trisc_epoch_id = PERF_RISC_MAILBOX_PTR->trisc_epoch_id;
+      while (PERF_RISC_MAILBOX_PTR->brisc_epoch_id != trisc_epoch_id) {}
+      PERF_RISC_MAILBOX_PTR->overlay_decouple_mask = overlay_decouple_mask;
+      PERF_RISC_MAILBOX_PTR->trisc_epoch_id++;
+   }
+}
+#endif
 #endif
 
 uint8_t thread_id;
