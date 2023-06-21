@@ -977,8 +977,6 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     // }
 
 
-    //AddBlankDataMovementKernel(device, program, profile_kernel);
-    // This can be removed when we load BRISC FW separately from kernel
     wait_events.push_back ( tt::tt_metal::GetExecutor().async( [device, &program, profile_kernel ] {
                                         AddBlankKernels(device, program, profile_kernel);
                                        } ) );
