@@ -9,13 +9,18 @@ CONTRIBUTING.md @tt-rkim
 
 CODEOWNERS @tt-rkim
 
+third_party/ @tt-rkim @TT-billteng @kkwong10
+
 # Build stuff
 
 MANIFEST.in @tt-rkim @tt-aho
 setup.py @tt-rkim @tt-aho
 
 Makefile @tt-rkim
-module.mk @tt-rkim
+/module.mk @tt-rkim
+tt_metal/module.mk @tt-rkim
+tt_metal/common/module.mk @tt-rkim
+libs/module.mk @tt-rkim
 
 # Testing scripts and infra
 
@@ -25,54 +30,55 @@ tests/scripts/run_pre_post_commit_regressions.sh @tt-rkim
 tests/scripts/run_tests.sh @tt-rkim
 
 # metal - base
-tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
-tt_metal/host_api.hpp @abhullar-tt @TT-billteng @davorchap
+# tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
+# tt_metal/host_api.hpp @abhullar-tt @TT-billteng @davorchap
 # tt_metal/impl/ @abhullar-tt @TT-billteng
-tt_metal/impl/**/module.mk @tt-rkim @abhullar-tt @TT-billteng
+# tt_metal/impl/**/module.mk @tt-rkim @abhullar-tt @TT-billteng
 
 # metal - dispatch
-# tt_metal/impl/dispatch/ @DrJessop @davorchap
+tt_metal/impl/dispatch/ @DrJessop @davorchap
 tt_metal/impl/dispatch/**/module.mk @DrJessop @davorchap @tt-rkim
-# tt_metal/kernels/dataflow/dispatch/ @DrJessop @davorchap
+tt_metal/kernels/dataflow/dispatch/ @DrJessop @davorchap
 docs/source/frameworks/tt_dispatch.rst @DrJessop @davorchap
 
 # metal - fw, llks, risc-v
 # tt_metal/src/ckernels/ @davorchap @kkwong10
-tt_metal/src/ckernels/**/module.mk @tt-rkim @davorchap @kkwong10
-tt_metal/src/ckernels/**/Makefile @tt-rkim @davorchap @kkwong10
+# tt_metal/src/ckernels/**/module.mk @tt-rkim @davorchap @kkwong10
+# tt_metal/src/ckernels/**/Makefile @tt-rkim @davorchap @kkwong10
 # tt_metal/src/firmware/ @davorchap @pgkeller @DrJessop
-tt_metal/src/firmware/**/module.mk @tt-rkim @davorchap @pgkeller @DrJessop
-tt_metal/src/firmware/**/Makefile @tt-rkim @davorchap @pgkeller @DrJessop
+tt_metal/src/firmware/**/module.mk @tt-rkim
+tt_metal/src/firmware/**/Makefile @tt-rkim
 # tt_metal/src/meta/ @davorchap @pgkeller @DrJessop @tt-rkim
-tt_metal/src/ckernels/**/llk_lib/llk_3c.h @davorchap @kkwong10
-tt_metal/src/firmware/riscv/common/dataflow_api.h @davorchap @DrJessop
+# tt_metal/src/ckernels/**/llk_lib/llk_3c.h @davorchap @kkwong10
+# tt_metal/src/firmware/riscv/common/dataflow_api.h @davorchap @DrJessop
 
 # metal - profiler
-tt_metal/**/profiler/ @mo-tenstorrent @TT-billteng
-tt_metal/**/profiler/**/module.mk @tt-rkim @mo-tenstorrent @TT-billteng
-tests/tt_metal/tools/profiler/ @mo-tenstorrent @TT-billteng
-tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent @TT-billteng
-docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent @TT-billteng
+# tt_metal/**/profiler/ @mo-tenstorrent @TT-billteng
+# tt_metal/**/profiler/**/module.mk @tt-rkim @mo-tenstorrent @TT-billteng
+# tests/tt_metal/tools/profiler/ @mo-tenstorrent @TT-billteng
+# tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent @TT-billteng
+# docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent @TT-billteng
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
 
 # eager - dtx
-# **/dtx/ @tt-nshanker
+**/dtx/ @tt-nshanker
 **/dtx/**/module.mk @tt-rkim @tt-nshanker
 
 # eager - tensor
 # **/tensor/ @TT-BrianLiu @tt-aho @arakhmati
-**/tensor/**/module.mk @tt-rkim @TT-BrianLiu @tt-aho @arakhmati
+# **/tensor/**/module.mk @tt-rkim @TT-BrianLiu @tt-aho @arakhmati
 
 # eager - ops (dnn)
 # **/tt_dnn/ @TT-BrianLiu @tt-aho @arakhmati
-**/tt_dnn/**/module.mk @tt-rkim @TT-BrianLiu @tt-aho @arakhmati
-**/tt_dnn/op_library/conv/ @tt-nshanker @arakhmati
-**/tt_dnn/op_library/conv/**/module.mk @tt-rkim @tt-nshanker @arakhmati
-**/tt_dnn/op_library/bmm/ @mywoodstock @TT-BrianLiu @tt-aho
-**/tt_dnn/op_library/bmm/**/module.mk @tt-rkim @mywoodstock @TT-BrianLiu @tt-aho
+# **/tt_dnn/**/module.mk @tt-rkim @TT-BrianLiu @tt-aho @arakhmati
+# **/tt_dnn/op_library/conv/ @tt-nshanker @arakhmati
+# **/tt_dnn/op_library/conv/**/module.mk @tt-rkim @tt-nshanker @arakhmati
+# **/tt_dnn/op_library/bmm/ @mywoodstock @TT-BrianLiu @tt-aho
+# **/tt_dnn/op_library/bmm/**/module.mk @tt-rkim @mywoodstock @TT-BrianLiu @tt-aho
 
 # eager - python api
 # **/tt_lib/ @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati @mywoodstock @tt-rkim
+**/tt_lib/fallback_ops @tt-aho
 
 # models
 models/ @boris-drazic @ashayestehmanesh @farbabi # for future
@@ -80,14 +86,14 @@ tests/python_api_testing/models/ @boris-drazic @ashayestehmanesh @farbabi
 tests/python_api_testing/models/conv_on_device_utils*.py @tt-nshanker
 
 # docs
-docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
-docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
-docs/source/apis/kernel_apis/ @davorchap @DrJessop @kkwong10 @pgkeller @tt-rkim
-docs/source/apis/kernel_apis.rst @davorchap @DrJessop @kkwong10 @pgkeller @tt-rkim
+# docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
+# docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
+# docs/source/apis/kernel_apis/ @davorchap @DrJessop @kkwong10 @pgkeller @tt-rkim
+# docs/source/apis/kernel_apis.rst @davorchap @DrJessop @kkwong10 @pgkeller @tt-rkim
 
 # misc
 tests/**/dtx/ @tt-nshanker
 tests/**/*test*conv*.py @tt-nshanker
-tests/**/module.mk @tenstorrent-metal/developers
+# tests/**/module.mk @tenstorrent-metal/developers
 tests/python_api_testing/conv/ @tt-nshanker
-third_party/ @tt-rkim @TT-billteng @kkwong10
+tests/python_api_testing/unit_testing/fallback_ops @tt-aho
