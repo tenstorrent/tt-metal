@@ -20,6 +20,7 @@
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_qk_tiled.hpp"
+#include "tt_dnn/op_library/operation_cache.hpp"
 #include "tensor/tensor_utils.hpp"
 
 #include "tt_lib_bindings.hpp"
@@ -2018,6 +2019,13 @@ void DTXModule(py::module &m_dtx) {
     });
 }
 
+
+
+void OperationCacheModule(py::module &m_operation_cache) {
+   m_operation_cache.def("enable", &tt::tt_metal::operation_cache::enable);
+   m_operation_cache.def("disable_and_clear", &tt::tt_metal::operation_cache::disable_and_clear);
+}
+
 } // end namespace tt_metal
 
 } // end namespace tt
@@ -2039,4 +2047,7 @@ PYBIND11_MODULE(_C, m) {
 
     py::module_ m_dtx = m.def_submodule("dtx", "Submodule defining data transformation engine");
     tt::tt_metal::DTXModule(m_dtx);
+
+    py::module_ m_operation_cache = m.def_submodule("operation_cache", "Submodule for caching operations");
+    tt::tt_metal::OperationCacheModule(m_operation_cache);
 }
