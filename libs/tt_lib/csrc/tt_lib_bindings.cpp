@@ -1771,8 +1771,7 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("add_layernorm_gamma_beta", &add_layernorm_gamma_beta, "Performs a layernorm(a+b)*gamma + beta operation.");
 
     // TMs
-
-    m_tensor.def("split_last_dim_qk_tiled", &split_last_dim_qk_tiled, R"doc(
+    m_tensor.def("split_last_dim_qk_tiled", &split_last_dim_qk_tiled, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Splits a tensor's last dimension in two equal sized chunks
 
         +----------+----------------------+-----------+-------------+----------+

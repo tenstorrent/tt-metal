@@ -11,6 +11,8 @@ namespace tt_metal {
 struct SplitTiled {
     const uint32_t dim;
     const uint32_t num_chunks;
+    const MemoryConfig output_mem_config;
+
     void boiler_plate_asserts(const Tensor &a) const;
     void shape_asserts(const Tensor &a) const;
     Shape get_single_output_shape(const Shape &input_shape) const;

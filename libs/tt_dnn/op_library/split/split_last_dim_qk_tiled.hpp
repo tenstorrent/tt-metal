@@ -11,13 +11,13 @@ namespace tt_metal {
 struct SplitLastDimQKTiled : public SplitTiled {
     // setting dim = 3 (last dim)
     // num_chunks = 2
-    SplitLastDimQKTiled() : SplitTiled{3, 2} { ; }
+    SplitLastDimQKTiled(const MemoryConfig& mem_config) : SplitTiled{3, 2, mem_config} { ; }
     operation::ProgramWithCallbacks create_program(
         const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
 };
 
-std::vector<Tensor> split_last_dim_qk_tiled(const Tensor &a);
+std::vector<Tensor> split_last_dim_qk_tiled(const Tensor &a, const MemoryConfig& mem_config);
 
 }  // namespace tt_metal
 

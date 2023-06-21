@@ -23,17 +23,40 @@ import pytest
 
 
 @pytest.mark.parametrize(
+    "in_mem_config",
+    (
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
+    ),
+    ids=["in_DRAM", "in_L1"],
+)
+@pytest.mark.parametrize(
+    "out_mem_config",
+    (
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
+    ),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize(
     "shape",
     ([1, 2, 1024, 2560], [1, 2, 256, 5120], [1, 2, 64, 10240], [1, 2, 16, 10240]),
     ids=["1x2x1024x2560", "1x2x256x5120", "1x2x64x10240", "1x2x16x10240"],
 )
-def test_split_tiled_single_core_test_w(shape):
+def test_split_tiled_single_core_test_w(shape, in_mem_config, out_mem_config):
     dtype = ttl.tensor.DataType.BFLOAT16
     assert shape[0] == 1
+    untiled_shape = [1, 2, 16, 10240]
+    if shape == untiled_shape and (
+        out_mem_config.buffer_type == ttl.tensor.BufferType.L1
+        or in_mem_config.buffer_type == ttl.tensor.BufferType.L1
+    ):
+        pytest.skip("No Autoformat support for L1 buffers")
     num_splits = 2
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
+    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
+    # ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
     tile_size = 32
@@ -62,7 +85,7 @@ def test_split_tiled_single_core_test_w(shape):
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)
-            .to(device)
+            .to(device, in_mem_config)
         )
     else:
         a_t = ttl.tensor.Tensor(
@@ -72,7 +95,7 @@ def test_split_tiled_single_core_test_w(shape):
             ttl.tensor.Layout.ROW_MAJOR,
         ).to(device)
 
-    dev_buffers = ttl.tensor.split_last_dim_qk_tiled(a_t)
+    dev_buffers = ttl.tensor.split_last_dim_qk_tiled(a_t, out_mem_config)
 
     # Check memory of inputs and outputs
     logger.debug(f"in0 is on: {a_t.buffer_type()}")

@@ -11,8 +11,9 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks split_last_dim_qk_tiled(const Tensor &input_tensor, std::vector<Tensor> &output_tensors) {
-    SplitLastDimQKTiled op;
+operation::ProgramWithCallbacks split_last_dim_qk_tiled(
+    const Tensor &input_tensor, std::vector<Tensor> &output_tensors, const MemoryConfig &mem_config) {
+    SplitLastDimQKTiled op(mem_config);
     uint32_t dim = op.dim;
     uint32_t num_chunks = op.num_chunks;
 
@@ -85,8 +86,9 @@ operation::ProgramWithCallbacks split_last_dim_qk_tiled(const Tensor &input_tens
     };
 
     bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool in0_is_dram = true;
-    bool out_is_dram = true;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    TT_ASSERT(q_buffer->buffer_type() == k_buffer->buffer_type(), "Output buffers should be the same type");
 
     uint32_t num_tiles_per_z = num_tiles_per_tensor_x * num_tiles_per_tensor_y;
     uint32_t z_stride = num_tiles_per_z * num_chunks;
@@ -154,7 +156,7 @@ operation::ProgramWithCallbacks split_last_dim_qk_tiled(const Tensor &input_tens
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
             uint32_t core_id = core_idx_x + core_idx_y * num_cores_c;
 
-            std::vector<unsigned int> reader_runtime_args = {
+            std::vector<uint32_t> reader_runtime_args = {
                 core_id * per_core_tiles,
                 (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr
             };
@@ -176,11 +178,11 @@ operation::ProgramWithCallbacks split_last_dim_qk_tiled(const Tensor &input_tens
 operation::ProgramWithCallbacks SplitLastDimQKTiled::create_program(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto &input_tensor = input_tensors.at(0).get();
-    return split_last_dim_qk_tiled(input_tensor, output_tensors);
+    return split_last_dim_qk_tiled(input_tensor, output_tensors, this->output_mem_config);
 }
 
-std::vector<Tensor> split_last_dim_qk_tiled(const Tensor &input_tensor) {
-    SplitLastDimQKTiled op;
+std::vector<Tensor> split_last_dim_qk_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
+    SplitLastDimQKTiled op(mem_config);
 
     tt_metal::Device *device;
     // Get the device
@@ -194,12 +196,14 @@ std::vector<Tensor> split_last_dim_qk_tiled(const Tensor &input_tensor) {
     auto input_shape = input_tensor.shape();
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_shape);
     if (AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {
-        return std::move(operation::run(SplitLastDimQKTiled(), {std::cref(input_tensor)}));
+        return std::move(operation::run(op, {std::cref(input_tensor)}));
     } else {
+        TT_ASSERT(input_tensor.buffer_type() == tt_metal::BufferType::DRAM, "Untiled splits should be in DRAM");
+        TT_ASSERT(mem_config.buffer_type == tt_metal::BufferType::DRAM, "Untiled splits should be in DRAM");
         auto device = input_tensor.device();
         auto output_shape = op.compute_output_shapes({std::cref(input_tensor)}).at(0);
         const auto padded_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape);
-        auto output_tensors = std::move(operation::run(SplitLastDimQKTiled(), {std::cref(padded_tensor)}));
+        auto output_tensors = std::move(operation::run(op, {std::cref(padded_tensor)}));
         for (auto &output_tensor : output_tensors) {
             AutoFormat::format_output_tensor(output_tensor, output_shape, device);
         }
