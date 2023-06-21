@@ -21,6 +21,7 @@
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_qk_tiled.hpp"
 #include "tt_dnn/op_library/operation_cache.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tensor/tensor_utils.hpp"
 
 #include "tt_lib_bindings.hpp"

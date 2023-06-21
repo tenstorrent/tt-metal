@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 #include "tt_metal/host_api.hpp"
 

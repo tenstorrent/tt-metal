@@ -1,9 +1,12 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include <limits>
 
 #include "third_party/magic_enum/magic_enum.hpp"
+
+#include <limits>
 
 using namespace tt::constants;
 

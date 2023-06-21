@@ -1,6 +1,7 @@
 #include <libs/tensor/tensor.hpp>
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/operation_cache.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 

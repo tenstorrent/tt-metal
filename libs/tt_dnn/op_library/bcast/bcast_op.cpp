@@ -1,4 +1,6 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
+
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 

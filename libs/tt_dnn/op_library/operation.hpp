@@ -1,12 +1,12 @@
 #pragma once
 
-#include <libs/tensor/tensor.hpp>
-#include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/types.hpp"
 
-#include <experimental/type_traits>
+#include "tt_metal/host_api.hpp"
 
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include <libs/tensor/tensor.hpp>
+
+#include <experimental/type_traits>
 
 namespace tt::tt_metal {
 

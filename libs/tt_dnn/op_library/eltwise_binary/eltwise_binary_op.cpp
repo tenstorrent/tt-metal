@@ -1,4 +1,6 @@
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
