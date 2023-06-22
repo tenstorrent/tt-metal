@@ -187,6 +187,7 @@ def demo():
         iter += 1
         # save things required!
 
+
     latents = 1 / 0.18215 * latents
     with torch.no_grad():
         image = vae.decode(latents).sample
@@ -227,7 +228,7 @@ def demo():
         tt_latents = tt_scheduler.step(noise_pred, t, tt_latents).prev_sample
         save_image_and_latents(tt_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
         pcc_res[iter] = comp_allclose_and_pcc(latents_dict[iter], tt_latents)
-        logger.info(iter, pcc_res[iter])
+        logger.info(f"{iter}, {pcc_res[iter]}")
         last_latents = tt_latents
         # tt_latents = torch.Tensor(latents_dict[iter])
         # save things required!
@@ -235,7 +236,7 @@ def demo():
 
     latents = last_latents
     for key, val in pcc_res.items():
-        logger.info(key, val)
+        logger.info(f"{key}, {val}")
     # scale and decode the image latents with vae
     latents = 1 / 0.18215 * latents
     with torch.no_grad():
