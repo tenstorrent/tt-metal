@@ -25,7 +25,6 @@ extern uint32_t perf_end;
 extern volatile uint32_t *perf_buf_base[2];
 // Selects the half of perf_buffer that trisc is currently writing into.
 extern uint8_t perf_buf_base_id;
-extern uint32_t last_clock_32h;
 extern uint8_t thread_id;
 
 // In math thread, THCON dumps perf buffers in l1.
@@ -38,8 +37,9 @@ extern int32_t dram_dump_req_local;
 extern bool record_perf_events;
 extern uint32_t perf_events_target_idx;
 extern bool first_unpack_recorded;
-extern volatile uint tt_l1_ptr * ncrisc_ack_addr;
+extern volatile uint * ncrisc_ack_addr;
 extern uint16_t current_outer_loop_iter;
+extern uint32_t trisc_epoch_id;
 
 void allocate_perf_buffer();
 
@@ -60,7 +60,6 @@ inline void record_perf_value(uint32_t event_id, uint32_t event_value_lo_32b, ui
    if constexpr (INTERMED_DUMP || PERF_DUMP_CONCURRENT) {
       reserve_space_for_trisc_end_signal = 0;
    }
-   FWASSERT("There is no space left in perf-buffer.", perf_index + 1 < perf_end - reserve_space_for_trisc_end_signal);
    perf_buf_base[perf_buf_base_id][perf_index] = event_id;
    perf_buf_base[perf_buf_base_id][perf_index + 1] = event_value_hi_32b;
    perf_buf_base[perf_buf_base_id][perf_index + 2] = event_value_lo_32b;
@@ -144,5 +143,19 @@ inline void record_latest_wait_for_tile() {
 
 void increment_unpack_tiles(uint operand_idx, uint num_tiles);
 void increment_pack_tiles(uint num_tiles);
+#if (BRISC_TRISC_SYNC == 1) && (OVERLAY_OUTPUT_DECOUPLE == 1)
+inline uint32_t get_active_stream_idx(uint32_t stream_id) {
+    std::uint32_t active_stream_idx;
+    for (uint32_t active_streams_idx = 0; active_streams_idx < NOC_NUM_STREAMS; active_streams_idx++) {
+      if (stream_id == EPOCH_INFO_PTR->active_streams[active_streams_idx]->stream_id) {
+        active_stream_idx = active_streams_idx;
+        break;
+      }
+    }
+    return active_stream_idx;
+}
+
+void llk_push_all_packer_tiles_for_decoupling();
+#endif
 
 }

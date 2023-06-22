@@ -80,6 +80,10 @@ inline void llk_setup_outputs() {
         }
         outputs[output].f.dram_output_no_push = dram_output_no_push;
     }
+#if (BRISC_TRISC_SYNC == 1) && (OVERLAY_OUTPUT_DECOUPLE == 1)
+    llk_push_all_packer_tiles_for_decoupling();
+    semaphore_post(semaphore::UNPACK_MATH_DONE);
+#endif
 }
 
 void stream_wait_for_free_tiles(std::uint32_t operand, std::uint32_t stream_id, std::int32_t num_tiles, std::uint32_t num_words, std::uint32_t fork_indx, std::uint32_t dram_output_no_push) {
@@ -172,7 +176,7 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
 #if defined(PERF_DUMP)
     bool wait_for_tile_en = true;
 #if OVERLAY_OUTPUT_DECOUPLE == 1
-    wait_for_tile_en = !is_output_operand_decoupled(operand);
+    wait_for_tile_en = !is_output_operand_decoupled(operand, overlay_output_decouple_mask);
 #endif
 #endif
 
@@ -416,7 +420,7 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
     bool brisc_auto_clearing_en = false;
 #if defined(PERF_DUMP)
 #if OVERLAY_OUTPUT_DECOUPLE == 1
-    brisc_auto_clearing_en = is_output_operand_decoupled(operand);
+    brisc_auto_clearing_en = is_output_operand_decoupled(operand, overlay_output_decouple_mask);
 #endif
     if (!operand_is_intermediate(operand)) {
         uint16_t num_tiles_pushing = num_tiles;

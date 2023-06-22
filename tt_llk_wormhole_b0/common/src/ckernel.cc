@@ -38,34 +38,44 @@ const uint8_t mailbox_end = 32;
 const uint8_t mailbox_reserved_regs = 4;
 volatile uint8_t tt_l1_ptr *debug_buffer = nullptr;
 volatile uint8_t tt_l1_ptr *debug_buffer_start = nullptr;
+uint8_t thread_id __attribute__((section(".bss"))) = 0;
 
 #ifdef PERF_DUMP
 uint32_t perf_index __attribute__((section(".bss"))) = 0;
 uint32_t perf_end __attribute__((section(".bss"))) = 0;
-volatile uint *perf_buf_base[2] = {nullptr, nullptr};
+volatile uint32_t *perf_buf_base[2];
 uint8_t perf_buf_base_id __attribute__((section(".bss"))) = 0;
 bool record_perf_events __attribute__((section(".bss"))) = 0;
 uint32_t perf_events_target_idx __attribute__((section(".bss"))) = 0;
 uint16_t current_outer_loop_iter __attribute__((section(".bss"))) = 0;
-uint32_t last_clock_32h __attribute__((section(".bss"))) = 0;
 int32_t dram_dump_req_local;
 bool first_unpack_recorded __attribute__((section(".bss"))) = 0;
-volatile uint tt_l1_ptr *ncrisc_ack_addr = nullptr;
+volatile uint *ncrisc_ack_addr = nullptr;
 uint32_t header;
 #if BRISC_TRISC_SYNC == 1
+uint32_t trisc_epoch_id __attribute__((section(".bss"))) = 0;
 inline void update_overlay_decoupling_mailbox() {
-   if (thread_id == 0) {
-      uint32_t trisc_epoch_id = PERF_RISC_MAILBOX_PTR->trisc_epoch_id;
-      while (PERF_RISC_MAILBOX_PTR->brisc_epoch_id != trisc_epoch_id) {}
-      PERF_RISC_MAILBOX_PTR->overlay_input_decouple_mask = overlay_input_decouple_mask;
-      PERF_RISC_MAILBOX_PTR->overlay_output_decouple_mask = overlay_output_decouple_mask;
-      PERF_RISC_MAILBOX_PTR->trisc_epoch_id++;
-   }
+    if (thread_id == 2) {
+        trisc_epoch_id = *PERF_RISC_MAILBOX_TRISC_EPOCH_ID_PTR;
+        while (*PERF_RISC_MAILBOX_BRISC_EPOCH_ID_PTR != trisc_epoch_id) {}
+        PERF_RISC_MAILBOX_INPUT_DECOUPLE_MASK_PTR[0] = overlay_input_decouple_mask;
+        PERF_RISC_MAILBOX_OUTPUT_DECOUPLE_MASK_PTR[0] = overlay_output_decouple_mask;
+        trisc_epoch_id++;
+        PERF_RISC_MAILBOX_TRISC_EPOCH_ID_PTR[0] = trisc_epoch_id;
+    }
+#if (OVERLAY_OUTPUT_DECOUPLE == 1)
+    if (thread_id == 0 || thread_id == 1) {
+        while(semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
+    }
+#endif
+}
+#if (OVERLAY_OUTPUT_DECOUPLE == 1)
+inline void reset_unpack_pack_sync() {
+    semaphore_get(semaphore::UNPACK_MATH_DONE);
 }
 #endif
 #endif
-
-uint8_t thread_id;
+#endif
 
 volatile uint tt_l1_ptr * trisc_l1_mailbox = reinterpret_cast<volatile uint tt_l1_ptr *>(MAILBOX_ADDR);
 
@@ -232,6 +242,11 @@ int main(int argc, char *argv[])
     tensix_sync();
     uint64_t kernel_end_timestamp = read_wall_clock();
 #ifdef PERF_DUMP
+#if (BRISC_TRISC_SYNC == 1) && (OVERLAY_OUTPUT_DECOUPLE == 1)
+    if (thread_id == 2) {
+        reset_unpack_pack_sync();
+    }
+#endif
     record_perf_dump_end_and_check_overflow();
     // There has to be a tensix_sync() before this last pass.
     last_trisc_perf_dump_to_dram();

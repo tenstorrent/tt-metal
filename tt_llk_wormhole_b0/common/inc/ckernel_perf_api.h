@@ -45,24 +45,14 @@ inline void set_perf_dump_flag_for_input(int input_idx) {
    if (perf_events_target_inputs[perf_events_target_idx] == input_idx) {
       record_perf_events = true;
       perf_events_target_idx++;
-      if constexpr (PERF_DUMP_CONCURRENT) {
+      if constexpr(PERF_DUMP_CONCURRENT == 0 && INTERMED_DUMP == 0) {
          if (thread_id == 0 || thread_id == 2) {
-            perf_end = TRISC_PERF_BUF_SIZE >> 3;
-         }
-      } else {
-         // perf_end for math thread does not change based on number of inputs.
-         // We always record one 16B event for each input.
-         if (thread_id == 0 || thread_id == 2) {
-            if constexpr (INTERMED_DUMP == 1) {
-               perf_end = TRISC_PERF_BUF_SIZE >> 3;
-            } else {
                perf_end += num_events_per_input;
                // The buffer size available for each thread after double buffering is (l1_mem::address_map::TRISC_PERF_BUF_SIZE)/2.
                // Max number of events we can record in each half of the buffer will be that size divided by 4, since each event will be 4 bytes.
                if (perf_end > (TRISC_PERF_BUF_SIZE >> 2)) {
                   perf_end = TRISC_PERF_BUF_SIZE >> 2;
                }
-            }
          }
       }
       current_outer_loop_iter = input_idx;
