@@ -13,9 +13,9 @@ ASSETS_DIR=$TT_METAL_HOME/infra/machine_setup/assets
 # FULL_REPO_NAME=tenstorrent-software/pybuda
 FULL_REPO_NAME=tenstorrent-metal/tt-metal-sys-eng-packages
 
-PYBUDA_GS_RELEASE=v1.0.23-tt-external.2f4901c8-2-driver.gs
+PYBUDA_GS_RELEASE=v1.0.23-tt-external.2f4901c8-2-driver-smi.gs
 PYBUDA_WH_RELEASE=v1.0.24-tt-external.e67d8051-2-driver.wh_b0
-GS_TT_SMI_FILENAME=tt-smi_2022-12-05-74801e089fb2e564
+GS_TT_SMI_FILENAME=tt-smi_2023-06-16-0283a02404487eea
 WH_TT_SMI_FILENAME=tt-smi-wh-8.2.0.0_2023-04-19-621d61fca60a43eb
 GS_TT_FLASH_FILENAME=tt-flash_2022-09-06-fae5785cae3807a6
 WH_TT_FLASH_FILENAME=tt-flash_7.8.2.0_2023-03-29-ea858ffb9a5c19e3
