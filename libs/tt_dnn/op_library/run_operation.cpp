@@ -43,12 +43,12 @@ void override_runtime_args(
     override_runtime_args_callback(input_buffers, output_buffers);
 }
 
-std::vector<Tensor> run_without_program_cache(
+std::vector<Tensor> run_without_operation_cache(
     const Operation& op,
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
-    auto profile_run_wo_program_cache = op_profiler::ProfileScope(op.get_type_name());
+    auto profile_run_without_operation_cache = op_profiler::ProfileScope(op.get_type_name());
 
     op.validate(input_tensors, optional_input_tensors);
 
@@ -72,7 +72,7 @@ std::vector<Tensor> run_without_program_cache(
 }
 
 
-std::vector<Tensor> run_with_program_cache(
+std::vector<Tensor> run_with_operation_cache(
     const Operation& op,
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
@@ -118,9 +118,12 @@ std::vector<Tensor> run(
 ) {
     if (operation_cache::is_enabled() and op.supports_program_caching()) {
         TT_ASSERT (op_profiler::get_profiler_flag() == false , "Refer to ticket #1162 regarding profiling and program caching");
-        return detail::run_with_program_cache(op, input_tensors, optional_input_tensors);
+        return detail::run_with_operation_cache(op, input_tensors, optional_input_tensors);
     } else {
-        return detail::run_without_program_cache(op, input_tensors, optional_input_tensors);
+        if (operation_cache::is_enabled()) {
+            tt::log_info(tt::LogOp, "Running {} op without operation cache", op.get_type_name());
+        }
+        return detail::run_without_operation_cache(op, input_tensors, optional_input_tensors);
     }
 }
 

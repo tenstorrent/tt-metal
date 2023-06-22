@@ -6,6 +6,8 @@
 
 #include <libs/tensor/tensor.hpp>
 
+#include <boost/core/demangle.hpp>
+
 #include <experimental/type_traits>
 
 namespace tt::tt_metal {
@@ -229,7 +231,7 @@ class Operation {
         }
 
         std::string get_type_name() const {
-            return typeid(T).name();
+            return boost::core::demangle(typeid(T).name());
         }
 
       private:
@@ -284,10 +286,10 @@ class Operation {
     bool supports_program_caching() const {
         return this->implementation_->supports_program_caching();
     }
+
     std::string get_type_name() const {
         return this->implementation_->get_type_name();
     }
-
 
 };
 
