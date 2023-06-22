@@ -192,33 +192,22 @@ int main(int argc, char **argv) {
         );
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
+        uint32_t interm0_cb_index = 24;
         uint32_t output_cb_addr = 400 * 1024;
         uint32_t num_output_tiles = M * N;
         uint32_t cb_output_size = num_output_tiles * single_tile_size;
-        auto cb_output = tt_metal::CreateCircularBuffer(
+        CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+        auto cb_output = tt_metal::CreateCircularBuffers(
             program,
             device,
-            ouput_cb_index,
-            core,
+            {ouput_cb_index, interm0_cb_index},
+            cores,
             num_output_tiles,
             num_output_tiles * single_tile_size,
             output_cb_addr,
             tt::DataFormat::Float16_b
         );
 
-        uint32_t interm0_cb_index = 24;
-        uint32_t interm0_cb_addr = 400 * 1024;
-        uint32_t interm0_cb_tiles = M * N;
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            interm0_cb_index,
-            core,
-            interm0_cb_tiles,
-            interm0_cb_tiles * single_tile_size,
-            interm0_cb_addr,
-            tt::DataFormat::Float16_b
-        );
         std::vector<uint32_t> generic_binary_reader_args {
             dram_buffer_src0_addr,
             (uint32_t)dram_src0_noc_xy.x,

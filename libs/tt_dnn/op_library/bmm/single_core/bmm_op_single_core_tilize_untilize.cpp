@@ -66,15 +66,31 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
         cb0_ntiles * tile_size_bytes,
         DataFormat::Float16_b
     );
-    auto cb_matmul_partials = CreateCircularBuffer(
-        program,
-        device,
-        matmul_partials_cb,
-        core,
-        out_ntiles,
-        out_ntiles * tile_size_bytes,
-        DataFormat::Float16_b
-    );
+    CircularBuffer *cb_matmul_partials;
+    if (untilize_out) {
+        cb_matmul_partials = CreateCircularBuffer(
+            program,
+            device,
+            matmul_partials_cb,
+            core,
+            out_ntiles,
+            out_ntiles * tile_size_bytes,
+            DataFormat::Float16_b
+        );
+    } else {
+        CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+        cb_matmul_partials = CreateCircularBuffers(
+            program,
+            device,
+            {matmul_partials_cb, out_cb},
+            cores,
+            out_ntiles,
+            out_ntiles * tile_size_bytes,
+            DataFormat::Float16_b
+        );
+
+    }
+
     if (untilize_out) {
         auto cb_final_matmul_partials = CreateCircularBuffer(
             program,
@@ -107,18 +123,6 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
             core,
             out_ntiles,
             out_ntiles * tile_size_bytes,
-            DataFormat::Float16_b
-        );
-    } else {
-        // use the same address space as the partials intermed CB
-        auto cb_output = CreateCircularBuffer(
-            program,
-            device,
-            out_cb,
-            core,
-            out_ntiles,
-            out_ntiles * tile_size_bytes,
-            cb_matmul_partials->address(),
             DataFormat::Float16_b
         );
     }

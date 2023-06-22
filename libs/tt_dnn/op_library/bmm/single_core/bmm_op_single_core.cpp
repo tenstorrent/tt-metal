@@ -259,30 +259,16 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program& program,
         );
     }
     else {
-
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+        CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffers(
             program,
             device,
-            matmul_partials_cb,
-            core,
+            {matmul_partials_cb, out0_cb},
+            cores,
             num_output_tiles,
             num_output_tiles * single_tile_size,
             tt::DataFormat::Float16_b
         );
-
-        auto cb_matmul_partials_addr = cb_matmul_partials->address();
-
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            out0_cb,
-            core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            cb_matmul_partials_addr,
-            tt::DataFormat::Float16_b
-        );
-
     }
 }
 

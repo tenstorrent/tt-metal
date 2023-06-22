@@ -22,6 +22,7 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
     uint32_t single_tile_size = num_bytes_for_df * 1024;
 
     uint32_t num_output_tiles = M * N;
+    CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
 
     // Invariants
     uint32_t src0_cb_addr = 120 * 1024;
@@ -52,31 +53,18 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
 
 
     if (not activations_rm and not output_rm) { // no tilize, no untilize
+        // Partials share same L1 address space as output
         uint32_t matmul_partials_addr = 400 * 1024;
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffers(
             program,
             device,
-            matmul_partials_cb,
-            core,
+            {matmul_partials_cb, out0_cb},
+            cores,
             num_output_tiles,
             num_output_tiles * single_tile_size,
             matmul_partials_addr,
             tt::DataFormat::Float16_b
         );
-
-        // Partials share same L1 address space as output
-        uint32_t output_cb_addr = matmul_partials_addr;
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            out0_cb,
-            core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
     } else if (not activations_rm and output_rm) { // no tilize, just untilize
 
         uint32_t matmul_partials_addr = 450 * 1024;
@@ -150,29 +138,16 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
         );
 
         uint32_t matmul_partials_addr = 550 * 1024;
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffers(
             program,
             device,
-            matmul_partials_cb,
-            core,
+            {matmul_partials_cb, out0_cb},
+            cores,
             num_output_tiles,
             num_output_tiles * single_tile_size,
             matmul_partials_addr,
             tt::DataFormat::Float16_b
         );
-
-        uint32_t output_cb_addr = matmul_partials_addr;
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            out0_cb,
-            core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
     } else { // tilize activations and untilize output
 
         // Used for placing tilized activations

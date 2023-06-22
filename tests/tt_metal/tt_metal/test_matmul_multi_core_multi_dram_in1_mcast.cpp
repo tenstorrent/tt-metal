@@ -152,25 +152,15 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
-            uint32_t output_cb_addr = l1_valid_address;
-            l1_valid_address += out_CB_size;
-            auto cb_output = tt_metal::CreateCircularBuffer(
-                program,
-                device,
-                ouput_cb_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                output_cb_addr,
-                tt::DataFormat::Float16_b
-            );
-
             uint32_t interm0_cb_index = 24;
-            auto cb_interm0 = tt_metal::CreateCircularBuffer(
+            uint32_t output_cb_addr = l1_valid_address;
+            CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+            l1_valid_address += out_CB_size;
+            auto cb_output = tt_metal::CreateCircularBuffers(
                 program,
                 device,
-                interm0_cb_index,
-                core,
+                {ouput_cb_index, interm0_cb_index},
+                cores,
                 out_CB_tiles,
                 out_CB_size,
                 output_cb_addr,

@@ -13,38 +13,38 @@ class CircularBuffer {
     CircularBuffer(
         Device *device,
         const CoreRangeSet &core_range_set,
-        uint32_t buffer_index,
-        uint32_t num_tiles,
-        uint32_t size_in_bytes,
+        const std::set<u32> &buffer_indices,
+        u32 num_tiles,
+        u32 size_in_bytes,
         DataFormat data_format);
 
     CircularBuffer(
         Device *device,
         const CoreRangeSet &core_range_set,
-        uint32_t buffer_index,
-        uint32_t num_tiles,
-        uint32_t size_in_bytes,
-        uint32_t address,
+        const std::set<u32> &buffer_indices,
+        u32 num_tiles,
+        u32 size_in_bytes,
+        u32 address,
         DataFormat data_format);
 
     // TODO (abhullar): Copy ctor semantics for CB should allocate same size in new space. Uplift when redesigning CB and CB config
     CircularBuffer(const CircularBuffer &other) = delete;
     CircularBuffer& operator=(const CircularBuffer &other) = delete;
 
-    CircularBuffer(CircularBuffer &&other);
-    CircularBuffer& operator=(CircularBuffer &&other);
+    CircularBuffer(CircularBuffer &&other) = default;
+    CircularBuffer& operator=(CircularBuffer &&other) = default;
 
     ~CircularBuffer();
 
     CoreRangeSet core_range_set() const { return core_range_set_; }
 
-    uint32_t buffer_index() const { return buffer_index_; }
+    std::set<u32> buffer_indices() const { return buffer_indices_; }
 
-    uint32_t num_tiles() const { return num_tiles_; }
+    u32 num_tiles() const { return num_tiles_; }
 
-    uint32_t size() const { return size_; }
+    u32 size() const { return size_; }
 
-    uint32_t address() const { return address_; }
+    u32 address() const { return address_; }
 
     DataFormat data_format() const { return data_format_; }
 
@@ -63,12 +63,11 @@ class CircularBuffer {
 
     Device *device_;
     CoreRangeSet core_range_set_;
-    uint32_t buffer_index_;               // A buffer ID unique within a Tensix core (0 to 32)
-    uint32_t num_tiles_;                  // Size in tiles
-    uint32_t size_;
-    uint32_t address_;
+    const std::set<u32> buffer_indices_;        // Buffer IDs unique within a Tensix core (0 to 32)
+    u32 num_tiles_;                  // Size in tiles
+    u32 size_;
+    u32 address_;
     DataFormat data_format_;              // e.g. fp16, bfp8
-    // TODO: Remove this when CBs can have multiple buffer indices
     bool allocated_on_device_;
 };
 

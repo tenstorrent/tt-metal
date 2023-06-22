@@ -518,9 +518,9 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
         {
             OpCode op_code = tt::OpCode::Add;
 
-            uint32_t in0 = cb_src0->buffer_index();
-            uint32_t in1 = cb_src1->buffer_index();
-            uint32_t out = cb_interm0->buffer_index();
+            uint32_t in0 = *cb_src0->buffer_indices().begin();
+            uint32_t in1 = *cb_src1->buffer_indices().begin();
+            uint32_t out = *cb_interm0->buffer_indices().begin();
 
             uint32_t pop_input = 1;
 
@@ -541,9 +541,9 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
         {
             OpCode op_code = tt::OpCode::Gelu;
 
-            uint32_t in0 = cb_interm0->buffer_index();
-            uint32_t in1 = cb_interm1->buffer_index();
-            uint32_t out = cb_output->buffer_index();
+            uint32_t in0 = *cb_interm0->buffer_indices().begin();
+            uint32_t in1 = *cb_interm1->buffer_indices().begin();
+            uint32_t out = *cb_output->buffer_indices().begin();
 
             uint32_t pop_input = 1;
 
@@ -695,7 +695,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
 
 
         uint32_t output_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 600 * 1024;
+        uint32_t output_cb_addr = 700 * 1024;
         auto output_cb_buffer = tt_metal::CreateCircularBuffer(
             program,
             device,
@@ -709,7 +709,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
 
         std::vector<tt_metal::CircularBuffer *> interm_cb_buffers;
         uint32_t interm_cb_index = 24;
-        uint32_t interm_cb_addr = 700 * 1024;
+        uint32_t interm_cb_addr = 800 * 1024;
         for (uint32_t i = 0; i < 3; i++){
             auto interm_cb = tt_metal::CreateCircularBuffer(
                 program,
@@ -795,10 +795,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = src_cb_buffers[0]->buffer_index();
-            in1 = src_cb_buffers[1]->buffer_index();
+            in0 = *src_cb_buffers[0]->buffer_indices().begin();
+            in1 = *src_cb_buffers[1]->buffer_indices().begin();
 
-            out = interm_cb_buffers[0]->buffer_index();
+            out = *interm_cb_buffers[0]->buffer_indices().begin();
             uint32_t pop_input0 = 0;
             uint32_t pop_input1 = 1;
 
@@ -823,10 +823,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = src_cb_buffers[2]->buffer_index();
-            in1 = src_cb_buffers[3]->buffer_index();
+            in0 = *src_cb_buffers[2]->buffer_indices().begin();
+            in1 = *src_cb_buffers[3]->buffer_indices().begin();
 
-            out = interm_cb_buffers[1]->buffer_index();
+            out = *interm_cb_buffers[1]->buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -851,9 +851,9 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = src_cb_buffers[3]->buffer_index();
-            in1 = src_cb_buffers[4]->buffer_index();
-            out = interm_cb_buffers[2]->buffer_index();
+            in0 = *src_cb_buffers[3]->buffer_indices().begin();
+            in1 = *src_cb_buffers[4]->buffer_indices().begin();
+            out = *interm_cb_buffers[2]->buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
             op_info_t op_info = {
@@ -877,10 +877,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = interm_cb_buffers[0]->buffer_index();
-            in1 = interm_cb_buffers[1]->buffer_index();
+            in0 = *interm_cb_buffers[0]->buffer_indices().begin();
+            in1 = *interm_cb_buffers[1]->buffer_indices().begin();
 
-            out = interm_cb_buffers[0]->buffer_index();
+            out = *interm_cb_buffers[0]->buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -905,10 +905,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = interm_cb_buffers[1]->buffer_index();
-            in1 = interm_cb_buffers[2]->buffer_index();
+            in0 = *interm_cb_buffers[1]->buffer_indices().begin();
+            in1 = *interm_cb_buffers[2]->buffer_indices().begin();
 
-            out = interm_cb_buffers[2]->buffer_index();
+            out = *interm_cb_buffers[2]->buffer_indices().begin();
             uint32_t pop_input0 = 0;
             uint32_t pop_input1 = 1;
 
@@ -933,10 +933,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = interm_cb_buffers[1]->buffer_index();
-            in1 = interm_cb_buffers[2]->buffer_index();
+            in0 = *interm_cb_buffers[1]->buffer_indices().begin();
+            in1 = *interm_cb_buffers[2]->buffer_indices().begin();
 
-            out = interm_cb_buffers[1]->buffer_index();
+            out = *interm_cb_buffers[1]->buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 
@@ -961,10 +961,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = interm_cb_buffers[0]->buffer_index();
-            in1 = interm_cb_buffers[1]->buffer_index();
+            in0 = *interm_cb_buffers[0]->buffer_indices().begin();
+            in1 = *interm_cb_buffers[1]->buffer_indices().begin();
 
-            out = interm_cb_buffers[0]->buffer_index();
+            out = *interm_cb_buffers[0]->buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 
@@ -989,10 +989,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = interm_cb_buffers[0]->buffer_index();
-            in1 = interm_cb_buffers[0]->buffer_index();
+            in0 = *interm_cb_buffers[0]->buffer_indices().begin();
+            in1 = *interm_cb_buffers[0]->buffer_indices().begin();
 
-            out = interm_cb_buffers[0]->buffer_index();
+            out = *interm_cb_buffers[0]->buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -1017,10 +1017,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = src_cb_buffers[0]->buffer_index();
-            in1 = interm_cb_buffers[0]->buffer_index();
+            in0 = *src_cb_buffers[0]->buffer_indices().begin();
+            in1 = *interm_cb_buffers[0]->buffer_indices().begin();
 
-            out = interm_cb_buffers[1]->buffer_index();
+            out = *interm_cb_buffers[1]->buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -1045,10 +1045,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = interm_cb_buffers[0]->buffer_index();
-            in1 = interm_cb_buffers[1]->buffer_index();
+            in0 = *interm_cb_buffers[0]->buffer_indices().begin();
+            in1 = *interm_cb_buffers[1]->buffer_indices().begin();
 
-            out = output_cb_buffer->buffer_index();
+            out = *output_cb_buffer->buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 

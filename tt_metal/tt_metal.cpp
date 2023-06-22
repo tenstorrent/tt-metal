@@ -341,7 +341,7 @@ CircularBuffer *CreateCircularBuffer(
     uint32_t l1_address,
     DataFormat data_format) {
     CoreRange single_core_range = {.start = core, .end = core};
-    return CreateCircularBuffers(program, device, buffer_index, CoreRangeSet({single_core_range}), num_tiles, size_in_bytes, l1_address, data_format);
+    return CreateCircularBuffers(program, device, std::set<u32>({buffer_index}), CoreRangeSet({single_core_range}), num_tiles, size_in_bytes, l1_address, data_format);
 }
 
 CircularBuffer *CreateCircularBuffer(
@@ -353,7 +353,7 @@ CircularBuffer *CreateCircularBuffer(
     uint32_t size_in_bytes,
     DataFormat data_format) {
     CoreRange single_core_range = {.start = core, .end = core};
-    return CreateCircularBuffers(program, device, buffer_index, CoreRangeSet({single_core_range}), num_tiles, size_in_bytes, data_format);
+    return CreateCircularBuffers(program, device, std::set<u32>({buffer_index}), CoreRangeSet({single_core_range}), num_tiles, size_in_bytes, data_format);
 }
 
 CircularBuffer *CreateCircularBuffers(
@@ -365,7 +365,7 @@ CircularBuffer *CreateCircularBuffers(
     uint32_t size_in_bytes,
     uint32_t l1_address,
     DataFormat data_format) {
-    return CreateCircularBuffers(program, device, buffer_index, CoreRangeSet({core_range}), num_tiles, size_in_bytes, l1_address, data_format);
+    return CreateCircularBuffers(program, device, std::set<u32>({buffer_index}), CoreRangeSet({core_range}), num_tiles, size_in_bytes, l1_address, data_format);
 }
 
 CircularBuffer *CreateCircularBuffers(
@@ -376,7 +376,7 @@ CircularBuffer *CreateCircularBuffers(
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format) {
-    return CreateCircularBuffers(program, device, buffer_index, CoreRangeSet({core_range}), num_tiles, size_in_bytes, data_format);
+    return CreateCircularBuffers(program, device, std::set<u32>({buffer_index}), CoreRangeSet({core_range}), num_tiles, size_in_bytes, data_format);
 }
 
 CircularBuffer *CreateCircularBuffers(
@@ -388,7 +388,30 @@ CircularBuffer *CreateCircularBuffers(
     uint32_t size_in_bytes,
     uint32_t l1_address,
     DataFormat data_format) {
-    CircularBuffer *circular_buffer = new CircularBuffer(device, core_range_set, buffer_index, num_tiles, size_in_bytes, l1_address, data_format);
+    return CreateCircularBuffers(program, device, std::set<u32>({buffer_index}), core_range_set, num_tiles, size_in_bytes, l1_address, data_format);
+}
+
+CircularBuffer *CreateCircularBuffers(
+    Program &program,
+    Device *device,
+    uint32_t buffer_index,
+    const CoreRangeSet &core_range_set,
+    uint32_t num_tiles,
+    uint32_t size_in_bytes,
+    DataFormat data_format) {
+    return CreateCircularBuffers(program, device, std::set<u32>({buffer_index}), core_range_set, num_tiles, size_in_bytes, data_format);
+}
+
+CircularBuffer *CreateCircularBuffers(
+    Program &program,
+    Device *device,
+    const std::set<uint32_t> &buffer_indices,
+    const CoreRangeSet &core_range_set,
+    uint32_t num_tiles,
+    uint32_t size_in_bytes,
+    uint32_t l1_address,
+    DataFormat data_format) {
+    CircularBuffer *circular_buffer = new CircularBuffer(device, core_range_set, buffer_indices, num_tiles, size_in_bytes, l1_address, data_format);
     program.add_circular_buffer(circular_buffer);
     return circular_buffer;
 }
@@ -396,12 +419,12 @@ CircularBuffer *CreateCircularBuffers(
 CircularBuffer *CreateCircularBuffers(
     Program &program,
     Device *device,
-    uint32_t buffer_index,
+    const std::set<uint32_t> &buffer_indices,
     const CoreRangeSet &core_range_set,
     uint32_t num_tiles,
     uint32_t size_in_bytes,
     DataFormat data_format) {
-    CircularBuffer *circular_buffer = new CircularBuffer(device, core_range_set, buffer_index, num_tiles, size_in_bytes, data_format);
+    CircularBuffer *circular_buffer = new CircularBuffer(device, core_range_set, buffer_indices, num_tiles, size_in_bytes, data_format);
     program.add_circular_buffer(circular_buffer);
     return circular_buffer;
 }
@@ -743,8 +766,9 @@ void SetCircularBufferDataFormat(Device *device, const Program &program, Kernel 
         auto cbs_on_core = program.circular_buffers_on_core(logical_core);
         ValidateCircularBuffers(device, cbs_on_core, logical_core);
         for (auto circular_buffer : cbs_on_core) {
-            build_options.set_cb_dataformat_all_cores(
-                static_cast<CB>(circular_buffer->buffer_index()), circular_buffer->data_format());
+            for (auto buffer_index : circular_buffer->buffer_indices()) {
+                build_options.set_cb_dataformat_all_cores(static_cast<CB>(buffer_index), circular_buffer->data_format());
+            }
         }
     }
 }
@@ -1036,12 +1060,15 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
 
         auto cbs_on_core = program.circular_buffers_on_core(logical_core); // PROF_BEGIN("CBS")
         for (auto circular_buffer : cbs_on_core) {
-            llrt::set_config_for_circular_buffer(
-                circular_buffer_config_vec,
-                circular_buffer->buffer_index(),
-                circular_buffer->address(),
-                circular_buffer->size(),
-                circular_buffer->num_tiles());
+            for (auto buffer_index : circular_buffer->buffer_indices()) {
+                llrt::set_config_for_circular_buffer(
+                    circular_buffer_config_vec,
+                    buffer_index,
+                    circular_buffer->address(),
+                    circular_buffer->size(),
+                    circular_buffer->num_tiles()
+                );
+            }
         } // PROF_END("CBS")
 
         llrt::write_circular_buffer_config_vector_to_core(cluster, pcie_slot, worker_core, circular_buffer_config_vec); // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")

@@ -88,7 +88,6 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
 
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
     // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
-    uint32_t src0_cb_addr = 200 * 1024;
     uint32_t num_input_tiles = 8;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
@@ -97,12 +96,10 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        src0_cb_addr,
         program_attributes.data_format
     );
 
     // output operands start at index 16
-    uint32_t output_cb_addr = 300 * 1024;
     uint32_t num_output_tiles = 1;
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
@@ -111,7 +108,6 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        output_cb_addr,
         program_attributes.data_format
     );
 

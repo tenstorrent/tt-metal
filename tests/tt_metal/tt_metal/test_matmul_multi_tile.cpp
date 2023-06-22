@@ -179,31 +179,17 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         }
 
         uint32_t output_cb_addr = 500 * 1024;
-
+        uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t intermediate_cb_index = 24;
 
         // NOTE: intermediate and output CB share same address space since we operate it on it sequentially, not in parallel
-        uint32_t intermediate_cb_addr = output_cb_addr;
-        uint32_t intermediate_cb_tiles = M*N;
-        auto intermediate_cb = tt_metal::CreateCircularBuffer(
-            program,
-            device,
-            intermediate_cb_index,
-            core,
-            intermediate_cb_tiles,
-            intermediate_cb_tiles * single_tile_size,
-            intermediate_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
-
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t num_output_tiles = M*N;
-        auto cb_output = tt_metal::CreateCircularBuffer(
+        CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+        auto output_cb = tt_metal::CreateCircularBuffers(
             program,
             device,
-            ouput_cb_index,
-            core,
+            {ouput_cb_index, intermediate_cb_index},
+            cores,
             num_output_tiles,
             num_output_tiles * single_tile_size,
             output_cb_addr,

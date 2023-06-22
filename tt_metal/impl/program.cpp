@@ -74,6 +74,30 @@ std::vector<std::string> Program::cores_to_ops() const {
     return ops;
 }
 
+void Program::add_circular_buffer(CircularBuffer *circular_buffer) {
+    std::map<CoreCoord, FixedSlots<CircularBuffer *, NUM_CIRCULAR_BUFFERS>> per_core_cb_config;
+    for (auto core_range : circular_buffer->core_range_set().ranges()) {
+        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                CoreCoord logical_core(x, y);
+
+                auto cbs_on_core = this->circular_buffers_on_core(logical_core);
+                for (auto cb_on_core : cbs_on_core) {
+                    for (auto existing_buffer_index : cb_on_core->buffer_indices()) {
+                        per_core_cb_config[logical_core][existing_buffer_index] = cb_on_core;
+                    }
+                }
+
+                for (auto buffer_index : circular_buffer->buffer_indices()) {
+                    log_assert(not per_core_cb_config[logical_core][buffer_index].has_value(), "Circular buffer index {} already exists on core {}", buffer_index, logical_core.str());
+                }
+            }
+        }
+    }
+
+    circular_buffers_.push_back(circular_buffer);
+}
+
 std::vector<CircularBuffer *> Program::circular_buffers_on_core(const CoreCoord &core) const {
     std::vector<CircularBuffer *> cbs_on_core;
     for (auto circular_buffer : circular_buffers_) {

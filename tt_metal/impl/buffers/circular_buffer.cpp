@@ -7,60 +7,37 @@ namespace tt {
 
 namespace tt_metal {
 
+void validate_buffer_indices(const std::set<u32> &buffer_indices) {
+    log_assert(buffer_indices.size() <= NUM_CIRCULAR_BUFFERS, "Number of circular buffers requested ({}) exceeds max number of circular buffers allowed on a core ({})", buffer_indices.size(), NUM_CIRCULAR_BUFFERS);
+    // check that they're between 0 to NUM_CIRCULAR_BUFFERS - 1
+    for (u32 buffer_index : buffer_indices) {
+        log_assert(buffer_index < NUM_CIRCULAR_BUFFERS, "Buffer index can only be up to {}", NUM_CIRCULAR_BUFFERS - 1);
+    }
+}
+
 CircularBuffer::CircularBuffer(
     Device *device,
     const CoreRangeSet &core_range_set,
-    uint32_t buffer_index,
-    uint32_t num_tiles,
-    uint32_t size_in_bytes,
+    const std::set<u32> &buffer_indices,
+    u32 num_tiles,
+    u32 size_in_bytes,
     DataFormat data_format) :
-    device_(device), core_range_set_(core_range_set), buffer_index_(buffer_index), num_tiles_(num_tiles), size_(size_in_bytes), address_(0), data_format_(data_format), allocated_on_device_(true) {
+    device_(device), core_range_set_(core_range_set), buffer_indices_(buffer_indices), num_tiles_(num_tiles), size_(size_in_bytes), address_(std::numeric_limits<uint32_t>::max()), data_format_(data_format), allocated_on_device_(true) {
+    validate_buffer_indices(buffer_indices);
     this->reserve();
 }
 
 CircularBuffer::CircularBuffer(
     Device *device,
     const CoreRangeSet &core_range_set,
-    uint32_t buffer_index,
-    uint32_t num_tiles,
-    uint32_t size_in_bytes,
-    uint32_t address,
+    const std::set<u32> &buffer_indices,
+    u32 num_tiles,
+    u32 size_in_bytes,
+    u32 address,
     DataFormat data_format) :
-    device_(device), core_range_set_(core_range_set), buffer_index_(buffer_index), num_tiles_(num_tiles), size_(size_in_bytes), address_(address), data_format_(data_format), allocated_on_device_(false) {
-    // TODO (abhullar): Enable invoking allocator when we have a spec for overlapping circular buffers in L1
-    TT_ASSERT(address_ >= UNRESERVED_BASE, "First " + std::to_string(UNRESERVED_BASE) + " bytes in L1 are reserved");
-    // This assertion is only added for circular buffers because DRAM buffers and Interleaved DRAM buffers invoke mem manager
-    // to reserve specific addresses which checks for aligned addresses.
-    TT_ASSERT(address % 32 == 0, "Requested address " + std::to_string(address) + " should be 32B aligned");
-}
-
-CircularBuffer::CircularBuffer(CircularBuffer &&other)
-    : device_(other.device_),
-      core_range_set_(other.core_range_set_),
-      buffer_index_(other.buffer_index_),
-      num_tiles_(other.num_tiles_),
-      size_(other.size_),
-      address_(other.address_),
-      data_format_(other.data_format_),
-      allocated_on_device_(other.allocated_on_device_) {
-    other.device_ = nullptr;
-    other.allocated_on_device_ = false;
-}
-
-CircularBuffer &CircularBuffer::operator=(CircularBuffer &&other) {
-    if (this != &other) {
-        this->device_ = other.device_;
-        this->core_range_set_ = other.core_range_set_;
-        this->buffer_index_ = other.buffer_index_;
-        this->num_tiles_ = other.num_tiles_;
-        this->size_ = other.size_;
-        this->address_ = other.address_;
-        this->data_format_ = other.data_format_;
-        this->allocated_on_device_ = other.allocated_on_device_;
-        other.device_ = nullptr;
-        other.allocated_on_device_ = false;
-    }
-    return *this;
+    device_(device), core_range_set_(core_range_set), buffer_indices_(buffer_indices), num_tiles_(num_tiles), size_(size_in_bytes), address_(address), data_format_(data_format), allocated_on_device_(true) {
+    validate_buffer_indices(buffer_indices);
+    this->reserve();
 }
 
 bool CircularBuffer::is_on_logical_core(const CoreCoord &logical_core) const {
@@ -69,17 +46,20 @@ bool CircularBuffer::is_on_logical_core(const CoreCoord &logical_core) const {
 
 
 void CircularBuffer::reserve() {
-
-    uint32_t address = std::numeric_limits<uint32_t>::max();
-    for (auto core_range : this->core_range_set_.ranges()) {
-        uint32_t l1_address = allocator::get_address_for_circular_buffers_across_core_range(*this->device_->allocator_, core_range, this->size_);
-        if (address == std::numeric_limits<uint32_t>::max()) {
-            address = l1_address;
-        } else if (l1_address != address) {
-            TT_THROW("Cannot allocate CBs in core range " + core_range.str() + " at desired address  " + std::to_string(address));
+    // First find space on each core the CB is on because each core's memory can differ. Address has to be the same on each core.
+    // Don't need to do this for manually specified addresses
+    if (this->address_ == std::numeric_limits<uint32_t>::max()) {
+        uint32_t address = std::numeric_limits<uint32_t>::max();
+        for (auto core_range : this->core_range_set_.ranges()) {
+            uint32_t l1_address = allocator::get_address_for_circular_buffers_across_core_range(*this->device_->allocator_, core_range, this->size_);
+            if (address == std::numeric_limits<uint32_t>::max()) {
+                address = l1_address;
+            } else if (l1_address != address) {
+                TT_THROW("Cannot allocate CBs in core range " + core_range.str() + " at desired address  " + std::to_string(address));
+            }
         }
+        this->address_ = address;
     }
-    this->address_ = address;
 
     for (auto core_range : this->core_range_set_.ranges()) {
         auto start = core_range.start;

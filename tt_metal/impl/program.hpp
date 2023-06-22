@@ -1,10 +1,13 @@
 #pragma once
 
+#include <optional>
+
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 
 namespace tt {
@@ -16,6 +19,9 @@ struct KernelGroup {
     DataMovementKernel *riscv_0 = nullptr;
     DataMovementKernel *riscv_1 = nullptr;
 };
+
+template <typename T, uint32_t NUM>
+using FixedSlots = std::array<std::optional<T>, NUM>;
 
 class Program {
    public:
@@ -131,7 +137,7 @@ class Program {
     friend CircularBuffer *CreateCircularBuffers(
         Program &program,
         Device *device,
-        uint32_t buffer_id,
+        const std::set<uint32_t> &buffer_indices,
         const CoreRangeSet &core_range_set,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
@@ -141,7 +147,7 @@ class Program {
     friend CircularBuffer *CreateCircularBuffers(
         Program &program,
         Device *device,
-        uint32_t buffer_index,
+        const std::set<uint32_t> &buffer_indices,
         const CoreRangeSet &core_range_set,
         uint32_t num_tiles,
         uint32_t size_in_bytes,
@@ -153,7 +159,7 @@ class Program {
 
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
 
-    void add_circular_buffer(CircularBuffer *circular_buffer) { circular_buffers_.push_back(circular_buffer); }
+    void add_circular_buffer(CircularBuffer *circular_buffer);
 
     void add_semaphore(Semaphore *semaphore) { semaphores_.push_back(semaphore); }
 };

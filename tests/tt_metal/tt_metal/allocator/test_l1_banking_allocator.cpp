@@ -147,7 +147,7 @@ bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, 
     auto logical_core = device->logical_core_from_bank_id(compute_and_storage_bank_id);
 
     uint32_t single_tile_size = 2 * 1024;
-    constexpr uint32_t src0_cb_index = CB::c_in0;
+    constexpr uint32_t src0_cb_index = CB::c_in7;
     constexpr uint32_t num_input_tiles = 176;
     tt_metal::CircularBuffer *cb_src0 = tt_metal::CreateCircularBuffer(
         program,

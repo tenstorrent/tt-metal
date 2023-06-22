@@ -135,17 +135,19 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
             u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
 
-            sections.at(current_section_idx)
-                .at(TransferType::CB)
-                .push_back(std::make_tuple(
-                    CIRCULAR_BUFFER_CONFIG_BASE +
-                        cb->buffer_index() * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32),
-                    start_in_bytes,
-                    12,  // Only 3 of the UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG actually represent CB config data, the
-                         // last one just used for 16B alignment... need some constant for this somewhere
-                    noc_multicast_encoding,
-                    core_range.size()));
-
+            for (auto buffer_index : cb->buffer_indices()) {
+                sections.at(current_section_idx)
+                    .at(TransferType::CB)
+                    .push_back(std::make_tuple(
+                        CIRCULAR_BUFFER_CONFIG_BASE +
+                            buffer_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32),
+                        start_in_bytes,
+                        12,  // Only 3 of the UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG actually represent CB config data, the
+                            // last one just used for 16B alignment... need some constant for this somewhere
+                        noc_multicast_encoding,
+                        core_range.size()));
+            }
+            // TODO (andrew): These increments should be done once, not per core range - check other instances of core range
             start_in_bytes += 16;
             sections.at(current_section_idx).size_in_bytes += 16;
         }
