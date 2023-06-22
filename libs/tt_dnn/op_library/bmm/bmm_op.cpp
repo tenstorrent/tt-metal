@@ -4,6 +4,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 #include <optional>
 
 using namespace tt::constants;
@@ -508,7 +510,6 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
     const auto& bshape = input_tensor_b.shape();
     auto& output_tensor = output_tensors.at(0);
 
-    Program program;
     auto device_compute_and_storage_grid_size = input_tensor_a.device()->compute_and_storage_grid_size();
     CoreCoord compute_and_storage_grid_size;
     tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b;
@@ -527,8 +528,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             out_subblock_w = 2;
             per_core_M = 12;
             per_core_N = 8;
-            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
-            break;
+            return matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         case BertLargeMatmulOpType::FF1:
             compute_and_storage_grid_size = {12, 9};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
@@ -537,8 +537,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             out_subblock_w = 1;
             per_core_M = 12;
             per_core_N = 11;
-            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, this->fuse_gelu_activation);
-            break;
+            return matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, this->fuse_gelu_activation);
         case BertLargeMatmulOpType::FF2:
             compute_and_storage_grid_size = {11, 9};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
@@ -547,8 +546,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             out_subblock_w = 1;
             per_core_M = 12;
             per_core_N = 3;
-            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
-            break;
+            return matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         case BertLargeMatmulOpType::SELFOUT:
             compute_and_storage_grid_size = {11, 9};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
@@ -557,8 +555,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             out_subblock_w = 1;
             per_core_M = 12;
             per_core_N = 3;
-            program = matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
-            break;
+            return matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         case BertLargeMatmulOpType::PRE_SOFTMAX_BMM:
             compute_and_storage_grid_size = {12, 9};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
@@ -567,8 +564,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             out_subblock_w = 2;
             per_core_M = 12;
             per_core_N = 12;
-            program = bmm_multi_core_reuse_optimized_bert_large(input_tensor_a, input_tensor_b, ashape, bshape, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
-            break;
+            return bmm_multi_core_reuse_optimized_bert_large(input_tensor_a, input_tensor_b, ashape, bshape, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         case BertLargeMatmulOpType::POST_SOFTMAX_BMM:
             compute_and_storage_grid_size = {12, 9};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
@@ -578,12 +574,32 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             out_subblock_w = 2;
             per_core_M = 12;
             per_core_N = 2;
-            program = bmm_multi_core_reuse_optimized_bert_large(input_tensor_a, input_tensor_b, ashape, bshape, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
-            break;
+            return bmm_multi_core_reuse_optimized_bert_large(input_tensor_a, input_tensor_b, ashape, bshape, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         default:
             TT_ASSERT(false, "Unknown bert large matmul op in create_program!");
     }
-    return {std::move(program)};
+    return {};
+}
+
+
+
+operation::Hash BertLargeMatmul::compute_program_hash(
+    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
+    const auto& bias_tensor = optional_input_tensors.at(0);
+
+    return fmt::format(
+        "bert_large_matmul_{}_{}_{}_{}_{}_{}",
+         magic_enum::enum_name(this->bert_large_matmul_op_type),
+         operation::hash_memory_config(this->output_mem_config),
+         this->fuse_gelu_activation,
+         operation::hash_tensor(input_tensor_a),
+         operation::hash_tensor(input_tensor_b),
+         bias_tensor.has_value() ? operation::hash_tensor(bias_tensor.value().get()) : "nullopt"
+    );
 }
 
 }  // namespace tt_metal

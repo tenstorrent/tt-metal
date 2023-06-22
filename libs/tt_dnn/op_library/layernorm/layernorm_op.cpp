@@ -280,13 +280,13 @@ operation::ProgramWithCallbacks layernorm_(
                 auto runtime_args = GetRuntimeArgs(reader_kernel, core);
                 runtime_args[0] = src_a_dram_buffer->address();
                 if (src_b_dram_buffer != nullptr) {
-                    runtime_args[14] = src_b_dram_buffer->address();
+                    runtime_args[11] = src_b_dram_buffer->address();
                 }
                 if (gamma_dram_buffer != nullptr) {
-                    runtime_args[11] = gamma_dram_buffer->address();
+                    runtime_args[8] = gamma_dram_buffer->address();
                 }
                 if (beta_dram_buffer != nullptr) {
-                    runtime_args[13] = beta_dram_buffer->address();
+                    runtime_args[10] = beta_dram_buffer->address();
                 }
                 SetRuntimeArgs(reader_kernel, core, runtime_args);
             }
@@ -321,9 +321,9 @@ operation::ProgramWithCallbacks ResidualLayerNorm::create_program(
     std::vector<Tensor> &output_tensors
 ) const {
     auto& a = input_tensors.at(0).get();
-    const auto b = optional_input_tensors.at(0);
-    const auto gamma = optional_input_tensors.at(1);
-    const auto beta = optional_input_tensors.at(2);
+    const auto& b = optional_input_tensors.at(0);
+    const auto& gamma = optional_input_tensors.at(1);
+    const auto& beta = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
     return layernorm_(a, b, gamma, beta, output_tensor, this->eps);
 
@@ -334,13 +334,18 @@ operation::Hash ResidualLayerNorm::compute_program_hash(
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
 ) const {
     const auto& input_tensor = input_tensors.at(0).get();
+    const auto& b = optional_input_tensors.at(0);
+    const auto& gamma = optional_input_tensors.at(1);
+    const auto& beta = optional_input_tensors.at(2);
 
     return fmt::format(
-        "residual_layer_norm_{}_{}_{}_{}",
-         this->eps,
-         operation::hash_memory_config(this->output_mem_config),
-         operation::hash_tensor(input_tensor),
-         optional_input_tensors.size()
+        "residual_layer_norm_{}_{}_{}_{}_{}_{}",
+        this->eps,
+        operation::hash_memory_config(this->output_mem_config),
+        operation::hash_tensor(input_tensor),
+        b.has_value() ? operation::hash_tensor(b.value().get()) : "nullopt",
+        gamma.has_value() ? operation::hash_tensor(gamma.value().get()) : "nullopt",
+        beta.has_value() ? operation::hash_tensor(beta.value().get()) : "nullopt"
     );
 }
 

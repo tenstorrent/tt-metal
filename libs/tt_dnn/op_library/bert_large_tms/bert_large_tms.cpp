@@ -87,11 +87,9 @@ operation::Hash BertLargeTM::compute_program_hash(const std::vector<std::referen
     const auto& input_tensor = input_tensors.at(0).get();
 
     return fmt::format(
-        "bert_large_tm_{}_{}_{}_{}_{}",
+        "bert_large_tm_{}_{}_{}",
          magic_enum::enum_name(this->bert_large_tm_op_type),
-         this->output_mem_config.interleaved,
-         this->output_mem_config.bank_id,
-         magic_enum::enum_name(this->output_mem_config.buffer_type),
+         operation::hash_memory_config(this->output_mem_config),
          operation::hash_tensor(input_tensor)
     );
 }

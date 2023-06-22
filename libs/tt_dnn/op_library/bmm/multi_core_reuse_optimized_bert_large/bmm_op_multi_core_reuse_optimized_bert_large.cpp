@@ -1,8 +1,8 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -12,7 +12,7 @@ namespace reuse_optimized_bert_large_helpers {
 using namespace tt::constants;
 using namespace tt;
 
-tt_metal::Program create_program(
+operation::ProgramWithCallbacks create_program(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -224,6 +224,8 @@ tt_metal::Program create_program(
         cb_data_format
     );
 
+    std::vector<DataMovementKernel*> reader_kernels;
+    std::vector<DataMovementKernel*> writer_kernels;
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
         uint32_t core_idx_x = i / core_range.y;
         uint32_t core_idx_y = i % core_range.y;
@@ -285,12 +287,16 @@ tt_metal::Program create_program(
             tt_metal::SetRuntimeArgs(mm_kernel_in0_reader, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
             tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer, core, mm_reader_args);
+            reader_kernels.push_back(mm_kernel_in0_reader);
+            writer_kernels.push_back(mm_kernel_in1_reader_writer);
         }
         // right half
         else {
             tt_metal::SetRuntimeArgs(mm_kernel_in0_reader_other_noc_setup, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
             tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer_other_noc_setup, core, mm_reader_args);
+            reader_kernels.push_back(mm_kernel_in0_reader_other_noc_setup);
+            writer_kernels.push_back(mm_kernel_in1_reader_writer_other_noc_setup);
         }
         /* Checkerboard logic
         // white
@@ -368,7 +374,47 @@ tt_metal::Program create_program(
         num_blocks_written += num_output_blocks_per_core[i];
     }
 
-    return std::move(program);
+    auto override_runtime_args_callback = [
+            reader_kernels,
+            writer_kernels,
+            num_cores,
+            core_range
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        for (uint32_t i = 0; i < num_cores; i++){
+            uint32_t core_idx_x = i / core_range.y;
+            uint32_t core_idx_y = i % core_range.y;
+            CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
+
+            {
+                auto reader_kernel = reader_kernels.at(i);
+                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                runtime_args[0] = src_dram_buffer_a->address();
+                runtime_args[8] = src_dram_buffer_b->address();
+                SetRuntimeArgs(reader_kernel, core, runtime_args);
+            }
+
+            {
+                auto writer_kernel = writer_kernels.at(i);
+                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                runtime_args[0] = src_dram_buffer_a->address();
+                runtime_args[8] = src_dram_buffer_b->address();
+                runtime_args[21] = dst_dram_buffer->address();
+                SetRuntimeArgs(writer_kernel, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 }
@@ -379,7 +425,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Program matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const Shape &ashape, const Shape &bshape, Tensor& output, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const Shape &ashape, const Shape &bshape, Tensor& output, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
     // Pass in a and b shapes instead
     // const auto& ashape = a.shape(), bshape = b.shape();
@@ -460,7 +506,7 @@ Program matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Ten
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = reuse_optimized_bert_large_helpers::create_program(
+    return reuse_optimized_bert_large_helpers::create_program(
         device,
         cb_data_format,
         math_fidelity,
@@ -473,12 +519,10 @@ Program matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Ten
         per_core_M, per_core_N,
         in0_buffer, in1_buffer, out_buffer
     );
-
-    return program;
 }
 
 // matmul_multi_core_reuse_optimized_bert_large not used
-Program bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const Shape& ashape, const Shape& bshape, Tensor& output, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const Shape& ashape, const Shape& bshape, Tensor& output, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])

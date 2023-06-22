@@ -191,6 +191,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
+        TT_ASSERT(input_buffers.size() == 2);
 
         auto src_dram_buffer = input_buffers.at(0);
         auto mask_dram_buffer = input_buffers.at(1);
@@ -239,7 +240,7 @@ operation::ProgramWithCallbacks AttentionSoftmaxInPlace::create_program(
     std::vector<Tensor> &output_tensors
 ) const {
     auto& input_tensor = input_tensors.at(0);
-    const auto mask = optional_input_tensors.at(0);
+    const auto& mask = optional_input_tensors.at(0);
     return scale_mask_softmax_(input_tensor, mask, this->scale);
 
 }
@@ -249,12 +250,13 @@ operation::Hash AttentionSoftmaxInPlace::compute_program_hash(
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
 ) const {
     const auto& input_tensor = input_tensors.at(0).get();
+    const auto& mask = optional_input_tensors.at(0);
 
     return fmt::format(
         "attention_softmax_in_place_{}_{}_{}",
-         this->scale,
-         operation::hash_tensor(input_tensor),
-         optional_input_tensors.size()
+        this->scale,
+        operation::hash_tensor(input_tensor),
+        mask.has_value() ? operation::hash_tensor(mask.value().get()) : "nullopt"
     );
 }
 

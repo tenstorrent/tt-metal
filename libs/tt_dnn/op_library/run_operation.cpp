@@ -149,22 +149,23 @@ std::vector<Tensor> generic_create_output_tensors(
 Hash hash_tensor(const Tensor& tensor) {
     const auto shape = tensor.shape();
     return fmt::format(
-        "{}_{}_{}_{}_{}_{}",
-         shape[0],
-         shape[1],
-         shape[2],
-         shape[3],
-         magic_enum::enum_name(tensor.dtype()),
-         magic_enum::enum_name(tensor.layout())
+        "{}_{}_{}_{}_{}_{}_{}",
+        shape[0],
+        shape[1],
+        shape[2],
+        shape[3],
+        magic_enum::enum_name(tensor.dtype()),
+        magic_enum::enum_name(tensor.layout()),
+        magic_enum::enum_name(tensor.buffer_type())
     );
 }
 
 Hash hash_memory_config(const MemoryConfig& memory_config) {
     return fmt::format(
         "{}_{}_{}",
-         memory_config.interleaved,
-         memory_config.bank_id,
-         magic_enum::enum_name(memory_config.buffer_type)
+        memory_config.interleaved,
+        memory_config.bank_id,
+        magic_enum::enum_name(memory_config.buffer_type)
     );
 }
 

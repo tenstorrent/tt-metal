@@ -97,8 +97,8 @@ enum class BertLargeMatmulOpType {
     POST_SOFTMAX_BMM = 5,
 };
 
-Program matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<std::reference_wrapper<const Tensor>> bias, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool gelu=false);
-Program bmm_multi_core_reuse_optimized_bert_large(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const Shape &ashape, const Shape &bshape, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<std::reference_wrapper<const Tensor>> bias, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool gelu=false);
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const Shape &ashape, const Shape &bshape, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 
 struct BertLargeMatmul {
@@ -109,7 +109,15 @@ struct BertLargeMatmul {
     void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
+        std::vector<Tensor> &output_tensors
+    ) const;
+    operation::Hash compute_program_hash(
+        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+    ) const;
 };
 
 
