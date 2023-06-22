@@ -54,6 +54,10 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
     TT_ASSERT(a.device() == b.device(), "Operands to bcast need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to bcast need to be allocated in buffers on device!");
 
+	auto src0_buffer = a.buffer();
+	auto src1_buffer = b.buffer();
+	auto dst_buffer = output.buffer();
+
     const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::MULTI_CORE_W);
     const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
 
@@ -92,12 +96,18 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 		cb_data_format
 	);
 
-	std::vector<uint32_t> reader_writer_compile_time_args = {static_cast<uint32_t>(cb_data_format)};
+	bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)dst_is_dram};
+
 	tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
 		program,
 		reader_name,
 		all_cores,
-		reader_writer_compile_time_args,
+		reader_compile_time_args,
 		tt_metal::DataMovementProcessor::RISCV_1,
 		tt_metal::NOC::RISCV_1_default);
 
@@ -105,7 +115,7 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 		program,
 		"tt_metal/kernels/dataflow/writer_unary_8bank_input_cols_batched.cpp",
 		all_cores,
-		reader_writer_compile_time_args,
+		writer_compile_time_args,
 		tt_metal::DataMovementProcessor::RISCV_0,
 		tt_metal::NOC::RISCV_0_default);
 

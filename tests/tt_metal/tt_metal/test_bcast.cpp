@@ -239,14 +239,16 @@ int main(int argc, char **argv) {
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
         tt_metal::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
 
-        std::vector<uint32_t> reader_writer_compile_time_args = {static_cast<uint32_t>(tt::DataFormat::Float16_b)};
+        bool src0_is_dram = true;
+        bool src1_is_dram = true;
+        std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(tt::DataFormat::Float16_b), (uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
         const char* reader_name = get_reader_name(multibank, bcast_dim);
         auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
             reader_name,
             core,
-            reader_writer_compile_time_args,
+            reader_compile_time_args,
             tt_metal::DataMovementProcessor::RISCV_1,
             tt_metal::NOC::RISCV_1_default);
 

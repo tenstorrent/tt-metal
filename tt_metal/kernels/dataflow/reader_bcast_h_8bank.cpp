@@ -12,6 +12,10 @@ void kernel_main() {
     uint32_t Wt         = get_arg_val<uint32_t>(11);
     uint32_t nc1        = get_arg_val<uint32_t>(12); // if 1 we expect the bcast tensor to have NC=1
 
+    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr bool src0_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr bool src1_is_dram = get_compile_time_arg_val(2) == 1;
+
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t onetile = 1;
@@ -19,15 +23,13 @@ void kernel_main() {
     // single-tile ublocks
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
-
-    const InterleavedAddrGenFast<true> s0 = {
+    const InterleavedAddrGenFast<src0_is_dram> s0 = {
         .bank_base_address = src0_addr,
         .page_size = tile_bytes,
         .data_format = data_format
     };
 
-    const InterleavedAddrGenFast<true> s1 = {
+    const InterleavedAddrGenFast<src1_is_dram> s1 = {
         .bank_base_address = src1_addr,
         .page_size = tile_bytes,
         .data_format = data_format

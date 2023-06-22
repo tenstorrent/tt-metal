@@ -35,6 +35,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &input_tensor_a
 struct EltwiseBinaryBroadcast {
     const BcastOpMath::Enum math_op;
     const BcastOpDim::Enum dim;
+    const MemoryConfig& output_mem_config;
 
     void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
@@ -43,7 +44,7 @@ struct EltwiseBinaryBroadcast {
     operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
 
-inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim) {
+inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {
     if (bcast_dim == BcastOpDim::W) {
         TT_ASSERT(input_tensor_a.shape()[2] == input_tensor_b.shape()[2]);
         if (input_tensor_b.layout() == Layout::TILE) {
@@ -70,7 +71,7 @@ inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, 
             TT_ASSERT((input_tensor_b.shape()[2] == 1 && input_tensor_b.shape()[3] == 1) || (input_tensor_b.shape()[2] == TILE_HEIGHT && input_tensor_b.shape()[3] == TILE_WIDTH));
         }
     }
-    return operation::run_with_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim}, input_tensor_a, input_tensor_b);
+    return operation::run_with_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim, mem_config}, input_tensor_a, input_tensor_b);
 }
 
 

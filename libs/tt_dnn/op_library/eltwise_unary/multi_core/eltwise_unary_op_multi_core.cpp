@@ -67,7 +67,11 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         num_output_tiles * single_tile_size,
         DataFormat::Float16_b
     );
-    std::vector<uint32_t> reader_writer_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b)};
+
+    // Op not uplifted for L1 yet, but need to provide arg to kernel
+    bool dst_is_dram = true;
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)dst_is_dram};
+
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_8bank_start_id.cpp",
@@ -79,7 +83,7 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         program,
         "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
         all_cores,
-        reader_writer_compile_time_args,
+        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 

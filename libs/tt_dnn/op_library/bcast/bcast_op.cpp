@@ -131,7 +131,7 @@ std::vector<Shape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vect
 
 
 std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -161,11 +161,12 @@ operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<s
     const auto& input_tensor_b = input_tensors.at(1).get();
 
     return fmt::format(
-        "eltwise_binary_broadcast_{}_{}_{}_{}",
-         magic_enum::enum_name(this->math_op),
-         magic_enum::enum_name(this->dim),
-         operation::hash_tensor(input_tensor_a),
-         operation::hash_tensor(input_tensor_b)
+        "eltwise_binary_broadcast_{}_{}_{}_{}_{}",
+        magic_enum::enum_name(this->math_op),
+        magic_enum::enum_name(this->dim),
+        operation::hash_memory_config(this->output_mem_config),
+        operation::hash_tensor(input_tensor_a),
+        operation::hash_tensor(input_tensor_b)
     );
 }
 

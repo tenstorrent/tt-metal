@@ -18,6 +18,10 @@ void kernel_main() {
     uint32_t num_output_tiles     = get_arg_val<uint32_t>(10);
     uint32_t MtNt                 = get_arg_val<uint32_t>(11);
 
+    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr bool src0_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr bool src1_is_dram = get_compile_time_arg_val(2) == 1;
+
     //DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
     //DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
     //DPRINT << "batch=" << batch << ENDL();
@@ -37,21 +41,13 @@ void kernel_main() {
     if (bcast_B == 0)
         itileB += output_tile_start_id / MtNt * KtNt; // offset into correct batch if not bcasting
 
-
-    // const args for tile-based bank-swizzled layout
-    // could be added to the arg list in the future to test different
-    // bank-swizzling configurations
-    constexpr uint32_t num_used_dram_ch = 8;
-    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
-    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
-
-    const InterleavedAddrGenFast<true> s0 = {
+    const InterleavedAddrGenFast<src0_is_dram> s0 = {
         .bank_base_address = src0_addr,
         .page_size = tile_bytes,
         .data_format = data_format
     };
 
-    const InterleavedAddrGenFast<true> s1 = {
+    const InterleavedAddrGenFast<src1_is_dram> s1 = {
         .bank_base_address = src1_addr,
         .page_size = tile_bytes,
         .data_format = data_format

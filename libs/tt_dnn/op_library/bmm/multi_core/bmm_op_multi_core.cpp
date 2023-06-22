@@ -30,8 +30,8 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
-    tt_metal::Buffer *src1_dram_buffer = b.buffer();
+    tt_metal::Buffer *src0_buffer = a.buffer();
+    tt_metal::Buffer *src1_buffer = b.buffer();
     if (bcast_batch)
         TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     else {
@@ -39,8 +39,8 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
         TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
-    TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
-    TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0);
+    TT_ASSERT(src0_buffer->size() % single_tile_size == 0);
+    TT_ASSERT(src1_buffer->size() % single_tile_size == 0);
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -52,8 +52,8 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
     auto num_output_tiles_total = cshape[0] * cshape[1] * cshape[2] * cshape[3] / TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_and_storage_grid_size, num_output_tiles_total);
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // C = A*B
     // MN = MK*KN
@@ -71,10 +71,13 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
     uint32_t Mt = ashape[2]/TILE_HEIGHT;
     uint32_t Kt = ashape[3]/TILE_WIDTH;
     uint32_t Nt = bshape[3]/TILE_WIDTH;
+    uint32_t KtNt = Kt * Nt;
+    uint32_t MtKt = Mt * Kt;
+    uint32_t MtNt = Mt * Nt;
 
-    uint32_t in0_dram_addr = src0_dram_buffer->address();
-    uint32_t in1_dram_addr = src1_dram_buffer->address();
-    uint32_t out_dram_addr = dst_dram_buffer->address();
+    uint32_t in0_addr = src0_buffer->address();
+    uint32_t in1_addr = src1_buffer->address();
+    uint32_t out_addr = dst_buffer->address();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -110,18 +113,22 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
         num_output_tiles * single_tile_size,
         cb_data_format
     );
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
-    std::vector<uint32_t> reader_writer_compile_time_args = {static_cast<uint32_t>(cb_data_format)};
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)dst_is_dram};
 
     auto reader = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
-        all_cores, reader_writer_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        all_cores, reader_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
     auto writer = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
-        all_cores, reader_writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        all_cores, writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
     vector<uint32_t> compute_args_group_1 = {
         1, // B
@@ -175,23 +182,23 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
 		}
         tt_metal::SetRuntimeArgs(
             reader, core,
-            {in0_dram_addr,
-            in1_dram_addr,
+            {in0_addr,
+            in1_addr,
             Mt,
             Kt,
             Nt,
-            Mt*Kt,
-            Kt*Nt,
+            MtKt,
+            KtNt,
             B,
             uint32_t(bcast_batch),
             num_tiles_written,
             num_output_tiles_per_core,
-            Mt*Nt }
+            MtNt }
         );
         tt_metal::SetRuntimeArgs(
             writer,
             core,
-            {out_dram_addr,
+            {out_addr,
             0,
             0,
             num_output_tiles_per_core,

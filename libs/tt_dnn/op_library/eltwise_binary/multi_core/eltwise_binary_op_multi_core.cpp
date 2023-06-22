@@ -47,55 +47,58 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
-        uint32_t num_input_tiles = 2;
-        auto cb_src0 = tt_metal::CreateCircularBuffers(
-            program,
-            device,
-            src0_cb_index,
-            all_cores,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            DataFormat::Float16_b
-        );
+    uint32_t num_input_tiles = 2;
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src0_cb_index,
+        all_cores,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        DataFormat::Float16_b
+    );
 
-        uint32_t src1_cb_index = 1;
-        auto cb_src1 = tt_metal::CreateCircularBuffers(
-            program,
-            device,
-            src1_cb_index,
-            all_cores,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            DataFormat::Float16_b
-        );
+    uint32_t src1_cb_index = 1;
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        src1_cb_index,
+        all_cores,
+        num_input_tiles,
+        num_input_tiles * single_tile_size,
+        DataFormat::Float16_b
+    );
 
-        uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t num_output_tiles = 2;
-        auto cb_output = tt_metal::CreateCircularBuffers(
-            program,
-            device,
-            ouput_cb_index,
-            all_cores,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            DataFormat::Float16_b
-        );
-        std::vector<uint32_t> reader_writer_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b)};
+    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t num_output_tiles = 2;
+    auto cb_output = tt_metal::CreateCircularBuffers(
+        program,
+        device,
+        ouput_cb_index,
+        all_cores,
+        num_output_tiles,
+        num_output_tiles * single_tile_size,
+        DataFormat::Float16_b
+    );
 
-        tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
-            program,
-            "tt_metal/kernels/dataflow/reader_dual_8bank_start_id.cpp",
-            all_cores,
-            tt_metal::DataMovementProcessor::RISCV_1,
-            tt_metal::NOC::RISCV_1_default);
+    // Op not uplifted for L1 yet, but need to provide arg to kernel
+    bool dst_is_dram = true;
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)dst_is_dram};
 
-        tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
-            all_cores,
-            reader_writer_compile_time_args,
-            tt_metal::DataMovementProcessor::RISCV_0,
-            tt_metal::NOC::RISCV_0_default);
+    tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_dual_8bank_start_id.cpp",
+        all_cores,
+        tt_metal::DataMovementProcessor::RISCV_1,
+        tt_metal::NOC::RISCV_1_default);
+
+    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+        all_cores,
+        writer_compile_time_args,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::RISCV_0_default);
 
     vector<uint32_t> compute_kernel_args_group_1 = {
         num_tiles_per_core_group_1, // per_core_block_cnt
