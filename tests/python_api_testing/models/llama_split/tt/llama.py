@@ -571,7 +571,7 @@ def llama_second_half(
     configuration,
     num_decoders_start,
     num_decoders,
-    is_causallm=False,
+    is_causallm=True,
 ) -> TtLlamaModelSecondHFModel:
     return _llama_second_half(
         device,
