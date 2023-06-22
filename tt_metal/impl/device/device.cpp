@@ -86,13 +86,12 @@ void Device::initialize_harvesting_information() {
     auto soc_desc = this->cluster_->get_soc_desc(this->pcie_slot_);
     auto harvested_noc_rows = this->cluster_->get_harvested_rows(this->pcie_slot_);
     // Determine which noc-coords are harvested
-    std::vector<unsigned int> noc_row_offset_from_harvesting(soc_desc.worker_grid_size.y, 0);
+    std::vector<unsigned int> noc_row_offset_from_harvesting(soc_desc.grid_size.y, 0);
     this->num_harvested_rows_ = 0;
-    for (unsigned int r = 0; r < soc_desc.worker_grid_size.y; r++) {
-        bool row_harvested = harvested_noc_rows&0x1;
+    for (unsigned int r = 0; r < soc_desc.grid_size.y; r++) {
+        bool row_harvested = (harvested_noc_rows>>r)&0x1;
         this->num_harvested_rows_ += row_harvested;
         noc_row_offset_from_harvesting[r] = this->num_harvested_rows_;
-        harvested_noc_rows >> 1;
     }
     tt::log_assert(
         this->num_harvested_rows_ < 2,
@@ -121,7 +120,7 @@ void Device::initialize_harvesting_information() {
             });
             CoreCoord post_harvesting_noc_routing_coord({
                 .x = noc_routing_coord.x,
-                .y = noc_routing_coord.y + noc_row_offset_from_harvesting[logical_coord.y],
+                .y = noc_routing_coord.y + noc_row_offset_from_harvesting[noc_routing_coord.y],
             });
 
             this->logical_to_routing_coord_lookup_table_.insert({
