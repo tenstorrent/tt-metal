@@ -155,4 +155,7 @@ constexpr static std::int32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
     };
 }
 
+#define LOWER_HALFWORD(x) ((x) & 0xFFFF)
+#define UPPER_HALFWORD(x) ((x) >> 16) 
+
 } // namespace ckernel

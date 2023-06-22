@@ -64,8 +64,8 @@ struct p_gpr_pack
     constexpr static uint HEADER_ADDR       = 26;  // Holds the address of the header (used by pack shift kernel only)
     constexpr static uint TMP0              = 28;  // Temp data
     constexpr static uint TMP1              = 29;  // Temp data
-    constexpr static uint TMP2              = 30;  // Temp data
-    constexpr static uint TMP3              = 31;  // Temp data
+    constexpr static uint TMP_LO            = 30;  // Temp data, upper 16-bit always 0
+    constexpr static uint TMP_HI            = 31;  // Temp data, lower 16-bit always 0
     constexpr static uint PACK_STREAM_SYNC  = 32;  // sync between pack and output stream [32:47]
     constexpr static uint BFP8_EXP_SEC_SIZE = 48;  // holds packer 0-3 exp section size for bfp8 format
     constexpr static uint BFP4_EXP_SEC_SIZE = 52;  // holds packer 0-3 exp section size for bfp4 format

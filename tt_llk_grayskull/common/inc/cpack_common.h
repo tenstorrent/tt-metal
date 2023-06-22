@@ -266,8 +266,8 @@ namespace ckernel::packer
       // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
       for (uint i=0; i<4; i++) cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32+i]=pack_per_xy_plane | (pack_per_xy_plane<<8) | (1<<16);
 
+      cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]=0xffff;
       for (uint i=0; i<4; i++) {
-         cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+i]=0xffffffff;
          cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32+i] = 0x0;
       }	 
 

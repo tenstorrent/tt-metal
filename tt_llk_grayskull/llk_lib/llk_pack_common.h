@@ -4,6 +4,7 @@
 #include "ckernel_defs.h"
 #include "fw_debug.h"
 #include "cpack_common.h"
+#include "llk_defs.h"
 #include "llk_param_structs.h"
 #ifdef PERF_DUMP
 #include "ckernel_perf_api.h"
@@ -187,4 +188,72 @@ inline void llk_pack_relu_config(std::uint32_t config) {
 
 inline void llk_pack_reconfig_l1_acc(const std::uint32_t enable)
 {
-}    
+}
+
+template <bool untilize = false, ReduceDim dim>
+inline void llk_pack_reduce_mask_config() {
+    // More information about the configuration can be read in B0 llk_pack_common.h
+    // The only difference is that on GS we cannot configure which packer uses which 
+    // TILE_ROW_SET_MAPPING[0:3] register; the mapping is 1:1  
+    uint32_t edge_offset_sec1_mask = 0xffff;
+
+    // Wait for packer to finish to avoid breaking its current configuration
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+
+    if constexpr (dim == ReduceDim::REDUCE_ROW) {
+        edge_offset_sec1_mask = 0x0001;
+        // Configure TILE_ROW_SET_MAPPING registers
+        if constexpr (untilize) {
+            TTI_SETDMAREG(0, 0x1111, 0, LO_16(p_gpr_pack::TMP0));
+            TTI_SETDMAREG(0, 0x1111, 0, HI_16(p_gpr_pack::TMP0));
+
+            TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+            TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+            TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_2_row_set_mapping_0_ADDR32);
+            TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_3_row_set_mapping_0_ADDR32);
+        } else {
+            TTI_SETDMAREG(0, 0x5555, 0, LO_16(p_gpr_pack::TMP0));
+            TTI_SETDMAREG(0, 0x5555, 0, HI_16(p_gpr_pack::TMP0));
+
+            TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+            TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_2_row_set_mapping_0_ADDR32);
+        }
+    } else if constexpr (dim == ReduceDim::REDUCE_COL) {
+        // Configure TILE_ROW_SET_MAPPING registers
+        if constexpr (untilize) {
+            TTI_SETDMAREG(0, 0x0005, 0, LO_16(p_gpr_pack::TMP_LO));
+        } else {
+            TTI_SETDMAREG(0, 0x0001, 0, LO_16(p_gpr_pack::TMP_LO));
+        }
+        TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+        TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+    }
+
+    // Initialize TMP registers with values we need to write in PCK_EDGE_OFFSET_SEC[0:1] registers
+    TTI_SETDMAREG(0, LOWER_HALFWORD(edge_offset_sec1_mask), 0, LO_16(p_gpr_pack::TMP_LO));
+
+    // Write to PCK_EDGE_OFFSET_SEC[0:1] registers
+    TTI_WRCFG(p_gpr::ZERO,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32); // edge_offset_sec0_mask == p_gpr::ZERO
+    TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
+
+    TTI_NOP; TTI_NOP;
+}
+
+inline void llk_pack_reduce_mask_clear() {
+    // Set masks to default value to pass through all the datums
+    uint32_t edge_offset_sec0_mask = 0xffff;
+
+    TTI_SETDMAREG(0, LOWER_HALFWORD(edge_offset_sec0_mask), 0, LO_16(p_gpr_pack::TMP_LO));
+
+    // Wait for packer to finish to avoid breaking its current configuration
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+
+    TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+
+    // Clear out TILE_ROW_SET_MAPPING registers
+    for (uint i = 0; i < 4; i++) {
+        TTI_WRCFG(p_gpr::ZERO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32 + i); // All mappings point to PCK_EDGE_OFFSET_SEC0_mask_ADDR32
+    }
+
+    TTI_NOP; TTI_NOP;
+}
