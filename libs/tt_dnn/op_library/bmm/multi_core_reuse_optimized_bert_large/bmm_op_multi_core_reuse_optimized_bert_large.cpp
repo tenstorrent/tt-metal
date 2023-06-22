@@ -401,9 +401,9 @@ Program matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Ten
     if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
         cb_data_format = tt::DataFormat::Float16_b;
     }
-    if (cb_data_format != output_cb_data_format) {
-        log_warning("Input tensor datatype does not match target output dataformat. Defaulting to input dataformat.");
-    }
+    //if (cb_data_format != output_cb_data_format) {
+    //    log_warning("Input tensor datatype does not match target output dataformat. Defaulting to input dataformat.");
+    //}
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();
