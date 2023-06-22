@@ -143,7 +143,7 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
         TTI_SFPLOADI(1, 2, imm1);
         TTI_SFPLOADI(2, 2, imm2);
         break;
-    case SfpuType::sigmoid:
+    case SfpuType::sigmoid_appx:
         imm0 = 0x3DFF;
         imm1 = 0x21D8;
         imm2 = 0xFF10;
@@ -164,7 +164,7 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
             TTI_SFPLOADI(2, 0, 127 << 7);
         }
         break;
-    case SfpuType::sigmoid_piecewise_linear:
+    case SfpuType::sigmoid:
         break;
     case SfpuType::exponential:
         if constexpr(APPROXIMATION_MODE) {
@@ -417,7 +417,7 @@ inline void calculate_add1()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_sigmoid()
+inline void calculate_sigmoid_appx()
 {
     // SFPU microcode
     vUInt l0 = l_reg[LRegs::LReg0];
@@ -1164,7 +1164,7 @@ vFloat sigmoid_piecewise_linear_positive(vFloat val) {
 	} v_elseif ( val > 1.0f && val < 5.0f ) {
 	  result = POLYVAL5(0.00144462f, -0.01055479f, -0.01203685f,  0.24300185f,  0.50437757f,val);
 	} v_else {
-	  result = 0.25f*val + 0.5f; // linear appx as y = 0.25x + 0.5
+	  result = 0.229f*val + 0.5f; // linear appx as y = 0.229x + 0.5
 	}
 	v_endif;
 	return result;
@@ -1173,23 +1173,28 @@ vFloat sigmoid_piecewise_linear_positive(vFloat val) {
 //sigmoid is anti-symmetric and offset by 1
 //sigmoid[-x] = 1 - sigmoid[x]
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_sigmoid_piecewise_linear()
+inline void calculate_sigmoid()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
-	vFloat result = 0.0f;
+        vFloat result = 0.0f;
 
-	v_if ( val < 0.0f ) {
-	  result = sigmoid_piecewise_linear_positive(-val);
-	  result = 1.0f - result;
-	} v_else {
-	  result = sigmoid_piecewise_linear_positive(val);
-	}
-	v_endif;
+        v_if ( val < 0.0f ) {
+  	   val = -val;
+        }
+        v_endif;
 
-	dst_reg[0] = result;
-	dst_reg++;
+	result = sigmoid_piecewise_linear_positive(val);
+
+	val = dst_reg[0];
+        v_if ( val < 0.0f ) {
+            result = 1.0f - result;
+        }
+        v_endif;
+
+        dst_reg[0] = result;
+        dst_reg++;
     }
 
     return;
@@ -1216,11 +1221,11 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     else if constexpr (operation == SfpuType::reciprocal) {
         calculate_reciprocal<APPROXIMATION_MODE, ITERATIONS>();
     }
-    else if constexpr (operation == SfpuType::sigmoid_piecewise_linear) {
-        calculate_sigmoid_piecewise_linear<APPROXIMATION_MODE, ITERATIONS>();
-    }
     else if constexpr (operation == SfpuType::sigmoid) {
         calculate_sigmoid<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::sigmoid_appx) {
+        calculate_sigmoid_appx<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::sqrt) {
         calculate_sqrt<APPROXIMATION_MODE, ITERATIONS>();

@@ -84,7 +84,7 @@ enum SfpuType
   exponential,
   exp_with_base,
   sigmoid,
-  sigmoid_piecewise_linear,
+  sigmoid_appx,
   reciprocal,
   sqrt,
   lrelu,
