@@ -43,12 +43,6 @@
       ansible.builtin.copy:
         src: ../assets/
         dest: "/opt/tt_metal_infra/assets/"
-    - name: Unpack driver tar directly
-      become: yes
-      ansible.builtin.unarchive:
-        src: "/opt/tt_metal_infra/assets/tt_driver/ttkmd_1.14.tar.gz"
-        dest: "/opt/tt_metal_infra/assets/tt_driver/"
-        remote_src: yes
 
 - name: Install doxygen
   hosts: all
