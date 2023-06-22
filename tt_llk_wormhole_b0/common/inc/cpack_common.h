@@ -91,7 +91,15 @@ namespace ckernel::packer
       dest_rd_ctrl_t f;
    } dest_rd_ctrl_u;
 
-   // Pack edge mask
+   // PACK_EDGE_OFFSET_SEC[0:3] register sutructure
+   //
+   // Lower 16b represent a mask that is applied on a single row of one face on the packer output
+   // Higher 16b contain information about which TILE_ROW_SET_MAPPING register is used for each packer (only in PACK_EDGE_OFFSET_SEC0)
+   //
+   // There are 4 PACK_EDGE_OFFSET_SEC[0:3] registers and 4 TILE_ROW_SET_MAPPING[0:3] registers.
+   // TILE_ROW_SET_MAPPING[0:3] have 2 bits for each row inside a face that determine which PACK_EDGE_OFFSET_SEC[0:3] mask is used.
+   // Only PACK_EDGE_OFFSET_SEC0 register has higher 16b configured to determine TILE_ROW_SET_MAPPING[0:3] registers used for each packer.
+   // Other PACK_EDGE_OFFSET_SEC[1:3] registers are used only for the masks in the lower 16b.
    typedef struct {
       uint32_t mask : 16;
       uint32_t mode : 1;

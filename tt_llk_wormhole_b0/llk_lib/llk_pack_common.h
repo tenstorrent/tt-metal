@@ -4,6 +4,7 @@
 #include "ckernel_defs.h"
 #include "fw_debug.h"
 #include "cpack_common.h"
+#include "llk_defs.h"
 #include "llk_param_structs.h"
 
 using namespace ckernel;
@@ -188,4 +189,90 @@ inline void llk_pack_relu_config(std::uint32_t config) {
 inline void llk_pack_reconfig_l1_acc(const std::uint32_t enable)
 {
     reconfigure_packer_l1_acc(enable);
-}    
+}
+
+template <bool untilize = false, ReduceDim dim>
+inline void llk_pack_reduce_mask_config() {
+    ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
+
+    // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
+    pack_edge_offset.f.mask = 0x0;
+    uint32_t row_set_mapping_1;
+    uint32_t edge_offset_sec1_mask;
+
+    if constexpr (dim == ReduceDim::REDUCE_ROW) {
+        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
+        edge_offset_sec1_mask = 0x0001;
+        if constexpr (untilize) {
+            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack3 = 1;
+            row_set_mapping_1 = 0x11111111; // each packer packs 1x32 row
+        } else {
+            // Packer 0 and 2 will use TILE_ROW_SET_MAPPING_1, while packer 1 and 3 will keep using
+            // TILE_ROW_SET_MAPPING_0 configuration which is the default one 
+            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+
+            // TILE_ROW_SET_MAPPING_1 configuration sets all rows to use PCK_EDGE_OFFSET_SEC1 mask
+            row_set_mapping_1 = 0x55555555; // each packer packs 1x16 row
+        }
+    } else if constexpr (dim == ReduceDim::REDUCE_COL) {
+        // PCK_EDGE_OFFSET_SEC1 mask will pass through all the datums in the row as they are
+        edge_offset_sec1_mask = 0xffff;
+
+        // Packer 0 and 1 will use TILE_ROW_SET_MAPPING_1, while packer 2 and 3 will keep using
+        // TILE_ROW_SET_MAPPING_0 configuration which is the default one 
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+
+        if constexpr (untilize) {
+            row_set_mapping_1 = 0x00000005; // each packer packs 1x32 row
+        } else {
+            // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
+            row_set_mapping_1 = 0x00000001; // each packer packs 1x16 row
+        }
+    }
+
+    // Initialize TMP registers with values we need to write in CFG registers
+    TTI_SETDMAREG(0, LOWER_HALFWORD(pack_edge_offset.val), 0, LO_16(p_gpr_pack::TMP0));
+    TTI_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
+    TTI_SETDMAREG(0, LOWER_HALFWORD(edge_offset_sec1_mask), 0, LO_16(p_gpr_pack::TMP_LO));
+    TTI_SETDMAREG(0, LOWER_HALFWORD(row_set_mapping_1), 0, LO_16(p_gpr_pack::TMP1));
+    TTI_SETDMAREG(0, UPPER_HALFWORD(row_set_mapping_1), 0, HI_16(p_gpr_pack::TMP1));
+
+    // Wait for packer to finish to avoid breaking its current configuration
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+
+    // Configure packer
+    TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP1,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+
+    TTI_NOP; TTI_NOP;
+}
+
+inline void llk_pack_reduce_mask_clear() {
+    // By default, all packers are set to use TILE_ROW_SET_MAPPING_0 and
+    // mask is configured to pass through all the datums
+    pck_edge_offset_u pack_edge_offset = {.val = 0};
+    pack_edge_offset.f.mask = 0xffff;
+
+    // Initialize TMP registers with values we need to write in CFG registers
+    TTI_SETDMAREG(0, LOWER_HALFWORD(pack_edge_offset.val), 0, LO_16(p_gpr_pack::TMP0));
+    TTI_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
+
+    // Wait for packer to finish to avoid breaking its current configuration
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+
+    // Clear out packer configuration for reduce
+    TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
+
+    // All mappings point to PCK_EDGE_OFFSET_SEC0_mask_ADDR32
+    TTI_WRCFG(p_gpr::ZERO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+    TTI_WRCFG(p_gpr::ZERO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+
+    TTI_NOP; TTI_NOP;
+}
