@@ -94,14 +94,14 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
 void init_dram_bank_to_noc_coord_lookup_tables() {
     init_dram_bank_coords(dram_bank_to_noc_x, dram_bank_to_noc_y);
     for (uint8_t i = 0; i < NUM_DRAM_BANKS; i++) {
-        dram_bank_to_noc_xy[i] = (NOC_Y(dram_bank_to_noc_y[i]) << NOC_ADDR_NODE_ID_BITS) | NOC_X(dram_bank_to_noc_x[i]);
+        dram_bank_to_noc_xy[i] = ((NOC_Y(dram_bank_to_noc_y[i]) << NOC_ADDR_NODE_ID_BITS) | NOC_X(dram_bank_to_noc_x[i])) << (NOC_ADDR_LOCAL_BITS - 32);
     }
 }
 
 void init_l1_bank_to_noc_coord_lookup_tables() {
     init_l1_bank_coords(l1_bank_to_noc_x, l1_bank_to_noc_y, bank_to_l1_offset);
     for (uint16_t i = 0; i < NUM_L1_BANKS; i++) {
-        l1_bank_to_noc_xy[i] = (NOC_Y(l1_bank_to_noc_y[i]) << NOC_ADDR_NODE_ID_BITS) | NOC_X(l1_bank_to_noc_x[i]);
+        l1_bank_to_noc_xy[i] = ((NOC_Y(l1_bank_to_noc_y[i]) << NOC_ADDR_NODE_ID_BITS) | NOC_X(l1_bank_to_noc_x[i])) << (NOC_ADDR_LOCAL_BITS - 32);
     }
 }
 
