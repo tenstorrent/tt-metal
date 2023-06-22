@@ -8,7 +8,7 @@ import numpy as np
 from loguru import logger
 
 f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../tests")
+sys.path.append(f"{f}/../../../../..")
 
 DEBUG_PRINTS = False
 PROFILE = not DEBUG_PRINTS

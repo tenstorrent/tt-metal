@@ -6,7 +6,7 @@ import os
 from loguru import logger
 
 f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../tests")
+sys.path.append(f"{f}/../../../../..")
 
 import torch
 

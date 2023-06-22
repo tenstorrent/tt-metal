@@ -22,5 +22,6 @@ pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/test_bert_large_concat_heads.py -k in0_L1-out_L1
 
 # Fused ops unit tests
-python libs/tt_lib/fused_ops/fused_ln.py
-python libs/tt_lib/fused_ops/fused_softmax.py
+pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_ln.py -k in0_L1-out_L1
+# TODO: Uplift fused softmax test to pytests
+python $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py
