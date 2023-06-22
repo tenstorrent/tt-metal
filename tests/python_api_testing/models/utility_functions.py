@@ -47,7 +47,7 @@ def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
         print("absdiff=", absdiff.reshape(-1)[debug_index])
         HT = a.shape[-2] // 32
         WT = a.shape[-1] // 32
-        hwt = debug_index//1024
+        hwt = debug_index // 1024
         wt = hwt % WT
         ht = hwt // WT
         h = (debug_index % 1024) // 32
@@ -229,18 +229,28 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
 
     return passing, output
 
-def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, tt_layout=ttl.tensor.Layout.TILE, tt_memory_config=ttl.tensor.MemoryConfig(True, -1)):
+
+def torch2tt_tensor(
+    py_tensor: torch.Tensor,
+    tt_device,
+    tt_layout=ttl.tensor.Layout.TILE,
+    tt_memory_config=ttl.tensor.MemoryConfig(True, -1),
+):
     size = list(py_tensor.size())
 
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = ttl.tensor.Tensor(
-        py_tensor.reshape(-1).tolist(),
-        size,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(tt_layout).to(tt_device, tt_memory_config)
+    tt_tensor = (
+        ttl.tensor.Tensor(
+            py_tensor.reshape(-1).tolist(),
+            size,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(tt_layout)
+        .to(tt_device, tt_memory_config)
+    )
 
     return tt_tensor
 
@@ -256,34 +266,49 @@ def tt2torch_tensor(tt_tensor, tt_host=None):
     py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
     return py_output
 
+
 def pad_by_zero(x: torch.Tensor, device):
     initial_shape = x.shape
     if x.shape[3] % 32 != 0 or x.shape[2] % 32 != 0:
         tt_tensor = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
         )
-        x = tt_tensor.pad((x.shape[0], x.shape[1], nearest_32(x.shape[2]), nearest_32(x.shape[3])), (0, 0, 0, 0), 0)
+        x = tt_tensor.pad(
+            (x.shape[0], x.shape[1], nearest_32(x.shape[2]), nearest_32(x.shape[3])),
+            (0, 0, 0, 0),
+            0,
+        )
         x = x.to(ttl.tensor.Layout.TILE).to(device)
 
     else:
         x = torch2tt_tensor(x, device)
     return x, initial_shape
 
+
 def unpad_from_zero(x, desired_shape, host):
-    if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2] :
+    if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
         x = x.to(host)
-        if(x.layout() != ttl.tensor.Layout.ROW_MAJOR):
+        if x.layout() != ttl.tensor.Layout.ROW_MAJOR:
             x = x.to(ttl.tensor.Layout.ROW_MAJOR)
-        x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
+        x = x.unpad(
+            (0, 0, 0, 0),
+            (
+                desired_shape[0] - 1,
+                desired_shape[1] - 1,
+                desired_shape[2] - 1,
+                desired_shape[3] - 1,
+            ),
+        )
         x = torch.Tensor(x.data()).reshape(x.shape())
     return x
 
-class Profiler():
+
+class Profiler:
     def __init__(self):
         self.start_times = dict()
         self.times = dict()
@@ -295,14 +320,14 @@ class Profiler():
     def disable(self):
         self.disabled = True
 
-    def start(self, key):
-        if self.disabled:
+    def start(self, key, force_enable=False):
+        if self.disabled and not force_enable:
             return
 
         self.start_times[key] = time.time()
 
-    def end(self, key, PERF_CNT=1):
-        if self.disabled:
+    def end(self, key, PERF_CNT=1, force_enable=False):
+        if self.disabled and not force_enable:
             return
 
         if key not in self.start_times:
@@ -322,13 +347,14 @@ class Profiler():
         return sum(self.times[key]) / len(self.times[key])
 
     def print(self):
-
         for key in self.times:
             average = self.get(key)
             print(f"{key}: {average:.3f}s")
 
 
 profiler = Profiler()
+
+
 def tt_to_torch_tensor(tt_tensor, host):
     tt_tensor = tt_tensor.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
     # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
@@ -336,19 +362,18 @@ def tt_to_torch_tensor(tt_tensor, host):
     py_tensor = torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
     return py_tensor
 
+
 def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
     if shape is None:
         shape = list(py_tensor.size())
         while len(shape) < 4:
             shape.insert(0, 1)
 
-    tt_tensor = (
-        ttl.tensor.Tensor(
-            py_tensor.reshape(-1).tolist(), # PyTorch tensor flatten into a list of floats
-            shape,               # shape of TT Tensor that will be created
-            ttl.tensor.DataType.BFLOAT16, # data type that will be used in created TT Tensor
-            ttl.tensor.Layout.ROW_MAJOR,  # memory layout that will be used in created TT Tensor
-        )
+    tt_tensor = ttl.tensor.Tensor(
+        py_tensor.reshape(-1).tolist(),  # PyTorch tensor flatten into a list of floats
+        shape,  # shape of TT Tensor that will be created
+        ttl.tensor.DataType.BFLOAT16,  # data type that will be used in created TT Tensor
+        ttl.tensor.Layout.ROW_MAJOR,  # memory layout that will be used in created TT Tensor
     )
     if put_on_device:
         tt_tensor = tt_tensor.to(device)
@@ -362,13 +387,19 @@ def torch_to_tt_tensor(py_tensor, device):
 
     tt_tensor = (
         ttl.tensor.Tensor(
-            py_tensor.reshape(-1).tolist(), # PyTorch tensor flatten into a list of floats
-            shape,               # shape of TT Tensor that will be created
-            ttl.tensor.DataType.BFLOAT16, # data type that will be used in created TT Tensor
+            py_tensor.reshape(
+                -1
+            ).tolist(),  # PyTorch tensor flatten into a list of floats
+            shape,  # shape of TT Tensor that will be created
+            ttl.tensor.DataType.BFLOAT16,  # data type that will be used in created TT Tensor
             ttl.tensor.Layout.ROW_MAJOR,  # memory layout that will be used in created TT Tensor
         )
-        .to(ttl.tensor.Layout.TILE)     # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
-        .to(device)                         # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
+        .to(
+            ttl.tensor.Layout.TILE
+        )  # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
+        .to(
+            device
+        )  # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
     )
 
     return tt_tensor

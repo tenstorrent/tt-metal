@@ -88,7 +88,7 @@ class TtBertBatchDram(torch.nn.Module):
 
     def forward(self, PERF_CNT, input_ids, attention_mask=None, token_type_ids=None):
         for i in range(PERF_CNT):
-            profiler.start("_calc_embeddings")
+            # profiler.start("_calc_embeddings")
 
             embeddings = self.embeddings(input_ids, token_type_ids)
             if attention_mask is not None:
@@ -129,28 +129,28 @@ class TtBertBatchDram(torch.nn.Module):
             hidden_states = tt_embeddings  # pad_embeddings #
 
             self.hidden_states_list.append(hidden_states)
-            profiler.end("_calc_embeddings")
+            # profiler.end("_calc_embeddings")
 
         print(f"Num encoders {len(self.encoders)}")
         tt_out_list = []
 
         for i in range(PERF_CNT):
             print(f"Running BERT model {i}")
-            profiler.start("_run_encoders")
+            # profiler.start("_run_encoders")
 
             hidden_states = self.hidden_states_list[i]
             attention_mask = self.tt_attention_mask_list[i]
 
             for encoder in self.encoders:
-                profiler.start("__one_encoder")
+                # profiler.start("__one_encoder")
                 hidden_states = encoder(hidden_states, attention_mask)
-                profiler.end("__one_encoder")
+                # profiler.end("__one_encoder")
 
-            profiler.end("_run_encoders")
+            # profiler.end("_run_encoders")
 
-            profiler.start("_qa_linear")
+            # profiler.start("_qa_linear")
             res = self.qa_linear(hidden_states)
-            profiler.end("_qa_linear")
+            # profiler.end("_qa_linear")
 
             tt_out_list.append(res)
 
@@ -272,9 +272,10 @@ def run_bert_question_and_answering_inference(
     print(f"Running BERT model once to fill caches -> disable profiler")
     profiler.disable()
 
-    run_to_fill_cache_start = time.time()
+    # Use force enable to only record this profiler call while others are disabled
+    profiler.start("first_model_run_with_compile", force_enable=True)
     tt_out_list = tt_bert_model(1, **bert_input)
-    model_runtime_to_fill_cache = time.time() - run_to_fill_cache_start
+    profiler.end("first_model_run_with_compile", force_enable=True)
 
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
@@ -284,9 +285,9 @@ def run_bert_question_and_answering_inference(
     # since we don't yet have embedding support on device
     print(f"Running BERT model for perf measurement")
 
-    profiler.start("whole_model")
+    profiler.start(f"model_run_{PERF_CNT}_times_for_inference")
     tt_out_list = tt_bert_model(PERF_CNT, **bert_input)
-    profiler.end("whole_model", PERF_CNT)
+    profiler.end(f"model_run_{PERF_CNT}_times_for_inference", PERF_CNT)
 
     # output postprocessing
     for i in range(PERF_CNT):
