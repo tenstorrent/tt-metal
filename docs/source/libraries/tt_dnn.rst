@@ -129,9 +129,15 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autoclass:: tt_lib.fallback_ops.fallback_ops.Conv2d
 
+.. autoclass:: tt_lib.fallback_ops.fallback_ops.BatchNorm2d
+
 .. autoclass:: tt_lib.fallback_ops.fallback_ops.GroupNorm
 
 .. autoclass:: tt_lib.fallback_ops.fallback_ops.LayerNorm
+
+.. autoclass:: tt_lib.fallback_ops.fallback_ops.MaxPool2d
+
+.. autoclass:: tt_lib.fallback_ops.fallback_ops.AdaptiveAvgPool2d
 
 Experimental Operations
 =======================
