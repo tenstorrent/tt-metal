@@ -8,7 +8,7 @@ from python_api_testing.models.utility_functions_new import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
-from python_api_testing.models.ssd.reference.ssd_utils import create_batchnorm
+from python_api_testing.models.ssd.ssd_utils import create_batchnorm
 
 ACT_FN_1 = tt_lib.tensor.relu
 ACT_FN_2 = nn.Hardswish()

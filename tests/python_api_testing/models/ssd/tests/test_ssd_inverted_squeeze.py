@@ -18,14 +18,16 @@ from python_api_testing.models.utility_functions_new import (
     comp_allclose,
     comp_pcc,
 )
-from python_api_testing.models.ssd.tt.ssd_mobilenetv3_stemlayer import TtMobileNetV3Stem
+from python_api_testing.models.ssd.tt.ssd_mobilenetv3_inverted_squeeze import (
+    TtMobileNetV3InvertedSqueeze,
+)
 
 
 @pytest.mark.parametrize(
     "pcc",
     ((0.99),),
 )
-def test_ssd_stem_inference(pcc, reset_seeds):
+def test_ssd_inverted_squeeze_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
@@ -33,34 +35,32 @@ def test_ssd_stem_inference(pcc, reset_seeds):
 
     model = pretrained(weights=MobileNet_V3_Large_Weights.IMAGENET1K_V1)
 
-    # torch stemlayer
-    torch_model = model.features[1]
-    torch_model.eval()
+    # torch invertedsqueeze
+    torch_model = model.features[4]
 
-    # Tt ssd_stem
-    config = {"in_channels": 16}
-    tt_model = TtMobileNetV3Stem(
+    # Tt ssd_invertedsqueeze
+    config = {"in_channels": 24}
+    tt_model = TtMobileNetV3InvertedSqueeze(
         config,
         in_channels=config["in_channels"],
-        expanded_channels=16,
-        out_channels=16,
-        kernel_size=1,
-        stride=1,
-        padding=1,
+        expanded_channels=72,
+        out_channels=40,
+        kernel_size=5,
+        stride=2,
+        padding=2,
         state_dict=model.state_dict(),
-        base_address=f"features.1",
+        base_address=f"features.4",
         device=device,
         host=host,
     )
-    tt_model.eval()
 
     # Run torch model
-    input_tensor = torch.randn(1, 16, 112, 112)
+    input_tensor = torch.randn(1, 24, 56, 56)
     torch_output = torch_model(input_tensor)
 
     # Run tt model
-    tt_stem_input = torch_to_tt_tensor_rm(input_tensor, device)
-    tt_output = tt_model(tt_stem_input)
+    tt_inverted_squeeze_input = torch_to_tt_tensor_rm(input_tensor, device)
+    tt_output = tt_model(tt_inverted_squeeze_input)
 
     # Compare outputs
     tt_output_torch = tt_to_torch_tensor(tt_output, host)
@@ -73,6 +73,6 @@ def test_ssd_stem_inference(pcc, reset_seeds):
     tt_lib.device.CloseDevice(device)
 
     if does_pass:
-        logger.info("SSDStemlayer Passed!")
+        logger.info("SSDInvertedSqueeze Passed!")
 
-    assert does_pass, "SSDStemlayer Failed!"
+    assert does_pass, "SSDInvertedSqueeze Failed!"

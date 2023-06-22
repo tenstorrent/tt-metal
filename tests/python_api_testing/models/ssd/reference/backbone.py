@@ -5,7 +5,7 @@ from torch import nn, Tensor
 from torchvision.models._meta import _IMAGENET_CATEGORIES
 from torchvision.models._utils import handle_legacy_interface
 
-from .ssd_utils import (
+from .torch_utils import (
     register_model,
     Weights,
     WeightsEnum,

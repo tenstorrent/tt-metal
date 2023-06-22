@@ -3,7 +3,7 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 import torch.nn.functional as F
 from torch import nn, Tensor
-from .ssd_utils import (
+from .torch_utils import (
     _log_api_usage_once,
     _topk_min,
     retrieve_out_channels,

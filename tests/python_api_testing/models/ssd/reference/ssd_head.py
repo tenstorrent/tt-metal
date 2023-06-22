@@ -12,7 +12,7 @@ from typing import (
 import torch
 from torch import nn, Tensor
 from torchvision.models._meta import _COCO_CATEGORIES
-from .ssd_utils import (
+from .torch_utils import (
     Weights,
     WeightsEnum,
     DefaultBoxGenerator,

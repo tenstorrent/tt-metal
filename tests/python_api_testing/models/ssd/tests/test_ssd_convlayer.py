@@ -75,7 +75,5 @@ def test_ssd_convlayer_inference(pcc, reset_seeds):
 
     if does_pass:
         logger.info("SSDConvlayer Passed!")
-    else:
-        logger.warning("SSDConvlayer Failed!")
 
-    assert does_pass
+    assert does_pass, "SSDConvlayer Failed!"
