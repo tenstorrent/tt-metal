@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/..")
@@ -28,12 +29,15 @@ def test_gs_demo():
     tt_lib.device.SetDefaultDevice(device)
     host = tt_lib.device.GetHost()
 
-
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
-    HF_model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224") # loaded for the labels
+    HF_model = ViTForImageClassification.from_pretrained(
+        "google/vit-base-patch16-224"
+    )  # loaded for the labels
     inputs = image_processor(image, return_tensors="pt")
 
-    tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
+    tt_inputs = torch_to_tt_tensor_rm(
+        inputs["pixel_values"], device, put_on_device=False
+    )
     tt_model = vit_for_image_classification(device)
 
     with torch.no_grad():

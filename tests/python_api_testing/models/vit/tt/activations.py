@@ -15,6 +15,7 @@
 from collections import OrderedDict
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -24,6 +25,7 @@ sys.path.append(f"{f}/../../../../..")
 
 import tt_lib
 from torch import nn
+
 
 class GELUActivation(nn.Module):
     def __init__(self):
@@ -51,7 +53,9 @@ def get_activation(activation_string):
     if activation_string in ACT2FN:
         return ACT2FN[activation_string]
     else:
-        raise KeyError(f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}")
+        raise KeyError(
+            f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}"
+        )
 
 
 # For backwards compatibility with: from activations import gelu_python
