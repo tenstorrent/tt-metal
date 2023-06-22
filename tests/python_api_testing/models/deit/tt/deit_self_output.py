@@ -13,7 +13,8 @@ from torch import nn
 from deit_config import DeiTConfig
 
 import tt_lib
-from deit_helper_funcs import make_linear
+from utility_functions_new import torch_to_tt_tensor_rm
+from helper_funcs import Linear as TtLinear
 
 class TtDeiTSelfOutput(nn.Module):
     """
@@ -21,20 +22,12 @@ class TtDeiTSelfOutput(nn.Module):
     layernorm applied before each block.
     """
 
-    def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address="") -> None:
+    def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
-        # print('self output base address:::', base_address)
-        # dense_weight = state_dict[f"{base_address}.dense.weight"]
-        # dense_bias = state_dict[f"{base_address}.dense.bias"]
-        # self.dense = make_linear(config.hidden_size, config.hidden_size, dense_weight, dense_bias, device)
-        self.dense = make_linear(
-                            config.hidden_size,
-                            config.hidden_size,
-                            "dense",
-                            state_dict=state_dict,
-                            base_address=base_address,
-                            device=device
-                            )
+
+        dense_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.weight"], device)
+        dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], device)
+        self.dense = TtLinear(config.hidden_size, config.hidden_size, dense_weight, dense_bias)
 
     def forward(self, hidden_states, input_tensor):
         hidden_states = self.dense(hidden_states)

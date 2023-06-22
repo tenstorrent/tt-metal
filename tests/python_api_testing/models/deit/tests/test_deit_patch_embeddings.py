@@ -17,16 +17,17 @@ from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, com
 
 from deit_config import DeiTConfig
 from transformers import DeiTModel
-from deit_patch_embeddings import TtDeiTPatchEmbeddings
+from deit_patch_embeddings import DeiTPatchEmbeddings
 
-def test_deit_patch_embeddings_inference():
+def test_deit_patch_embeddings_inference(pcc=0.99):
+
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'embeddings.patch_embeddings.projection'
+    base_address= 'embeddings.patch_embeddings'
     torch_patch_embeddings = model.embeddings.patch_embeddings
 
     input_shape =  torch.Size([1, 3, 224, 224])
@@ -41,15 +42,11 @@ def test_deit_patch_embeddings_inference():
     host = tt_lib.device.GetHost()
 
     # setup tt model
+    tt_patch_embeddings = DeiTPatchEmbeddings(DeiTConfig(), state_dict, base_address)
 
-    tt_patch_embeddings = TtDeiTPatchEmbeddings(DeiTConfig(), host, device, state_dict, base_address)
+    tt_output = tt_patch_embeddings(pixel_values)
 
-    tt_input = torch_to_tt_tensor_rm(pixel_values, device, put_on_device=False)
-    tt_out = tt_patch_embeddings(tt_input)
-    tt_output = tt_to_torch_tensor(tt_out, host)
-
-    passing = comp_pcc(torch_output, tt_output)
-    logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    tt_lib.device.CloseDevice(device)
-    assert passing[0], passing[1:]
-    logger.info(f"PASSED {passing[1]}")
+    pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
+    _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
+    logger.info(f"Output {pcc_output}")
+    assert(pcc_passing), f"Failed! Low pcc: {pcc}."

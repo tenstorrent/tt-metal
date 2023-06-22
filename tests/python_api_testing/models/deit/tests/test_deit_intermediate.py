@@ -11,7 +11,6 @@ sys.path.append(f"{f}/../../../../..")
 from typing import Optional, Set, Tuple, Union
 
 import torch
-import torch.utils.checkpoint
 from torch import nn
 from loguru import logger
 
@@ -26,14 +25,14 @@ from transformers import DeiTModel
 from deit_intermediate import TtDeiTIntermediate
 
 
-def test_deit_intermediate_inference():
+def test_deit_intermediate_inference(pcc=0.99):
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'encoder.layer.0.intermediate.dense'
+    base_address= 'encoder.layer.0.intermediate'
     torch_intermediate = model.encoder.layer[0].intermediate
 
     input_shape =  torch.Size([1, 198, 768])
@@ -48,15 +47,13 @@ def test_deit_intermediate_inference():
     host = tt_lib.device.GetHost()
 
     # setup tt model
-
-    tt_intermediate = ttDeiTIntermediate(DeiTConfig(), host, device, state_dict, base_address)
+    tt_intermediate = TtDeiTIntermediate(DeiTConfig(), device, state_dict, base_address)
 
     tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
     tt_out = tt_intermediate(tt_input)
-    tt_output = tt_to_torch_tensor(tt_out, host)
+    tt_output = tt_to_torch_tensor(tt_out, host).squeeze(0)
 
-    passing = comp_pcc(torch_output, tt_output)
-    logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    tt_lib.device.CloseDevice(device)
-    assert passing[0], passing[1:]
-    logger.info(f"PASSED {passing[1]}")
+    pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
+    _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
+    logger.info(f"Output {pcc_output}")
+    assert(pcc_passing), f"Failed! Low pcc: {pcc}."

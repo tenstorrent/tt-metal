@@ -20,7 +20,8 @@ from transformers import DeiTModel
 from deit_self_output import TtDeiTSelfOutput
 
 
-def test_deit_self_output_inference():
+def test_deit_self_output_inference(pcc=0.99):
+
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
@@ -43,15 +44,13 @@ def test_deit_self_output_inference():
     host = tt_lib.device.GetHost()
 
     # setup tt model
-
-    tt_self_output = TtDeiTSelfOutput(DeiTConfig(), host, device, state_dict, base_address)
+    tt_self_output = TtDeiTSelfOutput(DeiTConfig(), device, state_dict, base_address)
 
     tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
     tt_out = tt_self_output(tt_input, input_tensor)
-    tt_output = tt_to_torch_tensor(tt_out, host)
+    tt_output = tt_to_torch_tensor(tt_out, host).squeeze(0)
 
-    passing = comp_pcc(torch_output, tt_output)
-    logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    tt_lib.device.CloseDevice(device)
-    assert passing[0], passing[1:]
-    logger.info(f"PASSED {passing[1]}")
+    pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
+    _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
+    logger.info(f"Output {pcc_output}")
+    assert(pcc_passing), f"Failed! Low pcc: {pcc}."

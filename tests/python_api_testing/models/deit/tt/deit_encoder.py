@@ -20,10 +20,10 @@ from deit_layer import TtDeiTLayer
 
 
 class TtDeiTEncoder(nn.Module):
-    def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address="") -> None:
+    def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([TtDeiTLayer(config, host, device, state_dict, f"{base_address}.layer.{_}") for _ in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList([TtDeiTLayer(config, device, state_dict, f"{base_address}.layer.{_}") for _ in range(config.num_hidden_layers)])
 
         self.gradient_checkpointing = False
 
@@ -35,6 +35,7 @@ class TtDeiTEncoder(nn.Module):
         output_hidden_states: bool = False,
         return_dict: bool = True,
     ) -> Union[tuple]:
+
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
 

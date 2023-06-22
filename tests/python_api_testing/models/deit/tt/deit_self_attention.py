@@ -8,45 +8,41 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
 
-
 import torch
 from torch import nn
 from deit_config import DeiTConfig
 from typing import Union, Optional, Tuple, Dict, Set, List
 
 import tt_lib
-# from deit_layer import TtDeiTLayer
 from tt_lib.fallback_ops import fallback_ops
-from deit_helper_funcs import make_linear
-from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
+from utility_functions_new import torch_to_tt_tensor_rm
+from helper_funcs import Linear as TtLinear
 
 
 class TtDeiTSelfAttention(nn.Module):
-    def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address="") -> None:
+    def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
                 f"The hidden size {config.hidden_size,} is not a multiple of the number of attention "
                 f"heads {config.num_attention_heads}."
             )
-        self.host = host
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        # self.query_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.query.weight"], device)
-        # self.query_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.query.bias"], device)
+        self.query_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.weight"], device)
+        self.query_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.bias"], device)
 
-        # self.key_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.key.weight"], device)
-        # self.key_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.key.bias"], device)
+        self.key_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.weight"], device)
+        self.key_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.bias"], device)
 
-        # self.value_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.value.weight"], device)
-        # self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.value.bias"], device)
-        # print('\nquery::::', f"{state_dict}.attention")
+        self.value_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.weight"], device)
+        self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.bias"], device)
 
-        self.query = make_linear(config.hidden_size, self.all_head_size, "query", state_dict, base_address, device)
-        self.key = make_linear(config.hidden_size, self.all_head_size, "key", state_dict, base_address, device)
-        self.value = make_linear(config.hidden_size, self.all_head_size, "value", state_dict, base_address, device)
+        self.query = TtLinear(config.hidden_size, self.all_head_size, self.query_weight, self.query_bias)
+        self.key = TtLinear(config.hidden_size, self.all_head_size, self.key_weight, self.key_bias)
+        self.value = TtLinear(config.hidden_size, self.all_head_size, self.value_weight, self.value_bias)
 
     def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         # x must be 4d originaly
@@ -84,9 +80,6 @@ class TtDeiTSelfAttention(nn.Module):
 
         # Normalize the attention scores to probabilities.
         attention_probs = fallback_ops.softmax(attention_scores, dim=-1)
-
-        # This is actually dropping out entire tokens to attend to, which might
-        # seem a bit unusual, but is taken from the original Transformer paper.
 
         # Mask heads if we want to
         if head_mask is not None:

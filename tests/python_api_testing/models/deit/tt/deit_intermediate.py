@@ -15,18 +15,18 @@ from torch import nn
 
 from activations import ACT2FN
 from deit_config import DeiTConfig
+from utility_functions_new import torch_to_tt_tensor_rm
 
 import tt_lib
-from deit_helper_funcs import make_linear
+from helper_funcs import Linear as TtLinear
 
 class TtDeiTIntermediate(nn.Module):
-    def __init__(self, config: DeiTConfig(), host, device, state_dict=None, base_address="") -> None:
+    def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
 
-        # dense_weight = state_dict[f"{base_address}.dense.weight"]
-        # dense_bias = state_dict[f"{base_address}.dense.bias"]
-        # self.dense = make_linear(config.hidden_size, config.intermediate_size, dense_weight, dense_bias, device)
-        self.dense = make_linear(config.hidden_size, config.intermediate_size, "dense", state_dict, base_address, device)
+        dense_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.weight"], device)
+        dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], device)
+        self.dense = TtLinear(config.hidden_size, config.intermediate_size, dense_weight, dense_bias)
 
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]

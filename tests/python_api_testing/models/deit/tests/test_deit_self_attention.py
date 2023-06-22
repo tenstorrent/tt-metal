@@ -26,14 +26,15 @@ from deit_self_attention import TtDeiTSelfAttention
 from activations import ACT2FN
 
 
-def test_deit_self_attention_inference():
+def test_deit_self_attention_inference(pcc = 0.99):
+
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'encoder.layer.0.attention'
+    base_address= 'encoder.layer.0.attention.attention'
     torch_self_attention = model.encoder.layer[0].attention.attention
     head_mask = None
     output_attentions = False
@@ -41,8 +42,6 @@ def test_deit_self_attention_inference():
     hidden_state = torch.randn(input_shape)
 
     torch_output = torch_self_attention(hidden_state.squeeze(0), head_mask, output_attentions)[0]
-    print('\n in test torch output:', torch_output[0][0][0:10])
-    print('in test torch output shape', torch_output.shape)
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -51,18 +50,14 @@ def test_deit_self_attention_inference():
     host = tt_lib.device.GetHost()
 
     # setup tt model
-
-    tt_self_attention = TtDeiTSelfAttention(DeiTConfig(), host, device, state_dict, base_address)
+    tt_self_attention = TtDeiTSelfAttention(DeiTConfig(), device, state_dict, base_address)
 
     tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
     tt_out = tt_self_attention(tt_input, head_mask, output_attentions)
     tt_output = tt_to_torch_tensor(tt_out[0], host).squeeze(0)
-    print('\n in test tt output:', tt_output[0][0][0:10])
-    print('in test tt output shape', tt_output.shape)
 
-
-    passing = comp_pcc(torch_output, tt_output)
-    logger.info(comp_allclose_and_pcc(tt_output, torch_output))
+    passing = comp_pcc(torch_output, tt_output, pcc)
+    logger.info(comp_allclose_and_pcc(tt_output, torch_output, pcc))
     tt_lib.device.CloseDevice(device)
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
