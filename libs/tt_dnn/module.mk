@@ -50,7 +50,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/bert_large_tms/multi_core_concat_heads/multi_core_concat_heads.cpp \
 	libs/tt_dnn/op_library/run_operation.cpp \
 	libs/tt_dnn/op_library/split/split_tiled.cpp \
-	libs/tt_dnn/op_library/split/split_last_dim_qk_tiled.cpp \
+	libs/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.cpp \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)

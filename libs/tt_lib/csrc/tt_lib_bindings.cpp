@@ -19,7 +19,7 @@
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
-#include "tt_dnn/op_library/split/split_last_dim_qk_tiled.hpp"
+#include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tensor/host_buffer.hpp"
@@ -2382,14 +2382,15 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // TMs
-    m_tensor.def("split_last_dim_qk_tiled", &split_last_dim_qk_tiled, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
-        Splits a tensor's last dimension in two equal sized chunks
+    m_tensor.def("split_last_dim_two_chunks_tiled", &split_last_dim_two_chunks_tiled, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Splits a tensor's last dimension in two equal sized chunks. This assumes the last dim is tiled.
 
-        +----------+----------------------+-----------+-------------+----------+
-        | Argument | Description          | Data type | Valid range | Required |
-        +==========+======================+===========+=============+==========+
-        | in0      | Input tensor         | Tensor    |             | Yes      |
-        +---------------------+-----------+-----------+-------------+----------+
+        +----------+--------------------------------+------------+-------------------------------+----------+
+        | Argument | Description                    | Data type  | Valid range                   | Required |
+        +==========+================================+============+===============================+==========+
+        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
+        +----------+--------------------------------+------------+-------------------------------+----------+
+
     )doc");
     m_tensor.def("tilize_with_zero_padding", &tilize_with_zero_padding, R"doc(
         Tilizes a given tensor across memory on device. Pads zeroes height-wise if required.

@@ -300,6 +300,9 @@ Tensor creation operations
 
 .. autofunction:: tt_lib.tensor.full_like
 
+.. autofunction:: tt_lib.tensor.split_last_dim_two_chunks_tiled
+
+
 Broadcast and Reduce
 --------------------
 
