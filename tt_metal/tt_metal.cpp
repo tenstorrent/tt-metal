@@ -891,7 +891,7 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
     bool cache_hit = true;
     bool path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix);
     if ( enable_compile_cache && path_exists ){
-        HashLookup::inst().add(kernel_hash);
+        TT_ASSERT ( HashLookup::inst().exists(kernel_hash) );
     } else if ( HashLookup::inst().add(kernel_hash) ) {
         cache_hit = false;
         GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
@@ -988,10 +988,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     {
         tf::Taskflow tf;
         // This can be removed when we load BRISC FW separately from kernel
-        tf.emplace ( [device, &program, profile_kernel ] {
-                                            CompileBlankKernel(device);
-                                            AddBlankDataMovementKernel(device, program, profile_kernel);
-                                        } );
+        tf.emplace ( [device ] { CompileBlankKernel(device); } );
 
 
         for (auto kernel : program.kernels()) {
@@ -999,11 +996,14 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
                                                                                 } );
 
         }
+        tf.emplace ( [device, &program, profile_kernel ] {
+                                       AddBlankKernels(device, program, profile_kernel);   }
+        );
 
-        // This can be removed when we load BRISC FW separately from kernel
-        taskflow.emplace ( [device, &program, profile_kernel ] {
-                                            AddBlankDataMovementKernel(device, program, profile_kernel);
-                                        } );
+        GetExecutor().run(tf).wait();
+    }
+    {
+        tf::Taskflow tf;
 
         for (auto kernel : program.kernels()) {
             tf.emplace ( [kernel] { kernel->read_binaries(); });
