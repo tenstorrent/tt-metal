@@ -45,14 +45,16 @@ PYBUDA_WH_RELEASE_ASSETS=$(curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
 
 GS_TT_SMI_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_SMI_FILENAME)\")" | jq '.url' | tr \" \ )
 WH_TT_SMI_SERVER_LOCATION=$(echo $PYBUDA_WH_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_SMI_FILENAME)\")" | jq '.url' | tr \" \ )
-# GS_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
-# WH_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_WH_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
+GS_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
+WH_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_WH_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
 GS_TT_DRIVER_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_DRIVER_FILENAME)\")" | jq '.url' | tr \" \ )
 
 GS_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/grayskull
 WH_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/wormhole_b0
 GS_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/grayskull
 WH_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/wormhole_b0
+
+# Note we are forcing same driver for both devices for now
 TT_DRIVER_LOCAL_FOLDER=$ASSETS_DIR/tt_driver
 
 mkdir -p $GS_TT_SMI_LOCAL_FOLDER
@@ -67,19 +69,37 @@ GS_TT_FLASH_LOCAL_LOCATION=$GS_TT_FLASH_LOCAL_FOLDER/tt-flash
 WH_TT_FLASH_LOCAL_LOCATION=$WH_TT_FLASH_LOCAL_FOLDER/tt-flash
 TT_DRIVER_LOCAL_LOCATION=$TT_DRIVER_LOCAL_FOLDER/ttkmd_1.14.tar.gz
 
-echo $GS_TT_FLASH_LOCAL_LOCATION
+echo $GS_TT_SMI_SERVER_LOCATION
 echo $GS_TT_SMI_LOCAL_LOCATION
-curl -vL -H "Authorization: Bearer $GITHUB_TOKEN" \
+curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
 	-H "X-GitHub-Api-Version: 2022-11-28" \
 	-H "Accept: application/octet-stream" \
 	$GS_TT_SMI_SERVER_LOCATION -o $GS_TT_SMI_LOCAL_LOCATION
 
-curl -vL -H "Authorization: Bearer $GITHUB_TOKEN" \
+echo $WH_TT_SMI_SERVER_LOCATION
+echo $WH_TT_SMI_LOCAL_LOCATION
+curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
 	-H "X-GitHub-Api-Version: 2022-11-28" \
 	-H "Accept: application/octet-stream" \
 	$WH_TT_SMI_SERVER_LOCATION -o $WH_TT_SMI_LOCAL_LOCATION
 
-curl -vL -H "Authorization: Bearer $GITHUB_TOKEN" \
+echo $TT_DRIVER_SERVER_LOCATION
+echo $TT_DRIVER_LOCAL_LOCATION
+curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
 	-H "X-GitHub-Api-Version: 2022-11-28" \
 	-H "Accept: application/octet-stream" \
 	$GS_TT_DRIVER_SERVER_LOCATION -o $TT_DRIVER_LOCAL_LOCATION
+
+echo $GS_TT_FLASH_SERVER_LOCATION
+echo $GS_TT_FLASH_LOCAL_LOCATION
+curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
+	-H "X-GitHub-Api-Version: 2022-11-28" \
+	-H "Accept: application/octet-stream" \
+	$GS_TT_FLASH_SERVER_LOCATION -o $GS_TT_FLASH_LOCAL_LOCATION
+
+echo $WH_TT_FLASH_SERVER_LOCATION
+echo $WH_TT_FLASH_LOCAL_LOCATION
+curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
+	-H "X-GitHub-Api-Version: 2022-11-28" \
+	-H "Accept: application/octet-stream" \
+	$WH_TT_FLASH_SERVER_LOCATION -o $WH_TT_FLASH_LOCAL_LOCATION
