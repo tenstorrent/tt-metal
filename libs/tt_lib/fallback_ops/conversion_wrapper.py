@@ -66,9 +66,12 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
 
 
 def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
+    output_shape = pt_tensor.shape
+    if len(output_shape) < 4:
+        output_shape = [1] * (4 - len(output_shape)) + output_shape
     tt_tensor = ttl_tensor.Tensor(
         pt_tensor.reshape(-1).tolist(),
-        pt_tensor.shape,
+        output_shape,
         output_format["dtype"],
         ttl_tensor.Layout.ROW_MAJOR,
     )
