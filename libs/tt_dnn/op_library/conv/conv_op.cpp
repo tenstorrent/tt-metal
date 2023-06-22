@@ -352,7 +352,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_activation_address_m
                 uint32_t w = start_block_2d_index_w;
                 uint32_t end_block_2d_index_w = start_block_2d_index_w + in0_block_w_datums - 1;
                 assert(end_block_2d_index_w < matrix_width_padded);
-                while (w < end_block_2d_index_w) {
+                while (w <= end_block_2d_index_w) {
                     uint32_t src_address_offset_dram = 0;
                     uint32_t read_size_bytes = 0;
                     uint32_t pad = 0;
@@ -373,7 +373,8 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_activation_address_m
                         uint32_t act_tensor_start_y = channel_stick_row_id_y * U;
                         uint32_t act_tensor_padded_x = act_tensor_start_x + (channel_stick_col_id % S);
                         uint32_t act_tensor_padded_y = act_tensor_start_y + (channel_stick_col_id / S);
-                        uint32_t read_size = min(channel_stick_size - channel_stick_offset, in0_block_w_datums);
+                        assert(w <= end_block_2d_index_w);
+                        uint32_t read_size = min(channel_stick_size - channel_stick_offset, (end_block_2d_index_w+1)-w);
                         read_size_bytes = read_size * num_bytes_df;
                         if(act_tensor_padded_x < Pad_W || act_tensor_padded_x >= (Pad_W + conv_input_x) || act_tensor_padded_y < Pad_H || act_tensor_padded_y >= (Pad_H + conv_input_y)) {
                             // pad (conv padding)
