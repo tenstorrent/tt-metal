@@ -15,16 +15,6 @@ CircularBuffer::CircularBuffer(
     uint32_t size_in_bytes,
     DataFormat data_format) :
     device_(device), core_range_set_(core_range_set), buffer_index_(buffer_index), num_tiles_(num_tiles), size_(size_in_bytes), address_(0), data_format_(data_format), allocated_on_device_(true) {
-    uint32_t address = std::numeric_limits<uint32_t>::max();
-    for (auto core_range : this->core_range_set_.ranges()) {
-        uint32_t l1_address = allocator::get_address_for_circular_buffers_across_core_range(*device->allocator_, core_range, size_in_bytes);
-        if (address == std::numeric_limits<uint32_t>::max()) {
-            address = l1_address;
-        } else if (l1_address != address) {
-            TT_THROW("Cannot allocate CBs in core range " + core_range.str() + " at desired address  " + std::to_string(address));
-        }
-    }
-    this->address_ = address;
     this->reserve();
 }
 
@@ -77,7 +67,20 @@ bool CircularBuffer::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.core_coord_in_core_ranges(logical_core);
 }
 
+
 void CircularBuffer::reserve() {
+
+    uint32_t address = std::numeric_limits<uint32_t>::max();
+    for (auto core_range : this->core_range_set_.ranges()) {
+        uint32_t l1_address = allocator::get_address_for_circular_buffers_across_core_range(*this->device_->allocator_, core_range, this->size_);
+        if (address == std::numeric_limits<uint32_t>::max()) {
+            address = l1_address;
+        } else if (l1_address != address) {
+            TT_THROW("Cannot allocate CBs in core range " + core_range.str() + " at desired address  " + std::to_string(address));
+        }
+    }
+    this->address_ = address;
+
     for (auto core_range : this->core_range_set_.ranges()) {
         auto start = core_range.start;
         auto end = core_range.end;
@@ -89,6 +92,7 @@ void CircularBuffer::reserve() {
             }
         }
     }
+    this->allocated_on_device_ = true;
 }
 
 void CircularBuffer::deallocate() {

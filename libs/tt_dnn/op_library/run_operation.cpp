@@ -92,9 +92,19 @@ std::vector<Tensor> run_with_program_cache(
     );
 
     auto& program = program_with_callbacks.program;
+    for (auto& circular_buffer : program.circular_buffers()) {
+        if (not circular_buffer->is_allocated()) {
+            circular_buffer->reserve();
+        }
+    }
+
     ConfigureDeviceWithProgram(device, program);
     WriteRuntimeArgsToDevice(device, program);
     LaunchKernels(device, program);
+
+    for (auto& circular_buffer : program.circular_buffers()) {
+        circular_buffer->deallocate();
+    }
 
     return output_tensors;
 }
