@@ -156,4 +156,13 @@ Hash hash_tensor(const Tensor& tensor) {
     );
 }
 
+Hash hash_memory_config(const MemoryConfig& memory_config) {
+    return fmt::format(
+        "{}_{}_{}",
+         memory_config.interleaved,
+         memory_config.bank_id,
+         magic_enum::enum_name(memory_config.buffer_type)
+    );
+}
+
 }

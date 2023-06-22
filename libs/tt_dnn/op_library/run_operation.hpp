@@ -26,6 +26,8 @@ std::vector<Tensor> generic_create_output_tensors(
 
 Hash hash_tensor(const Tensor& tensor);
 
+Hash hash_memory_config(const MemoryConfig& memory_config);
+
 template<typename ConcreteOperation>
 static Tensor run_without_autoformat(ConcreteOperation&& concrete_op, const Tensor &input_tensor) {
     const Operation op = Operation(concrete_op);

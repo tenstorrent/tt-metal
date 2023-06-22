@@ -336,11 +336,9 @@ operation::Hash ResidualLayerNorm::compute_program_hash(
     const auto& input_tensor = input_tensors.at(0).get();
 
     return fmt::format(
-        "residual_layer_norm_{}_{}_{}_{}_{}_{}",
+        "residual_layer_norm_{}_{}_{}_{}",
          this->eps,
-         this->output_mem_config.interleaved,
-         this->output_mem_config.bank_id,
-         magic_enum::enum_name(this->output_mem_config.buffer_type),
+         operation::hash_memory_config(this->output_mem_config),
          operation::hash_tensor(input_tensor),
          optional_input_tensors.size()
     );
