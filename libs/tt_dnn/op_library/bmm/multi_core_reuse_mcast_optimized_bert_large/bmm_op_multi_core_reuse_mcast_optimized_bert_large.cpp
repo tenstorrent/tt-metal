@@ -408,7 +408,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     // Create compute kernel
     bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
-    bool math_approx_mode = fuse_gelu_activation;
+    bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",

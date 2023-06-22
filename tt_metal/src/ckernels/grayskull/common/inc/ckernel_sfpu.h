@@ -344,8 +344,83 @@ sfpi_inline vFloat calculate_gelu_core(vFloat in)
     return result;
 }
 
+#define POLYVAL5(coef4,coef3,coef2,coef1,coef0,val) ( (((coef4*val + coef3)*val + coef2)*val + coef1)*val + coef0 )
+
+inline
+vFloat calculate_pos_cdf_appx(vFloat val) {
+  //(0,2.5) interpolation polynomial coeffs  [ 0.0122792,  -0.05281024, -0.03048313,  0.41314081,  0.49866379]
+  //(2.5,5) interpolation polynomial coeffs  [0.44656975,  0.58216001]
+
+  // FIXME:
+  // reuse LREG0-3 for storing coefficients and do product computation
+  // const float coef_2dot5_to_5[4] = {-0.00221304f, -0.03253934f, -0.18027954f, -0.44656975f };
+  // TTI_SFPLOADI(p_sfpu::LREG0, 0, 0xbb1108a6);
+  // TTI_SFPLOADI(p_sfpu::LREG1, 0, 0xbd0547f9);
+  // TTI_SFPLOADI(p_sfpu::LREG2, 0, 0xbe389b33);
+  // TTI_SFPLOADI(p_sfpu::LREG2, 0, 0xbee4a4ca);
+
+  vFloat result;
+  v_if( val < 2.5f ) {
+    result = POLYVAL5(0.0122792f,  -0.05281024f, -0.03048313f,  0.41314081f,  0.49866379f, val);
+  } v_else {
+    // assume v >= 2.5f - 5
+    //result = POLYVAL5(result,-0.00221304f,  0.03253934f, -0.18027954f,  0.44656975f,  0.58216001f, val);
+    //result = ((vFloat)l_reg[LRegs::LReg0])*val + (vFloat)l_reg[LRegs::LReg1];
+    //result = result*val + (vFloat)l_reg[LRegs::LReg2];
+    //result = result*val + (vFloat)l_reg[LRegs::LReg3];
+    result = 0.44656975f*val + 0.58216001f;
+  }
+  v_endif;
+
+  v_if(result > 1.0f) {
+    result = 1.0f;
+  }
+  v_endif;
+  return result;
+}
+
+// compute the approximate value of CDF of normal distribution
+inline
+vFloat calculate_cdf_appx(vFloat val,bool scaled = false) {
+    vFloat result = 0.0f;
+    vFloat val2 = 0.0;
+    v_if ( val < 0.0f ) {
+         val2 = -val;
+    } v_else {
+         val2 = val;
+    }
+    v_endif;
+
+    result = calculate_pos_cdf_appx(val2);
+
+    v_if ( val < 0.0f ) {
+        result = 1.0f - result;
+    }
+    v_endif;
+
+    if ( scaled ) {
+      result *= val; //scale
+    }
+    return result;
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_gelu()
+{
+    constexpr bool scaled = true;
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat val = dst_reg[0];
+        vFloat result = calculate_cdf_appx(val,scaled);
+        dst_reg[0] = result;
+        dst_reg++;
+    }
+}
+
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_gelu_appx()
 {
     constexpr uint imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
     constexpr uint imm2 = 0xFF00;
@@ -692,6 +767,22 @@ inline void calculate_lrelu(uint slope)
     }
 }
 
+template <bool APPROXIMATION_MODE,int ITERATIONS>
+inline void calculate_power_iterative(uint exponent)
+{
+    for (int d = 0; d < 8; d++)
+    {
+        vFloat in = dst_reg[0];
+        vFloat result = in * in;
+        for (uint i = 2; i < exponent; i++) {
+            result *= in;
+        }
+
+        dst_reg[0] = result;
+
+        dst_reg++;
+    }
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_power(uint exponent)
@@ -701,18 +792,18 @@ inline void calculate_power(uint exponent)
     {
         vFloat in = dst_reg[0];
         vFloat result = 1.0f;
-
-        vFloat b[sizeof(uint)] = {1.0f,};
+	constexpr uint SIZE = 4*sizeof(uint);//till power of 64
+        vFloat b[SIZE] = {1.0f,};
         // kind of a LUT
         b[0] = in;
         #pragma GCC unroll 32
-        for (uint i =  1; i < sizeof(uint); i++) {
+        for (uint i =  1; i < SIZE; i++) {
             b[i] = b[i-1]*b[i-1];
         }
 
         //reduce with product
         #pragma GCC unroll 32
-        for (uint i = 0; i < sizeof(uint)+1; i++) {
+        for (uint i = 0; i < SIZE; i++) {
             if ( exponent & (1<<i) )
                 result *= b[i];
         }
@@ -1154,8 +1245,6 @@ inline void relu_min(uint uint_threshold)
     }
 }
 
-#define POLYVAL5(coef4,coef3,coef2,coef1,coef0,val) (((coef4*val + coef3)*val + coef2)*val + coef1)*val + coef0
-
 inline
 vFloat sigmoid_piecewise_linear_positive(vFloat val) {
         vFloat result = 0.0f;
@@ -1240,7 +1329,11 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
         calculate_dropout<APPROXIMATION_MODE, ITERATIONS>(param0, param1);
     }
     else if constexpr (operation == SfpuType::power) {
-        calculate_power<APPROXIMATION_MODE, ITERATIONS>(param0);
+	if ( param0 <= 64 ) {
+	  calculate_power<APPROXIMATION_MODE, ITERATIONS>(param0);
+	} else {
+	  calculate_power_iterative<APPROXIMATION_MODE, ITERATIONS>(param0);
+	}
     }
     else if constexpr (operation == SfpuType::square) {
         calculate_square<APPROXIMATION_MODE, ITERATIONS>();

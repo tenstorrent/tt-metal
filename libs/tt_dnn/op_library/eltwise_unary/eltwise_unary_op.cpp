@@ -136,8 +136,6 @@ string get_op_name_default(UnaryOpType::Enum op_type) {
 
 bool get_op_approx_mode(UnaryOpType::Enum op_type) {
     switch (op_type) {
-        case UnaryOpType::GELU:
-            return true;
         default:
             return false;
     }
