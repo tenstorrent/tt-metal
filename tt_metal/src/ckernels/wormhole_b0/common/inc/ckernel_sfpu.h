@@ -328,9 +328,11 @@ void calculate_exponential(uint16_t exp_base_scale_factor = 0)
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
+
         if constexpr(SCALE_EN){
             val = val * s2vFloat16a(exp_base_scale_factor);
         }
+
         if constexpr (APPROXIMATION_MODE)
         {
             // * by 1/ln2 and add convert to 7.3 FxP format
@@ -366,7 +368,7 @@ void calculate_exponential(uint16_t exp_base_scale_factor = 0)
             }
             v_endif;
 
-            dst_reg[0] = result;
+	    dst_reg[0] = result;
         }
 
         dst_reg++;
@@ -1340,10 +1342,12 @@ template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
     if constexpr (operation == SfpuType::exponential) {
-        calculate_exponential<APPROXIMATION_MODE, APPROXIMATION_MODE, false, ITERATIONS>(param0);
+	constexpr bool zero_negative = true;
+        calculate_exponential<APPROXIMATION_MODE, zero_negative, false, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::exp_with_base) {
-        calculate_exponential<APPROXIMATION_MODE, false, true, ITERATIONS>(param0);
+	constexpr bool zero_negative = true;
+        calculate_exponential<APPROXIMATION_MODE, zero_negative, true, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::tanh) {
         calculate_tanh<APPROXIMATION_MODE, ITERATIONS>();
