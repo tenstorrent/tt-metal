@@ -86,12 +86,12 @@ void Device::initialize_harvesting_information() {
     auto soc_desc = this->cluster_->get_soc_desc(this->pcie_slot_);
     auto harvested_noc_rows = this->cluster_->get_harvested_rows(this->pcie_slot_);
     // Determine which noc-coords are harvested
-    std::vector<unsigned int> noc_row_offset_from_harvesting(soc_desc.grid_size.y, 0);
+    std::vector<unsigned int> noc_row_harvested(soc_desc.grid_size.y, 0);
     this->num_harvested_rows_ = 0;
     for (unsigned int r = 0; r < soc_desc.grid_size.y; r++) {
         bool row_harvested = (harvested_noc_rows>>r)&0x1;
         this->num_harvested_rows_ += row_harvested;
-        noc_row_offset_from_harvesting[r] = this->num_harvested_rows_;
+        noc_row_harvested[r] = row_harvested;
     }
     tt::log_assert(
         this->num_harvested_rows_ < 2,
@@ -108,6 +108,7 @@ void Device::initialize_harvesting_information() {
     this->logical_to_routing_coord_lookup_table_.clear();
     unsigned int num_rows = soc_desc.worker_grid_size.y - this->num_harvested_rows_;
     unsigned int num_cols = soc_desc.worker_grid_size.x;
+    unsigned int row_offset = 0;
     for (unsigned int r = 0; r < num_rows; r++) {
         for (unsigned int c = 0; c < num_cols; c++) {
             CoreCoord logical_coord({
@@ -118,11 +119,19 @@ void Device::initialize_harvesting_information() {
                 .x = static_cast<size_t>(soc_desc.worker_log_to_routing_x.at(logical_coord.x)),
                 .y = static_cast<size_t>(soc_desc.worker_log_to_routing_y.at(logical_coord.y)),
             });
+            if (noc_row_harvested[noc_routing_coord.y]) {
+                if (c == 0) {
+                    row_offset++;
+                }
+            }
+            noc_routing_coord.y += row_offset;
+            while (not soc_desc.is_worker_core(noc_routing_coord)) {
+                noc_routing_coord.y++;
+            }
             CoreCoord post_harvesting_noc_routing_coord({
                 .x = noc_routing_coord.x,
-                .y = noc_routing_coord.y + noc_row_offset_from_harvesting[noc_routing_coord.y],
+                .y = noc_routing_coord.y,
             });
-
             this->logical_to_routing_coord_lookup_table_.insert({
                 logical_coord,
                 post_harvesting_noc_routing_coord
