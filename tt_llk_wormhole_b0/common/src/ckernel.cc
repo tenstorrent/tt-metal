@@ -206,6 +206,9 @@ int main(int argc, char *argv[])
     allocate_perf_buffer();
     setup_fpu_perf_cnt();
     record_dummy_math_event();
+#if BRISC_TRISC_SYNC == 1
+    update_overlay_decoupling_mailbox();
+#endif
 #endif
   
     uint64_t kernel_start_timestamp = read_wall_clock();
