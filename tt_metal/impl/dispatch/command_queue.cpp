@@ -135,8 +135,10 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
         if (DISPATCH_MAP_DUMP != nullptr) {
             vector<u32> cb_config = {cb->address() >> 4, cb->size() >> 4, cb->num_tiles()};
-            string name = "CB: " + std::to_string(cb->buffer_index());
-            update_dispatch_map_dump(name, cb_config, dispatch_dump_file);
+            for (auto buffer_index: cb->buffer_indices()) {
+                string name = "CB: " + std::to_string(buffer_index);
+                update_dispatch_map_dump(name, cb_config, dispatch_dump_file);
+            }
         }
 
         CoreRangeSet cr_set = cb->core_range_set();
