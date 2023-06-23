@@ -216,6 +216,41 @@ TEST_SUITE(
         REQUIRE(tt::tt_metal::InitializeDevice(device));
         REQUIRE(tt::tt_metal::CloseDevice(device));
     }
+    TEST_CASE("HarvestingPrints") {
+        auto arch = tt::get_arch_from_string(get_env_arch_name());
+        tt::tt_metal::Device* device;
+        const unsigned int pcie_id = 0;
+        device = tt::tt_metal::CreateDevice(arch, pcie_id);
+        REQUIRE(tt::tt_metal::InitializeDevice(device));
+        CoreCoord unharvested_logical_grid_size = {.x=12, .y = 10};
+        if (arch == tt::ARCH::WORMHOLE_B0) {
+            unharvested_logical_grid_size = {.x=8, .y=10};
+        }
+        auto logical_grid_size = device->logical_grid_size();
+        if (logical_grid_size == unharvested_logical_grid_size) {
+            tt::log_info("Harvesting Disabled in SW");
+        } else {
+            tt::log_info("Harvesting Enabled in SW");
+            tt::log_info("Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
+        }
+
+        tt::log_info("Logical -- Noc Coordinates Mapping");
+        tt::log_info("[Logical <-> NOC0] Coordinates");
+        for (int r = 0; r < logical_grid_size.y; r ++) {
+            string output_row = "";
+            for (int c = 0; c < logical_grid_size.x; c ++) {
+                const CoreCoord logical_coord(c, r);
+                const auto noc_coord = device->worker_core_from_logical_core(logical_coord);
+                output_row += "{L[x" + std::to_string(c);
+                output_row += "-y" + std::to_string(r);
+                output_row += "]:N[x" + std::to_string(noc_coord.x);
+                output_row += "-y" + std::to_string(noc_coord.y);
+                output_row += "]}, ";
+            }
+            tt::log_info("{}", output_row);
+        }
+        REQUIRE(tt::tt_metal::CloseDevice(device));
+    }
 
     TEST_CASE("Single Device Load Blank Kernels") {
         auto arch = tt::get_arch_from_string(get_env_arch_name());
