@@ -593,25 +593,14 @@ tt_metal::Program create_program_mcast_in0(
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t interm0_cb_index = 24;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
-        ouput_cb_index,
-        all_cores,
+        {ouput_cb_index, interm0_cb_index},
+        CoreRangeSet({all_cores}),
         out_CB_tiles,
         out_CB_size,
-        cb_data_format
-    );
-
-    uint32_t interm0_cb_index = 24;
-    auto cb_interm0 = tt_metal::CreateCircularBuffers(
-        program,
-        device,
-        interm0_cb_index,
-        all_cores,
-        out_CB_tiles,
-        out_CB_size,
-        cb_output->address(),
         cb_data_format
     );
 
@@ -890,25 +879,14 @@ tt_metal::Program create_program_mcast_in1(
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t interm0_cb_index = 24;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         device,
-        ouput_cb_index,
-        all_cores,
+        {ouput_cb_index, interm0_cb_index},
+        CoreRangeSet({all_cores}),
         out_CB_tiles,
         out_CB_size,
-        cb_data_format
-    );
-
-    uint32_t interm0_cb_index = 24;
-    auto cb_interm0 = tt_metal::CreateCircularBuffers(
-        program,
-        device,
-        interm0_cb_index,
-        all_cores,
-        out_CB_tiles,
-        out_CB_size,
-        cb_output->address(),
         cb_data_format
     );
 
