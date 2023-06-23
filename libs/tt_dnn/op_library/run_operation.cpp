@@ -94,7 +94,7 @@ std::vector<Tensor> run_with_operation_cache(
     auto& program = program_with_callbacks.program;
     for (auto& circular_buffer : program.circular_buffers()) {
         if (not circular_buffer->is_allocated()) {
-            circular_buffer->reserve();
+            circular_buffer->reserve(device);
         }
     }
 

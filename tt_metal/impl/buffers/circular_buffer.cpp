@@ -22,9 +22,9 @@ CircularBuffer::CircularBuffer(
     u32 num_tiles,
     u32 size_in_bytes,
     DataFormat data_format) :
-    device_(device), core_range_set_(core_range_set), buffer_indices_(buffer_indices), num_tiles_(num_tiles), size_(size_in_bytes), address_(std::numeric_limits<uint32_t>::max()), data_format_(data_format), allocated_on_device_(true) {
+    device_(device), core_range_set_(core_range_set), buffer_indices_(buffer_indices), num_tiles_(num_tiles), size_(size_in_bytes), address_(std::numeric_limits<uint32_t>::max()), data_format_(data_format), allocated_on_device_(false) {
     validate_buffer_indices(buffer_indices);
-    this->reserve();
+    this->reserve(device);
 }
 
 CircularBuffer::CircularBuffer(
@@ -35,9 +35,9 @@ CircularBuffer::CircularBuffer(
     u32 size_in_bytes,
     u32 address,
     DataFormat data_format) :
-    device_(device), core_range_set_(core_range_set), buffer_indices_(buffer_indices), num_tiles_(num_tiles), size_(size_in_bytes), address_(address), data_format_(data_format), allocated_on_device_(true) {
+    device_(device), core_range_set_(core_range_set), buffer_indices_(buffer_indices), num_tiles_(num_tiles), size_(size_in_bytes), address_(address), data_format_(data_format), allocated_on_device_(false) {
     validate_buffer_indices(buffer_indices);
-    this->reserve();
+    this->reserve(device);
 }
 
 bool CircularBuffer::is_on_logical_core(const CoreCoord &logical_core) const {
@@ -45,7 +45,9 @@ bool CircularBuffer::is_on_logical_core(const CoreCoord &logical_core) const {
 }
 
 
-void CircularBuffer::reserve() {
+void CircularBuffer::reserve(Device* device) {
+    TT_ASSERT(not this->allocated_on_device_, "Cannot re-allocate the buffer");
+    this->device_ = device;
     // First find space on each core the CB is on because each core's memory can differ. Address has to be the same on each core.
     // Don't need to do this for manually specified addresses
     if (this->address_ == std::numeric_limits<uint32_t>::max()) {

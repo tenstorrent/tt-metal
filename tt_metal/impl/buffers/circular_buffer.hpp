@@ -50,7 +50,7 @@ class CircularBuffer {
 
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
-    void reserve();
+    void reserve(Device*);
     void deallocate();
 
     bool is_allocated() {
