@@ -44,10 +44,18 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
     u32 start_in_bytes = DEVICE_COMMAND_DATA_ADDR;
 
+    const char *DISPATCH_MAP_DUMP = std::getenv("DISPATCH_MAP_DUMP");
+    std::ofstream dispatch_dump_file;
+
+    if (DISPATCH_MAP_DUMP != nullptr) {
+        dispatch_dump_file.open(DISPATCH_MAP_DUMP);
+    }
+
     auto write_program_kernel_transfer = [&](const Kernel* kernel, vector<TransferType> transfer_types) {
         size_t i = 0;
         const vector<ll_api::memory>& kernel_bins = kernel->binaries();
         CoreRangeSet cr_set = kernel->core_range_set();
+
 
         for (TransferType transfer_type : transfer_types) {
             u32 dst_code_location;
@@ -86,6 +94,11 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                 u32 destination = tt::llrt::relocate_dev_addr(addr, dst_code_location);
                 u32 transfer_size_in_bytes = len * sizeof(u32);
                 binary_destination_and_size.push_back(std::make_pair(destination, transfer_size_in_bytes));
+
+                if (DISPATCH_MAP_DUMP != nullptr) {
+                    string name = "BINARY SPAN " + transfer_type_to_string(transfer_type);
+                    update_dispatch_map_dump(name, std::move(vector<u32>(mem_ptr, mem_ptr + len)), dispatch_dump_file);
+                }
             });
 
             for (const CoreRange& core_range : cr_set.ranges()) {
@@ -119,6 +132,12 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         program_vector.push_back(cb->size() >> 4);
         program_vector.push_back(cb->num_tiles());
         program_vector.push_back(0);  // Padding
+
+        if (DISPATCH_MAP_DUMP != nullptr) {
+            vector<u32> cb_config = {cb->address() >> 4, cb->size() >> 4, cb->num_tiles()};
+            string name = "CB: " + std::to_string(cb->buffer_index());
+            update_dispatch_map_dump(name, cb_config, dispatch_dump_file);
+        }
 
         CoreRangeSet cr_set = cb->core_range_set();
 
@@ -160,6 +179,11 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         program_vector.push_back(sem->initial_value());
         for (u32 i = 0; i < (SEMAPHORE_ALIGNMENT / sizeof(u32)) - 1; i++) {
             program_vector.push_back(0);
+        }
+
+        if (DISPATCH_MAP_DUMP != nullptr) {
+            vector<u32> sem_config = {sem->initial_value()};
+            update_dispatch_map_dump("SEM", sem_config, dispatch_dump_file);
         }
 
         CoreRangeSet cr_set = sem->core_range_set();

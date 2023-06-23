@@ -1,9 +1,10 @@
-
 #include <algorithm>
 #include <chrono>
 #include <memory>
 #include <thread>
 #include <utility>
+#include <fstream>
+
 
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
@@ -34,6 +35,29 @@ enum class TransferType : u8 {
     CB = 5,
     SEM = 6,
 };
+
+inline void update_dispatch_map_dump(const string& name, const vector<u32>& data, std::ofstream& stream) {
+    string decorative_stars(name.size(), '*');
+
+    stream << decorative_stars << '\n';
+    stream << name << '\n';
+    stream << decorative_stars << '\n';
+
+    for (u32 datum: data) {
+        stream << datum << '\n';
+    }
+}
+
+inline const string transfer_type_to_string(const TransferType& transfer_type) {
+    switch (transfer_type) {
+        case TransferType::B: return "B";
+        case TransferType::N: return "NC";
+        case TransferType::T0: return "T0";
+        case TransferType::T1: return "T1";
+        case TransferType::T2: return "T2";
+        default: TT_THROW("Invalid riscv type");
+    }
+}
 
 typedef tuple<
     u32 /* addr */,
