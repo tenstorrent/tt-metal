@@ -52,9 +52,9 @@ def test_run_padding_test(
         input_tensor_start[3] : input_tensor_end[3],
     ] = inp
 
-    print("\n", a_pt.shape)
-    print("\n", a_pt)
-    print("\n", a_ref)
+    # print("\n", a_pt.shape)
+    # print("\n", a_pt)
+    # print("\n", a_ref)
 
     assert a_pt.shape == output_tensor_shape
     assert torch.equal(a_pt, a_ref)
@@ -97,9 +97,9 @@ def test_run_unpadding_test(input_tensor_shape, output_tensor_start, output_tens
         output_tensor_start[3] : output_tensor_end[3] + 1,
     ]
 
-    print("\n", a_pt.shape)
-    print("\n", a_pt)
-    print("\n", a_ref)
+    # print("\n", a_pt.shape)
+    # print("\n", a_pt)
+    # print("\n", a_ref)
 
     assert a_pt.shape == output_tensor_shape
     assert torch.equal(a_pt, a_ref)
@@ -157,8 +157,8 @@ def test_run_padding_and_add_test(
 
     out_ref = inp + ones
 
-    print("\n", out_pt)
-    print("\n", out_ref)
+    # print("\n", out_pt)
+    # print("\n", out_ref)
 
     assert torch.allclose(out_pt, out_ref, rtol=1e-2)
 
@@ -209,9 +209,9 @@ def test_run_tile_padding_test(input_tensor_shape, pad_value):
         0 : input_tensor_end[3],
     ] = inp
 
-    print("\n", a_pt.shape)
-    print("\n", a_pt)
-    print("\n", a_ref)
+    # print("\n", a_pt.shape)
+    # print("\n", a_pt)
+    # print("\n", a_ref)
 
     assert a_pt.shape == output_tensor_shape
     assert torch.equal(a_pt, a_ref)
@@ -250,9 +250,9 @@ def test_run_tile_unpadding_test(input_tensor_shape, output_tensor_shape):
         0 : output_tensor_shape[3],
     ]
 
-    print("\n", a_pt.shape)
-    print("\n", a_pt)
-    print("\n", a_ref)
+    # print("\n", a_pt.shape)
+    # print("\n", a_pt)
+    # print("\n", a_ref)
 
     assert a_pt.shape == output_tensor_shape
     assert torch.equal(a_pt, a_ref)
@@ -301,8 +301,8 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value):
 
     out_ref = inp + ones
 
-    print("\n", out_pt)
-    print("\n", out_ref)
+    # print("\n", out_pt)
+    # print("\n", out_ref)
 
     assert torch.allclose(out_pt, out_ref, rtol=1e-2)
 
