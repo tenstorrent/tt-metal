@@ -51,12 +51,9 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
         for (TransferType transfer_type : transfer_types) {
             u32 dst_code_location;
-            bool is_kernel = true;
 
             string temp_for_debug;
             switch (transfer_type) {
-                case TransferType::CB:
-                case TransferType::SEM: is_kernel = false; break;
                 case TransferType::B: dst_code_location = MEM_BRISC_INIT_LOCAL_L1_BASE; temp_for_debug = "brisc"; break;
                 case TransferType::N: dst_code_location = MEM_NCRISC_INIT_LOCAL_L1_BASE; temp_for_debug = "ncrisc"; break;
                 case TransferType::T0: dst_code_location = MEM_TRISC0_INIT_LOCAL_L1_BASE; temp_for_debug = "trisc0"; break;
@@ -98,9 +95,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
                     u32 transfer_size_in_bytes = len * sizeof(u32);
 
-                    if (is_kernel) {
-                        addr = tt::llrt::relocate_dev_addr(addr, dst_code_location);
-                    }
+                    addr = tt::llrt::relocate_dev_addr(addr, dst_code_location);
 
                     sections.at(current_section_idx)
                         .at(transfer_type)
@@ -364,14 +359,10 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
     u32 program_src_noc = noc_coord_to_u32(this->buffer.noc_coordinates());
 
     for (const ProgramSection& section : this->program_to_dev_map.program_sections) {
-        u32 transfer_size = section.size_in_bytes;
         vector<TrailingWriteCommand> trailing_write_commands;
-        i32 dst_code_location = 0;
 
         // Kernel section
         for (const auto& [transfer_type, transfer_info_vector] : section.section) {
-            bool is_kernel = true;
-
             for (const auto& [dst_addr, src, size_in_bytes, noc_multicast_encoding, num_receivers] :
                  transfer_info_vector) {
 
@@ -389,7 +380,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
         // This is not fully correct since if there are multiple sections, they are not starting at the correct
         // part of the program buffer... a simpler method would be for there to be multiple buffers, where each
         // buffer owns a section... that is definitely a TODO(agrebenisan)
-        command.add_read_multi_write_instruction(program_src, program_src_noc, transfer_size, trailing_write_commands);
+        command.add_read_multi_write_instruction(program_src, program_src_noc,  section.size_in_bytes, trailing_write_commands);
     }
 
     // Deal with runtime args
