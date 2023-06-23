@@ -10,9 +10,7 @@
 
 #include "tools/cpuprof/cpuprof.h"
 #include "common/executor.hpp"
-
-using std::unique_lock;
-using std::mutex;
+#include "tt_metal/detail/tt_metal.hpp"
 
 namespace tt {
 
@@ -827,31 +825,7 @@ size_t KernelCompileHash(Kernel *kernel, build_kernel_for_riscv_options_t &build
     return compile_hash;
 }
 
-struct HashLookup {
-    static HashLookup& inst() {
-        static HashLookup inst_;
-        return inst_;
-    }
 
-    bool exists(size_t khash) {
-        unique_lock<mutex> lock(mutex_);
-        return hashes_.find(khash) != hashes_.end();
-    }
-    bool add(size_t khash) {
-        unique_lock<mutex> lock(mutex_);
-        bool ret = false;
-        if (hashes_.find(khash) == hashes_.end() ){
-            hashes_.insert(khash);
-            ret = true;
-        }
-        return ret;
-    }
-
-
-private:
-    std::mutex mutex_;
-    std::unordered_set<size_t > hashes_;
-};
 
 void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &build_options) {
     if (auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel)) {
@@ -891,8 +865,8 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
     bool cache_hit = true;
     bool path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix);
     if ( enable_compile_cache && path_exists ){
-        TT_ASSERT ( HashLookup::inst().exists(kernel_hash) );
-    } else if ( HashLookup::inst().add(kernel_hash) ) {
+        TT_ASSERT ( detail::HashLookup::inst().exists(kernel_hash) );
+    } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
         cache_hit = false;
         GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
     }

@@ -7,6 +7,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/device/tt_memory.h"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -15,6 +16,11 @@ struct KernelCacheStatus {
     std::unordered_map<std::string, std::string> kernel_name_to_hash_str;
     std::unordered_map<std::string, bool> kernel_name_to_cache_hit;
 };
+
+void ClearKernelCache (){
+    std::filesystem::remove_all(get_kernel_compile_outpath());
+    detail::HashLookup::inst().clear();
+}
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
 std::unordered_map<std::string, std::string> get_last_program_binary_path(const Program &program) {
@@ -169,8 +175,7 @@ void assert_kernel_hash_matches(const std::unordered_map<std::string, std::strin
 bool test_compile_program_in_loop(Device *device) {
     bool pass = true;
 
-    std::filesystem::remove_all(get_kernel_compile_outpath());
-
+    ClearKernelCache();
     ProgramAttributes default_attributes;
     auto program = create_program(device, default_attributes);
 
@@ -194,7 +199,7 @@ bool test_compile_program_in_loop(Device *device) {
 bool test_compile_program_after_clean_kernel_binary_directory(Device *device) {
     bool pass = true;
 
-    std::filesystem::remove_all(get_kernel_compile_outpath());
+    ClearKernelCache();
 
     ProgramAttributes default_attributes;
     auto program = create_program(device, default_attributes);
@@ -205,7 +210,7 @@ bool test_compile_program_after_clean_kernel_binary_directory(Device *device) {
     assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
-    std::filesystem::remove_all(get_kernel_compile_outpath());
+    ClearKernelCache();
 
     auto second_kernel_cache_status = CompileProgramTestWrapper(device, program);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, second_kernel_cache_status);
@@ -280,7 +285,7 @@ bool test_compile_program_with_modified_program(Device *device) {
         {KernelType::DataMovement, false}
     };
 
-    std::filesystem::remove_all(get_kernel_compile_outpath());
+    ClearKernelCache();
 
     ProgramAttributes attributes;
     auto program = create_program(device, attributes);
