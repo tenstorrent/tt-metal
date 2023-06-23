@@ -108,7 +108,9 @@ def parse_ops_logs(opsFolder):
     global minTime, maxDiff, maxStackSize
     ops = {}
 
+    assert os.path.isdir(opsFolder), f"{opsFolder} does no exists. Use -i option to choose the correct logs dir"
     paths = sorted(Path(opsFolder).iterdir(), key=os.path.getmtime, reverse=True)
+    assert paths, f"{opsFolder} is empty. Use -i option to choose the correct logs dir"
 
     for opCandidate in paths:
         opCandidatePath = os.path.join(opsFolder, opCandidate)
@@ -126,7 +128,7 @@ def parse_ops_logs(opsFolder):
                         op_folder_name = row[1].strip()
                         op_name = op_folder_name
                         is_op = "No"
-                        extractName = re.findall(r".*tt.*tt_metal\d*(.*)E", op_name)
+                        extractName = re.findall(r".*tt.*tt_metal:*\d*(.*)E*", op_name)
                         if extractName:
                             op_name = extractName.pop()
                             is_op = "Yes"
@@ -196,7 +198,7 @@ def parse_ops_logs(opsFolder):
 preFig = go.Figure()
 
 
-def run_dashbaord_webapp(port, opsFolder):
+def run_dashbaord_webapp(ops, opsFolder, port=None):
     global preFig
     curveDict = {}
     curveNumber = 0
@@ -211,12 +213,12 @@ def run_dashbaord_webapp(port, opsFolder):
         diffs = []
         names = []
         for opCall in opCalls:
-            s = opCall["HOST Start TS"] - minTime
-            e = opCall["HOST End TS"] - minTime
+            s = opCall["HOST START TS"] - minTime
+            e = opCall["HOST END TS"] - minTime
             c = opCall["CALL COUNT"]
             callDepth = opCall["CALL DEPTH"]
             y = 1 + (0.2 / maxStackSize) * (maxStackSize - callDepth + 1)
-            diff = opCall["HOST Duration [ns]"]
+            diff = opCall["HOST DURATION [ns]"]
             ps = opCall["META DATA"]
             m = (s + e) // 2
             xVals += [None, s, e, e, s, s]
@@ -303,7 +305,10 @@ def run_dashbaord_webapp(port, opsFolder):
 
         return fig
 
-    app.run_server(host="0.0.0.0", port=port, debug=True)
+    if port:
+        app.run_server(host="0.0.0.0", port=port, debug=True)
+    else:
+        app.run_server(host="0.0.0.0", debug=True)
 
 
 def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
@@ -374,7 +379,7 @@ def main(ops_folder, output_folder, name_append, port, webapp, date):
     if webapp:
         # TODO: Works but needs more refining
         logger.info("Web app dashboard is a work in progress. Don't be alarmed by bugs and glitches!")
-        run_dashbaord_webapp(port, opsFolder)
+        run_dashbaord_webapp(ops, opsFolder, port)
 
 
 if __name__ == "__main__":
