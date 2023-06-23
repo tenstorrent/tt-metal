@@ -291,6 +291,12 @@ void TensorModule(py::module &m_tensor) {
                 Not supported.
             )doc"
         )
+        .def("deallocate", [](Tensor &self) {
+            return self.deallocate();
+        }, R"doc(
+            Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
+        )doc"
+        )
         .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
             return self.to(device, mem_config);
         }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, py::keep_alive<0, 2>(), R"doc(

@@ -99,6 +99,8 @@ class Tensor {
 
         ~Tensor();
 
+        void deallocate();
+
         Tensor to(Device *target_device, const MemoryConfig &mem_config={.interleaved=true}) const;
 
         Tensor to(Host *host) const;

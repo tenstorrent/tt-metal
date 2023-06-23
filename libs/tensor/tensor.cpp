@@ -148,6 +148,10 @@ Tensor &Tensor::operator=(Tensor &&other) {
 }
 
 Tensor::~Tensor() {
+    this->deallocate();
+}
+
+void Tensor::deallocate() {
     if (not on_host()) {
         this->free_buffer();
     }
