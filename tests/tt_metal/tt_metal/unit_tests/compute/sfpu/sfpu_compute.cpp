@@ -22,7 +22,7 @@ namespace unit_tests::sfpu_util {
 
 const map<string, string> sfpu_op_to_op_name = {
     // FIXME: #1157
-    {"relu", "pack_relu_tile_to_stream(0, CB::c_out0);"},
+    {"relu", "relu_min_tile_init(); relu_min_tile(0,0x0); pack_tile(0, CB::c_out0);"},
     {"exponential", "exp_tile_init(); exp_tile(0); pack_tile(0, CB::c_out0);"},
     {"reciprocal", "recip_tile_init(); recip_tile(0); pack_tile(0, CB::c_out0);"},
     {"gelu", "gelu_tile_init(); gelu_tile(0); pack_tile(0, CB::c_out0);"},
@@ -215,10 +215,6 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
             test_config.approx_mode);
 
         sfpu_kernel->add_define("SFPU_OP_AND_PACK", sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op));
-        bool is_relu = (test_config.sfpu_op == "relu");
-        sfpu_kernel->add_define("INIT_RELU", is_relu ? "pack_relu_config(1);" : "");
-        sfpu_kernel->add_define("DEINIT_RELU", is_relu ? "pack_relu_config(0);" : "");
-
         int chip_id = 0;
         CoresInCoreRangeGenerator cores_in_core_range(
             core_range, device->cluster()->get_soc_desc(chip_id).worker_grid_size);
