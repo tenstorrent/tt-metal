@@ -1,4 +1,4 @@
-#include "tt_dnn/op_library/operation_cache.hpp"
+#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -61,7 +61,7 @@ int main () {
         run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::HW>>(host, device);
     }
 
-    tt::tt_metal::operation_cache::enable();
+    tt::tt_metal::program_cache::enable();
 
     auto run_reduce_ops = [&] {
         {
@@ -97,11 +97,11 @@ int main () {
 
     run_reduce_ops();
 
-    TT_ASSERT(tt::tt_metal::operation_cache::num_cached_programs() == 6);
+    TT_ASSERT(tt::tt_metal::program_cache::num_cached_programs() == 6);
 
-    tt::tt_metal::operation_cache::disable_and_clear();
+    tt::tt_metal::program_cache::disable_and_clear();
 
-    TT_ASSERT(tt::tt_metal::operation_cache::num_cached_programs() == 0);
+    TT_ASSERT(tt::tt_metal::program_cache::num_cached_programs() == 0);
 
     TT_ASSERT(tt::tt_metal::CloseDevice(device));
 

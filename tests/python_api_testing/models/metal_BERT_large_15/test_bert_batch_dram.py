@@ -398,8 +398,8 @@ def test_bert_batch_dram(
     "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
     (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, 0.98),),
 )
-def test_bert_batch_dram_with_operation_cache(
-    use_operation_cache,
+def test_bert_batch_dram_with_program_cache(
+    use_program_cache,
     model_version,
     batch,
     seq_len,
@@ -419,7 +419,7 @@ def test_bert_batch_dram_with_operation_cache(
     enable_compilation_reports()
 
     ttl.profiler.set_profiler_flag(False)
-    ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_full_with_operation_cache/")
+    ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_full_with_program_cache/")
 
     run_bert_question_and_answering_inference(
         model_version,

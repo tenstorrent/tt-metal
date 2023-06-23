@@ -1,1 +1,1 @@
-from ._C import tensor, device, dtx, profiler, operation_cache
+from ._C import tensor, device, dtx, profiler, program_cache

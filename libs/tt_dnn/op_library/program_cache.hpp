@@ -6,11 +6,11 @@
 
 namespace tt::tt_metal {
 
-namespace operation_cache {
+namespace program_cache {
 
 namespace detail {
 
-struct OperationCache {
+struct ProgramCache {
     operation::ProgramWithCallbacks& get_or_create(
         const operation::Operation& op,
         const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
@@ -20,11 +20,11 @@ struct OperationCache {
     ) {
         auto program_hash = op.compute_program_hash(input_tensors, optional_input_tensors);
         if (this->cache_.count(program_hash) > 0) {
-            tt::log_info(tt::LogOp, "Operation Cache: HIT - Getting program from the cache \"{}\"", program_hash);
+            tt::log_info(tt::LogOp, "Program Cache: HIT - Getting program from the cache \"{}\"", program_hash);
             auto& program = this->cache_.at(program_hash);
             return program;
         } else {
-            tt::log_info(tt::LogOp, "Operation Cache: MISS - Compiling new program \"{}\"", program_hash);
+            tt::log_info(tt::LogOp, "Program Cache: MISS - Compiling new program \"{}\"", program_hash);
             this->cache_[program_hash] = op.create_program(input_tensors, optional_input_tensors, output_tensors);
             auto& program = this->cache_[program_hash].program;
             tt_metal::CompileProgram(device, program);
@@ -57,32 +57,32 @@ struct OperationCache {
         std::unordered_map<operation::Hash, operation::ProgramWithCallbacks> cache_{};
 };
 
-inline OperationCache OPERATION_CACHE{};
+inline ProgramCache PROGRAM_CACHE{};
 
 }
 
 template<typename ... Args>
 static operation::ProgramWithCallbacks& get_or_create(Args&& ... args) {
-    return detail::OPERATION_CACHE.get_or_create(std::forward<Args>(args)...);
+    return detail::PROGRAM_CACHE.get_or_create(std::forward<Args>(args)...);
 }
 
 static bool is_enabled() {
-    return detail::OPERATION_CACHE.is_enabled();
+    return detail::PROGRAM_CACHE.is_enabled();
 }
 
 static void enable() {
-    tt::log_info(tt::LogOp, "Operation Cache: enabled.");
-    detail::OPERATION_CACHE.enable();
+    tt::log_info(tt::LogOp, "Program Cache: enabled.");
+    detail::PROGRAM_CACHE.enable();
 }
 
 static void disable_and_clear() {
-    tt::log_info(tt::LogOp, "Operation Cache: disabled and cleared.");
-    detail::OPERATION_CACHE.disable();
-    detail::OPERATION_CACHE.clear();
+    tt::log_info(tt::LogOp, "Program Cache: disabled and cleared.");
+    detail::PROGRAM_CACHE.disable();
+    detail::PROGRAM_CACHE.clear();
 }
 
 static std::size_t num_cached_programs() {
-    return detail::OPERATION_CACHE.num_cached_programs();
+    return detail::PROGRAM_CACHE.num_cached_programs();
 }
 
 }

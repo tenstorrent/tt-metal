@@ -20,7 +20,7 @@
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_qk_tiled.hpp"
-#include "tt_dnn/op_library/operation_cache.hpp"
+#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tensor/tensor_utils.hpp"
 
@@ -1330,7 +1330,7 @@ void TensorModule(py::module &m_tensor) {
         | arg0     |deg2rad operation on tensor| Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
- 
+
     m_tensor.def("rad2deg", &rad2deg, R"doc(
         Returns tensor with the rad2deg conversion of elements of the input tensor ``arg0``.
 
@@ -2137,9 +2137,9 @@ void DTXModule(py::module &m_dtx) {
 
 
 
-void OperationCacheModule(py::module &m_operation_cache) {
-   m_operation_cache.def("enable", &tt::tt_metal::operation_cache::enable);
-   m_operation_cache.def("disable_and_clear", &tt::tt_metal::operation_cache::disable_and_clear);
+void ProgramCacheModule(py::module &m_program_cache) {
+   m_program_cache.def("enable", &tt::tt_metal::program_cache::enable);
+   m_program_cache.def("disable_and_clear", &tt::tt_metal::program_cache::disable_and_clear);
 }
 
 } // end namespace tt_metal
@@ -2164,6 +2164,6 @@ PYBIND11_MODULE(_C, m) {
     py::module_ m_dtx = m.def_submodule("dtx", "Submodule defining data transformation engine");
     tt::tt_metal::DTXModule(m_dtx);
 
-    py::module_ m_operation_cache = m.def_submodule("operation_cache", "Submodule for caching operations");
-    tt::tt_metal::OperationCacheModule(m_operation_cache);
+    py::module_ m_program_cache = m.def_submodule("program_cache", "Submodule for caching operations");
+    tt::tt_metal::ProgramCacheModule(m_program_cache);
 }

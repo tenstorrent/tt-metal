@@ -207,8 +207,8 @@ def reset_tensix(request):
 
 
 @pytest.fixture(scope="function")
-def use_operation_cache():
+def use_program_cache():
     from libs import tt_lib as ttl
-    ttl.operation_cache.enable()
+    ttl.program_cache.enable()
     yield
-    ttl.operation_cache.disable_and_clear()
+    ttl.program_cache.disable_and_clear()

@@ -3,8 +3,6 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 
-#include "tt_dnn/op_library/operation_cache.hpp"
-
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
@@ -122,18 +120,6 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         );
 
         eltwise_unary_op_utils::add_defines(eltwise_unary_kernel_group_2, op_type, param);
-    }
-
-    if (not operation_cache::is_enabled()) {
-
-        tt_metal::Buffer *src0_dram_buffer = a.buffer();
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-
-        tt_metal::Buffer *dst_dram_buffer = output.buffer();
-        TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
-
     }
 
     auto src_dram_buffer = a.buffer();

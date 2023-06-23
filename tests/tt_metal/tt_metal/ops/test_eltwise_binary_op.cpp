@@ -1,4 +1,4 @@
-#include "tt_dnn/op_library/operation_cache.hpp"
+#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -66,7 +66,7 @@ int main() {
         TT_ASSERT(allclose);
     }
 
-    tt::tt_metal::operation_cache::enable();
+    tt::tt_metal::program_cache::enable();
 
     auto run_binary_ops = [&] {
         {
@@ -93,11 +93,11 @@ int main() {
 
     run_binary_ops();
 
-    TT_ASSERT(tt::tt_metal::operation_cache::num_cached_programs() == 3);
+    TT_ASSERT(tt::tt_metal::program_cache::num_cached_programs() == 3);
 
-    tt::tt_metal::operation_cache::disable_and_clear();
+    tt::tt_metal::program_cache::disable_and_clear();
 
-    TT_ASSERT(tt::tt_metal::operation_cache::num_cached_programs() == 0);
+    TT_ASSERT(tt::tt_metal::program_cache::num_cached_programs() == 0);
 
     TT_ASSERT(tt::tt_metal::CloseDevice(device));
 

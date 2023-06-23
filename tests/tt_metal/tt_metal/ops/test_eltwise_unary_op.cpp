@@ -1,7 +1,7 @@
 #include "tt_metal/host_api.hpp"
 
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_dnn/op_library/operation_cache.hpp"
+#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_numpy/functions.hpp"
 
 #include "tensor/tensor.hpp"
@@ -110,12 +110,12 @@ int main(int argc, char **argv) {
             run_test<host_function<detail::sqrt>, device_function<tt::tt_metal::sqrt>>(host, device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
         };
 
-        tt::tt_metal::operation_cache::enable();
+        tt::tt_metal::program_cache::enable();
         run_tests();
 
         TT_ASSERT(tt::tt_metal::CloseDevice(device));
 
-        TT_ASSERT(tt::tt_metal::operation_cache::num_cached_programs() == 4);
+        TT_ASSERT(tt::tt_metal::program_cache::num_cached_programs() == 4);
 
 
     } catch (const std::exception &e) {
