@@ -17,7 +17,6 @@ import numpy as np
 from tests.python_api_testing.models.conftest import model_location_generator_
 from libs import tt_lib as ttl
 from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from libs.tt_lib.fused_ops.softmax import softmax
 from utility_functions import enable_compile_cache, comp_pcc, comp_allclose, profiler
 from tests.python_api_testing.models.metal_BERT_large_15.utils import (
     run_matmul_with_dataformat,
@@ -77,31 +76,6 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         device,
     )
 
-    def make_attention_heads(x):
-        if num_heads == 1:
-            return x
-        else:
-            # ref code from modeling_bert.py:
-            #    def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
-            #        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-            #        x = x.view(new_x_shape)
-            #        return x.permute(0, 2, 1, 3)
-
-            untilized_x = ttl.tensor.untilize(x)
-            reshaped_unt = ttl.tensor.reshape(
-                untilized_x,
-                x.shape()[0],
-                x.shape()[2],
-                num_heads,
-                x.shape()[3] // num_heads,
-            )
-
-            # N, 128, 2, 64
-            transposed = ttl.tensor.transpose_hc(reshaped_unt)
-            # N, 2, 128, 64
-            retilized = ttl.tensor.tilize(transposed)
-            return retilized
-
     def multiply_by_sqrt_hidden_dim(x):
         return ttl.tensor.bcast(
             x,
@@ -118,7 +92,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             device,
             activation,
             qkv_weight,
-            qkv_bias
+            qkv_bias,
         )
         # profiler.end("___op1_qkv_fused")
 
@@ -127,17 +101,6 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     def op2_split(qkv):
         # profiler.start("___op2_split")
         Q, K, V = ttl.tensor.bert_large_split_fused_qkv(qkv)
-        """
-        # Old TM on host with split
-        qkv = tt2torch_tensor(qkv)
-        hidden_dim = qkv.shape[-1] // 3
-
-        (Q, K, V) = torch.split(qkv, hidden_dim, -1)
-
-        Q = torch2tt_tensor(Q, device)
-        K = torch2tt_tensor(K, device)
-        V = torch2tt_tensor(V, device)
-        """
         # profiler.end("___op2_split")
 
         return Q, K, V
@@ -145,10 +108,6 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     def op3_create_heads(Q):
         # profiler.start("___op3_make_attention_heads")
         q_heads = ttl.tensor.bert_large_create_q_head(Q)
-        """
-        # Old TM with reshape and transpose
-        q_heads = make_attention_heads(Q)
-        """
         # profiler.end("___op3_make_attention_heads")
 
         return q_heads
@@ -157,10 +116,6 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         # profiler.start("___op4_make_attention_heads")
         # NOTE: This merges in transpose_hw (op6)
         k_heads = ttl.tensor.bert_large_create_k_head(K)
-        """
-        # Old TM with reshape and transpose
-        k_heads = make_attention_heads(K)
-        """
         # profiler.end("___op4_make_attention_heads")
 
         return k_heads
@@ -168,10 +123,6 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     def op5_create_heads(V):
         # profiler.start("___op5_make_attention_heads")
         v_heads = ttl.tensor.bert_large_create_v_head(V)
-        """
-        # Old TM with reshape and transpose
-        v_heads = make_attention_heads(V)
-        """
         # profiler.end("___op5_make_attention_heads")
 
         return v_heads
@@ -209,28 +160,6 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         else:
             attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
             attention_scores = ttl.tensor.softmax_in_place(attention_score_input)
-
-        """
-        # Old unfused scale, mask, and softmax
-        N, C, H, W = qkt.shape()
-        new_shape = [N, 1, C * H, W]
-        ttl.tensor.reshape(qkt, *new_shape)
-        attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
-
-        if attention_mask is not None:
-            attention_score_input = ttl.tensor.bcast(
-                attention_score_input,
-                attention_mask,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.H,
-            )
-
-        attention_scores = softmax(attention_score_input)
-        ttl.tensor.reshape(
-            attention_scores, N, C, H, W
-        )  # Reshape back to original shape
-        """
-
         # profiler.end("___op8_scale_mask_softmax")
 
         return attention_scores
@@ -254,26 +183,8 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             # profiler.end("___op10_unmake_attention_heads")
             return x
         else:
-            """
-            context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-            new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-            context_layer = context_layer.view(new_context_layer_shape)
-            debug_state["context_reshaped"] = context_layer.clone()
-
-            outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
-            """
-
             # profiler.start("___op10_unmake_attention_heads")
             retval = ttl.tensor.bert_large_concat_heads(x)
-            """
-            # Old TM with transpose_hc and reshape
-            ctx = ttl.tensor.transpose_hc(x)
-            ushape = ctx.shape()
-            reshaped = ttl.tensor.reshape(
-                ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3]
-            )
-            retval = ttl.tensor.tilize(reshaped)
-            """
             # profiler.end("___op10_unmake_attention_heads")
 
             return retval

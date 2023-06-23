@@ -16,14 +16,7 @@ from tests.python_api_testing.models.conftest import model_location_generator_
 from libs import tt_lib as ttl
 from python_api_testing.models.metal_BERT_large_15.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.metal_BERT_large_15.ffn import TtFeedForwardModel
-from python_api_testing.models.metal_BERT_large_15.fused_ops.add_and_norm import (
-    AddAndNorm,
-)
-from python_api_testing.models.metal_BERT_large_15.fused_ops.layernorm import (
-    create_var_scaler,
-)
-from python_api_testing.models.metal_BERT_large_15.fused_ops.linear import Linear
-from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
+from libs.tt_lib.utils import pad_activation, pad_weight
 from utility_functions import comp_pcc, comp_allclose, profiler
 from tests.python_api_testing.models.metal_BERT_large_15.utils import (
     run_matmul_with_dataformat,
@@ -31,11 +24,8 @@ from tests.python_api_testing.models.metal_BERT_large_15.utils import (
 
 
 class TtBertEncoder(torch.nn.Module):
-    def __init__(self, config, encoder_idx, state_dict, var_scaler, device):
+    def __init__(self, config, encoder_idx, state_dict, device):
         super().__init__()
-        hidden_dim = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"]
-        ).shape[-1]
         self.device = device
 
         # MHA part
@@ -108,18 +98,6 @@ class TtBertEncoder(torch.nn.Module):
             .to(ttl.tensor.Layout.TILE)
             .to(device)
         )
-        """
-        # Old add + layernorm from python composed ops
-        self.mha_add_and_norm = AddAndNorm(
-            mha_gamma,
-            mha_beta,
-            config.layer_norm_eps,
-            var_scaler,
-            config.hidden_size,
-            config.hidden_size,
-            device,
-        )
-        """
 
         # FFN part
         self.ffn = TtFeedForwardModel(encoder_idx, state_dict, device)
@@ -149,17 +127,6 @@ class TtBertEncoder(torch.nn.Module):
             .to(ttl.tensor.Layout.TILE)
             .to(device)
         )
-        """
-        self.ffn_add_and_norm = AddAndNorm(
-            ffn_gamma,
-            ffn_beta,
-            config.layer_norm_eps,
-            var_scaler,
-            config.hidden_size,
-            config.hidden_size,
-            device,
-        )
-        """
 
         self.layer_norm_eps = config.layer_norm_eps
 
@@ -190,9 +157,6 @@ class TtBertEncoder(torch.nn.Module):
             self.mha_beta,
             out_mem_config,
         )
-        """
-        mha_out_add_and_norm = self.mha_add_and_norm(activation, mha_out)
-        """
         # profiler.end("__op12_add_layernorm")
 
         return mha_out_add_and_norm
@@ -208,9 +172,6 @@ class TtBertEncoder(torch.nn.Module):
             self.ffn_beta,
             out_mem_config,
         )
-        """
-        ffn_out_add_and_norm = self.ffn_add_and_norm(mha_out_add_and_norm, ffn_out)
-        """
         # profiler.end("__op15_add_layernorm")
 
         return ffn_out_add_and_norm
@@ -263,16 +224,11 @@ def run_bert_encoder_inference(
         model_name, torchscript=False
     )
     config = hugging_face_reference_model.config
-    # var_scaler = create_var_scaler(
-    #     seq_len, config.hidden_size, config.layer_norm_eps, device
-    # )
-    var_scaler = None
 
     tt_bert_encoder_model = TtBertEncoder(
         hugging_face_reference_model.config,
         0,
         hugging_face_reference_model.state_dict(),
-        var_scaler,
         device,
     )
     pytorch_bert_model = PytorchBertEncoder(hugging_face_reference_model)
@@ -341,7 +297,9 @@ def test_bert_encoder_inference(
     model_version, batch, seq_len, on_weka, pcc, model_location_generator
 ):
     ttl.profiler.set_profiler_flag(False)
-    ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_1_encoder")
+    ttl.profiler.set_profiler_location(
+        "tt_metal/tools/profiler/logs/BERT_large_1_encoder"
+    )
 
     ttl.profiler.start_profiling("entire_run")
     run_bert_encoder_inference(

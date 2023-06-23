@@ -16,7 +16,6 @@ import time
 from libs import tt_lib as ttl
 from python_api_testing.models.metal_BERT_large_15.embeddings import PytorchEmbeddings
 from python_api_testing.models.metal_BERT_large_15.bert_encoder import TtBertEncoder
-from python_api_testing.models.metal_BERT_large_15.fused_ops.linear import Linear
 from libs.tt_lib.utils import pad_activation, pad_weight
 from utility_functions import (
     enable_compile_cache,
@@ -27,13 +26,10 @@ from utility_functions import (
     disable_compile_cache,
 )
 from utility_functions import profiler
-from python_api_testing.models.metal_BERT_large_15.fused_ops.layernorm import (
-    create_var_scaler,
-)
 
 
 class TtBertBatchDram(torch.nn.Module):
-    def __init__(self, config, hugging_face_reference_model, var_scaler, device):
+    def __init__(self, config, hugging_face_reference_model, device):
         super().__init__()
 
         # NOTE: Once we make embeddings run on device, pass in state dict
@@ -51,7 +47,7 @@ class TtBertBatchDram(torch.nn.Module):
 
         self.encoders = torch.nn.ModuleList(
             [
-                TtBertEncoder(config, encoder_idx, state_dict, var_scaler, device)
+                TtBertEncoder(config, encoder_idx, state_dict, device)
                 for encoder_idx in range(config.num_hidden_layers)
             ]
         )
@@ -82,7 +78,15 @@ class TtBertBatchDram(torch.nn.Module):
         )
 
         # QA linear
-        self.qa_linear = Linear(hidden_size, 32, weight, bias, device)
+        # TODO: Replace with custom op with fused bias?
+        def qa_linear_(activation):
+            output = ttl.tensor.matmul(activation, weight)
+            output_plus_bias = ttl.tensor.bcast(
+                output, bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
+            )
+            return output_plus_bias
+
+        self.qa_linear = qa_linear_
 
         self.device = device
 
@@ -197,17 +201,9 @@ def run_bert_question_and_answering_inference(
         model_name, torchscript=False
     )
     hugging_face_reference_model.eval()
-    var_scaler = None
-    # var_scaler = create_var_scaler(
-    #     seq_len,
-    #     hugging_face_reference_model.config.hidden_size,
-    #     hugging_face_reference_model.config.layer_norm_eps,
-    #     device,
-    # )
     tt_bert_model = TtBertBatchDram(
         hugging_face_reference_model.config,
         hugging_face_reference_model,
-        var_scaler,
         device,
     )
 
