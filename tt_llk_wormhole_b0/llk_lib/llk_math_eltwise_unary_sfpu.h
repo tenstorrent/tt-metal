@@ -27,7 +27,7 @@ inline void eltwise_unary_sfpu_configure_addrmod(){
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
-    }.set(ADDR_MOD_3);
+    }.set(ADDR_MOD_7);
 
 }
 inline void eltwise_unary_sfpu_configure_mop();
@@ -42,12 +42,13 @@ inline void llk_math_eltwise_unary_sfpu(
     uint param3 = 0,
     uint param4 = 0,
     uint param5 = 0) {
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
     } else {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     }
+    math::set_addr_mod_base();
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     if (vector_mode == Dim::R) {
         // Do a row vector, Face0 + Face1 -- first iteration (first row)
         const int ITERATIONS = 1;
@@ -81,7 +82,10 @@ inline void llk_math_eltwise_unary_sfpu(
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         }
     }
-    math::clear_dst_reg_addr();
+    math::clear_dst_reg_addr(); 
+
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
+    math::clear_addr_mod_base();
 }
 
 template <SfpuType sfpu_op, bool APPROXIMATE>

@@ -33,6 +33,9 @@ constexpr uint DstTileSizeLog2[3] = {
     4      // 16x16 tile shape
 };
 
+constexpr uint replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
+                                       // fist 16 for sfpu, next 16 for fpu
+
 
 inline void reset_counters(const uint setrwc)
 {
@@ -163,6 +166,16 @@ inline void set_dst_write_addr(uint32_t tile_index)
 inline void clear_dst_reg_addr()
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+}
+
+inline void set_addr_mod_base()
+{
+    TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 1); // set addr mod base (use addr mods 4..7)
+}
+
+inline void clear_addr_mod_base()
+{
+    TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 0); // clear addr mod base (use addr mods 0..3)
 }
 
 inline void math_dest_wait()

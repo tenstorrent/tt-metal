@@ -13,84 +13,6 @@
 
 using namespace ckernel;
 
-// local function declarations
-inline void matmul_configure_addrmod();
-inline void matmul_configure_mop();
-
-template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul(uint dst_index, const bool transpose=false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
-    const bool reuse_a = ct_dim>=rt_dim;
-    const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
-    const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; //reuse-dim
-
-    for (uint t = 0; t < t_dim; t++) {
-        for (uint rut=0; rut<rut_dim; rut++) {
-            math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index+(reuse_a ? ct_dim*t+rut : t+rut*ct_dim));
-
-            if  (t_dim == 1) {
-                ckernel_template::run(instrn_buffer);
-
-                // Done with reuse. Clear srcA or srcB valid
-                if(rut == (rut_dim-1)) {
-                    if (reuse_a) {
-                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
-                    } else {
-                        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
-                    }
-                }
-            } else {
-                ckernel_template::run(instrn_buffer);
-
-                if (t<(t_dim-1)) {
-
-                    // Move to the next srcA or srcB bank 
-                    if (reuse_a) {
-                        if(rut == (rut_dim-1)) {
-                            // Clear srcB valid as reuse is done and move to next srcB bank
-                            TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
-                        } else {
-                            // Move to the next srcB bank
-                            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
-                        }
-
-                    } else {
-                        if(rut == (rut_dim-1)) {
-                            // Clear srcA valid as reuse is done and move to next srcA bank
-                            TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
-                        } else {
-                            // Move to the next srcB bank
-                            TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
-                        }    
-                    }    
-
-                    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index+(reuse_a ? ct_dim*(t+1)+rut : t+1+rut*ct_dim));
-                    ckernel_template::run(instrn_buffer);
-                } 
-
-                if (reuse_a) {
-                    // Clear srcA&B valid
-                    if(rut == (rut_dim-1)) {
-                        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD); // Clear srcA valid as reuse is done and move to next srcA bank
-                        TTI_CLEARDVALID(p_setrwc::CLR_B, 0); // Clear srcB valid as reuse is done and move to next srcB bank 
-                    } else {
-                        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD); // Move to the next srcB and srcA bank
-                    }    
-                } else{
-                    // Clear srcB&A valid
-                    if(rut == (rut_dim-1)) {
-                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD); // Clear srcB valid as reuse is done and move to next srcB bank
-                        TTI_CLEARDVALID(p_setrwc::CLR_A, 0); // Clear srcA valid as reuse is done and move to next srcA bank
-                    } else {
-                        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD); // Move to the next srcA and srcB bank
-                    }    
-                }    
-            }    
-
-        }    
-        t++;
-    }
-}
-
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
 inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim) {
 
@@ -211,7 +133,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
     const bool reuse_a = ct_dim>=rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
 
-    TTI_REPLAY(0, replay_buf_len, 0, 1);
+    TTI_REPLAY(replay_buf_offset, replay_buf_len, 0, 1);
     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0
     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srcb+=32
     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0
@@ -250,7 +172,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
 
     // TODO: can we commonize this?
     constexpr uint inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
-    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(0, replay_buf_len, 0, 0));
+    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(replay_buf_offset, replay_buf_len, 0, 0));
 
     if constexpr(high_fidelity) {
         if (t_dim>1) { //
@@ -284,4 +206,78 @@ inline void llk_math_matmul_init(std::uint32_t transpose=0, const std::uint32_t 
         TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0); 
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
+inline void llk_math_matmul(uint dst_index, const bool transpose=false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+    const bool reuse_a = ct_dim>=rt_dim;
+    const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; //reuse-dim
+
+    for (uint t = 0; t < t_dim; t++) {
+        for (uint rut=0; rut<rut_dim; rut++) {
+            math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index+(reuse_a ? ct_dim*t+rut : t+rut*ct_dim));
+
+            if  (t_dim == 1) {
+                ckernel_template::run(instrn_buffer);
+
+                // Done with reuse. Clear srcA or srcB valid
+                if(rut == (rut_dim-1)) {
+                    if (reuse_a) {
+                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    } else {
+                        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    }
+                }
+            } else {
+                ckernel_template::run(instrn_buffer);
+
+                if (t<(t_dim-1)) {
+
+                    // Move to the next srcA or srcB bank 
+                    if (reuse_a) {
+                        if(rut == (rut_dim-1)) {
+                            // Clear srcB valid as reuse is done and move to next srcB bank
+                            TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
+                        } else {
+                            // Move to the next srcB bank
+                            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                        }
+
+                    } else {
+                        if(rut == (rut_dim-1)) {
+                            // Clear srcA valid as reuse is done and move to next srcA bank
+                            TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
+                        } else {
+                            // Move to the next srcB bank
+                            TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                        }    
+                    }    
+
+                    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index+(reuse_a ? ct_dim*(t+1)+rut : t+1+rut*ct_dim));
+                    ckernel_template::run(instrn_buffer);
+                } 
+
+                if (reuse_a) {
+                    // Clear srcA&B valid
+                    if(rut == (rut_dim-1)) {
+                        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD); // Clear srcA valid as reuse is done and move to next srcA bank
+                        TTI_CLEARDVALID(p_setrwc::CLR_B, 0); // Clear srcB valid as reuse is done and move to next srcB bank 
+                    } else {
+                        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD); // Move to the next srcB and srcA bank
+                    }    
+                } else{
+                    // Clear srcB&A valid
+                    if(rut == (rut_dim-1)) {
+                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD); // Clear srcB valid as reuse is done and move to next srcB bank
+                        TTI_CLEARDVALID(p_setrwc::CLR_A, 0); // Clear srcA valid as reuse is done and move to next srcA bank
+                    } else {
+                        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD); // Move to the next srcA and srcB bank
+                    }    
+                }    
+            }    
+
+        }    
+        t++;
+    }
 }
