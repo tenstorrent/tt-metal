@@ -10,9 +10,9 @@ namespace tt {
 
 namespace tt_metal {
 
-Program matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
+operation::ProgramWithCallbacks matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     const auto& ashape = a.shape(), bshape = b.shape();
@@ -144,15 +144,44 @@ Program matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bo
         {dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
     );
 
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return program;
+    auto override_runtime_args_callback = [
+        reader_kernel=reader,
+        writer_kernel=writer
+    ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            runtime_args[0] = src_dram_buffer_a->address();
+            runtime_args[1] = src_dram_buffer_b->address();
+            SetRuntimeArgs(reader_kernel, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            SetRuntimeArgs(writer_kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
-Program matmul_single_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+operation::ProgramWithCallbacks matmul_single_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
     return matmul_single_core_(input_tensor_a, input_tensor_b, output_tensor, true);
 }
 
-Program bmm_single_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+operation::ProgramWithCallbacks bmm_single_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
     return matmul_single_core_(input_tensor_a, input_tensor_b, output_tensor, false);
 }
 
@@ -609,7 +638,7 @@ Tensor large_bmm_single_core_(const Tensor& a, const Tensor &b, bool tilize_act,
     TT_ASSERT(a.device() == b.device(), "Operands to large matmul need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to large matmul need to be allocated in buffers on device!");
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
     CoreCoord core = {0, 0};
 
     uint32_t single_tile_size = 2 * 1024; // TODO(agrebenisan): Refactor on df

@@ -10,9 +10,9 @@ namespace tt {
 namespace tt_metal {
 
 
-Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -207,15 +207,48 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
         num_tiles_written += num_output_tiles_per_core;
     }
 
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return program;
+    auto override_runtime_args_callback = [
+            reader_kernel=reader,
+            writer_kernel=writer,
+            num_cores,
+            num_cores_y
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+            {
+                auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                runtime_args[0] = src_dram_buffer_a->address();
+                runtime_args[1] = src_dram_buffer_b->address();
+                SetRuntimeArgs(reader_kernel, core, runtime_args);
+            }
+
+            {
+                auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                runtime_args[0] = dst_dram_buffer->address();
+                SetRuntimeArgs(writer_kernel, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
-Program matmul_multi_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+operation::ProgramWithCallbacks matmul_multi_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
     return matmul_multi_core_(input_tensor_a, input_tensor_b, output_tensor, true);
 }
 
-Program bmm_multi_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+operation::ProgramWithCallbacks bmm_multi_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
     return matmul_multi_core_(input_tensor_a, input_tensor_b, output_tensor, false);
 }
 

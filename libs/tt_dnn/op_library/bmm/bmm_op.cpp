@@ -313,31 +313,35 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<std::re
 
     switch (parallelization_strategy){
         case BmmOpParallelizationStrategy::MULTI_CORE:
-            return {matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor)};
-            break;
+            return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE:
-            return {matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor)};
-            break;
+            return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
-            return {matmul_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor)};
-            break;
+            return matmul_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
-            return {matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor)};
-            break;
+            return matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
-            return {matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor)};
-            break;
+            return matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
-            return {matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor)};
-            break;
+            return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
-            return {matmul_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor)};
-            break;
+            return matmul_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor);
         case BmmOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return {matmul_single_core(input_tensor_a, input_tensor_b, output_tensor)};
+            return matmul_single_core(input_tensor_a, input_tensor_b, output_tensor);
     }
 
+}
+
+operation::Hash Matmul::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
+
+    return fmt::format(
+        "matmul_{}_{}",
+         operation::hash_tensor(input_tensor_a),
+         operation::hash_tensor(input_tensor_b)
+    );
 }
 
 void BatchedMatmul::validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
@@ -370,31 +374,42 @@ operation::ProgramWithCallbacks BatchedMatmul::create_program(const std::vector<
 
     switch (parallelization_strategy){
         case BmmOpParallelizationStrategy::MULTI_CORE:
-            return {bmm_multi_core(input_tensor_a, input_tensor_b, output_tensor)};
+            return bmm_multi_core(input_tensor_a, input_tensor_b, output_tensor);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE:
-            return {bmm_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor)};
+            return bmm_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
-            return {bmm_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor)};
+            return bmm_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
-            return {bmm_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor)};
+            return bmm_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
-            return {bmm_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor)};
+            return bmm_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
-            return {bmm_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor)};
+            return bmm_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
-            return {bmm_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor)};
+            return bmm_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor);
             break;
         case BmmOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return {bmm_single_core(input_tensor_a, input_tensor_b, output_tensor)};
+            return bmm_single_core(input_tensor_a, input_tensor_b, output_tensor);
     }
 
+}
+
+operation::Hash BatchedMatmul::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
+
+    return fmt::format(
+        "batched_matmul_{}_{}",
+         operation::hash_tensor(input_tensor_a),
+         operation::hash_tensor(input_tensor_b)
+    );
 }
 
 /*
@@ -572,8 +587,6 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
     }
     return {};
 }
-
-
 
 operation::Hash BertLargeMatmul::compute_program_hash(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,

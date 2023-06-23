@@ -6,8 +6,7 @@
 
 using namespace tt::constants;
 using namespace tt;
-
-tt_metal::Program create_program_mcast_in0_in1(
+operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -22,7 +21,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
 ) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
@@ -206,6 +205,8 @@ tt_metal::Program create_program_mcast_in0_in1(
         cb_data_format
     );
 
+    std::vector<DataMovementKernel*> reader_kernels;
+    std::vector<DataMovementKernel*> writer_kernels;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
@@ -292,24 +293,75 @@ tt_metal::Program create_program_mcast_in0_in1(
             if(core_idx_x == 0 and core_idx_y == 0) {
                 tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_sender, core, mm_reader_args); // RISCV_0_default
                 tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
+                reader_kernels.push_back(mm_reader_kernel_in0_sender_in1_sender);
+                writer_kernels.push_back(unary_writer_kernel_noc1);
             } else if (core_idx_x == 0 and core_idx_y != 0) {
                 tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_receiver, core, mm_reader_args); // RISCV_0_default
                 tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
+                reader_kernels.push_back(mm_reader_kernel_in0_sender_in1_receiver);
+                writer_kernels.push_back(unary_writer_kernel_noc1);
             } else if (core_idx_x != 0 and core_idx_y == 0) {
                 tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_sender, core, mm_reader_args); // RISCV_1_default
                 tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
+                reader_kernels.push_back(mm_reader_kernel_in0_receiver_in1_sender);
+                writer_kernels.push_back(unary_writer_kernel_noc0);
             } else {
                 tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_receiver, core, mm_reader_args); // RISCV_1_default
                 tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
+                reader_kernels.push_back(mm_reader_kernel_in0_receiver_in1_receiver);
+                writer_kernels.push_back(unary_writer_kernel_noc0);
             }
 
         }
     }
 
-    return std::move(program);
+    auto override_runtime_args_callback = [
+            reader_kernels,
+            writer_kernels,
+            num_cores_r,
+            num_cores_c,
+            start_core_y,
+            start_core_x
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        int i = 0;
+        for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+            for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+                CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+
+                {
+                    auto reader_kernel = reader_kernels.at(i);
+                    auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                    runtime_args[0] = src_dram_buffer_a->address();
+                    runtime_args[8] = src_dram_buffer_b->address();
+                    SetRuntimeArgs(reader_kernel, core, runtime_args);
+                }
+
+                {
+                    auto writer_kernel = writer_kernels.at(i);
+                    auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                    runtime_args[0] = dst_dram_buffer->address();
+                    SetRuntimeArgs(writer_kernel, core, runtime_args);
+                }
+
+                i++;
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
-tt_metal::Program create_program_mcast_in0(
+operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -324,7 +376,7 @@ tt_metal::Program create_program_mcast_in0(
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
 ) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
@@ -465,6 +517,8 @@ tt_metal::Program create_program_mcast_in0(
         cb_data_format
     );
 
+    std::vector<DataMovementKernel*> reader_kernels;
+    std::vector<DataMovementKernel*> writer_kernels;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
@@ -535,18 +589,64 @@ tt_metal::Program create_program_mcast_in0(
 
             if(core_idx_x == 0) {
                 tt_metal::SetRuntimeArgs(mm_reader_kernel_sender, core, mm_reader_args);
+                reader_kernels.push_back(mm_reader_kernel_sender);
             } else {
                 tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver, core, mm_reader_args);
+                reader_kernels.push_back(mm_reader_kernel_receiver);
             }
             tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
+            writer_kernels.push_back(unary_writer_kernel);
 
         }
     }
 
-    return std::move(program);
+    auto override_runtime_args_callback = [
+            reader_kernels,
+            writer_kernels,
+            num_cores_r,
+            num_cores_c,
+            start_core_y,
+            start_core_x
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        int i = 0;
+        for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+            for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+                CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+
+                {
+                    auto reader_kernel = reader_kernels.at(i);
+                    auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                    runtime_args[0] = src_dram_buffer_a->address();
+                    runtime_args[8] = src_dram_buffer_b->address();
+                    SetRuntimeArgs(reader_kernel, core, runtime_args);
+                }
+
+                {
+                    auto writer_kernel = writer_kernels.at(i);
+                    auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                    runtime_args[0] = dst_dram_buffer->address();
+                    SetRuntimeArgs(writer_kernel, core, runtime_args);
+                }
+
+                i++;
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
-tt_metal::Program create_program_mcast_in1(
+operation::ProgramWithCallbacks create_program_mcast_in1(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -561,7 +661,7 @@ tt_metal::Program create_program_mcast_in1(
    tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
 ) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
@@ -702,6 +802,8 @@ tt_metal::Program create_program_mcast_in1(
         cb_data_format
     );
 
+    std::vector<DataMovementKernel*> reader_kernels;
+    std::vector<DataMovementKernel*> writer_kernels;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
@@ -771,15 +873,61 @@ tt_metal::Program create_program_mcast_in1(
 
             if(core_idx_y == 0) {
                 tt_metal::SetRuntimeArgs(mm_reader_kernel_sender, core, mm_reader_args);
+                reader_kernels.push_back(mm_reader_kernel_sender);
             } else {
                 tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver, core, mm_reader_args);
+                reader_kernels.push_back(mm_reader_kernel_receiver);
             }
             tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
+            writer_kernels.push_back(unary_writer_kernel);
 
         }
     }
 
-    return std::move(program);
+    auto override_runtime_args_callback = [
+            reader_kernels,
+            writer_kernels,
+            num_cores_r,
+            num_cores_c,
+            start_core_y,
+            start_core_x
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        int i = 0;
+        for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+            for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+                CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
+
+                {
+                    auto reader_kernel = reader_kernels.at(i);
+                    auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                    runtime_args[0] = src_dram_buffer_a->address();
+                    runtime_args[8] = src_dram_buffer_b->address();
+                    SetRuntimeArgs(reader_kernel, core, runtime_args);
+                }
+
+                {
+                    auto writer_kernel = writer_kernels.at(i);
+                    auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                    runtime_args[0] = dst_dram_buffer->address();
+                    SetRuntimeArgs(writer_kernel, core, runtime_args);
+                }
+
+                i++;
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 namespace tt {
@@ -787,7 +935,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -863,11 +1011,8 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-
-    tt_metal::Program program;
-
     if (core_range.x > 1 && core_range.y > 1) {
-        program = create_program_mcast_in0_in1(
+        return create_program_mcast_in0_in1(
             device,
             cb_data_format,
             math_fidelity,
@@ -882,7 +1027,7 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
             in0_buffer, in1_buffer, out_buffer
         );
     } else if (core_range.x > 1) {
-        program = create_program_mcast_in0(
+        return create_program_mcast_in0(
             device,
             cb_data_format,
             math_fidelity,
@@ -897,7 +1042,7 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
             in0_buffer, in1_buffer, out_buffer
         );
     } else {
-        program = create_program_mcast_in1(
+        return create_program_mcast_in1(
             device,
             cb_data_format,
             math_fidelity,
@@ -912,16 +1057,13 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
             in0_buffer, in1_buffer, out_buffer
         );
     }
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return program;
 }
 
-Program matmul_multi_core_reuse_mcast(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
     return matmul_multi_core_reuse_mcast_(input_tensor_a, input_tensor_b, output_tensor, true);
 }
 
-Program bmm_multi_core_reuse_mcast(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_mcast(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
     return matmul_multi_core_reuse_mcast_(input_tensor_a, input_tensor_b, output_tensor, false);
 }
 

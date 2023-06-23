@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer
 ) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer

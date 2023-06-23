@@ -12,7 +12,7 @@ namespace reuse_padding_helpers {
 using namespace tt::constants;
 using namespace tt;
 
-tt_metal::Program create_program(
+operation::ProgramWithCallbacks create_program(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -26,7 +26,7 @@ tt_metal::Program create_program(
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
 ) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
@@ -243,7 +243,48 @@ tt_metal::Program create_program(
         }
     }
 
-    return std::move(program);
+    auto override_runtime_args_callback = [
+        reader_kernel=mm_reader_kernel,
+        writer_kernel=unary_writer_kernel,
+        num_cores_x,
+        num_blocks_y,
+        num_blocks_x
+    ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        uint32_t num_blocks_read = 0;
+        for(int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
+            for(int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
+                int core_idx_x = num_blocks_read % num_cores_x;
+                int core_idx_y = num_blocks_read / num_cores_x;
+                CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
+
+                {
+                    auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                    runtime_args[0] = src_dram_buffer_a->address();
+                    runtime_args[8] = src_dram_buffer_b->address();
+                    SetRuntimeArgs(reader_kernel, core, runtime_args);
+                }
+
+                {
+                    auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                    runtime_args[0] = dst_dram_buffer->address();
+                    SetRuntimeArgs(writer_kernel, core, runtime_args);
+                }
+                num_blocks_read++;
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 }
@@ -253,7 +294,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Program matmul_multi_core_reuse_padding_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_padding_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -327,7 +368,7 @@ Program matmul_multi_core_reuse_padding_(const Tensor &a, const Tensor &b, Tenso
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = reuse_padding_helpers::create_program(
+    return reuse_padding_helpers::create_program(
         device,
         cb_data_format,
         math_fidelity,
@@ -340,16 +381,13 @@ Program matmul_multi_core_reuse_padding_(const Tensor &a, const Tensor &b, Tenso
         per_core_M, per_core_N,
         in0_buffer, in1_buffer, out_buffer
     );
-
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return program;
 }
 
-Program matmul_multi_core_reuse_padding(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_padding(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
     return matmul_multi_core_reuse_padding_(input_tensor_a, input_tensor_b, output_tensor, true);
 }
 
-Program bmm_multi_core_reuse_padding(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_padding(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
     return matmul_multi_core_reuse_padding_(input_tensor_a, input_tensor_b, output_tensor, false);
 }
 
