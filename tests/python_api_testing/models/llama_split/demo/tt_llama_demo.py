@@ -268,7 +268,7 @@ def test_gs_demo(prompt, num_words):
 
     # decode output with tokenizer
     tt_generated_text = tokenizer.batch_decode(
-        tt_generated_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+        tt_generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
 
     logger.info(f"Tenstorrent generated text: {tt_generated_text}")
