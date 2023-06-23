@@ -52,8 +52,9 @@ void kernel_main() {
     uint32_t last_block_h                       = get_arg_val<uint32_t>(30);
     uint32_t last_block_w                       = get_arg_val<uint32_t>(31); // not used
 
-    constexpr uint32_t num_used_dram_ch = 8;
-    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
+    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(2) == 1; // not used
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -70,23 +71,11 @@ void kernel_main() {
     bool one_time_noc_wait = true;
     bool one_time_cb_push = true;
 
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
-    #if (tile_size_is_pow2)
-    constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<true> s0 = {
+    const InterleavedAddrGenFast<in0_is_dram> s0 = {
         .bank_base_address = in0_tensor_addr,
-
-
-        .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
+        .page_size = single_tile_size_bytes,
+        .data_format = data_format
     };
-    #else
-    const InterleavedAddrGen<true> s0 = {
-        .bank_base_address = in0_tensor_addr,
-
-
-        .page_size = single_tile_size_bytes
-    };
-    #endif
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
@@ -100,8 +89,7 @@ void kernel_main() {
                 uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                 for(uint32_t w = 0; w < in0_block_w; w++) {
                     if (h < last_block_h) {
-                        uint64_t in0_tile_noc_address = get_noc_addr(in0_tensor_tile_id, s0);
-                        noc_async_read(in0_tile_noc_address, l1_write_addr_in0, single_tile_size_bytes);
+                        noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
                     }
                     else
                         noc_async_read(l1_zeros_addr_in2, l1_write_addr_in0, single_tile_size_bytes);

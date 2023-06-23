@@ -31,34 +31,20 @@ void kernel_main() {
     uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(18);
     uint32_t padded_block_tiles_w_skip          = get_arg_val<uint32_t>(19);
 
-    // const args for tile-based bank-swizzled layout
-    // could be added to the arg list in the future to test different
-    // bank-swizzling configurations
-    constexpr uint32_t num_used_dram_ch = 8;
-    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
+    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr bool out_is_dram = get_compile_time_arg_val(1) == 1;
 
     constexpr uint32_t cb_id_out0 = 16;
 
     // single-tile
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
-    #if (tile_size_is_pow2)
-    constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<true> s = {
+    const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
-
-
-        .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
+        .page_size = single_tile_size_bytes,
+        .data_format = data_format
     };
-    #else
-    const InterleavedAddrGen<true> s = {
-        .bank_base_address = out_tensor_addr,
 
-
-        .page_size = single_tile_size_bytes
-    };
-    #endif
 
     bool one_time_profile = true;
     for (uint32_t b = 0; b < batch; b++) {
@@ -86,9 +72,7 @@ void kernel_main() {
                 for(uint32_t h = 0; h < out_subblock_h_; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for(uint32_t w = 0; w < out_subblock_w_; w++) {
-                        uint64_t out_tensor_tile_noc_addr = get_noc_addr(out_tensor_tile_id, s);
-
-                        noc_async_write(l1_read_addr, out_tensor_tile_noc_addr, single_tile_size_bytes);
+                        noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
                         l1_read_addr+=single_tile_size_bytes;
 
                         out_tensor_tile_id += out_tensor_stride_w;

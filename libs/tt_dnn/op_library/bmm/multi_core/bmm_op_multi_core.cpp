@@ -75,9 +75,9 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
     uint32_t MtKt = Mt * Kt;
     uint32_t MtNt = Mt * Nt;
 
-    uint32_t in0_addr = src0_buffer->address();
-    uint32_t in1_addr = src1_buffer->address();
-    uint32_t out_addr = dst_buffer->address();
+    uint32_t src0_addr = src0_buffer->address();
+    uint32_t src1_addr = src1_buffer->address();
+    uint32_t dst_addr = dst_buffer->address();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -182,8 +182,8 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
 		}
         tt_metal::SetRuntimeArgs(
             reader, core,
-            {in0_addr,
-            in1_addr,
+            {src0_addr,
+            src1_addr,
             Mt,
             Kt,
             Nt,
@@ -198,7 +198,7 @@ Program matmul_multi_core_(const Tensor &a, const Tensor &b, Tensor& output, boo
         tt_metal::SetRuntimeArgs(
             writer,
             core,
-            {out_addr,
+            {dst_addr,
             0,
             0,
             num_output_tiles_per_core,

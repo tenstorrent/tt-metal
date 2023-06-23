@@ -139,8 +139,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     auto top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    std::uint32_t tile_size_pow2_exponent = tile_size_is_power_of_two ? (std::uint32_t)log2(single_tile_size) : 0;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in3_is_dram = true;
@@ -150,8 +148,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> in0_sender_compile_time_args = {
             // interleaved accessor args
-            (std::uint32_t) tile_size_is_power_of_two,
-            (std::uint32_t) tile_size_pow2_exponent,
+            (std::uint32_t) static_cast<uint32_t>(cb_data_format),
             (std::uint32_t) in0_is_dram,
 
             // in0 tensor args
@@ -176,8 +173,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     };
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
             // interleaved accessor args
-            (std::uint32_t) tile_size_is_power_of_two,
-            (std::uint32_t) tile_size_pow2_exponent,
+            (std::uint32_t) static_cast<uint32_t>(cb_data_format),
             (std::uint32_t) in1_is_dram,
             (std::uint32_t) out_is_dram,
 
@@ -241,8 +237,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     };
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
             // interleaved accessor args
-            (std::uint32_t) tile_size_is_power_of_two,
-            (std::uint32_t) tile_size_pow2_exponent,
+            (std::uint32_t) static_cast<uint32_t>(cb_data_format),
             (std::uint32_t) out_is_dram,
 
             // READER

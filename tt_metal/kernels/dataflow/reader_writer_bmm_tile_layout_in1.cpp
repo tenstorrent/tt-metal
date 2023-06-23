@@ -61,17 +61,10 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    //constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(2); // not used
-    constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(3);
-    constexpr uint32_t out_is_dram                        = get_compile_time_arg_val(4);
-
-    // const args for tile-based bank-swizzled layout
-    // could be added to the arg list in the future to test different
-    // bank-swizzling configurations
-    constexpr uint32_t num_used_dram_ch = 8;
-    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
+    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(1) == 1; // not used
+    constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(2) == 1;
+    constexpr uint32_t out_is_dram                        = get_compile_time_arg_val(3) == 1;
 
     constexpr uint32_t cb_id_in1 = 1;
 
@@ -83,32 +76,17 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in1;
 
-    constexpr bool in1_is_dram_bool = in1_is_dram == 1;
-    constexpr bool out_is_dram_bool = out_is_dram == 1;
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1 // TODO: Refactor to data_format
-    #if (tile_size_is_pow2)
     const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
         .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Float16
+        .data_format = data_format
     };
     const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Float16
+        .data_format = data_format
     };
-    #else
-    const InterleavedAddrGenFast<in1_is_dram> s1 = {
-        .bank_base_address = in1_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Bfp8_b
-    };
-    const InterleavedAddrGenFast<out_is_dram> s = {
-        .bank_base_address = out_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Bfp8_b
-    };
-    #endif
+
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;

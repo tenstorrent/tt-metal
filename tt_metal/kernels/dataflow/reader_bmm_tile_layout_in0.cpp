@@ -41,17 +41,10 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    //constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(2);
-    constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(3); // not used
-    constexpr uint32_t out_is_dram                        = get_compile_time_arg_val(4); // not used
-
-    // const args for tile-based bank-swizzled layout
-    // could be added to the arg list in the future to test different
-    // bank-swizzling configurations
-    constexpr uint32_t num_used_dram_ch = 8;
-    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
+    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(2) == 1; // not used
+    constexpr uint32_t out_is_dram                        = get_compile_time_arg_val(3) == 1; // not used
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -59,21 +52,11 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
 
-    constexpr bool in0_is_dram_bool = in0_is_dram == 1;
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1 // TODO: Refactor to data_format
-    #if (tile_size_is_pow2)
-    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
+    const InterleavedAddrGenFast<in0_is_dram> s0 = {
         .bank_base_address = in0_tensor_addr,
         .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Float16
+        .data_format = data_format
     };
-    #else
-    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
-        .bank_base_address = in0_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Bfp8_b
-    };
-    #endif
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;

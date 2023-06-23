@@ -29,45 +29,45 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    //constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
-    constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(2);
-    constexpr uint32_t out_is_dram                        = get_compile_time_arg_val(3);
+    // interleaved accessor args
+    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr bool in1_is_dram                            = get_compile_time_arg_val(1) == 1;
+    constexpr bool out_is_dram                            = get_compile_time_arg_val(2) == 1;
 
     // READER
     // in1 tensor args
-    constexpr uint32_t in1_tensor_stride_w                = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_tensor_stride_h                = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_tensor_next_block_stride       = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_tensor_stride_w                = get_compile_time_arg_val(3);
+    constexpr uint32_t in1_tensor_stride_h                = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_tensor_next_block_stride       = get_compile_time_arg_val(5);
     // in1 block args
-    constexpr uint32_t in1_block_w                        = get_compile_time_arg_val(7);
-    constexpr uint32_t in1_block_h                        = get_compile_time_arg_val(8);
-    constexpr uint32_t in1_block_num_tiles                = get_compile_time_arg_val(9);
+    constexpr uint32_t in1_block_w                        = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_block_h                        = get_compile_time_arg_val(7);
+    constexpr uint32_t in1_block_num_tiles                = get_compile_time_arg_val(8);
     // in0/in1 common args
-    constexpr uint32_t num_blocks                         = get_compile_time_arg_val(10);
+    constexpr uint32_t num_blocks                         = get_compile_time_arg_val(9);
     // in1 mcast args
-    constexpr uint32_t in1_mcast_dest_noc_start_y         = get_compile_time_arg_val(11);
-    constexpr uint32_t in1_mcast_dest_noc_end_y           = get_compile_time_arg_val(12);
-    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(13);
-    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(14);
-    constexpr uint32_t in1_mcast_num_dests                = get_compile_time_arg_val(15);
+    constexpr uint32_t in1_mcast_dest_noc_start_y         = get_compile_time_arg_val(10);
+    constexpr uint32_t in1_mcast_dest_noc_end_y           = get_compile_time_arg_val(11);
+    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(12);
+    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(13);
+    constexpr uint32_t in1_mcast_num_dests                = get_compile_time_arg_val(14);
     // batch args
-    constexpr uint32_t KtNt                               = get_compile_time_arg_val(16);
-    constexpr uint32_t batch                              = get_compile_time_arg_val(17);
-    constexpr uint32_t bcast_B                            = get_compile_time_arg_val(18);
+    constexpr uint32_t KtNt                               = get_compile_time_arg_val(15);
+    constexpr uint32_t batch                              = get_compile_time_arg_val(16);
+    constexpr uint32_t bcast_B                            = get_compile_time_arg_val(17);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(19);
-    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(20);
-    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(21);
-    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(22);
+    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(18);
+    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(19);
+    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(20);
+    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(21);
     // out subblock args
-    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(23);
-    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(24);
-    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(25);
+    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(22);
+    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(23);
+    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(24);
     // batch args
-    constexpr uint32_t MtNt                               = get_compile_time_arg_val(26); // if 0
+    constexpr uint32_t MtNt                               = get_compile_time_arg_val(25); // if 0
     // Don't need batch; same as batch from READER args
 
     #ifdef FUSE_BIAS
@@ -77,27 +77,20 @@ void kernel_main() {
         uint32_t in3_mcast_dest_noc_start_x         = get_arg_val<uint32_t>(16);
         uint32_t in3_mcast_dest_noc_end_x           = get_arg_val<uint32_t>(17);
         // in3 mcast args
-        constexpr uint32_t in3_is_dram                        = get_compile_time_arg_val(27);
-        constexpr uint32_t in3_tensor_stride_w                = get_compile_time_arg_val(28);
-        constexpr uint32_t in3_mcast_dest_noc_start_y         = get_compile_time_arg_val(29);
-        constexpr uint32_t in3_mcast_dest_noc_end_y           = get_compile_time_arg_val(30);
-        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(31);
-        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(32);
-        constexpr uint32_t in3_mcast_num_dests                = get_compile_time_arg_val(33);
+        constexpr bool in3_is_dram                            = get_compile_time_arg_val(26) == 1;
+        constexpr uint32_t in3_tensor_stride_w                = get_compile_time_arg_val(27);
+        constexpr uint32_t in3_mcast_dest_noc_start_y         = get_compile_time_arg_val(28);
+        constexpr uint32_t in3_mcast_dest_noc_end_y           = get_compile_time_arg_val(29);
+        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(30);
+        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(31);
+        constexpr uint32_t in3_mcast_num_dests                = get_compile_time_arg_val(32);
 
         constexpr uint32_t cb_id_in3 = 3;
 
-        constexpr bool in3_is_dram_bool = in3_is_dram == 1;
         uint32_t l1_write_addr_in3;
         volatile uint32_t* in3_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in3_mcast_receiver_semaphore_addr);
         volatile uint32_t* in3_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in3_mcast_sender_semaphore_addr);
     #endif
-
-    // const args for tile-based bank-swizzled layout
-    // could be added to the arg list in the future to test different
-    // bank-swizzling configurations
-    constexpr uint32_t num_used_dram_ch = 8;
-    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -119,48 +112,25 @@ void kernel_main() {
     // to receive the mcast
     volatile uint32_t* in1_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_sender_semaphore_addr);
 
-    constexpr bool in1_is_dram_bool = in1_is_dram == 1;
-    constexpr bool out_is_dram_bool = out_is_dram == 1;
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1 // TODO: Refactor to data_format
-    #if (tile_size_is_pow2)
-    const InterleavedAddrGenFast<in1_is_dram_bool> s1 = {
+    const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
         .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Float16
+        .data_format = data_format
     };
     #ifdef FUSE_BIAS
-        const InterleavedAddrGenFast<in3_is_dram_bool> s3 = {
+        const InterleavedAddrGenFast<in3_is_dram> s3 = {
             .bank_base_address = in3_tensor_addr,
             .page_size = single_tile_size_bytes,
-            .data_format = DataFormat::Float16
+            .data_format = data_format
         };
     #endif
     // WRITER
-    const InterleavedAddrGenFast<out_is_dram_bool> s = {
+    const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Float16
+        .data_format = data_format
     };
-    #else
-    const InterleavedAddrGenFast<in1_is_dram_bool> s1 = {
-        .bank_base_address = in1_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Bfp8_b
-    };
-    #ifdef FUSE_BIAS
-        const InterleavedAddrGenFast<in3_is_dram_bool> s3 = {
-            .bank_base_address = in3_tensor_addr,
-            .page_size = single_tile_size_bytes,
-            .data_format = DataFormat::Bfp8_b
-        };
-    #endif
-    // WRITER
-    const InterleavedAddrGenFast<out_is_dram_bool> s = {
-        .bank_base_address = out_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Bfp8_b
-    };
-    #endif
+
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;

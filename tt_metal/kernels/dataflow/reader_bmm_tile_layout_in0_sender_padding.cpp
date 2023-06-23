@@ -15,36 +15,29 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    //constexpr uint32_t tile_size_is_power_of_two          = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_size_pow2_exponent            = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(2);
+    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr bool in0_is_dram                            = get_compile_time_arg_val(1) == 1;
 
     // in0 tensor args
-    constexpr uint32_t in0_tensor_stride_w                = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_tensor_stride_h                = get_compile_time_arg_val(4);
-    constexpr uint32_t in0_tensor_next_block_stride       = get_compile_time_arg_val(5);
+    constexpr uint32_t in0_tensor_stride_w                = get_compile_time_arg_val(2);
+    constexpr uint32_t in0_tensor_stride_h                = get_compile_time_arg_val(3);
+    constexpr uint32_t in0_tensor_next_block_stride       = get_compile_time_arg_val(4);
     // in0 block args
-    constexpr uint32_t in0_block_w                        = get_compile_time_arg_val(6);
-    constexpr uint32_t in0_block_h                        = get_compile_time_arg_val(7);
-    constexpr uint32_t in0_block_num_tiles                = get_compile_time_arg_val(8);
+    constexpr uint32_t in0_block_w                        = get_compile_time_arg_val(5);
+    constexpr uint32_t in0_block_h                        = get_compile_time_arg_val(6);
+    constexpr uint32_t in0_block_num_tiles                = get_compile_time_arg_val(7);
     // in0/in1 common args
-    constexpr uint32_t num_blocks                         = get_compile_time_arg_val(9);
+    constexpr uint32_t num_blocks                         = get_compile_time_arg_val(8);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_dest_noc_start_x         = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_mcast_dest_noc_end_x           = get_compile_time_arg_val(11);
-    constexpr uint32_t in0_mcast_sender_semaphore_addr    = get_compile_time_arg_val(12);
-    constexpr uint32_t in0_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(13);
-    constexpr uint32_t in0_mcast_num_dests                = get_compile_time_arg_val(14);
+    constexpr uint32_t in0_mcast_dest_noc_start_x         = get_compile_time_arg_val(9);
+    constexpr uint32_t in0_mcast_dest_noc_end_x           = get_compile_time_arg_val(10);
+    constexpr uint32_t in0_mcast_sender_semaphore_addr    = get_compile_time_arg_val(11);
+    constexpr uint32_t in0_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(12);
+    constexpr uint32_t in0_mcast_num_dests                = get_compile_time_arg_val(13);
     // batch args
-    constexpr uint32_t MtKt                               = get_compile_time_arg_val(15); // if 0
-    constexpr uint32_t batch                              = get_compile_time_arg_val(16);
+    constexpr uint32_t MtKt                               = get_compile_time_arg_val(14); // if 0
+    constexpr uint32_t batch                              = get_compile_time_arg_val(15);
 
-
-    // const args for tile-based bank-swizzled layout
-    // could be added to the arg list in the future to test different
-    // bank-swizzling configurations
-    constexpr uint32_t num_used_dram_ch = 8;
-    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -63,21 +56,11 @@ void kernel_main() {
     // to receive the mcast
     volatile uint32_t* in0_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in0_mcast_sender_semaphore_addr);
 
-    constexpr bool in0_is_dram_bool = in0_is_dram == 1;
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1 // TODO: Refactor to data_format
-    #if (tile_size_is_pow2)
-    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
+    const InterleavedAddrGenFast<in0_is_dram> s0 = {
         .bank_base_address = in0_tensor_addr,
         .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Float16
+        .data_format = data_format
     };
-    #else
-    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
-        .bank_base_address = in0_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = DataFormat::Bfp8_b
-    };
-    #endif
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;

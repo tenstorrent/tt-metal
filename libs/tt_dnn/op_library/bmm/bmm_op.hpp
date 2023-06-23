@@ -57,6 +57,7 @@ Program matmul_multi_core_reuse_mcast_padding (const Tensor &input_tensor_a, con
 Program bmm_multi_core_reuse_mcast_padding  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
 
 struct Matmul {
+    const MemoryConfig& output_mem_config;
     void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
@@ -65,6 +66,7 @@ struct Matmul {
 
 
 struct BatchedMatmul {
+    const MemoryConfig& output_mem_config;
     void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
@@ -72,16 +74,16 @@ struct BatchedMatmul {
 };
 
 
-inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {
     TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(input_tensor_b.shape()[0]*input_tensor_b.shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
-    return operation::run_with_autoformat(Matmul(), input_tensor_a, input_tensor_b);
+    return operation::run_with_autoformat(Matmul{.output_mem_config=mem_config}, input_tensor_a, input_tensor_b);
 }
-inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {
     TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(input_tensor_a.shape()[1] == input_tensor_b.shape()[1] && input_tensor_a.shape()[0] == input_tensor_b.shape()[0]
         && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
-    return operation::run_with_autoformat(BatchedMatmul(), input_tensor_a, input_tensor_b);
+    return operation::run_with_autoformat(BatchedMatmul{.output_mem_config=mem_config}, input_tensor_a, input_tensor_b);
 }
 
 
@@ -102,9 +104,9 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const 
 
 
 struct BertLargeMatmul {
-    BertLargeMatmulOpType bert_large_matmul_op_type;
-    MemoryConfig output_mem_config;
-    bool fuse_gelu_activation;
+    const BertLargeMatmulOpType bert_large_matmul_op_type;
+    const MemoryConfig& output_mem_config;
+    const bool fuse_gelu_activation;
 
     void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
@@ -122,22 +124,22 @@ struct BertLargeMatmul {
 
 
 inline Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FUSED_QKV, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FUSED_QKV, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
 }
 inline Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, bool fuse_gelu_activation, const MemoryConfig& mem_config) {
     return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF1, mem_config, fuse_gelu_activation}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
 }
 inline Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF2, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF2, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
 }
 inline Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::SELFOUT, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::SELFOUT, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
 }
 inline Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0));
 }
 inline Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0));
+    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0));
 }
 
 

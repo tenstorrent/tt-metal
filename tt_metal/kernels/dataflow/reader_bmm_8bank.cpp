@@ -15,6 +15,10 @@ void kernel_main() {
     uint32_t batch      = get_arg_val<uint32_t>(7);
     uint32_t bcast_B    = get_arg_val<uint32_t>(8); // if 1 we broadcast B to batch
 
+    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr bool src0_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr bool src1_is_dram = get_compile_time_arg_val(2) == 1;
+
     //DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
     //DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
     //DPRINT << "batch=" << batch << ENDL();
@@ -28,40 +32,17 @@ void kernel_main() {
     uint32_t itileA_batch = 0;
     uint32_t itileB_batch = 0;
 
-    // const args for tile-based bank-swizzled layout
-    // could be added to the arg list in the future to test different
-    // bank-swizzling configurations
-    constexpr uint32_t num_used_dram_ch = 8;
-    constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
-    #if (tile_size_is_pow2)
-    constexpr uint32_t tile_size_pow2_exponent = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<true> s0 = {
+    const InterleavedAddrGenFast<src0_is_dram> s0 = {
         .bank_base_address = src0_addr,
-
-
-        .log_base_2_of_page_size = tile_size_pow2_exponent // TODO(AP): refactor
+        .page_size = tile_bytes,
+        .data_format = data_format
     };
-    const InterleavedPow2AddrGen<true> s1 = {
+
+    const InterleavedAddrGenFast<src1_is_dram> s1 = {
         .bank_base_address = src1_addr,
-
-
-        .log_base_2_of_page_size = tile_size_pow2_exponent
+        .page_size = tile_bytes,
+        .data_format = data_format
     };
-    #else
-    const InterleavedAddrGen<true> s0 = {
-        .bank_base_address = src0_addr,
-
-
-        .page_size = tile_bytes
-    };
-    const InterleavedAddrGen<true> s1 = {
-        .bank_base_address = src1_addr,
-
-
-        .page_size = tile_bytes
-    };
-    #endif
 
     for (uint32_t nb = 0; nb < batch; nb++) {
         uint32_t itileA = itileA_batch;
@@ -70,19 +51,17 @@ void kernel_main() {
             for (uint32_t nt = 0; nt < Nt; nt++) {
                 for (uint32_t kt = 0; kt < Kt; kt++) {
                     { // Read A's tile at (mt, kt)
-                        uint64_t src0_noc_addr = get_noc_addr(itileA, s0);
                         cb_reserve_back(cb_id_in0, onetile);
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                        noc_async_read(src0_noc_addr, l1_write_addr_in0, tile_bytes);
+                        noc_async_read_tile(itileA, s0, l1_write_addr_in0);
                         noc_async_read_barrier();
                         cb_push_back(cb_id_in0, onetile);
                     }
 
                     { // Read B's tile at (kt, nt)
-                        uint64_t src1_noc_addr = get_noc_addr(itileB, s1);
                         cb_reserve_back(cb_id_in1, onetile);
                         uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                        noc_async_read(src1_noc_addr, l1_write_addr_in1, tile_bytes);
+                        noc_async_read_tile(itileB, s1, l1_write_addr_in1);
                         noc_async_read_barrier();
                         cb_push_back(cb_id_in1, onetile);
                     }

@@ -1413,7 +1413,8 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** matrix multiplication ***
-    m_tensor.def("matmul", &matmul, R"doc(
+    m_tensor.def("matmul", &matmul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a non-batched matrix multiplication ``arg0 x arg1`` with two tensors.
 
         Both input tensors must have BFLOAT16 data type.
@@ -1429,7 +1430,8 @@ void TensorModule(py::module &m_tensor) {
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("bmm", &bmm, R"doc(
+    m_tensor.def("bmm", &bmm,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a batched matmul ``arg0 x arg1`` with two tensors, where batch dims match.
 
         Both input tensors must have BFLOAT16 data type.
@@ -1529,7 +1531,8 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** broadcast and reduce ***
-    m_tensor.def("bcast", &bcast, R"doc(
+    m_tensor.def("bcast", &bcast,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a binary elementwise operation ``arg2`` between tensors ``arg0`` and ``arg1``, where values from tensor ``arg1`` are broadcast.
 
         Let tensor ``arg0`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``arg1`` shape ``[W1, Z1, Y1, X1]``. ``arg3`` determines the type of broadcast performed.

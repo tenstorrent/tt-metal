@@ -30,8 +30,8 @@ Program matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bo
     }
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
-    tt_metal::Buffer *src1_dram_buffer = b.buffer();
+    tt_metal::Buffer *src0_buffer = a.buffer();
+    tt_metal::Buffer *src1_buffer = b.buffer();
     if (bcast_batch)
         TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     else {
@@ -44,15 +44,15 @@ Program matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bo
     TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
     TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
     TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
-    TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
-    TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0);
+    TT_ASSERT(src0_buffer->size() % single_tile_size == 0);
+    TT_ASSERT(src1_buffer->size() % single_tile_size == 0);
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
     std::array<uint32_t, 4> cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // C = A*B
     // MN = MK*KN
@@ -61,9 +61,9 @@ Program matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bo
     uint32_t Kt = ashape[3]/TILE_WIDTH;
     uint32_t Nt = bshape[3]/TILE_WIDTH;
 
-    uint32_t in0_dram_addr = src0_dram_buffer->address();
-    uint32_t in1_dram_addr = src1_dram_buffer->address();
-    uint32_t out_dram_addr = dst_dram_buffer->address();
+    uint32_t src0_addr = src0_buffer->address();
+    uint32_t src1_addr = src1_buffer->address();
+    uint32_t dst_addr = dst_buffer->address();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -100,23 +100,22 @@ Program matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bo
         cb_data_format
     );
 
-    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    std::vector<uint32_t> reader_writer_compile_time_args;
-    if (tile_size_is_power_of_two) {
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
-    } else {
-        reader_writer_compile_time_args = {0, 0};
-    }
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)dst_is_dram};
+
     auto reader = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
-        core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        core, reader_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
     auto writer = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
-        core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+        core, writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
     vector<uint32_t> compute_args = {
         B, // B
@@ -138,11 +137,11 @@ Program matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bo
 
     tt_metal::SetRuntimeArgs(
         reader, core,
-        {in0_dram_addr, in1_dram_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, uint32_t(bcast_batch ? 1 : 0)}
+        {src0_addr, src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, uint32_t(bcast_batch ? 1 : 0)}
     );
     tt_metal::SetRuntimeArgs(
         writer, core,
-        {out_dram_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
+        {dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
     );
 
     // output does not hold any data, contains pointer to buffer on device with the data

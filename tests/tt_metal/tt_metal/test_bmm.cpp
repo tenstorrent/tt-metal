@@ -106,16 +106,21 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
-        std::vector<uint32_t> reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
+        bool src0_is_dram = true;
+        bool src1_is_dram = true;
+        std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(tt::DataFormat::Float16_b), (uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+
+        bool dst_is_dram = true;
+        std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(tt::DataFormat::Float16_b), (uint32_t)dst_is_dram};
         auto reader = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
-            core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+            core, reader_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
         auto writer = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
-            core, reader_writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+            core, writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
         vector<uint32_t> compute_kernel_args = {
             B, // batch

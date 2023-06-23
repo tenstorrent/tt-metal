@@ -29,11 +29,15 @@ operation::ProgramWithCallbacks create_program(
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
+    uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
+    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
-    uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
-    uint32_t out_CB_tiles = per_core_M * per_core_N;
+    uint32_t in1_CB_tiles = in1_block_tiles * 2; // double buffer
+    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
+    uint32_t out_block_tiles = per_core_M * per_core_N;
+    uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
+
 
     // Compute kernel compile time args
     uint32_t num_blocks = (K/in0_block_w);
@@ -77,19 +81,16 @@ operation::ProgramWithCallbacks create_program(
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     // Compile time args
-    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    std::uint32_t tile_size_pow2_exponent = tile_size_is_power_of_two ? (std::uint32_t)log2(single_tile_size) : 0;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_writer_compile_time_args = {
-                // interleaved accessor args
-                (std::uint32_t) tile_size_is_power_of_two,
-                (std::uint32_t) tile_size_pow2_exponent,
-                (std::uint32_t) in0_is_dram,
-                (std::uint32_t) in1_is_dram,
-                (std::uint32_t) out_is_dram
-        };
+        // interleaved accessor args
+        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) in0_is_dram,
+        (std::uint32_t) in1_is_dram,
+        (std::uint32_t) out_is_dram
+    };
 
     // left half
     auto mm_kernel_in0_reader = tt_metal::CreateDataMovementKernel(
@@ -189,26 +190,24 @@ operation::ProgramWithCallbacks create_program(
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
-    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
         all_cores,
-        cb0_tiles,
-        cb0_tiles * single_tile_size,
+        in0_CB_tiles,
+        in0_CB_size,
         cb_data_format
     );
 
     uint32_t src1_cb_index = 1;
-    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
     auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src1_cb_index,
         all_cores,
-        cb1_tiles,
-        cb1_tiles * single_tile_size,
+        in1_CB_tiles,
+        in1_CB_size,
         cb_data_format
     );
 

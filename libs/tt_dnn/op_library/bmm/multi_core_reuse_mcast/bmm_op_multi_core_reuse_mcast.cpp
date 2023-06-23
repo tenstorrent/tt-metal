@@ -19,16 +19,19 @@ tt_metal::Program create_program_mcast_in0_in1(
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
-    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
+    tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
 ) {
 
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
+    uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
+    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
-    uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
-    uint32_t out_CB_tiles = per_core_M * per_core_N;
+    uint32_t in1_CB_tiles = in1_block_tiles * 2; // double buffer
+    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
+    uint32_t out_block_tiles = per_core_M * per_core_N;
+    uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
 
     uint32_t start_core_x = start_core.x;
@@ -64,20 +67,18 @@ tt_metal::Program create_program_mcast_in0_in1(
         .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    std::vector<uint32_t> reader_writer_compile_time_args;
-    if (tile_size_is_power_of_two) {
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
-    } else {
-        reader_writer_compile_time_args = {0, 0};
-    }
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
+
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)out_is_dram};
 
     auto mm_reader_kernel_in0_sender_in1_sender = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
         in0_sender_in1_sender,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_0_default);
 
@@ -85,7 +86,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
         in0_sender_in1_receiver,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_0_default);
 
@@ -93,7 +94,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
         in0_receiver_in1_sender,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -101,7 +102,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
         in0_receiver_in1_receiver,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -109,7 +110,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_except_left_column,
-        reader_writer_compile_time_args,
+        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -117,7 +118,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
         left_column,
-        reader_writer_compile_time_args,
+        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_1_default);
 
@@ -170,27 +171,26 @@ tt_metal::Program create_program_mcast_in0_in1(
     auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
 
+    // Create circular buffers
     uint32_t src0_cb_index = 0;
-    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
         all_cores,
-        cb0_tiles,
-        cb0_tiles * single_tile_size,
+        in0_CB_tiles,
+        in0_CB_size,
         cb_data_format
     );
 
     uint32_t src1_cb_index = 1;
-    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
     auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src1_cb_index,
         all_cores,
-        cb1_tiles,
-        cb1_tiles * single_tile_size,
+        in1_CB_tiles,
+        in1_CB_size,
         cb_data_format
     );
 
@@ -224,7 +224,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
             auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)  in0_dram_addr, // in0_tensor_addr
+                (std::uint32_t)  in0_buffer->address(), // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                 (std::uint32_t)  1, // in0_tensor_stride_w
                 (std::uint32_t)  K, // in0_tensor_stride_h
@@ -234,7 +234,7 @@ tt_metal::Program create_program_mcast_in0_in1(
                 (std::uint32_t)  per_core_M, // in0_block_h
                 (std::uint32_t)  in0_block_w * per_core_M, // in0_block_num_tiles
 
-                (std::uint32_t)  in1_dram_addr, // in1_tensor_addr
+                (std::uint32_t)  in1_buffer->address(), // in1_tensor_addr
                 (std::uint32_t)  per_core_N * core_idx_x, //in1_tensor_start_tile_id
                 (std::uint32_t)  1, // in1_tensor_stride_w
                 (std::uint32_t)  N, // in1_tensor_stride_h
@@ -272,7 +272,7 @@ tt_metal::Program create_program_mcast_in0_in1(
                 (std::uint32_t)  bcast_batch // bcast_B
             };
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t) out_dram_addr, // out_tensor_addr
+                (std::uint32_t) out_buffer->address(), // out_tensor_addr
                 (std::uint32_t) core_idx_x * per_core_N + core_idx_y * per_core_M * N, // out_tensor_start_tile_id
                 (std::uint32_t) 1, // out_tensor_stride_w
                 (std::uint32_t) N,  // out_tensor_stride_h
@@ -321,16 +321,19 @@ tt_metal::Program create_program_mcast_in0(
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
-    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
+    tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
 ) {
 
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
+    uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
+    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
-    uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
-    uint32_t out_CB_tiles = per_core_M * per_core_N;
+    uint32_t in1_CB_tiles = in1_block_tiles * 2; // double buffer
+    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
+    uint32_t out_block_tiles = per_core_M * per_core_N;
+    uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
 
     uint32_t start_core_x = start_core.x;
@@ -349,20 +352,18 @@ tt_metal::Program create_program_mcast_in0(
         .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    std::vector<uint32_t> reader_writer_compile_time_args;
-    if (tile_size_is_power_of_two) {
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
-    } else {
-        reader_writer_compile_time_args = {0, 0};
-    }
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
+
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)out_is_dram};
 
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_sender.cpp",
         mcast_senders,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -370,7 +371,7 @@ tt_metal::Program create_program_mcast_in0(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_receiver.cpp",
         mcast_receivers,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -378,7 +379,7 @@ tt_metal::Program create_program_mcast_in0(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
-        reader_writer_compile_time_args,
+        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -429,27 +430,26 @@ tt_metal::Program create_program_mcast_in0(
     auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
     auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
 
+    // Create circular buffers
     uint32_t src0_cb_index = 0;
-    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
         all_cores,
-        cb0_tiles,
-        cb0_tiles * single_tile_size,
+        in0_CB_tiles,
+        in0_CB_size,
         cb_data_format
     );
 
     uint32_t src1_cb_index = 1;
-    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
     auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src1_cb_index,
         all_cores,
-        cb1_tiles,
-        cb1_tiles * single_tile_size,
+        in1_CB_tiles,
+        in1_CB_size,
         cb_data_format
     );
 
@@ -477,7 +477,7 @@ tt_metal::Program create_program_mcast_in0(
             auto core_end_physical = device->worker_core_from_logical_core(core_end);
 
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)  in0_dram_addr, // in0_tensor_addr
+                (std::uint32_t)  in0_buffer->address(), // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                 (std::uint32_t)  1, // in0_tensor_stride_w
                 (std::uint32_t)  K, // in0_tensor_stride_h
@@ -487,7 +487,7 @@ tt_metal::Program create_program_mcast_in0(
                 (std::uint32_t)  per_core_M, // in0_block_h
                 (std::uint32_t)  in0_block_w * per_core_M, // in0_block_num_tiles
 
-                (std::uint32_t)  in1_dram_addr, // in1_tensor_addr
+                (std::uint32_t)  in1_buffer->address(), // in1_tensor_addr
                 (std::uint32_t)  per_core_N * core_idx_x, //in1_tensor_start_tile_id
                 (std::uint32_t)  1, // in1_tensor_stride_w
                 (std::uint32_t)  N, // in1_tensor_stride_h
@@ -516,7 +516,7 @@ tt_metal::Program create_program_mcast_in0(
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t) out_dram_addr, // out_tensor_addr
+                (std::uint32_t) out_buffer->address(), // out_tensor_addr
                 (std::uint32_t) core_idx_x * per_core_N + core_idx_y * per_core_M * N, // out_tensor_start_tile_id
                 (std::uint32_t) 1, // out_tensor_stride_w
                 (std::uint32_t) N,  // out_tensor_stride_h
@@ -558,16 +558,19 @@ tt_metal::Program create_program_mcast_in1(
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
-    uint32_t in0_dram_addr, uint32_t in1_dram_addr, uint32_t out_dram_addr
+   tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
 ) {
 
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
+    uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
+    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
-    uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
-    uint32_t out_CB_tiles = per_core_M * per_core_N;
+    uint32_t in1_CB_tiles = in1_block_tiles * 2; // double buffer
+    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
+    uint32_t out_block_tiles = per_core_M * per_core_N;
+    uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
 
     uint32_t start_core_x = start_core.x;
@@ -586,20 +589,18 @@ tt_metal::Program create_program_mcast_in1(
         .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
-    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
-    std::vector<uint32_t> reader_writer_compile_time_args;
-    if (tile_size_is_power_of_two) {
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_writer_compile_time_args = {1, (std::uint32_t)log2(single_tile_size)};
-    } else {
-        reader_writer_compile_time_args = {0, 0};
-    }
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
+
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)out_is_dram};
 
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_sender.cpp",
         mcast_senders,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -607,7 +608,7 @@ tt_metal::Program create_program_mcast_in1(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_receiver.cpp",
         mcast_receivers,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
@@ -615,7 +616,7 @@ tt_metal::Program create_program_mcast_in1(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
-        reader_writer_compile_time_args,
+        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -666,27 +667,26 @@ tt_metal::Program create_program_mcast_in1(
     auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
 
+    // Create circular buffers
     uint32_t src0_cb_index = 0;
-    uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src0_cb_index,
         all_cores,
-        cb0_tiles,
-        cb0_tiles * single_tile_size,
+        in0_CB_tiles,
+        in0_CB_size,
         cb_data_format
     );
 
     uint32_t src1_cb_index = 1;
-    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
     auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         device,
         src1_cb_index,
         all_cores,
-        cb1_tiles,
-        cb1_tiles * single_tile_size,
+        in1_CB_tiles,
+        in1_CB_size,
         cb_data_format
     );
 
@@ -714,7 +714,7 @@ tt_metal::Program create_program_mcast_in1(
             auto core_end_physical = device->worker_core_from_logical_core(core_end);
 
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)  in0_dram_addr, // in0_tensor_addr
+                (std::uint32_t)  in0_buffer->address(), // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                 (std::uint32_t)  1, // in0_tensor_stride_w
                 (std::uint32_t)  K, // in0_tensor_stride_h
@@ -724,7 +724,7 @@ tt_metal::Program create_program_mcast_in1(
                 (std::uint32_t)  per_core_M, // in0_block_h
                 (std::uint32_t)  in0_block_w * per_core_M, // in0_block_num_tiles
 
-                (std::uint32_t)  in1_dram_addr, // in1_tensor_addr
+                (std::uint32_t)  in1_buffer->address(), // in1_tensor_addr
                 (std::uint32_t)  per_core_N * core_idx_x, //in1_tensor_start_tile_id
                 (std::uint32_t)  1, // in1_tensor_stride_w
                 (std::uint32_t)  N, // in1_tensor_stride_h
@@ -752,7 +752,7 @@ tt_metal::Program create_program_mcast_in1(
                 (std::uint32_t)  bcast_batch // bcast_B
             };
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t) out_dram_addr, // out_tensor_addr
+                (std::uint32_t) out_buffer->address(), // out_tensor_addr
                 (std::uint32_t) core_idx_x * per_core_N + core_idx_y * per_core_M * N, // out_tensor_start_tile_id
                 (std::uint32_t) 1, // out_tensor_stride_w
                 (std::uint32_t) N,  // out_tensor_stride_h
@@ -804,8 +804,8 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
     }
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
-    tt_metal::Buffer *src1_dram_buffer = b.buffer();
+    tt_metal::Buffer *in0_buffer = a.buffer();
+    tt_metal::Buffer *in1_buffer = b.buffer();
     if (bcast_batch)
         TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
     else {
@@ -813,8 +813,8 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
         TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
-    TT_ASSERT(src0_dram_buffer->size() % single_tile_size == 0);
-    TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0);
+    TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
+    TT_ASSERT(in1_buffer->size() % single_tile_size == 0);
 
     TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
@@ -856,12 +856,9 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     std::array<uint32_t, 4> cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    tt_metal::Buffer *out_buffer = output.buffer();
+    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t in0_dram_addr = src0_dram_buffer->address();
-    uint32_t in1_dram_addr = src1_dram_buffer->address();
-    uint32_t out_dram_addr = dst_dram_buffer->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -882,7 +879,7 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
             in0_block_w,
             out_subblock_h, out_subblock_w,
             per_core_M, per_core_N,
-            in0_dram_addr, in1_dram_addr, out_dram_addr
+            in0_buffer, in1_buffer, out_buffer
         );
     } else if (core_range.x > 1) {
         program = create_program_mcast_in0(
@@ -897,7 +894,7 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
             in0_block_w,
             out_subblock_h, out_subblock_w,
             per_core_M, per_core_N,
-            in0_dram_addr, in1_dram_addr, out_dram_addr
+            in0_buffer, in1_buffer, out_buffer
         );
     } else {
         program = create_program_mcast_in1(
@@ -912,7 +909,7 @@ Program matmul_multi_core_reuse_mcast_(const Tensor &a, const Tensor &b, Tensor&
             in0_block_w,
             out_subblock_h, out_subblock_w,
             per_core_M, per_core_N,
-            in0_dram_addr, in1_dram_addr, out_dram_addr
+            in0_buffer, in1_buffer, out_buffer
         );
     }
 
