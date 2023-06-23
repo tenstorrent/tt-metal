@@ -394,6 +394,46 @@ def test_bert_batch_dram(
         PERF_CNT,
     )
 
+@pytest.mark.parametrize(
+    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, 0.98),),
+)
+def test_bert_batch_dram_with_operation_cache(
+    use_operation_cache,
+    model_version,
+    batch,
+    seq_len,
+    on_weka,
+    real_input,
+    attention_mask,
+    token_type_ids,
+    pcc,
+    model_location_generator,
+):
+    # This test will run BERT-Large once with cache disabled.
+    # Then it will enable cache and run BERT-Large PERF_CNT number of times.
+    # Performance is reported only for PERF_CNT number of runs.
+    PERF_CNT = 1
+
+    disable_compile_cache()
+    enable_compilation_reports()
+
+    ttl.profiler.set_profiler_flag(False)
+    ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_full_with_operation_cache/")
+
+    run_bert_question_and_answering_inference(
+        model_version,
+        batch,
+        seq_len,
+        on_weka,
+        real_input,
+        attention_mask,
+        token_type_ids,
+        pcc,
+        model_location_generator,
+        PERF_CNT,
+    )
+
 
 if __name__ == "__main__":
     test_bert_batch_dram(
