@@ -3,6 +3,9 @@ from typing import List, Tuple, Union, Optional
 from .conversion_wrapper import convert_tt_tensors_wrapper
 from .. import tensor as ttl_tensor
 
+# python 3.10 has types.EllipsisType
+EllipsisType = type(Ellipsis)
+
 
 @convert_tt_tensors_wrapper
 def full(size: List[int], fill_value: float) -> ttl_tensor.Tensor:
@@ -18,6 +21,26 @@ def full(size: List[int], fill_value: float) -> ttl_tensor.Tensor:
     +------------+-----------------------------------------+-------------+-----------------+----------+
     """
     return torch.full(size, fill_value, dtype=torch.float32)
+
+
+@convert_tt_tensors_wrapper
+def tensor_slice(
+    input: ttl_tensor.Tensor, slices: List[Union[slice, EllipsisType]]
+) -> ttl_tensor.Tensor:
+    """
+    Creates a ``tt_lib.tensor.Tensor`` from ``input`` using ``slices``.
+    To use ``...``, pass in ``...`` or ``Ellipsis``.
+    To use ``:``, pass in ``slice(None)``.
+
+    +------------+------------------------------------------+-----------------------+-----------------+----------+
+    | Argument   | Description                              | Data type             | Valid range     | Required |
+    +============+==========================================+=======================+=================+==========+
+    | input      | Input tensor                             | Tensor                |                 | Yes      |
+    +------------+------------------------------------------+-----------------------+-----------------+----------+
+    | slices     | List of slices to slice the input tensor | List[slice, Ellipsis] |                 | Yes      |
+    +------------+------------------------------------------+-----------------------+-----------------+----------+
+    """
+    return input[slices]
 
 
 @convert_tt_tensors_wrapper

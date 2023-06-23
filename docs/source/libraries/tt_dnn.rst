@@ -103,6 +103,8 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autofunction:: tt_lib.fallback_ops.fallback_ops.full
 
+.. autofunction:: tt_lib.fallback_ops.fallback_ops.tensor_slice
+
 .. autofunction:: tt_lib.fallback_ops.fallback_ops.reshape
 
 .. autofunction:: tt_lib.fallback_ops.fallback_ops.chunk
