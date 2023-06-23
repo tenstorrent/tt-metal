@@ -40,8 +40,6 @@ def test_deit_for_image_classification_inference(pcc=0.95):
 
         torch_output = torch_model(**inputs).logits
 
-        # print('torch out:', torch_output)
-
         # Initialize the device
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
@@ -57,7 +55,6 @@ def test_deit_for_image_classification_inference(pcc=0.95):
         tt_model.deit.get_head_mask = torch_model.deit.get_head_mask
         tt_output = tt_model(tt_inputs)[0]
         tt_output = tt_to_torch_tensor(tt_output, host).squeeze(0)[:, 0, :]
-        print('tt_output:', tt_output)
 
         pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
         _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
