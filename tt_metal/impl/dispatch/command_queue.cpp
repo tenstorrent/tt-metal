@@ -44,7 +44,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
     u32 start_in_bytes = DEVICE_COMMAND_DATA_ADDR;
 
-    const char *DISPATCH_MAP_DUMP = std::getenv("DISPATCH_MAP_DUMP");
+    const char *DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
     std::ofstream dispatch_dump_file;
 
     if (DISPATCH_MAP_DUMP != nullptr) {
