@@ -2140,6 +2140,7 @@ void DTXModule(py::module &m_dtx) {
 void ProgramCacheModule(py::module &m_program_cache) {
    m_program_cache.def("enable", &tt::tt_metal::program_cache::enable);
    m_program_cache.def("disable_and_clear", &tt::tt_metal::program_cache::disable_and_clear);
+   m_program_cache.def("num_entries", &tt::tt_metal::program_cache::num_entries);
 }
 
 } // end namespace tt_metal

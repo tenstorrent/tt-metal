@@ -434,6 +434,8 @@ def test_bert_batch_dram_with_program_cache(
         PERF_CNT,
     )
 
+    assert ttl.program_cache.num_entries() == 14
+
 
 if __name__ == "__main__":
     test_bert_batch_dram(

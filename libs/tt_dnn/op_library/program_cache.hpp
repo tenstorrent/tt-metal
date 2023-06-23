@@ -48,7 +48,7 @@ struct ProgramCache {
         this->cache_.clear();
     }
 
-    std::size_t num_cached_programs() const {
+    std::size_t num_entries() const {
         return this->cache_.size();
     }
 
@@ -81,8 +81,8 @@ static void disable_and_clear() {
     detail::PROGRAM_CACHE.clear();
 }
 
-static std::size_t num_cached_programs() {
-    return detail::PROGRAM_CACHE.num_cached_programs();
+static std::size_t num_entries() {
+    return detail::PROGRAM_CACHE.num_entries();
 }
 
 }

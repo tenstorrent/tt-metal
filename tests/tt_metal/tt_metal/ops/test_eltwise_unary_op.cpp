@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
 
         TT_ASSERT(tt::tt_metal::CloseDevice(device));
 
-        TT_ASSERT(tt::tt_metal::program_cache::num_cached_programs() == 4);
+        TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 4);
 
 
     } catch (const std::exception &e) {

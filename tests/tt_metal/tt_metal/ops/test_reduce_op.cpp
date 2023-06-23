@@ -97,11 +97,11 @@ int main () {
 
     run_reduce_ops();
 
-    TT_ASSERT(tt::tt_metal::program_cache::num_cached_programs() == 6);
+    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 6);
 
     tt::tt_metal::program_cache::disable_and_clear();
 
-    TT_ASSERT(tt::tt_metal::program_cache::num_cached_programs() == 0);
+    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 0);
 
     TT_ASSERT(tt::tt_metal::CloseDevice(device));
 
