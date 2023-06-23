@@ -22,7 +22,12 @@ env pytest tests/python_api_testing/models/vit/tests/test_vit_image_classificati
 
 env pytest tests/python_api_testing/models/bert/bert_encoder.py -k bert_encoder
 env pytest tests/python_api_testing/models/bert -k bert_question_and_answering
+
 env pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k bert_large
+env pytest tests/python_api_testing/models/metal_BERT_large_15/mha.py
+env pytest tests/python_api_testing/models/metal_BERT_large_15/ffn.py
+env pytest tests/python_api_testing/models/metal_BERT_large_15/bert_encoder.py
+env pytest tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py
 
 env pytest tests/python_api_testing/models/t5 -k t5_dense_act_dense
 env pytest tests/python_api_testing/models/t5 -k t5_layer_norm
