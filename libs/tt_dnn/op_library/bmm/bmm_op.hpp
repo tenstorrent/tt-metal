@@ -149,14 +149,6 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &input_tensor_a, const Tenso
 Tensor large_bmm_single_core(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes a, untilizes b
 Tensor large_bmm_single_core_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
 
-
-// TODO: Merge/delete these (un)used matmuls/bmms
-Tensor matmul_multi_core_reuse_mcast_padding_generalized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
-Tensor bmm_multi_core_reuse_mcast_padding_generalized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
-Tensor matmul_multi_core_reuse_generalized_bert_large  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
-Tensor bmm_multi_core_reuse_generalized_bert_large  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch); // No actual padding
-
-
 }  // namespace tt_metal
 
 }  // namespace tt

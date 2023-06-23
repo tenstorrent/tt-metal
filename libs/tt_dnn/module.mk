@@ -33,8 +33,6 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast_generalized/bmm_op_multi_core_reuse_mcast_generalized.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_padding/bmm_op_multi_core_reuse_padding.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast_padding/bmm_op_multi_core_reuse_mcast_padding.cpp \
-	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast_padding_generalized/bmm_op_multi_core_reuse_mcast_padding_generalized.cpp \
-	libs/tt_dnn/op_library/bmm/multi_core_reuse_generalized_bert_large/bmm_op_multi_core_reuse_generalized_bert_large.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_mcast_optimized_bert_large/bmm_op_multi_core_reuse_mcast_optimized_bert_large.cpp \
 	libs/tt_dnn/op_library/bmm/multi_core_reuse_optimized_bert_large/bmm_op_multi_core_reuse_optimized_bert_large.cpp \
 	libs/tt_dnn/op_library/conv/conv_op.cpp \
@@ -44,7 +42,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/layernorm/layernorm_op.cpp \
 	libs/tt_dnn/op_library/reshape/reshape_op.cpp \
 	libs/tt_dnn/op_library/permute/permute_op.cpp \
-        libs/tt_dnn/op_library/composite/composite_ops.cpp\
+	libs/tt_dnn/op_library/composite/composite_ops.cpp\
 	libs/tt_dnn/op_library/bert_large_tms/bert_large_tms.cpp \
 	libs/tt_dnn/op_library/bert_large_tms/multi_core_split_fused_qkv/multi_core_split_fused_qkv.cpp \
 	libs/tt_dnn/op_library/bert_large_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp \

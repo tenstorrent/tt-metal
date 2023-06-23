@@ -29,21 +29,26 @@ tt_metal::Program create_program_mcast_in0_in1(
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
+    uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
+    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
-    uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
-    uint32_t out_CB_tiles = per_core_M * per_core_N;
+    uint32_t in1_CB_tiles = in1_block_tiles * 2; // double buffer
+    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
+    uint32_t out_block_tiles = per_core_M * per_core_N;
+    uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
 
     // Dummy cb to store one tile of zeros for padding
-    uint32_t in2_block_tiles = 1;
-    uint32_t in2_CB_size = in2_block_tiles * single_tile_size;
+    uint32_t in2_CB_tiles = 1; // No double buffer
+    uint32_t in2_CB_size = in2_CB_tiles * single_tile_size;
 
     uint32_t in3_block_tiles = per_core_N;
-    uint32_t in3_CB_size = in3_block_tiles * single_tile_size;
+    uint32_t in3_CB_tiles = in3_block_tiles; // No double buffer
+    uint32_t in3_CB_size = in3_CB_tiles * single_tile_size;
 
     uint32_t interm1_block_tiles = out_subblock_h * out_subblock_w;
-    uint32_t interm1_CB_size = interm1_block_tiles * single_tile_size;
+    uint32_t interm1_CB_tiles = interm1_block_tiles; // No double buffer
+    uint32_t interm1_CB_size = interm1_CB_tiles * single_tile_size;
 
 
     uint32_t start_core_x = 0;
@@ -435,7 +440,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         device,
         src0_cb_index,
         all_cores,
-        in0_block_tiles,
+        in0_CB_tiles,
         in0_CB_size,
         cb_data_format
     );
@@ -446,7 +451,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         device,
         src1_cb_index,
         all_cores,
-        in1_block_tiles,
+        in1_CB_tiles,
         in1_CB_size,
         cb_data_format
     );
@@ -457,7 +462,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         device,
         src2_cb_index,
         all_cores,
-        in2_block_tiles,
+        in2_CB_tiles,
         in2_CB_size,
         cb_data_format
     );
@@ -492,7 +497,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             device,
             src3_cb_index,
             all_cores,
-            in3_block_tiles,
+            in3_CB_tiles,
             in3_CB_size,
             cb_data_format
         );
@@ -503,7 +508,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             device,
             interm1_cb_index,
             all_cores,
-            interm1_block_tiles,
+            interm1_CB_tiles,
             interm1_CB_size,
             cb_data_format
         );
