@@ -102,9 +102,6 @@ Tensor selu(const Tensor& x,const float scale, const float alpha) {
 //use transformation y = x * sigmoid( x ) by broadcast
 std::function<unary_tensor_op_t> swish = silu;
 
-//FIXME: required MAX operator in BINARY OPS
-//       required relu_max in UNARY OPS
-
 // Function Clip
 //use transformation y = x * sigmoid( x ) by broadcast
 //Ref: https://www.tensorflow.org/api_docs/python/tf/keras/activations/swish
@@ -299,6 +296,58 @@ Tensor std(const Tensor& y) {
   return std::move(std_y);
 }
 #endif
+
+//deg2rad(a) using scale pi/180.
+Tensor deg2rad(const Tensor &input_a) {
+  constexpr float scale = (float)(M_PI/180.0);
+  Tensor t_scale = mk_scalar(scale);
+  return std::move( bcast(input_a,t_scale,BcastOpMath::MUL, BcastOpDim::HW) );
+}
+
+//rad2deg(a) using scale 180/pi.
+Tensor rad2deg(const Tensor &input_a) {
+  constexpr float scale = (float)(180.0/M_PI);
+  Tensor t_scale = mk_scalar(scale);
+  return std::move( bcast(input_a,t_scale,BcastOpMath::MUL, BcastOpDim::HW) );
+}
+
+//hypot(a,b) = sqrt[ a^2 + b^2 ]
+Tensor hypot(const Tensor &input_a, const Tensor &input_b) {
+  Tensor a_sq = square(input_a);
+  Tensor b_sq = square(input_b);
+  Tensor c_sq = add(a_sq,b_sq);
+  return std::move( sqrt( c_sq ) );
+}
+
+//relu6(a) = min(relu(a),6);
+Tensor relu6(const Tensor &input_a) {
+  return std::move(relu_max(input_a,6.0f));
+}
+
+//threshold(a,t,v) = (a < t)*v + (a > t)*a
+Tensor threshold(const Tensor &input_a,float threshold, float value) {
+  Tensor t_threshold = mk_scalar(threshold);
+  Tensor t_value = mk_scalar(value);
+  auto bcast_sub = [](const Tensor& a, const Tensor& b) -> Tensor {
+		    return bcast(a,b,BcastOpMath::SUB, BcastOpDim::HW);
+		  };
+  Tensor t1 = bcast(ltz(bcast_sub(input_a,t_threshold)),t_value,BcastOpMath::MUL, BcastOpDim::HW);
+  Tensor t2 = mul(gtz(bcast_sub(input_a,t_threshold)),input_a);
+  return std::move(add(t1,t2));
+}
+
+//cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
+//        = exp[ (1/3)*log[a] ]
+Tensor cbrt(const Tensor &input_a) {
+  constexpr float scale = (float)(1.0/3.0);
+  Tensor t_scale = mk_scalar(scale);
+  Tensor t_ln_input = log(abs(input_a)); //negative log is not useful here
+  Tensor t1 = bcast(t_ln_input,t_scale,BcastOpMath::MUL, BcastOpDim::HW);
+  Tensor t2 = exp(t1);
+  Tensor t3 = mul(t2,sign(input_a));
+  return std::move(t3);
+}
+
 
 }//namespace tt_metal
 

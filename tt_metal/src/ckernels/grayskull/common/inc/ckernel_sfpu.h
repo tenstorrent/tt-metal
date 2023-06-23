@@ -1213,7 +1213,7 @@ inline void calculate_cosine()
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_max(uint uint_threshold)
 {
-    vFloat threshold = s2vFloat16(uint_threshold, s2vFloat16::fp16a);
+    vFloat threshold((float)uint_threshold);
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat a = dst_reg[0];
@@ -1229,10 +1229,11 @@ inline void relu_max(uint uint_threshold)
         dst_reg++;
     }
 }
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_min(uint uint_threshold)
 {
-    vFloat threshold = s2vFloat16(uint_threshold, s2vFloat16::fp16a);
+    vFloat threshold((float)uint_threshold);
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat a = dst_reg[0];

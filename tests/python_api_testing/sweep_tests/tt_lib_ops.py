@@ -20,6 +20,7 @@ def setup_host_and_device(func):
 
     return wrap
 
+
 ################################################
 ################## Helper-Funcs ################
 ################################################
@@ -48,7 +49,6 @@ def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
-
     t0 = t0.to(layout)
     tt_weight = tt_weight.to(layout)
 
@@ -62,9 +62,9 @@ def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
 
     t1 = tt_linear(t0)
 
-    output = torch.Tensor(t1.to(host).to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
+    output = torch.Tensor(
+        t1.to(host).to(tt_lib.tensor.Layout.ROW_MAJOR).data()
+    ).reshape(t1.shape())
 
     return output
 
@@ -72,6 +72,136 @@ def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
 ################################################
 #################### TT-DNN ####################
 ################################################
+@setup_host_and_device
+def eltwise_threshold(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.threshold(t0, kwargs["threshold"], kwargs["value"])
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def eltwise_relu6(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.relu6(t0)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+    return output
+
+
+@setup_host_and_device
+def eltwise_hypot(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.hypot(t0, t0)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def eltwise_cbrt(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.cbrt(t0)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+    return output
+
+
+@setup_host_and_device
+def eltwise_rad2deg(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.rad2deg(t0)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def eltwise_deg2rad(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.deg2rad(t0)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
 @setup_host_and_device
 def eltwise_sign(x, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(

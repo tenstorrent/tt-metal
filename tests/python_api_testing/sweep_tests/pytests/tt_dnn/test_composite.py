@@ -45,6 +45,12 @@ def custom_compare(*args, **kwargs):
                 "silu",
                 "polyval",
                 "mac",
+                "relu6",
+                "cbrt",
+                "deg2rad",
+                "rad2deg",
+                "threshold",
+                "hypot",
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
@@ -60,6 +66,11 @@ def test_run_eltwise_composite_test(
     options["relu_max"] = (-100, +100)
     options["relu_min"] = (-100, +100)
     options["polyval"] = (1, 100)
+    options["deg2rad"] = (-180, 180)
+    options["rad2deg"] = (0, 2 * pi)
+    options["hypot"] = (1, 100)
+    options["cbrt"] = (-1000, 1000)
+    options["relu6"] = (-100, 100)
 
     generator = generation_funcs.gen_rand
     function = fn

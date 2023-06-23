@@ -1,4 +1,5 @@
 import torch
+import math
 from tt_lib.utils import (
     _nearest_32 as nearest_32,
     tilize as tilize_util,
@@ -9,6 +10,7 @@ from tt_lib.utils import (
 ################# Helper-Funcs #################
 ################################################
 
+
 def linear(x, weight, bias=None, *args, **kwargs):
     while len(weight.shape) > 2:
         weight = weight.squeeze(0)
@@ -17,12 +19,44 @@ def linear(x, weight, bias=None, *args, **kwargs):
 
     return torch.nn.functional.linear(x, weight, bias)
 
+
 ################################################
 #################### TT-DNN ####################
 ################################################
 
 
 # Unary Ops
+def hypot(x, *args, **kwargs):
+    return torch.hypot(x, x)
+
+
+def cbrt(x, *args, **kwargs):
+    result = x.sign() * x.abs().pow(1.0 / 3.0)
+    return result
+
+
+def rad2deg(x, *args, **kwargs):
+    result = (180.0 / math.pi) * x
+    return result
+
+
+def deg2rad(x, *args, **kwargs):
+    result = (math.pi / 180.0) * x
+    return result
+
+
+def threshold(x, *args, **kwargs):
+    threshold = kwargs.pop("threshold")
+    value = kwargs.pop("value")
+    result = torch.threshold(x, threshold, value)
+    return result
+
+
+def relu6(x, *args, **kwargs):
+    result = torch.nn.functional.relu6(x)
+    return result
+
+
 def power(x, *args, **kwargs):
     exponent = kwargs["exponent"]
     result = x**exponent
@@ -44,7 +78,7 @@ def relu_max(x, *args, **kwargs):
 
 def relu_min(x, *args, **kwargs):
     lower_limit = kwargs["lower_limit"]
-    return torch.min(torch.relu(x), torch.tensor(lower_limit))
+    return torch.max(torch.relu(x), torch.tensor(lower_limit))
 
 
 def abs(x, *args, **kwargs):

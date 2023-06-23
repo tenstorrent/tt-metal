@@ -1,4 +1,3 @@
-
 from functools import partial
 
 from python_api_testing.sweep_tests import (
@@ -7,15 +6,11 @@ from python_api_testing.sweep_tests import (
 )
 
 
-
 op_map = {
     ################################################
     ################# Helper-Funcs #################
     ################################################
-    "linear":{
-        "tt_lib_op": tt_lib_ops.linear,
-        "pytorch_op": pytorch_ops.linear
-    },
+    "linear": {"tt_lib_op": tt_lib_ops.linear, "pytorch_op": pytorch_ops.linear},
     ################################################
     #################### TT-DNN ####################
     ################################################
@@ -172,6 +167,30 @@ op_map = {
     "eltwise-max": {
         "tt_lib_op": tt_lib_ops.eltwise_max,
         "pytorch_op": pytorch_ops.max,
+    },
+    "eltwise-deg2rad": {
+        "tt_lib_op": tt_lib_ops.eltwise_deg2rad,
+        "pytorch_op": pytorch_ops.deg2rad,
+    },
+    "eltwise-rad2deg": {
+        "tt_lib_op": tt_lib_ops.eltwise_rad2deg,
+        "pytorch_op": pytorch_ops.rad2deg,
+    },
+    "eltwise-cbrt": {
+        "tt_lib_op": tt_lib_ops.eltwise_cbrt,
+        "pytorch_op": pytorch_ops.cbrt,
+    },
+    "eltwise-hypot": {
+        "tt_lib_op": tt_lib_ops.eltwise_hypot,
+        "pytorch_op": pytorch_ops.hypot,
+    },
+    "eltwise-threshold": {
+        "tt_lib_op": partial(tt_lib_ops.eltwise_threshold, threshold=5.0, value=1.0),
+        "pytorch_op": partial(pytorch_ops.threshold, threshold=5.0, value=1.0),
+    },
+    "eltwise-relu6": {
+        "tt_lib_op": tt_lib_ops.eltwise_relu6,
+        "pytorch_op": pytorch_ops.relu6,
     },
     # Matmul
     "matmul": {

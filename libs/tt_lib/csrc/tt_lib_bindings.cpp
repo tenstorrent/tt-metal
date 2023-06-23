@@ -1316,6 +1316,102 @@ void TensorModule(py::module &m_tensor) {
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 
+   //composite ops on 06/22/23
+   m_tensor.def("deg2rad", &deg2rad, R"doc(
+        Returns tensor with the deg2rad conversion of elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     |deg2rad operation on tensor| Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+ 
+    m_tensor.def("rad2deg", &rad2deg, R"doc(
+        Returns tensor with the rad2deg conversion of elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     |rad2deg operation on tensor| Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("relu6", &relu6, R"doc(
+        Returns tensor with the relu6 activation on elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     | relu6 operation on tensor | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("hypot", &hypot, R"doc(
+        Returns tensor with the hypot activation on elements of the input tensors ``arg0`` and ``arg1``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | first tensor for hypotenuse   |           |                              |          |
+        |          | operation                     | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | arg1     | second tensor for hypotenuse  |           |                              |          |
+        |          | operation                     | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
+     m_tensor.def("threshold", &threshold, R"doc(
+        Returns tensor with the threshold activation on elements of the input tensors ``arg0`` at threshold `t`,
+        and value 'v'.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | first tensor for threshold    |           |                              |          |
+        |          | operation                     | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | threshold| second arg float for threshold|           |                              |          |
+        |          | operation                     | float     |      fp32 range              | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        |  value   | third arg for limiting value  | float     |      fp32 range              | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("cbrt", &cbrt, R"doc(
+        Returns tensor with the cbrt activation on elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | cube-root operation on tensor | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
     // *** matrix multiplication ***
     m_tensor.def("matmul", &matmul, R"doc(
         Perform a non-batched matrix multiplication ``arg0 x arg1`` with two tensors.

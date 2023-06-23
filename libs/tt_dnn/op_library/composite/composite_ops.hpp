@@ -97,6 +97,23 @@ Tensor min(const Tensor &input_a,const Tensor &input_b);
 //max(a,b)
 Tensor max(const Tensor &input_a,const Tensor &input_b);
 
+//deg2rad(a) using scale pi/180.
+Tensor deg2rad(const Tensor &input_a);
+
+//rad2deg(a) using scale 180/pi.
+Tensor rad2deg(const Tensor &input_a);
+
+//hypot(a,b) = sqrt[ a^2 + b^2 ]
+Tensor hypot(const Tensor &input_a, const Tensor &input_b);
+
+//relu6(a) = min(relu(a),6);
+Tensor relu6(const Tensor &input_a);
+
+//threshold(a,t,v) = (a < t)*v + (a > t)*a
+Tensor threshold(const Tensor &input_a,float threshold, float value);
+
+//cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
+Tensor cbrt(const Tensor &input_a);
 } //namespace tt_metal
 
 } //namespace tt
