@@ -17,8 +17,9 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
     vector<ProgramSection>& sections = program_to_device_map.program_sections;
 
     // Initialize the worker notify section
-    for (const CoreCoord& core: program.logical_cores()) {
-        program_to_device_map.worker_noc_coords.push_back(noc_coord_to_u32(device->worker_core_from_logical_core(core)));
+    for (const CoreCoord& core : program.logical_cores()) {
+        program_to_device_map.worker_noc_coords.push_back(
+            noc_coord_to_u32(device->worker_core_from_logical_core(core)));
     }
 
     // 'section' here refers to a piece of the program buffer
@@ -48,17 +49,15 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         const vector<ll_api::memory>& kernel_bins = kernel->binaries();
         CoreRangeSet cr_set = kernel->core_range_set();
 
-
         for (TransferType transfer_type : transfer_types) {
             u32 dst_code_location;
 
-            string temp_for_debug;
             switch (transfer_type) {
-                case TransferType::B: dst_code_location = MEM_BRISC_INIT_LOCAL_L1_BASE; temp_for_debug = "brisc"; break;
-                case TransferType::N: dst_code_location = MEM_NCRISC_INIT_LOCAL_L1_BASE; temp_for_debug = "ncrisc"; break;
-                case TransferType::T0: dst_code_location = MEM_TRISC0_INIT_LOCAL_L1_BASE; temp_for_debug = "trisc0"; break;
-                case TransferType::T1: dst_code_location = MEM_TRISC1_INIT_LOCAL_L1_BASE; temp_for_debug = "trisc1"; break;
-                case TransferType::T2: dst_code_location = MEM_TRISC2_INIT_LOCAL_L1_BASE; temp_for_debug = "trisc2"; break;
+                case TransferType::B: dst_code_location = MEM_BRISC_INIT_LOCAL_L1_BASE; break;
+                case TransferType::N: dst_code_location = MEM_NCRISC_INIT_LOCAL_L1_BASE; break;
+                case TransferType::T0: dst_code_location = MEM_TRISC0_INIT_LOCAL_L1_BASE; break;
+                case TransferType::T1: dst_code_location = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
+                case TransferType::T2: dst_code_location = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
                 default: TT_THROW("Invalid riscv type");
             }
 
@@ -73,6 +72,8 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                 initialize_section();
             }
 
+            // Appends the binary to a vector
+            vector<pair<u32, u32>> binary_destination_and_size;
             kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len) {
                 program_vector.insert(program_vector.end(), mem_ptr, mem_ptr + len);
 
@@ -81,6 +82,10 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                 for (u32 i = 0; i < padding; i++) {
                     program_vector.push_back(0);
                 }
+
+                u32 destination = tt::llrt::relocate_dev_addr(addr, dst_code_location);
+                u32 transfer_size_in_bytes = len * sizeof(u32);
+                binary_destination_and_size.push_back(std::make_pair(destination, transfer_size_in_bytes));
             });
 
             for (const CoreRange& core_range : cr_set.ranges()) {
@@ -89,20 +94,13 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
                 u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
 
-                kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr,
-                                             uint64_t addr,
-                                             uint32_t len) {
-
-                    u32 transfer_size_in_bytes = len * sizeof(u32);
-
-                    addr = tt::llrt::relocate_dev_addr(addr, dst_code_location);
-
+                for (const auto& [destination, transfer_size_in_bytes]: binary_destination_and_size) {
                     sections.at(current_section_idx)
                         .at(transfer_type)
                         .push_back(std::make_tuple(
-                            addr, start_in_bytes, transfer_size_in_bytes, noc_multicast_encoding, core_range.size()));
+                            destination, start_in_bytes, transfer_size_in_bytes, noc_multicast_encoding, core_range.size()));
                     start_in_bytes = align(start_in_bytes + transfer_size_in_bytes, 16);
-                });
+                }
             }
             sections.at(current_section_idx).size_in_bytes += align(kernel_bin.size() * sizeof(u32), 16);
         }
@@ -351,7 +349,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
     command.set_num_workers(this->program_to_dev_map.worker_noc_coords.size());
 
     // Set the noc coords for all the worker cores
-    for (u32 worker_noc_coord: this->program_to_dev_map.worker_noc_coords) {
+    for (u32 worker_noc_coord : this->program_to_dev_map.worker_noc_coords) {
         command.set_worker_core_noc_coord(worker_noc_coord);
     }
 
@@ -365,7 +363,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
         for (const auto& [transfer_type, transfer_info_vector] : section.section) {
             for (const auto& [dst_addr, src, size_in_bytes, noc_multicast_encoding, num_receivers] :
                  transfer_info_vector) {
-
                 TrailingWriteCommand trailing_write = {
                     .src = src,
                     .dst = dst_addr,
@@ -380,7 +377,8 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
         // This is not fully correct since if there are multiple sections, they are not starting at the correct
         // part of the program buffer... a simpler method would be for there to be multiple buffers, where each
         // buffer owns a section... that is definitely a TODO(agrebenisan)
-        command.add_read_multi_write_instruction(program_src, program_src_noc,  section.size_in_bytes, trailing_write_commands);
+        command.add_read_multi_write_instruction(
+            program_src, program_src_noc, section.size_in_bytes, trailing_write_commands);
     }
 
     // Deal with runtime args
@@ -506,13 +504,12 @@ void send_dispatch_kernel_to_device(Device* device) {
         device->cluster(), 0, tt::llrt::TensixRiscsOptions::BRISC_ONLY, {dispatch_core});
     device->cluster()->set_remote_tensix_risc_reset(tt_cxy_pair(0, dispatch_core), TENSIX_DEASSERT_SOFT_RESET);
 
-    u32 chip_id = 0; // TODO(agrebenisan): Remove hardcoding
+    u32 chip_id = 0;  // TODO(agrebenisan): Remove hardcoding
     const auto& sdesc = device->cluster()->get_soc_desc(chip_id);
 
-    for (const CoreCoord& worker: sdesc.workers) {
+    for (const CoreCoord& worker : sdesc.workers) {
         tt::llrt::program_brisc_startup_addr(device->cluster(), 0, {worker.x, worker.y});
     }
-
 }
 
 // CommandQueue section
@@ -525,7 +522,6 @@ CommandQueue::CommandQueue(Device* device) {
     // in its own deassert. Easy fix, just need to do it.
     send_dispatch_kernel_to_device(device);
     this->device = device;
-
 }
 
 CommandQueue::~CommandQueue() {
@@ -562,7 +558,9 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<u32>& dst, bool bl
 
 void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool blocking) {
     TT_ASSERT(not blocking, "EnqueueWriteBuffer only has support for non-blocking mode currently");
-    TT_ASSERT(buffer.page_size() < 1024 * 1024 - DEVICE_COMMAND_DATA_ADDR, "Buffer pages must fit within the command queue data section");
+    TT_ASSERT(
+        buffer.page_size() < 1024 * 1024 - DEVICE_COMMAND_DATA_ADDR,
+        "Buffer pages must fit within the command queue data section");
 
     shared_ptr<EnqueueWriteBufferCommand> command =
         std::make_shared<EnqueueWriteBufferCommand>(this->device, buffer, src, this->sysmem_writer);
@@ -603,7 +601,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         RuntimeArgs runtime_args;
         for (const auto kernel : program.kernels()) {
             tt::RISCV processor = kernel->processor();
-            for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
+            for (const auto& [logical_core, rt_args] : kernel->runtime_args()) {
                 runtime_args[logical_core][processor] = rt_args;
             }
         }
