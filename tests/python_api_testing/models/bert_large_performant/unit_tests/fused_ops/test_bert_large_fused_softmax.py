@@ -10,27 +10,10 @@ from loguru import logger
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../../../..")
 
-DEBUG_PRINTS = False
-PROFILE = not DEBUG_PRINTS
-
 import torch
 
 from libs import tt_lib as ttl
-from python_api_testing.models.utility_functions import (
-    pad_activation,
-    pad_weight,
-    tilize,
-    untilize,
-    tilize_to_list,
-    print_diff_argmax,
-    pad_weight,
-    is_close,
-)
-from python_api_testing.models.utility_functions import tt2torch_tensor
-from libs.tt_lib.utils import tilize_to_list
-
-tensor = ttl.tensor
-device = ttl.device
+from libs.tt_lib.utils import untilize, tilize_to_list, print_diff_argmax, is_close
 
 
 def ref_stable_softmax(x):
@@ -47,15 +30,15 @@ def ref_stable_softmax(x):
     sh, sw = 16, 16  # stride inside the tile
     ow0, ow1 = 0, 0  # offset inside the tile
     oh0, oh1 = 0, 0
-    print(
-        "Ref x=\n",
-        x[
-            0,
-            0,
-            ph0 * 32 + oh0 : ph1 * 32 + oh1 : sh,
-            pw0 * 32 + ow0 : pw1 * 32 + ow1 : sw,
-        ],
-    )
+    # print(
+    #     "Ref x=\n",
+    #     x[
+    #         0,
+    #         0,
+    #         ph0 * 32 + oh0 : ph1 * 32 + oh1 : sh,
+    #         pw0 * 32 + ow0 : pw1 * 32 + ow1 : sw,
+    #     ],
+    # )
     # print("Ref exps=\n", numerator[0, 0, ph0*32 : ph1*32 : sh, pw0*32 : pw1*32 : sw])
     denominator = torch.sum(numerator, 3, keepdim=True)
     # print("denom shape=", denominator.shape)
@@ -85,8 +68,9 @@ def generate_recip_tensor(dev, invsqrt):
 
 
 # generates an additive attention mask with some different values
-def generate_attn_mask(NC, W, dev, offs, memcfg):
+def generate_attn_mask(N, C, W, dev, offs, dtype, mem_config):
     assert W % 32 == 0
+    NC = N * C
     top_row = [offs * (i % 2) for i in range(0, W)]
     zero_rows = [0.0 for _ in range(31 * W)]
     # For debugging
@@ -100,97 +84,93 @@ def generate_attn_mask(NC, W, dev, offs, memcfg):
     val = ttl.tensor.Tensor(
         nc_tiles_tilized,
         [1, NC, 32, W],
-        ttl.tensor.DataType.BFLOAT16,
+        dtype,
         ttl.tensor.Layout.TILE,
         dev,
-        memcfg,
+        mem_config,
     )
     # print("Attn mask=", valtorch)
     return valtorch, val
 
 
-if __name__ == "__main__":
-    in_dram = False
-    if PROFILE:
-        os.environ["TT_PROFILE"] = "1"
-    dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
-    device.InitializeDevice(dev, ttl.device.MemoryAllocator.L1_BANKING)
-    memcfg = ttl.tensor.MemoryConfig(
-        buffer_type=(
-            ttl.tensor.BufferType.DRAM if in_dram else ttl.tensor.BufferType.L1
-        )
-    )
-    if DEBUG_PRINTS:
-        device.StartDebugPrintServer(dev)
-
-    host = device.GetHost()
-
-    # TODO: Clean up
-    # N, C, H, W = 1, 7, 5*32, 17*32
-    # test_dims = (
-    #     (1, 1, 32, 4 * 8 * 32),
-    #     (1, 1, 2048, 4 * 8 * 32),
-    #     (1, 1, 128, 12 * 32),
-    #     (1, 1, 32, 7 * 32),
-    # )
-    # # test_dims = ((1,1,4*32,7*32),)
-    # # test_dims = ((1,9,6144,384),)
-    # test_dims = ((1, 9, 6144, 384),)
-    # test_dims = ((1, 1, 6144, 384),)
-    test_dims = ((1, 9, 6144, 384),)
+def run_softmax_tests(test_id, dtype, in0_mem_config):
     torch.manual_seed(123)
     random.seed(123)
-    # for test_fused_mask in [True, False]:
-    for test_fused_mask in [True, False]:
-        for nchw in test_dims:
-            for nrepeat in range(0, 1):
-                # nchw = (1,random.randint(1,5),random.randint(1,16)*32,random.randint(1,16)*32)
-                (N, C, H, W) = nchw
-                print("NCHW=", nchw)
-                print("Ht,Wt=", H // 32, W // 32)
-                x = torch.randn((N, C, H, W)) * 2.0 - 1.0
-                if test_fused_mask:
-                    torch_scale, tt_scale = generate_recip_tensor(
-                        dev, 0.5 + random.random()
-                    )
-                    torch_attn_mask, tt_attn_mask = generate_attn_mask(
-                        N * C, W, dev, -4.2 * 1, memcfg
-                    )
-                    ref_sm = ref_scale_mask_softmax(torch_scale, torch_attn_mask, x)
-                else:
-                    ref_sm = ref_stable_softmax(x)
 
-                x_t = tilize_to_list(x)
-                t0 = tensor.Tensor(
-                    x_t,
-                    [N, C, H, W],
-                    tensor.DataType.BFLOAT16,
-                    tensor.Layout.TILE,
-                    dev,
-                    memcfg,
+    # Initialize the device
+    tensor = ttl.tensor
+    device = ttl.device
+
+    dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
+    device.InitializeDevice(dev, ttl.device.MemoryAllocator.L1_BANKING)
+    host = device.GetHost()
+
+    test_dims = ((1, 9, 6144, 384),)
+    for N, C, H, W in test_dims:
+        for nrepeat in range(0, 1):
+            x = torch.randn((N, C, H, W)) * 2.0 - 1.0
+            x_t = tilize_to_list(x)
+
+            t0 = tensor.Tensor(
+                x_t,
+                [N, C, H, W],
+                dtype,
+                tensor.Layout.TILE,
+                dev,
+                in0_mem_config,
+            )
+
+            if test_id == 0:
+                logger.info("Running scale_mask_softmax")
+                torch_scale, tt_scale = generate_recip_tensor(
+                    dev, 0.5 + random.random()
                 )
+                torch_attn_mask, tt_attn_mask = generate_attn_mask(
+                    N, C, W, dev, -4.2 * 1, dtype, in0_mem_config
+                )
+                t1_fused = tensor.scale_mask_softmax_in_place(
+                    tt_scale, tt_attn_mask, t0
+                )
+                ref_sm = ref_scale_mask_softmax(torch_scale, torch_attn_mask, x)
+            elif test_id == 1:
+                logger.info("Running softmax")
+                t1_fused = tensor.softmax_in_place(t0)
+                ref_sm = ref_stable_softmax(x)
+            else:
+                assert False
 
-                if test_fused_mask:
-                    logger.info("Running scale_mask_softmax")
-                    t1_fused = tensor.scale_mask_softmax_in_place(
-                        tt_scale, tt_attn_mask, t0
-                    )
-                else:
-                    logger.info("Running softmax")
-                    t1_fused = tensor.softmax_in_place(t0)
-                t2_data_fused = t1_fused.to(host).data()
-                tt_got_back_fused = torch.Tensor(t2_data_fused).reshape((N, C, H, W))
-                tt_unt = untilize(tt_got_back_fused)
+            t2_data_fused = t1_fused.to(host).data()
+            tt_got_back_fused = torch.Tensor(t2_data_fused).reshape((N, C, H, W))
+            tt_unt = untilize(tt_got_back_fused)
 
-                time.sleep(0.33)  # so prints don't overlap with kernel prints
-                if not is_close(tt_unt, ref_sm, rtol=5e-2, atol=5e-2):
-                    assert False
-                    print("****  Mismatch!")
-                    print("Max abs diff=")
-                    print_diff_argmax(tt_unt, ref_sm)
+            time.sleep(0.33)  # so prints don't overlap with kernel prints
 
-                # Clean up tensors; otherwise, no space on dev?
-                # TODO: Refactor into separate tests
-                del t1_fused
+            assert is_close(tt_unt, ref_sm, rtol=5e-2, atol=5e-2)
+            # print_diff_argmax(tt_unt, ref_sm)
 
     device.CloseDevice(dev)
+
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "in0_mem_config",
+    (
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
+    ),
+    ids=["in0_DRAM", "in0_L1"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT16,),
+    ids=["BFLOAT16"],
+)
+@pytest.mark.parametrize(
+    "test_id",
+    (0, 1),
+    ids=["scale_mask_softmax", "softmax"],
+)
+def test_bert_large_softmax_test(test_id, dtype, in0_mem_config):
+    run_softmax_tests(test_id, dtype, in0_mem_config)
