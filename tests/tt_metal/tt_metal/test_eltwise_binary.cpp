@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
                 core,
                 tt_metal::DataMovementProcessor::RISCV_0,
                 tt_metal::NOC::RISCV_0_default);
-            unary_writer_kernel->add_define("DEVICE_DISPATCH_MODE", "1");
+            unary_writer_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
 
             vector<uint32_t> compute_kernel_args = {
                 2048,  // per_core_block_cnt

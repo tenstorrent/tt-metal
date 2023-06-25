@@ -121,7 +121,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
             tt_metal::DataMovementProcessor::RISCV_0,
             tt_metal::NOC::RISCV_0_default));
 
-        sender_kernels.at(sender_kernels.size() - 1)->add_define("DEVICE_DISPATCH_MODE", "1");
+        sender_kernels.at(sender_kernels.size() - 1)->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
 
         // Add blank compute kernel
         tt_metal::CreateComputeKernel(

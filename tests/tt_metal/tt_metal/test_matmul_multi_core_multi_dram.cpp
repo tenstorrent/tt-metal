@@ -159,7 +159,7 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    unary_writer_kernel->add_define("DEVICE_DISPATCH_MODE", "1");
+    unary_writer_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
 
     int num_blocks = (K / in0_block_w);
 

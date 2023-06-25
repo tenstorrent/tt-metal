@@ -61,8 +61,8 @@ std::vector<Tensor> run_without_program_cache(
     auto do_profile = op_profiler::get_profiler_flag();
 
     CompileProgram(device, program, do_profile);
-    const char *DEVICE_DISPATCH_MODE = std::getenv("DEVICE_DISPATCH_MODE");
-    if (DEVICE_DISPATCH_MODE != nullptr) {
+    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
+    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
         if (not HACK_CQ) {
             HACK_CQ = make_unique<CommandQueue>(device);
         }
@@ -108,8 +108,8 @@ std::vector<Tensor> run_with_program_cache(
         }
     }
 
-    const char *DEVICE_DISPATCH_MODE = std::getenv("DEVICE_DISPATCH_MODE");
-    if (DEVICE_DISPATCH_MODE != nullptr) {
+    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
+    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
         if (not HACK_CQ) {
             HACK_CQ = make_unique<CommandQueue>(device);
         }

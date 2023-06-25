@@ -921,9 +921,9 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     // Currently we want to support both slow and fast dispatch until we
     // fully move over to fast, so using this env var method to set all
     // the kernels to using fast dispatch mode.
-    const char *DEVICE_DISPATCH_MODE = std::getenv("DEVICE_DISPATCH_MODE");
+    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
 
-    if (DEVICE_DISPATCH_MODE != nullptr) {
+    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
         // Ensure that none of the kernels have core ranges that include the
         // dispatch cores/storage cores
 
@@ -949,7 +949,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
 
             // This triggers the firmware to do logic only needed for fast
             // dispatch
-            kernel->add_define("DEVICE_DISPATCH_MODE", 1);
+            kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", 1);
         }
     }
 

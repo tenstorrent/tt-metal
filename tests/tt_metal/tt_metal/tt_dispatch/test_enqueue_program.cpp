@@ -66,7 +66,7 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    unary_writer_kernel->add_define("DEVICE_DISPATCH_MODE", "1");
+    unary_writer_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,

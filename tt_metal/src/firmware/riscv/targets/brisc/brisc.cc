@@ -204,7 +204,7 @@ void device_setup() {
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
     volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
-    #ifdef DEVICE_DISPATCH_MODE
+    #ifdef TT_METAL_DEVICE_DISPATCH_MODE
     *use_ncrisc = true;
     #endif
     if (*use_ncrisc) {
@@ -275,7 +275,7 @@ int main() {
     // TODO: we could specialize it via "noc_id", in the same manner as "noc_init" (see below)
     risc_init();
 
-#if not defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)
+#if not defined(TT_METAL_DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)
     volatile uint32_t* enable_core_mailbox_ptr =
         (volatile uint32_t*)(MEM_ENABLE_CORE_MAILBOX);
     while (enable_core_mailbox_ptr[0] != 0x1);
@@ -298,7 +298,7 @@ int main() {
 
     volatile uint32_t* use_triscs = (volatile uint32_t*)(RUNTIME_CONFIG_BASE + 4);
 
-    #ifdef DEVICE_DISPATCH_MODE
+    #ifdef TT_METAL_DEVICE_DISPATCH_MODE
     *use_triscs = true;
     #endif
 
@@ -340,7 +340,7 @@ kernel_main();
         test_mailbox_ptr[0] = 0x1;
 
 // disable core once we're done
-#if not defined(DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)
+#if not defined(TT_METAL_DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)
     enable_core_mailbox_ptr[0] = 0x0;
 #endif
 
@@ -348,7 +348,7 @@ kernel_main();
     kernel_profiler::mark_time(CC_MAIN_END);
 #endif
 
-#if defined(DEVICE_DISPATCH_MODE) and not defined(IS_DISPATCH_KERNEL)
+#if defined(TT_METAL_DEVICE_DISPATCH_MODE) and not defined(IS_DISPATCH_KERNEL)
     // Notify dispatcher core that it has completed
 
     u64 dispatch_addr = get_noc_addr(1, 11, DISPATCH_MESSAGE_ADDR);
