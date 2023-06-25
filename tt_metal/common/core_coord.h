@@ -77,15 +77,29 @@ constexpr inline bool operator<(const tt_cxy_pair &left, const tt_cxy_pair &righ
 }
 
 struct CoreRange {
-  CoreCoord start;
-  CoreCoord end;
+    CoreCoord start;
+    CoreCoord end;
 
-  std::string str() const { return "[" + start.str() + " - " + end.str() + "]"; }
+    CoreRange(CoreCoord start, CoreCoord end) {
+        // tt::log_assert(
+        //     end.x >= start.x and end.y >= start.y,
+        //     "Invalid core range for start: {}, end: {}", start.str(), end.str());
 
-  size_t size() const {
-    size_t s = (this->end.x - this->start.x + 1) * (this->end.y - this->start.y + 1);
-    return (s > 0) ? s: -s;
-  }
+        if (not (end.x >= start.x and end.y >= start.y)) {
+            tt::log_warning("Incorrectly specified start coord to come after end coord! For now"
+            ", we are swapping the two, but we will eventually assert that you supplied valid coordinates!");
+            CoreCoord temp = start;
+            start = end;
+            end = start;
+        }
+
+        this->start = start;
+        this->end = end;
+    }
+
+    std::string str() const { return "[" + start.str() + " - " + end.str() + "]"; }
+
+    size_t size() const { return (this->end.x - this->start.x + 1) * (this->end.y - this->start.y + 1); }
 };
 
 struct CoresInCoreRangeGenerator {
