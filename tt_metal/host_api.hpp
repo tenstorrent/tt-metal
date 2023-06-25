@@ -23,6 +23,10 @@
 
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
+// To be removed at a later time, but need a global
+// command queue for the time being.
+inline unique_ptr<CommandQueue> HACK_CQ;
+
 /** @file */
 
 /** \mainpage tt-metal Internal C++ Documentation

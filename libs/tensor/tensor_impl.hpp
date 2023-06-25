@@ -359,7 +359,18 @@ template <typename T>
 std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_bytes) {
     std::vector<uint32_t> device_data;
     TT_ASSERT(tensor.buffer()->size() == size_in_bytes);
-    ReadFromBuffer(*tensor.buffer(), device_data);
+
+    const char *DEVICE_DISPATCH_MODE = std::getenv("DEVICE_DISPATCH_MODE");
+    if (DEVICE_DISPATCH_MODE != nullptr) {
+        if (not HACK_CQ) {
+            HACK_CQ = make_unique<CommandQueue>(tensor.buffer()->device());
+        }
+        EnqueueReadBuffer(*HACK_CQ, *tensor.buffer(), device_data, true);
+        Finish(*HACK_CQ);
+    } else {
+        ReadFromBuffer(*tensor.buffer(), device_data);
+    }
+
     std::vector<T> unpacked_data;
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         std::vector<float> float_unpacked_data = unpack_bfp8_tiles_into_float_vec(device_data, /*row_major_output=*/false, /*is_exp_a=*/false);
@@ -390,7 +401,16 @@ inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
     } else {
         uint32_data = pack_vec_into_uint32_vec<T>(data);
     }
-    WriteToBuffer(*tensor.buffer(), uint32_data);
+
+    const char *DEVICE_DISPATCH_MODE = std::getenv("DEVICE_DISPATCH_MODE");
+    if (DEVICE_DISPATCH_MODE != nullptr) {
+        if (not HACK_CQ) {
+            HACK_CQ = make_unique<CommandQueue>(tensor.buffer()->device());
+        }
+        EnqueueWriteBuffer(*HACK_CQ, *tensor.buffer(), uint32_data, false);
+    } else {
+        WriteToBuffer(*tensor.buffer(), uint32_data);
+    }
 }
 
 template <typename T>

@@ -61,9 +61,19 @@ std::vector<Tensor> run_without_program_cache(
     auto do_profile = op_profiler::get_profiler_flag();
 
     CompileProgram(device, program, do_profile);
-    ConfigureDeviceWithProgram(device, program);
-    WriteRuntimeArgsToDevice(device, program);
-    LaunchKernels(device, program);
+    const char *DEVICE_DISPATCH_MODE = std::getenv("DEVICE_DISPATCH_MODE");
+    if (DEVICE_DISPATCH_MODE != nullptr) {
+        if (not HACK_CQ) {
+            HACK_CQ = make_unique<CommandQueue>(device);
+        }
+        EnqueueProgram(*HACK_CQ, program, false);
+        Finish(*HACK_CQ);
+
+    } else {
+        ConfigureDeviceWithProgram(device, program);
+        WriteRuntimeArgsToDevice(device, program);
+        LaunchKernels(device, program);
+    }
 
     op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
     op_profiler::dump_device_profiler_results(device, program);
@@ -98,9 +108,19 @@ std::vector<Tensor> run_with_program_cache(
         }
     }
 
-    ConfigureDeviceWithProgram(device, program);
-    WriteRuntimeArgsToDevice(device, program);
-    LaunchKernels(device, program);
+    const char *DEVICE_DISPATCH_MODE = std::getenv("DEVICE_DISPATCH_MODE");
+    if (DEVICE_DISPATCH_MODE != nullptr) {
+        if (not HACK_CQ) {
+            HACK_CQ = make_unique<CommandQueue>(device);
+        }
+        EnqueueProgram(*HACK_CQ, program, false);
+        Finish(*HACK_CQ);
+
+    } else {
+        ConfigureDeviceWithProgram(device, program);
+        WriteRuntimeArgsToDevice(device, program);
+        LaunchKernels(device, program);
+    }
 
     for (auto& circular_buffer : program.circular_buffers()) {
         circular_buffer->deallocate();
