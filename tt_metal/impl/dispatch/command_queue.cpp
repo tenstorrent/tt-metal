@@ -1,5 +1,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/llrt/tt_debug_print_server.hpp"
+#include "debug_tools.hpp"
 
 u64 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
@@ -48,14 +49,13 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
     std::ofstream dispatch_dump_file;
 
     if (DISPATCH_MAP_DUMP != nullptr) {
-        dispatch_dump_file.open(DISPATCH_MAP_DUMP);
+        dispatch_dump_file.open(DISPATCH_MAP_DUMP, std::ofstream::out | std::ofstream::trunc);
     }
 
     auto write_program_kernel_transfer = [&](const Kernel* kernel, vector<TransferType> transfer_types) {
         size_t i = 0;
         const vector<ll_api::memory>& kernel_bins = kernel->binaries();
         CoreRangeSet cr_set = kernel->core_range_set();
-
 
         for (TransferType transfer_type : transfer_types) {
             u32 dst_code_location;
@@ -93,6 +93,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
                 u32 destination = tt::llrt::relocate_dev_addr(addr, dst_code_location);
                 u32 transfer_size_in_bytes = len * sizeof(u32);
+
                 binary_destination_and_size.push_back(std::make_pair(destination, transfer_size_in_bytes));
 
                 if (DISPATCH_MAP_DUMP != nullptr) {
@@ -101,20 +102,25 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                 }
             });
 
+            // Need to initialize to 0 to avoid 'maybe-not-initialized' error
+            u32 start_in_bytes_copy = 0;
             for (const CoreRange& core_range : cr_set.ranges()) {
                 CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
                 CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
 
                 u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
 
+                start_in_bytes_copy = start_in_bytes;
                 for (const auto& [destination, transfer_size_in_bytes]: binary_destination_and_size) {
+
                     sections.at(current_section_idx)
                         .at(transfer_type)
                         .push_back(std::make_tuple(
-                            destination, start_in_bytes, transfer_size_in_bytes, noc_multicast_encoding, core_range.size()));
-                    start_in_bytes = align(start_in_bytes + transfer_size_in_bytes, 16);
+                            destination, start_in_bytes_copy, transfer_size_in_bytes, noc_multicast_encoding, core_range.size()));
+                    start_in_bytes_copy = align(start_in_bytes_copy + transfer_size_in_bytes, 16);
                 }
             }
+            start_in_bytes = start_in_bytes_copy;
             sections.at(current_section_idx).size_in_bytes += align(kernel_bin.size() * sizeof(u32), 16);
         }
     };
@@ -161,10 +167,9 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                         noc_multicast_encoding,
                         core_range.size()));
             }
-            // TODO (andrew): These increments should be done once, not per core range - check other instances of core range
-            start_in_bytes += 16;
-            sections.at(current_section_idx).size_in_bytes += 16;
         }
+        start_in_bytes += 16;
+        sections.at(current_section_idx).size_in_bytes += 16;
     };
 
     // If only we could template lambdas in C++17, then wouldn't need this code duplication!
@@ -201,9 +206,9 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                 .push_back(
                     std::make_tuple(sem->address(), start_in_bytes, 4, noc_multicast_encoding, core_range.size()));
 
-            start_in_bytes += 16;
-            sections.at(current_section_idx).size_in_bytes += 16;
         }
+        start_in_bytes += 16;
+        sections.at(current_section_idx).size_in_bytes += 16;
     };
 
     // TODO(agrebenisan): Once Almeet gets rid of kernel polymorphism,
@@ -513,6 +518,12 @@ void send_dispatch_kernel_to_device(Device* device) {
     // Hard-coding as BRISC for now, could potentially be NCRISC
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/dispatch/command_queue.cpp";
     std::map<string, string> brisc_defines = {{"IS_DISPATCH_KERNEL", ""}};
+
+    const char *DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
+    if (DISPATCH_MAP_DUMP) {
+        brisc_defines.emplace("TT_METAL_DISPATCH_MAP_DUMP", "");
+    }
+
     build_kernel_for_riscv_options.brisc_defines = brisc_defines;
     bool profile = false;
 
@@ -540,6 +551,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 
 // CommandQueue section
 CommandQueue::CommandQueue(Device* device) {
+
     // Zeroing out the read/write pointers
     vector<u32> zeros(96 / sizeof(u32), 0);
     device->cluster()->write_sysmem_vec(zeros, 0, 0);
@@ -599,18 +611,21 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     // Need to relay the program into DRAM if this is the first time
     // we are seeing it
     static int channel_id = 0;  // Are there issues with this being static?
-    if (not this->program_to_buffer.count(&program)) {
+
+    static u32 i = 0;
+    if (not this->program_to_buffer.count(i)) {
         ProgramSrcToDstAddrMap program_to_device_map = ConstructProgramSrcToDstAddrMap(this->device, program);
 
         vector<u32>& program_vector = program_to_device_map.program_vector;
         u32 program_data_size_in_bytes = program_vector.size() * sizeof(u32);
 
         this->program_to_buffer.emplace(
-            &program,
+            i,
             std::make_unique<Buffer>(
                 this->device, program_data_size_in_bytes, channel_id, program_data_size_in_bytes, BufferType::DRAM));
 
-        this->enqueue_write_buffer(*this->program_to_buffer.at(&program), program_vector, blocking);
+
+        this->enqueue_write_buffer(*this->program_to_buffer.at(i), program_vector, blocking);
 
         // TODO(agrebenisan): Right now, write/read buffer device APIs assume we start at bank 0,
         // need to add support to start at a non-0-starting buffer
@@ -620,7 +635,9 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         //                            .dram_cores.size();  // TODO(agrebenisan): Pull in num DRAM banks from SOC
         //                            descriptor
 
-        this->program_to_dev_map.emplace(&program, std::move(program_to_device_map));
+        this->program_to_dev_map.emplace(i, std::move(program_to_device_map));
+    } else {
+        tt::log_assert(false, "SHOULD NOT BE HITTING CACHE");
     }
 
     auto get_current_runtime_args = [&program]() {
@@ -636,12 +653,13 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
     shared_ptr<EnqueueProgramCommand> command = std::make_shared<EnqueueProgramCommand>(
         this->device,
-        *this->program_to_buffer.at(&program),
-        this->program_to_dev_map.at(&program),
+        *this->program_to_buffer.at(i),
+        this->program_to_dev_map.at(i),
         this->sysmem_writer,
         get_current_runtime_args());
 
     this->enqueue_command(command, blocking);
+    i++;
 }
 
 void CommandQueue::finish() {
@@ -676,8 +694,23 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool
 
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     tt::log_debug(tt::LogDispatch, "EnqueueProgram");
+    const char *COMPARE_DISPATCH_DEVICE_TO_HOST = std::getenv("TT_METAL_COMPARE_DISPATCH_DEVICE_TO_HOST");
+    const char *DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
+
+    if (COMPARE_DISPATCH_DEVICE_TO_HOST != nullptr) {
+        tt::log_assert(DISPATCH_MAP_DUMP != nullptr, "Cannot compare dispatch device output to host when dispatch map dump not enabled");
+
+        auto hart_mask = DPRINT_HART_BR;
+
+        string device_dispatch_dump_file = "device_" + string(DISPATCH_MAP_DUMP);
+        tt_start_debug_print_server(cq.device->cluster(), {0}, {{1, 11}}, hart_mask, device_dispatch_dump_file.c_str());
+    }
 
     cq.enqueue_program(program, blocking);
+
+    if (COMPARE_DISPATCH_DEVICE_TO_HOST != nullptr) {
+        internal::wait_for_program_vector_to_arrive_and_compare_to_host_program_vector(DISPATCH_MAP_DUMP, cq.device);
+    }
 }
 
 void Finish(CommandQueue& cq) {

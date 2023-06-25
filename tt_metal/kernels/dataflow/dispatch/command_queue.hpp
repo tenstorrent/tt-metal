@@ -228,6 +228,8 @@ FORCE_INLINE void write_program_section(
     noc_async_read(((u64(src_noc) << 32) | src), DEVICE_COMMAND_DATA_ADDR, transfer_size);
     noc_async_read_barrier();
 
+
+
     // Write different parts of that program section to different worker cores
     for (u32 write = 0; write < num_writes; write++) {
         u32 src = command_ptr[0];
@@ -239,9 +241,18 @@ FORCE_INLINE void write_program_section(
 
         command_ptr += 5;
 
+        #ifdef TT_METAL_DISPATCH_MAP_DUMP
+        DPRINT << "CHUNK" << ENDL();
+        for (u32 i = 0; i < transfer_size; i += sizeof(u32)) {
+            DPRINT << *reinterpret_cast<volatile u32*>(src + i) << ENDL();
+        }
+        #else
         noc_async_write_multicast(src, u64(dst_noc) << 32 | dst, transfer_size, num_receivers);
+        #endif
     }
+    #ifndef TT_METAL_DISPATCH_MAP_DUMP
     noc_async_write_barrier();
+    #endif
 }
 
 FORCE_INLINE void write_program(u32 num_program_relays, volatile u32*& command_ptr) {
@@ -254,24 +265,26 @@ FORCE_INLINE void write_program(u32 num_program_relays, volatile u32*& command_p
         command_ptr += 4;
         write_program_section(src, src_noc, transfer_size, num_writes, command_ptr);
     }
+
+    #ifdef TT_METAL_DISPATCH_MAP_DUMP
+    if (num_program_relays != 0) {
+        DPRINT << "EXIT_CONDITION" << ENDL();
+    }
+    #endif
 }
 
 FORCE_INLINE void launch_program(u32 num_workers, volatile u32*& command_ptr) {
+
+    // Never launch a program when this tool is used.
+    #ifdef TT_METAL_DISPATCH_MAP_DUMP
+    return;
+    #endif
+
     if (not num_workers)
         return;
 
     volatile uint32_t* message_addr_ptr = reinterpret_cast<volatile uint32_t*>(DISPATCH_MESSAGE_ADDR);
     *message_addr_ptr = 0;
-
-    // Until Almeet checks in changes for the core_coords to be core range, just looping over all num workers
-    // and sending notify address and deasserting/asserting one-by-one
-    for (u32 i = 0; i < num_workers; i++) {
-        u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
-        u64 notify_addr = worker_core_noc_coord | DISPATCH_MESSAGE_ADDR;
-        noc_async_write(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR, notify_addr, 8);
-    }
-
-    noc_async_write_barrier();
     for (u32 i = 0; i < num_workers; i++) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
         u64 deassert_addr = worker_core_noc_coord | TENSIX_SOFT_RESET_ADDR;
@@ -280,8 +293,7 @@ FORCE_INLINE void launch_program(u32 num_workers, volatile u32*& command_ptr) {
     noc_async_write_barrier();
 
     // Wait on worker cores to notify me that they have completed
-    while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers)
-        ;
+    while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers);
 
     for (u32 i = 0; i < num_workers; i++) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;

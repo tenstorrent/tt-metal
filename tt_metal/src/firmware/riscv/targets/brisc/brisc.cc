@@ -350,9 +350,10 @@ kernel_main();
 
 #if defined(DEVICE_DISPATCH_MODE) and not defined(IS_DISPATCH_KERNEL)
     // Notify dispatcher core that it has completed
-    volatile uint64_t* dispatch_addr = reinterpret_cast<volatile uint64_t*>(DISPATCH_MESSAGE_ADDR);
 
-    noc_semaphore_inc(*dispatch_addr, 1);
+    u64 dispatch_addr = get_noc_addr(1, 11, DISPATCH_MESSAGE_ADDR);
+
+    noc_semaphore_inc(dispatch_addr, 1);
 #endif
 
     while (true);

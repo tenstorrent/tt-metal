@@ -15,7 +15,7 @@ SystemMemoryWriter::SystemMemoryWriter() {
 
 // Ensure that there is enough space to push to the queue first
 void SystemMemoryWriter::cq_reserve_back(Device* device, u32 cmd_size_B) {
-    u32 cmd_size_16B = ((cmd_size_B - 1) | 31 + 1) >> 4; // Terse way to find next multiple of 32 in 16B words
+    u32 cmd_size_16B = (((cmd_size_B - 1) | 31) + 1) >> 4; // Terse way to find next multiple of 32 in 16B words
 
     // Need to create a NOP to fill in the remaining space
     if (this->cq_write_interface.fifo_wr_ptr + cmd_size_16B > this->cq_write_interface.fifo_limit) {
