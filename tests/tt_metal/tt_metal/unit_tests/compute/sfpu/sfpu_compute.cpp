@@ -201,7 +201,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
         // Enqueue apis only supported on gs so far
         if (device->arch() == tt::ARCH::GRAYSKULL) {
-            writer_kernel->add_define("DEVICE_DISPATCH_MODE", "1");
+            writer_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", "1");
         }
 
         bool fp32_dest_acc_en = false;
@@ -264,7 +264,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
 TEST_SUITE("SfpuCompute" * doctest::description("Eltwise unary SFPU tests") * doctest::timeout(90)) {
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleCore") {
-        CoreRange core_range = {{0, 0}};
+        CoreRange core_range = {.start = {0, 0}, .end = {0, 0}};
         CoreRangeSet core_range_set({core_range});
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .tile_byte_size = 2 * 32 * 32,
@@ -368,7 +368,7 @@ TEST_SUITE("SfpuCompute" * doctest::description("Eltwise unary SFPU tests") * do
         }
     }
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleCoreApprox") {
-        CoreRange core_range = {{0, 0}};
+        CoreRange core_range = {.start = {0, 0}, .end = {1, 0}};
         CoreRangeSet core_range_set({core_range});
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .tile_byte_size = 2 * 32 * 32,
@@ -481,7 +481,7 @@ TEST_SUITE("SfpuCompute" * doctest::description("Eltwise unary SFPU tests") * do
     }
 
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "MultiCoreApprox") {
-        CoreRange core_range = {{0, 0}};
+        CoreRange core_range = {.start = {0, 0}, .end = {1, 0}};
         CoreRangeSet core_range_set({core_range});
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .tile_byte_size = 2 * 32 * 32,
