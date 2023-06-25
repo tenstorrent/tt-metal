@@ -22,7 +22,6 @@ BUILD_KERNELS_FOR_RISCV_TEST_ENTRIES = (
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_transpose_hc", "test_build_kernel_transpose_hc"),
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_test_debug_print", "test_build_kernel_test_debug_print"),
     TestEntry("build_kernels_for_riscv/tests/test_build_kernel_datacopy_switched_riscs", "test_build_kernel_datacopy_switched_riscs"),
-    TestEntry("build_kernels_for_riscv/tests/test_build_kernel_dispatch_datacopy_mvp", "test_build_kernel_dispatch_datacopy_mvp")
 )
 
 def run_compile_tests(timeout, tt_arch):

@@ -53,11 +53,6 @@ LLRT_TEST_ENTRIES = set(
             "llrt/tests/test_run_datacopy_switched_riscs",
             "test_run_datacopy_switched_riscs",
         ),
-        TestEntry("llrt/tests/test_dispatch_v1", "test_dispatch_v1"),
-    ]
-) - set(
-    [
-        TestEntry("llrt/tests/test_dispatch_v1", "test_dispatch_v1"),
     ]
 )
 
