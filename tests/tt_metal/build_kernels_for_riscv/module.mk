@@ -15,8 +15,7 @@ BUILD_KERNELS_FOR_RISCV_TESTS = \
 	tests/build_kernels_for_riscv/test_build_kernel_test_debug_print \
 	tests/build_kernels_for_riscv/test_build_kernel_risc_rw_speed_banked_dram \
 	tests/build_kernels_for_riscv/test_build_kernel_matmul_small_block \
-	tests/build_kernels_for_riscv/test_build_kernel_dataflow_cb_test \
-	tests/build_kernels_for_riscv/test_build_kernel_dispatch_datacopy_mvp
+	tests/build_kernels_for_riscv/test_build_kernel_dataflow_cb_test
 
 BUILD_KERNELS_FOR_RISCV_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(BUILD_KERNELS_FOR_RISCV_TESTS:tests/%:%)))
 
