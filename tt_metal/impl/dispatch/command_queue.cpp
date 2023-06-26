@@ -1,6 +1,8 @@
 #include "debug_tools.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/llrt/tt_debug_print_server.hpp"
+#include "tt_metal/impl/buffers/semaphore.hpp"
+#include "debug_tools.hpp"
 
 u64 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);

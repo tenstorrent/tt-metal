@@ -14,7 +14,6 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/host.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"

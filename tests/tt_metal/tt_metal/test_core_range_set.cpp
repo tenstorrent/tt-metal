@@ -5,6 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/impl/buffers/semaphore.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
