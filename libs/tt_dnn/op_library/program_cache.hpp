@@ -21,11 +21,11 @@ struct ProgramCache {
     ) {
         auto program_hash = op.compute_program_hash(input_tensors, optional_input_tensors);
         if (this->cache_.count(program_hash) > 0) {
-            tt::log_info(tt::LogOp, "Program Cache: HIT - Getting program from the cache \"{}\"", program_hash);
+            tt::log_debug(tt::LogOp, "Program Cache: HIT - Getting program from the cache \"{}\"", program_hash);
             auto& program = this->cache_.at(program_hash);
             return program;
         } else {
-            tt::log_info(tt::LogOp, "Program Cache: MISS - Compiling new program \"{}\"", program_hash);
+            tt::log_debug(tt::LogOp, "Program Cache: MISS - Compiling new program \"{}\"", program_hash);
             this->cache_[program_hash] = op.create_program(input_tensors, optional_input_tensors, output_tensors);
             auto& program = this->cache_[program_hash].program;
             tt_metal::CompileProgram(device, program, profile_device);
@@ -72,12 +72,12 @@ static bool is_enabled() {
 }
 
 static void enable() {
-    tt::log_info(tt::LogOp, "Program Cache: enabled.");
+    tt::log_debug(tt::LogOp, "Program Cache: enabled.");
     detail::PROGRAM_CACHE.enable();
 }
 
 static void disable_and_clear() {
-    tt::log_info(tt::LogOp, "Program Cache: disabled and cleared.");
+    tt::log_debug(tt::LogOp, "Program Cache: disabled and cleared.");
     detail::PROGRAM_CACHE.disable();
     detail::PROGRAM_CACHE.clear();
 }
