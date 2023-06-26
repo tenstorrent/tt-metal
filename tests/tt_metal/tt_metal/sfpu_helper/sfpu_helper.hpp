@@ -43,6 +43,11 @@ float ref_tanh(float x) {
     return tanh(x);
 }
 
+
+inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2_plus_1(uint32_t num_bytes, int seed) {
+  return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed, 1.0f); // 0.0f..2.0f
+}
+
 namespace helper {
 template <typename T> int sgn(T val) {
     return (T(0) < val) - (val < T(0));
@@ -174,9 +179,9 @@ const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>>
     {"gelu",        create_random_binary_vector_of_bfloat16},
     {"sqrt",        create_random_vector_of_bfloat16_0_2},
     {"sigmoid",     create_random_vector_of_bfloat16_1_1},
-    {"log",         create_random_vector_of_bfloat16_0_2},
-    {"log2",         create_random_vector_of_bfloat16_0_2},
-    {"log10",         create_random_vector_of_bfloat16_0_2},
+    {"log",         create_random_vector_of_bfloat16_0_2_plus_1},
+    {"log2",         create_random_vector_of_bfloat16_0_2_plus_1},
+    {"log10",         create_random_vector_of_bfloat16_0_2_plus_1},
     {"tanh",        create_random_vector_of_bfloat16_1_1},
     {"sign",        create_random_vector_of_bfloat16_1_1},
     {"abs",         create_random_vector_of_bfloat16_1_1},
