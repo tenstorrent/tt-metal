@@ -2,9 +2,6 @@
 #include "libs/tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 
-
-#include "../op_config.hpp"
-
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/tile_math.hpp"
@@ -56,7 +53,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     Device *device = input_tensor.device();
 
     uint32_t block_size = find_max_divisor(Wt, 8);
-    OpEnvConfig::update_block_size(&block_size);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t in0_t  = block_size*2;
@@ -86,7 +82,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     uint32_t NCHt = NC*Ht;
     CoreGridDesc grid(input_tensor.device());
     uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
-    OpEnvConfig::update_num_cores(&num_cores);
     uint32_t partHt = NCHt/num_cores; // only used by fused_scale_mask variant
 
     // we are actually splitting blocks of Wt tiles, not tiles, so no checking for bank alignment is needed

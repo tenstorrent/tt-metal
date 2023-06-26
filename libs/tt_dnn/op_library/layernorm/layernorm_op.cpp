@@ -7,8 +7,6 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
-#include "tt_dnn/op_library/op_config.hpp"
-
 #include <optional>
 
 using u32 = std::uint32_t;
@@ -56,7 +54,6 @@ operation::ProgramWithCallbacks layernorm_(
 
     TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
     uint32_t block_size = find_max_divisor(Wt, 8);
-    OpEnvConfig::update_block_size(&block_size);
 
     // TODO: CHANGE TO FUNCTION CONVERSION
     tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
@@ -132,7 +129,6 @@ operation::ProgramWithCallbacks layernorm_(
     uint32_t NCHt = NC*Ht;
     CoreGridDesc grid(a.device());
     uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
-    OpEnvConfig::update_num_cores(&num_cores);
     TT_ASSERT(NCHt % num_cores == 0);
 
     // we are actually splitting blocks of Wt tiles, not tiles, so no checking for bank alignment is needed
