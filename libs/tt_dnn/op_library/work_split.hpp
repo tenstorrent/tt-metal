@@ -125,28 +125,38 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
 	std::set<CoreRange> core_group_2_set;
 	uint32_t units_per_core_group_1 = units_to_divide / target_num_cores;
 	uint32_t units_per_core_group_2 = 0;
+    // Evenly divided units to all target cores
 	if (units_to_divide % target_num_cores == 0) {
 		core_group_1_set = all_cores.ranges();
+    // Uneven division of units across cores
+    // This case should only be hit when there are more units of work than a full grid of cores
+    // which is implicitly assumed in the following logic
 	} else {
+        // Group of cores that do more work
 		core_group_2_set = num_cores_to_corerange_set(units_to_divide % target_num_cores, grid_size);
 		auto last_block_group_2 = (*core_group_2_set.rbegin());
 		auto last_block_all_cores = (*all_cores.ranges().rbegin());
-		if (last_block_group_2.end.x == last_block_all_cores.end.x) {
+        // Case where only the last column is divided between core group 1 and 2
+		if (last_block_group_2.end.x == last_block_all_cores.end.x && last_block_group_2.end.y != last_block_all_cores.end.y) {
 			CoreRange leftover_block = {
 				.start={last_block_group_2.end.x, last_block_group_2.end.y + 1},
 				.end=last_block_all_cores.end
 			};
 			core_group_1_set.insert(leftover_block);
 		} else {
-			CoreRange leftover_stick = {
-				.start={last_block_group_2.end.x, last_block_group_2.end.y + 1},
-				.end={last_block_group_2.end.x, num_cores_y - 1}
-			};
+            // Case where a middle column is divided between core group 1 and 2
+            if (last_block_group_2.end.y != num_cores_y - 1) {
+                CoreRange leftover_stick = {
+                    .start={last_block_group_2.end.x, last_block_group_2.end.y + 1},
+                    .end={last_block_group_2.end.x, num_cores_y - 1}
+                };
+                core_group_1_set.insert(leftover_stick);
+            }
+            // Remaining columns of cores that does less work
 			CoreRange leftover_block = {
 				.start={last_block_group_2.end.x + 1, 0},
 				.end=last_block_all_cores.end
 			};
-			core_group_1_set.insert(leftover_stick);
 			core_group_1_set.insert(leftover_block);
 		}
 		units_per_core_group_2 = units_per_core_group_1 + 1;
