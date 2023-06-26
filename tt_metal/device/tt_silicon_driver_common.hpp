@@ -1,7 +1,8 @@
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <optional>
+#include <string>
 #include "hostdevcommon/common_runtime_address_map.h"
 
 struct TLB_OFFSETS {
