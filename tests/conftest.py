@@ -7,14 +7,7 @@ from functools import partial
 from itertools import chain
 from operator import contains, eq, getitem
 from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
+
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result

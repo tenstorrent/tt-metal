@@ -12,8 +12,7 @@ import torch
 from torch import nn
 from transformers import AutoImageProcessor, DeiTForImageClassification
 from loguru import logger
-from PIL import Image
-import requests
+from datasets import load_dataset
 
 import tt_lib
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc
@@ -25,9 +24,8 @@ from deit_for_image_classification import TtDeiTForImageClassification
 def test_deit_for_image_classification_inference(pcc=0.95):
 
     with torch.no_grad():
-        torch.manual_seed(3)
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-        image = Image.open(requests.get(url, stream=True).raw)
+        dataset = load_dataset("huggingface/cats-image")
+        image = dataset["test"]["image"][0]
 
         #real input
         image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")

@@ -1,13 +1,12 @@
 from transformers import AutoImageProcessor, DeiTForImageClassification
 import torch
-from PIL import Image
-import requests
+from datasets import load_dataset
+from loguru import logger
 
 
 def test_cpu_demo():
-    torch.manual_seed(3)
-    url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-    image = Image.open(requests.get(url, stream=True).raw)
+    dataset = load_dataset("huggingface/cats-image")
+    image = dataset["test"]["image"][0]
 
     image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
@@ -16,5 +15,10 @@ def test_cpu_demo():
     inputs = image_processor(images=image, return_tensors="pt")
     outputs = model(**inputs)
     logits = outputs.logits
-    predicted_class_idx = logits.argmax(-1).item()
-    print("\ncpu predicted class:\n", model.config.id2label[predicted_class_idx])
+
+    # model prediction
+    image.save("deit_without_teacher_cpu_input_image.jpg")
+    predicted_label = logits.argmax(-1).item()
+
+    logger.info(f"Input image saved as deit_without_teacher_cpu_input_image.jpg")
+    logger.info(f"TT's prediction: {model.config.id2label[predicted_label]}.")

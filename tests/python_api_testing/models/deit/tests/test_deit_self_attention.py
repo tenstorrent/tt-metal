@@ -23,7 +23,6 @@ from deit_config import DeiTConfig
 
 from transformers import DeiTModel
 from deit_self_attention import TtDeiTSelfAttention
-from activations import ACT2FN
 
 
 def test_deit_self_attention_inference(pcc = 0.99):

@@ -8,15 +8,11 @@ sys.path.append(f"{f}/../../..")
 
 import torch
 from torch import nn
-
 from typing import Set, List, Tuple
-
 
 import tt_lib
 from tt_lib import tensor
 from utility_functions_new import  torch_to_tt_tensor_rm
-
-
 
 
 def find_pruneable_heads_and_indices(

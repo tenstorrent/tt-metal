@@ -11,8 +11,7 @@ sys.path.append(f"{f}/../../../../..")
 import torch
 from torch import nn
 from transformers import AutoImageProcessor,DeiTModel
-from PIL import Image
-import requests
+from datasets import load_dataset
 from loguru import logger
 
 import tt_lib
@@ -36,8 +35,8 @@ def test_deit_embeddings_inference(pcc=0.99):
 
     #real input
     image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
-    url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-    image = Image.open(requests.get(url, stream=True).raw)
+    dataset = load_dataset("huggingface/cats-image")
+    image = dataset["test"]["image"][0]
     input_image = image_processor(images=image, return_tensors="pt")
     input_image = input_image['pixel_values']
 

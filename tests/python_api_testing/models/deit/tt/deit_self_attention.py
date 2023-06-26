@@ -45,9 +45,7 @@ class TtDeiTSelfAttention(nn.Module):
         self.value = TtLinear(config.hidden_size, self.all_head_size, self.value_weight, self.value_bias)
 
     def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        # x must be 4d originaly
-        # 1 is appended to the beggining
-        # so create tensor shape by ommiting the first dimension
+
         new_x_shape = list(x.shape()[1:-1]) + [
             self.num_attention_heads,
             self.attention_head_size,
@@ -56,7 +54,11 @@ class TtDeiTSelfAttention(nn.Module):
         x = tt_lib.tensor.permute(x, 0, 2, 1, 3)
         return x
 
-    def forward(self,hidden_states,head_mask, output_attentions):
+    def forward(self,
+                hidden_states: tt_lib.tensor.Tensor,
+                head_mask: Optional[tt_lib.tensor.Tensor],
+                output_attentions: bool = False)-> tt_lib.tensor.Tensor:
+
         key = self.key(hidden_states)
         value = self.value(hidden_states)
         mixed_query_layer = self.query(hidden_states)

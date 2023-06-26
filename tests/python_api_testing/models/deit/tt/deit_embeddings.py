@@ -35,7 +35,10 @@ class DeiTEmbeddings(nn.Module):
         num_patches = self.patch_embeddings.num_patches
         self.position_embeddings = nn.Parameter(state_dict[f"{base_address}.position_embeddings"])
 
-    def forward(self, pixel_values: torch.Tensor, bool_masked_pos: Optional[torch.BoolTensor] = None) -> torch.Tensor:
+    def forward(self,
+                pixel_values: torch.Tensor,
+                bool_masked_pos: Optional[torch.BoolTensor] = None) -> torch.Tensor:
+
         embeddings = self.patch_embeddings(pixel_values)
         batch_size, seq_length, _ = embeddings.size()
 

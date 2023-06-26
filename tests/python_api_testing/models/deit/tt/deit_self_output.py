@@ -29,7 +29,9 @@ class TtDeiTSelfOutput(nn.Module):
         dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], device)
         self.dense = TtLinear(config.hidden_size, config.hidden_size, dense_weight, dense_bias)
 
-    def forward(self, hidden_states, input_tensor):
+    def forward(self,
+                hidden_states: tt_lib.tensor.Tensor,
+                input_tensor: tt_lib.tensor.Tensor)-> tt_lib.tensor.Tensor:
         hidden_states = self.dense(hidden_states)
 
         return hidden_states

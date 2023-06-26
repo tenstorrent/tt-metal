@@ -38,26 +38,15 @@ class TtDeiTModel(nn.Module):
         self.pooler = TtDeiTPooler(config, state_dict, f"{base_address}.pooler") if add_pooling_layer else None
 
 
-    def get_input_embeddings(self) -> DeiTPatchEmbeddings:
-        return self.embeddings.patch_embeddings
-
-    def _prune_heads(self, heads_to_prune):
-        """
-        Prunes heads of the model. heads_to_prune: dict of {layer_num: list of heads to prune in this layer} See base
-        class PreTrainedModel
-        """
-        for layer, heads in heads_to_prune.items():
-            self.encoder.layer[layer].attention.prune_heads(heads)
-
     def forward(
         self,
-        pixel_values = None,
-        bool_masked_pos = None,
-        head_mask= None,
-        output_attentions= None,
-        output_hidden_states= None,
-        return_dict = None,
-    ):
+        pixel_values: tt_lib.tensor.Tensor = None,
+        bool_masked_pos: bool = None,
+        head_mask: bool= None,
+        output_attentions: bool= None,
+        output_hidden_states: bool= None,
+        return_dict: bool = None,
+    )-> Tuple[tt_lib.tensor.Tensor]:
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (

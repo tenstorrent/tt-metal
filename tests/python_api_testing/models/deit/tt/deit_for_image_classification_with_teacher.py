@@ -76,8 +76,6 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
         half = fallback_ops.full(logits.shape(), 0.5)
         logits = tt_lib.tensor.mul(logits , half)
 
-        # logits = (cls_logits + distillation_logits) / 2
-
         # if not return_dict:
         output = (logits, cls_logits, distillation_logits) + outputs[1:]
         return output
