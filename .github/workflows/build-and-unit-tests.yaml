@@ -3,9 +3,38 @@ name: Post-commit main build and unit tests
 on:
   workflow_dispatch:
   push:
-    branches: ["main", "rkim/290-wheel"]
+    branches: ["main"]
 
 jobs:
+  build-and-unit-tests:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        arch: [grayskull, wormhole_b0]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+    environment: dev
+    runs-on: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: true
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: make build
+      - name: Build tt-metal CPP tests
+        run: make tests
+      - name: Run pre/post regression tests
+        run: |
+          source build/python_env/bin/activate
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
   check-syseng-assets:
     runs-on: ubuntu-latest
     steps:
