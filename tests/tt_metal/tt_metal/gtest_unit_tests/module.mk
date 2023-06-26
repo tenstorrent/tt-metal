@@ -2,8 +2,8 @@
 
 TT_METAL_UNIT_TESTS_SRCS_HOME = tests/tt_metal/tt_metal/gtest_unit_tests
 
-# TT_METAL_UNIT_TESTS = ${TT_METAL_UNIT_TESTS_SRCS_HOME}/tests_main.cpp
-TT_METAL_UNIT_TESTS = $(wildcard ${TT_METAL_UNIT_TESTS_SRCS_HOME}/*/*.cpp)
+TT_METAL_UNIT_TESTS = ${TT_METAL_UNIT_TESTS_SRCS_HOME}/tests_main.cpp
+TT_METAL_UNIT_TESTS += $(wildcard ${TT_METAL_UNIT_TESTS_SRCS_HOME}/*/*.cpp)
 TT_METAL_UNIT_TESTS += $(wildcard ${TT_METAL_UNIT_TESTS_SRCS_HOME}/*/*/*.cpp)
 
 TT_METAL_UNIT_TESTS_OBJ_HOME = tt_metal/tests/gtest_unit_tests/
