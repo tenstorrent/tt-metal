@@ -19,7 +19,10 @@ pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/test_bert_large*bmm* -k in0_L1-in1_L1-out_L1
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/test_bert_large_split_fused_qkv.py -k in0_L1-out_L1
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/test_bert_large_create_qkv_heads.py -k in0_L1-out_L1
-pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/test_bert_large_concat_heads.py -k in0_L1-out_L1
+pytest $TT_METAL_HOME/tests/pythons_api_testing/models/bert_large_performant/unit_tests/test_bert_large_concat_heads.py -k in0_L1-out_L1
+
+# Test program cache
+pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/ -k program_cache
 
 # Fused ops unit tests
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_ln.py -k in0_L1-out_L1

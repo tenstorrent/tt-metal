@@ -114,3 +114,20 @@ def test_bert_large_pre_softmax_bmm_test(
     run_bert_large_pre_softmax_bmm_test(
         dtype, in0_mem_config, in1_mem_config, out_mem_config
     )
+
+
+def test_bert_large_pre_softmax_bmm_with_program_cache(use_program_cache):
+    dtype = ttl.tensor.DataType.BFLOAT8_B
+    dram_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM)
+    for _ in range(2):
+        run_bert_large_pre_softmax_bmm_test(
+            dtype, dram_mem_config, dram_mem_config, dram_mem_config
+        )
+
+    dram_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1)
+    for _ in range(2):
+        run_bert_large_pre_softmax_bmm_test(
+            dtype, dram_mem_config, dram_mem_config, dram_mem_config
+        )
+
+    assert ttl.program_cache.num_entries() == 2

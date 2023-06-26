@@ -154,3 +154,20 @@ def test_bert_large_ff1_matmul_test(
     run_bert_large_ff1_matmul_test(
         dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config, gelu_activation
     )
+
+
+def test_bert_large_ff1_matmul_with_program_cache(use_program_cache):
+    dtype = ttl.tensor.DataType.BFLOAT8_B
+    dram_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM)
+    for _ in range(2):
+        run_bert_large_ff1_matmul_test(
+            dtype, dram_mem_config, dram_mem_config, dram_mem_config, dram_mem_config, gelu_activation=False
+        )
+
+    dram_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1)
+    for _ in range(2):
+        run_bert_large_ff1_matmul_test(
+            dtype, dram_mem_config, dram_mem_config, dram_mem_config, dram_mem_config, gelu_activation=True
+        )
+
+    assert ttl.program_cache.num_entries() == 2
