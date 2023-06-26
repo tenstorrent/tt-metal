@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "common/tt_backend_api_types.hpp"
@@ -12,7 +13,6 @@
 namespace tt {
 
 namespace tt_metal {
-class Semaphore;
 
 struct KernelGroup {
     ComputeKernel *compute = nullptr;
@@ -41,7 +41,7 @@ class Program {
 
     std::vector<CircularBuffer *> circular_buffers() const { return circular_buffers_; }
 
-    std::vector<Semaphore *> semaphores() const { return semaphores_; }
+    const std::vector< Semaphore > & semaphores() const { return semaphores_; }
 
     std::vector<ComputeKernel *> compute_kernels() const;
 
@@ -53,7 +53,7 @@ class Program {
 
     std::vector<CircularBuffer *> circular_buffers_on_core(const CoreCoord &core) const;
 
-    std::vector<Semaphore *> semaphores_on_core(const CoreCoord &core) const;
+    std::vector<std::reference_wrapper<Semaphore>> semaphores_on_core(const CoreCoord &core) const;
 
     size_t num_semaphores ( const CoreCoord & core ) const;
     size_t num_semaphores () const;
@@ -70,7 +70,7 @@ class Program {
     static std::atomic<u64> program_counter;
     std::vector<Kernel *> kernels_;
     std::vector<CircularBuffer *> circular_buffers_;
-    std::vector<Semaphore *> semaphores_;
+    std::vector<Semaphore> semaphores_;
 
     friend DataMovementKernel *CreateDataMovementKernel(
         Program &program,

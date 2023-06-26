@@ -183,7 +183,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
     // If only we could template lambdas in C++17, then wouldn't need this code duplication!
     // Maybe we can move to C++20 soon :)
-    auto write_sem_config_transfer = [&](const Semaphore* sem) {
+    auto write_sem_config_transfer = [&](const Semaphore& sem) {
         u32 num_bytes_so_far = program_vector.size() * sizeof(u32);
         u32 num_new_bytes = 16;
 
@@ -192,17 +192,17 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
             initialize_section();
         }
 
-        program_vector.push_back(sem->initial_value());
+        program_vector.push_back(sem.initial_value());
         for (u32 i = 0; i < (SEMAPHORE_ALIGNMENT / sizeof(u32)) - 1; i++) {
             program_vector.push_back(0);
         }
 
         if (DISPATCH_MAP_DUMP != nullptr) {
-            vector<u32> sem_config = {sem->initial_value()};
+            vector<u32> sem_config = {sem.initial_value()};
             update_dispatch_map_dump("SEM", sem_config, dispatch_dump_file);
         }
 
-        CoreRangeSet cr_set = sem->core_range_set();
+        CoreRangeSet cr_set = sem.core_range_set();
 
         for (const CoreRange& core_range : cr_set.ranges()) {
             CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
@@ -213,7 +213,8 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
             sections.at(current_section_idx)
                 .at(TransferType::SEM)
                 .push_back(
-                    std::make_tuple(sem->address(), start_in_bytes, 4, noc_multicast_encoding, core_range.size()));
+                    std::make_tuple(sem.address(), start_in_bytes, 4, noc_multicast_encoding, core_range.size()));
+
         }
         start_in_bytes += 16;
         sections.at(current_section_idx).size_in_bytes += 16;
@@ -245,7 +246,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         write_cb_config_transfer(cb);
     }
 
-    for (const Semaphore* sem : program.semaphores()) {
+    for (auto sem: program.semaphores()) {
         write_sem_config_transfer(sem);
     }
 

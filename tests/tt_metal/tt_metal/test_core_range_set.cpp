@@ -30,7 +30,7 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
                     TT_ASSERT(cb->is_on_logical_core(logical_core));
                 }
                 for (auto semaphore : program.semaphores() ){
-                    TT_ASSERT(semaphore->initialized_on_logical_core(logical_core));
+                    TT_ASSERT(semaphore.initialized_on_logical_core(logical_core));
                 }
             }
         }

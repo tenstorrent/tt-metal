@@ -4,10 +4,10 @@
 
 namespace tt::tt_metal {
 
-std::vector<Semaphore *> Program::semaphores_on_core(const CoreCoord &core) const {
-    std::vector<Semaphore *> semaphores;
+std::vector<std::reference_wrapper<Semaphore>> Program::semaphores_on_core(const CoreCoord &core) const {
+    std::vector<std::reference_wrapper<Semaphore>> semaphores;
     for (auto semaphore : this->semaphores_) {
-        if (semaphore->initialized_on_logical_core(core)) {
+        if (semaphore.initialized_on_logical_core(core)) {
             semaphores.push_back(semaphore);
         }
     }
@@ -132,18 +132,18 @@ size_t Program::num_semaphores() const {
 }
 
 uint32_t Program::semaphore_address ( uint32_t sem_idx ) const {
-    return semaphores_.at(sem_idx)->address();
+    return semaphores_.at(sem_idx).address();
 }
 
 void Program::init_semaphores( const Device & device, const CoreCoord &logical_core ) const{
     auto semaphores_on_core = this->semaphores_on_core(logical_core);
     for (auto semaphore : semaphores_on_core) {
-        llrt::write_hex_vec_to_core(device.cluster(), device.pcie_slot(), device.worker_core_from_logical_core(logical_core), {semaphore->initial_value()}, semaphore->address());
+        llrt::write_hex_vec_to_core(device.cluster(), device.pcie_slot(), device.worker_core_from_logical_core(logical_core), {semaphore.get().initial_value()}, semaphore.get().address());
     }
 }
 
 void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value) {
-    semaphores_.push_back(new Semaphore( crs, address, init_value));
+    semaphores_.emplace_back(Semaphore( crs, address, init_value));
 }
 
 std::vector<CoreCoord> Program::logical_cores() const {
