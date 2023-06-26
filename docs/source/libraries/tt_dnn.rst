@@ -22,6 +22,41 @@ However, you can supply these type of tensors to OPs from TT-DNN library as they
 to TT Accelerator device. To use this functionality, you must call `tt_lib.device.SetDefaultDevice(tt_device)` to set your TT Accelerator device
 as the default device that will be used to execute operations on tensors that are on host machine.
 
+Operation Infra
+----------------------------
+
+TT-DNN has operation infrastructure which is used to launch, profile and cache operations generically.
+
+To add a new operation that can plug in to the infrastructure, all that's needed is a struct that implements methods needed by operation inferface.
+Below, is an example of how to declare a new operation with all of the methods requred by the interface.
+
+.. code-block::
+
+    struct <NewOperation> {
+        void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+        std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+        std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+        operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    };
+
+Program Caching
+----------------------------
+
+One of the features supported by operation infra is program caching. It provides an ability for an operation to cache the program and simply reload it the next time the same operation is used.
+
+In order for an op to be cachable, it needs to implement the following method:
+
+.. code-block::
+
+    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+
+Program caching is an optional feature which can enabled by running:
+
+.. code-block::
+
+    tt::tt_metal::program_cache::enable()
+
+
 tt-DNN API through ``tt_lib``
 =============================
 
