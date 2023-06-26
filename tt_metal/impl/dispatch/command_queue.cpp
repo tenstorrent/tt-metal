@@ -559,10 +559,6 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     u32 chip_id = 0;  // TODO(agrebenisan): Remove hardcoding
     const auto& sdesc = device->cluster()->get_soc_desc(chip_id);
-
-    for (const CoreCoord& worker : sdesc.workers) {
-        tt::llrt::program_brisc_startup_addr(device->cluster(), 0, {worker.x, worker.y});
-    }
 }
 
 // CommandQueue section

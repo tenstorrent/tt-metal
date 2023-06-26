@@ -14,6 +14,8 @@
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 
+bool enable_fw_profile_hack = false;
+
 namespace tt {
 
 namespace tt_metal {
@@ -82,21 +84,72 @@ Host *GetHost() {
 Device *CreateDevice(tt::ARCH arch, int pcie_slot) {
     return new Device(arch, pcie_slot);
 }
+
+static void DownloadFirmware(Device *device, CoreCoord phys_core) {
+    for (int riscv_id = 0; riscv_id < 5; riscv_id++)  {
+        string fname;
+        switch (riscv_id) {
+        case 0:
+            fname = "brisc/brisc.hex";
+            tt::llrt::program_brisc_startup_addr(device->cluster(), device->pcie_slot(), phys_core);
+            break;
+        case 1: fname = "ncrisc/ncrisc.hex"; break;
+        case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
+        case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
+        case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
+        }
+        tt::llrt::test_load_write_read_risc_binary(device->cluster(), fname, device->pcie_slot(),
+                                                   phys_core, riscv_id, true);
+    }
+}
+
 bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
 
     bool init;
     if (device->initialize(memory_allocator)) {
-        build_kernel_for_riscv_options_t build_options;
-        GenerateBankToNocCoordHeaders(device, &build_options, "");
-        device->initialize_firmware_build(&build_options);
+        static bool globally_initialized = false;
+        if (!globally_initialized) {
+            // Thread safety: ok if we build twice
+            build_kernel_for_riscv_options_t build_options;
+            GenerateBankToNocCoordHeaders(device, &build_options, "");
+            std::string arch_name = tt::get_string_lowercase(device->arch());
+            generate_binaries_params_t default_params;
+            generate_binaries_all_riscs(&build_options,
+                                        "",
+                                        arch_name,
+                                        default_params,
+                                        enable_fw_profile_hack);
+
+            globally_initialized = true;
+        }
+
+        // Download to worker cores
+        CoreCoord grid_size = device->logical_grid_size();
+        for (uint32_t y = 0; y < grid_size.y; y++) {
+            for (uint32_t x = 0; x < grid_size.x; x++) {
+                CoreCoord logical_core(x, y);
+                CoreCoord phys_core = device->worker_core_from_logical_core(logical_core);
+                DownloadFirmware(device, phys_core);
+
+                // This is ugly
+                // Enable ncrisc/trisc on worker cores since device dispatch
+                // expects this.  Non device-dispatch will override and device
+                // dispatch will set up the dispatch cores appropriately
+                tt::llrt::enable_ncrisc(device->cluster(), device->pcie_slot(), phys_core);
+                tt::llrt::enable_triscs(device->cluster(), device->pcie_slot(), phys_core);
+            }
+        }
+
         init = true;
     } else {
         init = false;
     }
+
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
         HACK_CQ = std::make_unique<CommandQueue>(device);
     }
+
     return init;
 }
 
@@ -584,7 +637,7 @@ bool GenerateBinaries(
     return true;
 }
 
-void CompileBlankKernel(Device *device) {
+void CompileBlankKernel(Device *device, bool profile_kernel) {
     // Crude way to check if blank_op needs to be compiled or not
     // TODO(pgk):
     //  - fw is compiled every run
@@ -611,7 +664,7 @@ void CompileBlankKernel(Device *device) {
 
     generate_binaries_params_t default_params;
     GenerateBankToNocCoordHeaders(device, &blank_build_options, blank_build_options.name);
-    generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params, /*profile_kernel=*/false);
+    generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params, profile_kernel);
 
     compiled = true;
 }
@@ -823,7 +876,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         tf.emplace ( [&program]{ program.construct_core_range_set_for_worker_cores(); });
 
         // This can be removed when we load BRISC FW separately from kernel
-        tf.emplace ( [device ] { CompileBlankKernel(device); } );
+        tf.emplace ( [device, profile_kernel] { CompileBlankKernel(device, profile_kernel); } );
 
 
         for (auto kernel : program.kernels()) {

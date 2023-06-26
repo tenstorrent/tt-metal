@@ -64,6 +64,8 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
+        extern bool enable_fw_profile_hack;
+        enable_fw_profile_hack = true;
         pass &= tt_metal::InitializeDevice(device);
 
         int loop_count = 20;

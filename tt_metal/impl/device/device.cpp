@@ -145,17 +145,6 @@ void Device::initialize_harvesting_information() {
     this->harvesting_initialized_ = true;
 }
 
-void Device::initialize_firmware_build(build_kernel_for_riscv_options_t *build_options) {
-
-    std::string arch_name = tt::get_string_lowercase(this->arch());
-    generate_binaries_params_t default_params;
-    generate_binaries_all_riscs(build_options,
-                                "",
-                                arch_name,
-                                default_params,
-                                false);
-}
-
 bool Device::initialize(const MemoryAllocator &memory_allocator, const std::vector<uint32_t>& l1_bank_remap) {
     this->initialize_cluster();
     this->initialize_harvesting_information();
@@ -219,6 +208,13 @@ CoreCoord Device::compute_and_storage_grid_size() const {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
     return this->cluster_->get_soc_desc(pcie_slot_).compute_and_storage_grid_size;
+}
+
+CoreCoord Device::post_harvested_worker_grid_size() const {
+    if (not cluster_is_initialized()) {
+        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
+    }
+    return this->post_harvested_worker_grid_size_;
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {

@@ -15,6 +15,8 @@
 
 #include <kernel.cpp>
 
+#include "debug_print.h"
+
 CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
 CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
 CBReadInterface cq_read_interface;
@@ -41,6 +43,9 @@ uint32_t dram_bank_to_noc_xy[NUM_DRAM_BANKS];
 uint8_t l1_bank_to_noc_x[NUM_L1_BANKS];
 uint8_t l1_bank_to_noc_y[NUM_L1_BANKS];
 uint32_t l1_bank_to_noc_xy[NUM_L1_BANKS];
+
+extern uint64_t dispatch_addr;
+extern uint8_t kernel_noc_id_var;
 
 inline void notify_host_kernel_finished() {
     uint32_t pcie_noc_x = NOC_X(0);
@@ -72,4 +77,15 @@ void kernel_launch() {
     noc_init(loading_noc);
 
     kernel_main();
+
+    // FW needs to notify device dispatcher when we are done
+    // Some information needed is known here, pass it back
+    kernel_noc_id_var = loading_noc;
+#if defined(TT_METAL_DEVICE_DISPATCH_MODE)
+    dispatch_addr = (my_x[loading_noc] == NOC_X(1) && my_y[loading_noc] == NOC_Y(11)) ?
+        0 :
+        get_noc_addr(1, 11, DISPATCH_MESSAGE_ADDR);
+#else
+    dispatch_addr = 0;
+#endif
 }

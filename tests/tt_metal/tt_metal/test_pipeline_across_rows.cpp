@@ -49,7 +49,9 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
 
-        pass &= tt_metal::InitializeDevice(device);;
+        extern bool enable_fw_profile_hack;
+        enable_fw_profile_hack = true;
+        pass &= tt_metal::InitializeDevice(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

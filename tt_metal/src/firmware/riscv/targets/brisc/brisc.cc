@@ -38,6 +38,8 @@ uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint8_t noc_size_x __attribute__((used));
 uint8_t noc_size_y __attribute__((used));
+uint8_t kernel_noc_id_var __attribute__((used));
+uint64_t dispatch_addr __attribute__((used));
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
@@ -192,9 +194,6 @@ void device_setup() {
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
     volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
-    #ifdef TT_METAL_DEVICE_DISPATCH_MODE
-    *use_ncrisc = true;
-    #endif
     if (*use_ncrisc) {
         l1_to_ncrisc_iram_copy();
         // Bring NCRISC out of reset, keep TRISCs under reset
@@ -270,21 +269,10 @@ int main() {
     // TODO: we could specialize it via "noc_id", in the same manner as "noc_init" (see below)
     risc_init();
 
-#if not defined(TT_METAL_DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)
-    volatile uint32_t* enable_core_mailbox_ptr =
-        (volatile uint32_t*)(MEM_ENABLE_CORE_MAILBOX);
-    while (enable_core_mailbox_ptr[0] != 0x1);
-#endif
-
     init_sync_registers();  // this init needs to be done before NCRISC / TRISCs are launched, only done by BRISC
-
     device_setup();  // NCRISC is disabled/enabled here
 
     volatile uint32_t* use_triscs = (volatile uint32_t*)(RUNTIME_CONFIG_BASE + 4);
-
-    #ifdef TT_METAL_DEVICE_DISPATCH_MODE
-    *use_triscs = true;
-    #endif
 
     if (*use_triscs) {
         // FIXME: this is not sufficient to bring Trisc / Tensix out of a bad state
@@ -323,22 +311,14 @@ int main() {
     if (test_mailbox_ptr[0] != RISC_DETECTED_STREAM_ASSERT)
         test_mailbox_ptr[0] = 0x1;
 
-// disable core once we're done
-#if not defined(TT_METAL_DEVICE_DISPATCH_MODE) or defined(IS_DISPATCH_KERNEL)
-    enable_core_mailbox_ptr[0] = 0x0;
-#endif
-
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
     kernel_profiler::mark_time(CC_MAIN_END);
 #endif
 
-#if defined(TT_METAL_DEVICE_DISPATCH_MODE) and not defined(IS_DISPATCH_KERNEL)
     // Notify dispatcher core that it has completed
-
-    u64 dispatch_addr = get_noc_addr(1, 11, DISPATCH_MESSAGE_ADDR);
-
-    noc_semaphore_inc(dispatch_addr, 1);
-#endif
+    if (dispatch_addr != 0) {
+        noc_fast_atomic_increment(kernel_noc_id_var, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
+    }
 
     while (true);
     return 0;

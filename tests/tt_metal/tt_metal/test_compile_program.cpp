@@ -337,6 +337,8 @@ int main(int argc, char **argv) {
         int pci_express_slot = 0;
         Device *device = CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
+        constexpr bool profile_device = true;
+        extern bool enable_fw_profile_hack;
         pass &= InitializeDevice(device);
 
         pass &= test_compile_program_in_loop(device);

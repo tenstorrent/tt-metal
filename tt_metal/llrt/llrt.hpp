@@ -132,7 +132,7 @@ void program_brisc_startup_addr(tt_cluster* cluster, int chip_id, const CoreCoor
 // for BRISC and NCRISC
 // hex_file_path is relative to the "kernels"/"firwmare" root
 bool test_load_write_read_risc_binary(
-    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id);
+    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id, bool fw_build = false);
 
 bool test_load_write_read_risc_binary(
     tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id);

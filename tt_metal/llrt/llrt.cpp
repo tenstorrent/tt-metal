@@ -227,7 +227,7 @@ static bool test_load_write_read_risc_binary_imp(
         cluster->write_dram_vec(&*mem_ptr, len, tt_cxy_pair(chip_id, core), relo_addr);
     });
 
-    log_debug(tt::LogLLRuntime, "wrote hex to the core");
+    log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
 
     if (std::getenv("TT_KERNEL_READBACK_ENABLE") != nullptr) {
         ll_api::memory read_mem = read_mem_from_core(cluster, chip_id, core, mem, local_init_addr);
@@ -238,50 +238,19 @@ static bool test_load_write_read_risc_binary_imp(
     return true;
 }
 
-static void test_load_write_read_risc_fw_binary(
-    tt_cluster *cluster, int chip_id, const CoreCoord &core, int riscv_id) {
-
-    // TODO(pgk): this is wedged in here for now, will be fixed later
-    // XXXXX careful, if this gets called w/ CoreCoord different from before
-    // the chip won't be initialized (change corecoord to the whole chip???)
-    static bool fw_downloaded = false;
-    if (!fw_downloaded) {
-        if (riscv_id == 0) {
-            program_brisc_startup_addr(cluster, chip_id, core);
-        }
-
-        string fname;
-        switch (riscv_id) {
-            case 0: fname = "brisc/brisc.hex"; break;
-            case 1: fname = "ncrisc/ncrisc.hex"; break;
-            case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
-            case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
-            case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
-        }
-        ll_api::memory mem = get_risc_binary(fname, true);
-        log_debug(tt::LogLLRuntime, "hex_file_path = {}", get_firmware_compile_outpath() + fname);
-        test_load_write_read_risc_binary_imp(cluster, mem, chip_id, core, riscv_id);
-
-        //        fw_downloaded = true;
-    }
-}
-
 bool test_load_write_read_risc_binary(
     tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id) {
 
-    test_load_write_read_risc_fw_binary(cluster, chip_id, core, riscv_id);
     test_load_write_read_risc_binary_imp(cluster, mem, chip_id, core, riscv_id);
 
     return true;
 }
 
 bool test_load_write_read_risc_binary(
-    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id) {
+    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id, bool fw_build) {
 
-    test_load_write_read_risc_fw_binary(cluster, chip_id, core, riscv_id);
-
-    log_debug(tt::LogLLRuntime, "hex_file_path = {}", get_kernel_compile_outpath() + hex_file_name);
-    ll_api::memory mem = get_risc_binary(hex_file_name, false);
+    log_debug(tt::LogLLRuntime, "hex_file_path = {}", (fw_build ? get_firmware_compile_outpath() : get_kernel_compile_outpath()) + hex_file_name);
+    ll_api::memory mem = get_risc_binary(hex_file_name, fw_build);
     test_load_write_read_risc_binary_imp(cluster, mem, chip_id, core, riscv_id);
 
     return true;
@@ -495,8 +464,13 @@ bool check_if_riscs_on_specified_core_done(
         std::vector<uint32_t> test_mailbox_read_val = {0};
         test_mailbox_read_val = read_hex_vec_from_core(
             cluster, chip_id, core, test_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
-        TT_ASSERT(
-            test_mailbox_read_val[0] == INIT_VALUE || test_mailbox_read_val[0] == DONE_VALUE);  // ensure no corruption
+
+        if (test_mailbox_read_val[0] != INIT_VALUE && test_mailbox_read_val[0] != DONE_VALUE) {
+            fprintf(stderr, "Read unexpected test_mailbox value: %x (expected %x or %x)\n", test_mailbox_read_val[0], INIT_VALUE, DONE_VALUE);
+            TT_ASSERT(
+                test_mailbox_read_val[0] == INIT_VALUE || test_mailbox_read_val[0] == DONE_VALUE);
+        }
+
         return test_mailbox_read_val[0] == DONE_VALUE;
     };
 
