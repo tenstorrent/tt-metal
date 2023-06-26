@@ -25,7 +25,7 @@ using FixedSlots = std::array<std::optional<T>, NUM>;
 
 class Program {
    public:
-    Program() {}
+    Program();
 
     Program(const Program &other) = delete;
     Program& operator=(const Program &other) = delete;
@@ -34,6 +34,8 @@ class Program {
     Program& operator=(Program &&other) = default;
 
     ~Program();
+
+    const u64 get_id() const { return this->id; }
 
     std::vector<Kernel *> kernels() const { return kernels_; }
 
@@ -58,6 +60,8 @@ class Program {
     std::vector<std::string> cores_to_ops() const;
 
    private:
+    u64 id; // Need to make non-const due to move constructor
+    static std::atomic<u64> program_counter;
     std::vector<Kernel *> kernels_;
     std::vector<CircularBuffer *> circular_buffers_;
     std::vector<Semaphore *> semaphores_;

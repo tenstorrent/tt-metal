@@ -4,6 +4,10 @@ namespace tt {
 
 namespace tt_metal {
 
+std::atomic<u64> Program::program_counter = 0;
+
+Program::Program(): id(program_counter++) {}
+
 std::vector<ComputeKernel *> Program::compute_kernels() const {
     std::vector<ComputeKernel *> compute_kernels;
     for (auto kernel : kernels_) {

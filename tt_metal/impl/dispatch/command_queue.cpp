@@ -96,6 +96,8 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
                 binary_destination_and_size.push_back(std::make_pair(destination, transfer_size_in_bytes));
 
+                sections.at(current_section_idx).size_in_bytes += (transfer_size_in_bytes + sizeof(u32) * padding);
+
                 if (DISPATCH_MAP_DUMP != nullptr) {
                     string name = "BINARY SPAN " + transfer_type_to_string(transfer_type);
                     update_dispatch_map_dump(name, std::move(vector<u32>(mem_ptr, mem_ptr + len)), dispatch_dump_file);
@@ -121,7 +123,6 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                 }
             }
             start_in_bytes = start_in_bytes_copy;
-            sections.at(current_section_idx).size_in_bytes += align(kernel_bin.size() * sizeof(u32), 16);
         }
     };
 
@@ -394,6 +395,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
         for (const auto& [transfer_type, transfer_info_vector] : section.section) {
             for (const auto& [dst_addr, src, size_in_bytes, noc_multicast_encoding, num_receivers] :
                  transfer_info_vector) {
+
                 TrailingWriteCommand trailing_write = {
                     .src = src,
                     .dst = dst_addr,
@@ -465,11 +467,12 @@ void EnqueueProgramCommand::process() {
         for (const auto& [riscv, rt_args_for_core] : rt_arg_map) {
             rt_args_vector.insert(rt_args_vector.end(), rt_args_for_core.begin(), rt_args_for_core.end());
 
-            // Need 16B alignment
+            // Need 32B alignment
             u32 padding = (align(rt_args_for_core.size() * sizeof(u32), 32) / sizeof(u32)) - rt_args_for_core.size();
             for (u32 i = 0; i < padding; i++) {
                 rt_args_vector.push_back(0);
             }
+
         }
     }
 
@@ -612,20 +615,19 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     // we are seeing it
     static int channel_id = 0;  // Are there issues with this being static?
 
-    static u32 i = 0;
-    if (not this->program_to_buffer.count(i)) {
+    const u64 program_id = program.get_id();
+    if (not this->program_to_buffer.count(program_id)) {
         ProgramSrcToDstAddrMap program_to_device_map = ConstructProgramSrcToDstAddrMap(this->device, program);
 
         vector<u32>& program_vector = program_to_device_map.program_vector;
         u32 program_data_size_in_bytes = program_vector.size() * sizeof(u32);
 
         this->program_to_buffer.emplace(
-            i,
+            program_id,
             std::make_unique<Buffer>(
                 this->device, program_data_size_in_bytes, channel_id, program_data_size_in_bytes, BufferType::DRAM));
 
-
-        this->enqueue_write_buffer(*this->program_to_buffer.at(i), program_vector, blocking);
+        this->enqueue_write_buffer(*this->program_to_buffer.at(program_id), program_vector, blocking);
 
         // TODO(agrebenisan): Right now, write/read buffer device APIs assume we start at bank 0,
         // need to add support to start at a non-0-starting buffer
@@ -635,9 +637,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         //                            .dram_cores.size();  // TODO(agrebenisan): Pull in num DRAM banks from SOC
         //                            descriptor
 
-        this->program_to_dev_map.emplace(i, std::move(program_to_device_map));
-    } else {
-        tt::log_assert(false, "SHOULD NOT BE HITTING CACHE");
+        this->program_to_dev_map.emplace(program_id, std::move(program_to_device_map));
     }
 
     auto get_current_runtime_args = [&program]() {
@@ -653,13 +653,12 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
     shared_ptr<EnqueueProgramCommand> command = std::make_shared<EnqueueProgramCommand>(
         this->device,
-        *this->program_to_buffer.at(i),
-        this->program_to_dev_map.at(i),
+        *this->program_to_buffer.at(program_id),
+        this->program_to_dev_map.at(program_id),
         this->sysmem_writer,
         get_current_runtime_args());
 
     this->enqueue_command(command, blocking);
-    i++;
 }
 
 void CommandQueue::finish() {

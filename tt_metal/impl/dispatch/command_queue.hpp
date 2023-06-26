@@ -202,13 +202,13 @@ class CommandQueue {
     TSQueue<shared_ptr<Command>>
         processing_thread_queue;  // These are commands that have not been placed in system memory
     // thread processing_thread;
-    map<u32, unique_ptr<Buffer>>
+    map<u64, unique_ptr<Buffer>>
         program_to_buffer;  // HACK FOR TIME BEING!
     // map<const Program*, unique_ptr<Buffer>>
     //     program_to_buffer;  // Using raw pointer since I want to be able to hash program inexpensively. This implies
                             // program object cannot be destroyed during the lifetime of the user's program
 
-    map<u32, ProgramSrcToDstAddrMap> program_to_dev_map;
+    map<u64, ProgramSrcToDstAddrMap> program_to_dev_map;
 
     void enqueue_command(shared_ptr<Command> command, bool blocking);
 
