@@ -204,11 +204,3 @@ def reset_tensix(request):
             "./tt_metal/device/bin/silicon/tensix-reset"
         )
         assert result.returncode == 0, "Tensix reset script raised error"
-
-
-@pytest.fixture(scope="function")
-def use_program_cache():
-    from libs import tt_lib as ttl
-    ttl.program_cache.enable()
-    yield
-    ttl.program_cache.disable_and_clear()
