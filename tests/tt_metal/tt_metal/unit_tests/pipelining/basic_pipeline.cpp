@@ -11,6 +11,7 @@
 
 using namespace tt;
 using namespace tt::test_utils;
+using namespace tt::tt_metal;
 
 namespace unit_tests::create_pipeline {
 
@@ -137,19 +138,19 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
 
     // TODO(agrebenisan): Once semaphores are properly allocated at 16B-aligned addresses, then
     // will make proper sems. For now, using the original code.
-    map<CoreCoord, vector<Semaphore*>> sems;
+    map<CoreCoord, vector<uint32_t>> sems;
     for (auto core : cores) {
         CoreRange cr = {.start = core, .end = core};
 
-        auto sender_semaphore = tt_metal::CreateSemaphore(program, device, cr, INVALID);
-        auto receiver_semaphore = tt_metal::CreateSemaphore(program, device, cr, INVALID);
-        auto l1_valid_value_semaphore = tt_metal::CreateSemaphore(program, device, cr, VALID);
+        auto sender_semaphore = tt_metal::CreateSemaphore(program, cr, INVALID);
+        auto receiver_semaphore = tt_metal::CreateSemaphore(program, cr, INVALID);
+        auto l1_valid_value_semaphore = tt_metal::CreateSemaphore(program, cr, VALID);
 
-        tt::log_debug("SENDER SEM ADDR {}", sender_semaphore->address());
-        tt::log_debug("RECEIVER SEM ADDR {}", receiver_semaphore->address());
-        tt::log_debug("L1 VALID VALUE SEM ADDR {}", l1_valid_value_semaphore->address());
+        tt::log_debug("SENDER SEM ADDR {}", sender_semaphore);
+        tt::log_debug("RECEIVER SEM ADDR {}", receiver_semaphore);
+        tt::log_debug("L1 VALID VALUE SEM ADDR {}", l1_valid_value_semaphore);
 
-        vector<Semaphore*> init_vec;
+        vector<uint32_t> init_vec;
         sems.emplace(core, init_vec);
         sems.at(core).push_back(sender_semaphore);
         sems.at(core).push_back(receiver_semaphore);
@@ -161,9 +162,9 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         // TODO(agrebenisan):  Once semaphores are properly allocated at 16B-aligned addresses, then
         // will make proper sems. For now, using the original code.
         CoreCoord core = cores[core_id];
-        auto sender_semaphore_addr = sems[core].at(0)->address();
-        auto receiver_semaphore_addr = sems[core].at(1)->address();
-        auto l1_valid_value_addr = sems[core].at(2)->address();
+        auto sender_semaphore_addr = sems[core].at(0);
+        auto receiver_semaphore_addr = sems[core].at(1);
+        auto l1_valid_value_addr = sems[core].at(2);
 
         if (core_id == 0) {
             SetRuntimeArgs(receiver_kernels.at(core_id), core, {src_address,

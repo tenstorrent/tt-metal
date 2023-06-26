@@ -668,7 +668,7 @@ CircularBuffer *CreateCircularBuffers(
 /**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to four 32B semaphores.
  *
- * Return value: Semaphore *
+ * Return value: Semaphore address (uint32_t)
  *
  * | Argument      | Description                                          | Type                                                  | Valid Range                                              | Required |
  * |---------------|------------------------------------------------------|-------------------------------------------------------|----------------------------------------------------------|----------|
@@ -677,12 +677,12 @@ CircularBuffer *CreateCircularBuffers(
  * | core_range    | Range of the Tensix co-ordinates using the semaphore | const CoreRange & (std::pair<CoreCoord, CoreCoord>)   | Pair of logical coords where first coord <= second coord | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                              |                                                          | Yes      |
  */
-Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value);
+uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value);
 
 /**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to four 32B semaphores.
  *
- * Return value: Semaphore *
+ * Return value: Semaphore address (uint32_t)
  *
  * | Argument       | Description                                                 | Type                   | Valid Range                                               | Required |
  * |----------------|-------------------------------------------------------------|------------------------|-----------------------------------------------------------|----------|
@@ -691,7 +691,7 @@ Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &co
  * | core_range_set    | Set of Range of the Tensix co-ordinates using the semaphore | const CoreRangeSet &   | Pairs of logical coords where first coord <= second coord | Yes      |
  * | initial_value  | Initial value of the semaphore                              | uint32_t               |                                                           | Yes      |
  */
-Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_range_set, uint32_t initial_value);
+uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value);
 
 /**
 * Copies data from a host buffer into the specified buffer

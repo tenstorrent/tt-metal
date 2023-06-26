@@ -1,8 +1,18 @@
 #include "tt_metal/impl/program.hpp"
+#include "tt_metal/llrt/llrt.hpp"
+#include "tt_metal/impl/buffers/semaphore.hpp"
 
-namespace tt {
+namespace tt::tt_metal {
 
-namespace tt_metal {
+std::vector<Semaphore *> Program::semaphores_on_core(const CoreCoord &core) const {
+    std::vector<Semaphore *> semaphores;
+    for (auto semaphore : this->semaphores_) {
+        if (semaphore->initialized_on_logical_core(core)) {
+            semaphores.push_back(semaphore);
+        }
+    }
+    return semaphores;
+}
 
 std::atomic<u64> Program::program_counter = 0;
 
@@ -112,14 +122,28 @@ std::vector<CircularBuffer *> Program::circular_buffers_on_core(const CoreCoord 
     return cbs_on_core;
 }
 
-std::vector<Semaphore *> Program::semaphores_on_core(const CoreCoord &core) const {
-    std::vector<Semaphore *> semaphores;
-    for (auto semaphore : this->semaphores_) {
-        if (semaphore->initialized_on_logical_core(core)) {
-            semaphores.push_back(semaphore);
-        }
+size_t Program::num_semaphores(const CoreCoord &core) const {
+    return semaphores_on_core(core).size();
+}
+
+
+size_t Program::num_semaphores() const {
+    return semaphores_.size();
+}
+
+uint32_t Program::semaphore_address ( uint32_t sem_idx ) const {
+    return semaphores_.at(sem_idx)->address();
+}
+
+void Program::init_semaphores( const Device & device, const CoreCoord &logical_core ) const{
+    auto semaphores_on_core = this->semaphores_on_core(logical_core);
+    for (auto semaphore : semaphores_on_core) {
+        llrt::write_hex_vec_to_core(device.cluster(), device.pcie_slot(), device.worker_core_from_logical_core(logical_core), {semaphore->initial_value()}, semaphore->address());
     }
-    return semaphores;
+}
+
+void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value) {
+    semaphores_.push_back(new Semaphore( crs, address, init_value));
 }
 
 std::vector<CoreCoord> Program::logical_cores() const {
@@ -155,6 +179,4 @@ Program::~Program() {
     }
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

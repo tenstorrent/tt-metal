@@ -171,10 +171,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         math_approx_mode
     );
 
-    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
-    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -260,8 +260,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
                 (std::uint32_t)  left_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  left_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in0_mcast_sender_semaphore->address(),
-                (std::uint32_t)  in0_mcast_receiver_semaphore->address(),
+                (std::uint32_t)  in0_mcast_sender_semaphore,
+                (std::uint32_t)  in0_mcast_receiver_semaphore,
 
                 (std::uint32_t)  bottom_core_physical.x, // in0_mcast_dest_noc_start_x
                 (std::uint32_t)  bottom_core_physical.y, // in0_mcast_dest_noc_start_y
@@ -270,8 +270,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 (std::uint32_t)  (num_cores_r - 1), // in0_mcast_num_dests
                 (std::uint32_t)  top_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  top_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in1_mcast_sender_semaphore->address(),
-                (std::uint32_t)  in1_mcast_receiver_semaphore->address(),
+                (std::uint32_t)  in1_mcast_sender_semaphore,
+                (std::uint32_t)  in1_mcast_receiver_semaphore,
 
                 (std::uint32_t)  M * K, // MtKt
                 (std::uint32_t)  K * N, // KtNt
@@ -484,8 +484,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         math_approx_mode
     );
 
-    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -565,8 +565,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 (std::uint32_t)  num_cores_c - 1, // in0_mcast_num_dests
                 (std::uint32_t)  mcast_sender_phyiscal.x, //in0_mcast_sender_noc_x
                 (std::uint32_t)  mcast_sender_phyiscal.y, //in0_mcast_sender_noc_y
-                (std::uint32_t) in0_mcast_sender_semaphore->address(),
-                (std::uint32_t) in0_mcast_receiver_semaphore->address(),
+                (std::uint32_t) in0_mcast_sender_semaphore,
+                (std::uint32_t) in0_mcast_receiver_semaphore,
 
                 (std::uint32_t)  M * K, // MtKt
                 (std::uint32_t)  K * N, // KtNt
@@ -769,8 +769,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         math_approx_mode
     );
 
-    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -850,8 +850,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 (std::uint32_t)  num_cores_r - 1, // in1_mcast_num_dests
                 (std::uint32_t)  mcast_sender_physical.x, //in1_mcast_sender_noc_x
                 (std::uint32_t)  mcast_sender_physical.y, //in1_mcast_sender_noc_y
-                (std::uint32_t)  in1_mcast_sender_semaphore->address(),
-                (std::uint32_t)  in1_mcast_receiver_semaphore->address(),
+                (std::uint32_t)  in1_mcast_sender_semaphore,
+                (std::uint32_t)  in1_mcast_receiver_semaphore,
 
                 (std::uint32_t)  M * K, // MtKt
                 (std::uint32_t)  K * N, // KtNt

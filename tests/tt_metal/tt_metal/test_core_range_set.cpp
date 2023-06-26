@@ -6,7 +6,6 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -29,7 +28,7 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
                 for (auto cb : program.circular_buffers()) {
                     TT_ASSERT(cb->is_on_logical_core(logical_core));
                 }
-                for (auto semaphore : program.semaphores()) {
+                for (auto semaphore : program.semaphores() ){
                     TT_ASSERT(semaphore->initialized_on_logical_core(logical_core));
                 }
             }
@@ -142,9 +141,9 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     std::vector<uint32_t> golden_sem_values;
     for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
-        auto semaphore = tt_metal::CreateSemaphore(program, device, core_range_set, initial_value);
+        auto semaphore_addr = tt_metal::CreateSemaphore(program, core_range_set, initial_value);
         golden_sem_values.push_back(initial_value);
-        pass &= semaphore->address() == SEMAPHORE_BASE + (size_per_semaphore * i);
+        pass &= semaphore_addr == SEMAPHORE_BASE + (size_per_semaphore * i);
     }
 
     check_program_is_mapped_to_correct_cores(program, core_range_set, compute_kernel_args);

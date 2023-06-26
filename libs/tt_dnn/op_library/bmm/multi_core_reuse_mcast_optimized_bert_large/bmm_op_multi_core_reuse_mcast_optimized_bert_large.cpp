@@ -122,12 +122,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     */
 
     // Mcast args
-    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
-    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, device, all_cores, INVALID);
-    Semaphore *in3_mcast_sender_semaphore = nullptr;
-    Semaphore *in3_mcast_receiver_semaphore = nullptr;
+    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t in3_mcast_sender_semaphore = 0;
+    uint32_t in3_mcast_receiver_semaphore = 0;
     if (bias_buffer != nullptr) {
         in3_mcast_sender_semaphore = in1_mcast_sender_semaphore;
         in3_mcast_receiver_semaphore = in1_mcast_receiver_semaphore;
@@ -164,8 +164,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // in0 mcast args
             (std::uint32_t)  bottom_right_core_physical.x, // in0_mcast_dest_noc_start_x
             (std::uint32_t)  top_left_core_plus_one_physical.x, // in0_mcast_dest_noc_end_x
-            (std::uint32_t)  in0_mcast_sender_semaphore->address(),
-            (std::uint32_t)  in0_mcast_receiver_semaphore->address(),
+            (std::uint32_t)  in0_mcast_sender_semaphore,
+            (std::uint32_t)  in0_mcast_receiver_semaphore,
             (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
             // batch args
             (std::uint32_t)  M * K, // MtKt
@@ -191,8 +191,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // in1 mcast args
             (std::uint32_t)  bottom_right_core_physical.y, // in1_mcast_dest_noc_start_y
             (std::uint32_t)  top_left_core_plus_one_physical.y, // in1_mcast_dest_noc_end_y
-            (std::uint32_t)  in1_mcast_sender_semaphore->address(),
-            (std::uint32_t)  in1_mcast_receiver_semaphore->address(),
+            (std::uint32_t)  in1_mcast_sender_semaphore,
+            (std::uint32_t)  in1_mcast_receiver_semaphore,
             (std::uint32_t)  (num_cores_r - 1), // in1_mcast_num_dests
             // batch args
             (std::uint32_t)  K * N, // KtNt
@@ -219,8 +219,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  1);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  bottom_right_core_physical.y); // in1_mcast_dest_noc_start_y
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  top_left_core_plus_one_physical.y); // in1_mcast_dest_noc_end_y
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in1_mcast_sender_semaphore->address());
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in1_mcast_receiver_semaphore->address());
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in1_mcast_sender_semaphore);
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in1_mcast_receiver_semaphore);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  (num_cores_r - 1)); // in1_mcast_num_dests
     }
     std::vector<uint32_t> in0_receiver_compile_time_args = {
@@ -230,8 +230,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)  K / in0_block_w, // num_blocks
             // in0 mcast args
             (std::uint32_t)  top_left_core_physical.x, // in0_mcast_sender_noc_x
-            (std::uint32_t)  in0_mcast_sender_semaphore->address(),
-            (std::uint32_t)  in0_mcast_receiver_semaphore->address(),
+            (std::uint32_t)  in0_mcast_sender_semaphore,
+            (std::uint32_t)  in0_mcast_receiver_semaphore,
             // batch args
             (std::uint32_t)  B // batch
     };
@@ -247,8 +247,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)  K / in0_block_w, // num_blocks
             // in1 mcast args
             (std::uint32_t)  top_left_core_physical.y, // in1_mcast_sender_noc_y
-            (std::uint32_t)  in1_mcast_sender_semaphore->address(),
-            (std::uint32_t)  in1_mcast_receiver_semaphore->address(),
+            (std::uint32_t)  in1_mcast_sender_semaphore,
+            (std::uint32_t)  in1_mcast_receiver_semaphore,
             // batch args
             (std::uint32_t)  B, // batch
 
@@ -269,8 +269,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         // in3 mcast args
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  per_core_N);
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  top_left_core_physical.y); // in1_mcast_sender_noc_y
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_sender_semaphore->address());
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_receiver_semaphore->address());
+        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_sender_semaphore);
+        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_receiver_semaphore);
     }
 
     auto mm_kernel_in0_sender = tt_metal::CreateDataMovementKernel(

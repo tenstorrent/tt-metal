@@ -6,6 +6,7 @@
 #include "../basic_harness.hpp"
 
 
+using namespace tt::tt_metal;
 struct BufferConfig {
     u32 num_pages;
     u32 page_size;

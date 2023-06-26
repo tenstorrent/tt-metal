@@ -13,10 +13,9 @@ namespace tt_metal {
 class Semaphore {
    public:
     Semaphore(
-        Device *device,
         const CoreRangeSet &core_range_set,
         uint32_t address,
-        uint32_t initial_value) : device_(device), core_range_set_(core_range_set), address_(address), initial_value_(initial_value) {}
+        uint32_t initial_value) : core_range_set_(core_range_set), address_(address), initial_value_(initial_value) {}
 
     Semaphore(const Semaphore &other);
 
@@ -28,7 +27,6 @@ class Semaphore {
 
     constexpr uint32_t size() const { return SEMAPHORE_SIZE / NUM_SEMAPHORES; }
 
-    Device *device() const { return device_; }
 
     uint32_t address() const { return address_; }
 
@@ -39,7 +37,6 @@ class Semaphore {
     bool initialized_on_logical_core(const CoreCoord &logical_core) const;
 
    private:
-    Device *device_;
     CoreRangeSet core_range_set_;             // Ranges of cores where this semaphore is initialized
     uint32_t address_;
     uint32_t initial_value_;              // Initial value of semaphore

@@ -80,9 +80,9 @@ void create_and_read_max_num_semaphores(tt_metal::Device *device, tt_metal::Prog
     std::vector<uint32_t> golden;
     for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
-        auto semaphore = tt_metal::CreateSemaphore(program, device, core_range, initial_value);
+        auto semaphore_addr = tt_metal::CreateSemaphore(program, core_range, initial_value);
         golden.push_back(initial_value);
-        REQUIRE(semaphore->address() == SEMAPHORE_BASE + (ALIGNED_SIZE_PER_SEMAPHORE * i));
+        REQUIRE(semaphore_addr == SEMAPHORE_BASE + (ALIGNED_SIZE_PER_SEMAPHORE * i));
     }
 
     REQUIRE(tt_metal::ConfigureDeviceWithProgram(device, program));
@@ -105,11 +105,11 @@ void create_and_read_max_num_semaphores(tt_metal::Device *device, tt_metal::Prog
 }
 
 void try_creating_more_than_max_num_semaphores(tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range) {
-    REQUIRE(program.semaphores().empty());
+    REQUIRE(program.num_semaphores() == 0);
     create_and_read_max_num_semaphores(device, program, core_range);
     constexpr static uint32_t val = 5;
     REQUIRE_THROWS_WITH(
-        tt_metal::CreateSemaphore(program, device, core_range, val),
+        tt_metal::CreateSemaphore(program, core_range, val),
         doctest::Contains("Max number of semaphores")
     );
 }

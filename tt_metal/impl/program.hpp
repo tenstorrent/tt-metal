@@ -4,7 +4,6 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "common/tt_backend_api_types.hpp"
@@ -13,6 +12,7 @@
 namespace tt {
 
 namespace tt_metal {
+class Semaphore;
 
 struct KernelGroup {
     ComputeKernel *compute = nullptr;
@@ -55,6 +55,10 @@ class Program {
 
     std::vector<Semaphore *> semaphores_on_core(const CoreCoord &core) const;
 
+    size_t num_semaphores ( const CoreCoord & core ) const;
+    size_t num_semaphores () const;
+    uint32_t semaphore_address ( uint32_t sem_index ) const;
+    void init_semaphores ( const Device & device, const CoreCoord &logical_core ) const;
     std::vector<CoreCoord> logical_cores() const;
 
     CoreRangeSet logical_core_range_set() const;
@@ -159,15 +163,15 @@ class Program {
         uint32_t size_in_bytes,
         DataFormat data_format);
 
-    friend Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value);
+    friend uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value);
 
-    friend Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_range_set, uint32_t initial_value);
+    friend uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value);
 
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
 
     void add_circular_buffer(CircularBuffer *circular_buffer);
 
-    void add_semaphore(Semaphore *semaphore) { semaphores_.push_back(semaphore); }
+    void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 };
 
 }  // namespace tt_metal

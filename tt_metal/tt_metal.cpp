@@ -353,11 +353,11 @@ uint32_t get_semaphore_address(const Program &program, const CoreRange &core_ran
     for (auto x = start_core.x; x <= end_core.x; x++) {
         for (auto y = start_core.y; y <= end_core.y; y++) {
             auto logical_core = CoreCoord{x, y};
-            auto semaphores_on_core = program.semaphores_on_core(logical_core);
-            if (semaphores_on_core.size() == NUM_SEMAPHORES) {
+            auto num_semaphores = program.num_semaphores(logical_core);
+            if (num_semaphores == NUM_SEMAPHORES) {
                 TT_THROW("Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" + std::to_string(NUM_SEMAPHORES) + ") reached!");
             }
-            uint32_t addr = semaphores_on_core.empty() ? SEMAPHORE_BASE : semaphores_on_core.back()->address() + ALIGNED_SIZE_PER_SEMAPHORE;
+            uint32_t addr = num_semaphores == 0 ? SEMAPHORE_BASE : program.semaphore_address(num_semaphores-1) + ALIGNED_SIZE_PER_SEMAPHORE;
             if (address == -1) {
                 address = addr;
             } else if (addr != address) {
@@ -368,17 +368,16 @@ uint32_t get_semaphore_address(const Program &program, const CoreRange &core_ran
     return address;
 }
 
-Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRange &core_range, uint32_t initial_value) {
+uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value) {
     auto start_core = core_range.start;
     auto end_core = core_range.end;
     TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
     uint32_t address = get_semaphore_address(program, core_range);
-    Semaphore *semaphore = new Semaphore(device, CoreRangeSet({core_range}), address, initial_value);
-    program.add_semaphore(semaphore);
-    return semaphore;
+    program.add_semaphore(CoreRangeSet({core_range}), address, initial_value);
+    return address;
 }
 
-Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet &core_range_set, uint32_t initial_value) {
+uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value) {
     uint32_t address = -1;
     for (auto core_range : core_range_set.ranges()) {
         auto addr = get_semaphore_address(program, core_range);
@@ -388,9 +387,8 @@ Semaphore *CreateSemaphore(Program &program, Device *device, const CoreRangeSet 
             TT_ASSERT(addr == address);
         }
     }
-    Semaphore *semaphore = new Semaphore(device, core_range_set, address, initial_value);
-    program.add_semaphore(semaphore);
-    return semaphore;
+    program.add_semaphore(core_range_set, address, initial_value);
+    return address;
 }
 
 void WriteToDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
@@ -977,10 +975,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
 
         llrt::write_circular_buffer_config_vector_to_core(cluster, pcie_slot, worker_core, circular_buffer_config_vec); // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
 
-        auto semaphores_on_core = program.semaphores_on_core(logical_core);
-        for (auto semaphore : semaphores_on_core) {
-            llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, {semaphore->initial_value()}, semaphore->address());
-        }
+        program.init_semaphores(*device, logical_core);
     }
 
     // Skip loading of blank kernels to storage cores when using L1 banking
