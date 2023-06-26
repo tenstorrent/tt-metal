@@ -161,7 +161,7 @@ inline void llk_unpack_AB_matmul(
                 TTI_NOP;
             #else
                 TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                if (((t<(t_dim-1)) && (t_dim>1))) {
+                if ((t+1)<t_dim) {
                     // Let's load one more tile into srcB
                     TT_SETDMAREG(0, LOWER_HALFWORD(next_address_a), 0, LO_16(p_gpr_unpack::TMP0));
                     TT_SETDMAREG(0, UPPER_HALFWORD(next_address_a), 0, HI_16(p_gpr_unpack::TMP0));
@@ -180,7 +180,7 @@ inline void llk_unpack_AB_matmul(
                 TTI_NOP;
             #else
                 TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                if (((t<(t_dim-1)) && (t_dim>1))) {
+                if ((t+1)<t_dim) {
                     // Let's load one more tile into srcB
                     TT_SETDMAREG(0, LOWER_HALFWORD(next_address_b), 0, LO_16(p_gpr_unpack::TMP0));
                     TT_SETDMAREG(0, UPPER_HALFWORD(next_address_b), 0, HI_16(p_gpr_unpack::TMP0));

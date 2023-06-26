@@ -232,7 +232,7 @@ inline void llk_math_matmul(uint dst_index, const bool transpose=false, const st
             } else {
                 ckernel_template::run(instrn_buffer);
 
-                if (t<(t_dim-1)) {
+                if ((t+1)<t_dim) {
 
                     // Move to the next srcA or srcB bank 
                     if (reuse_a) {
