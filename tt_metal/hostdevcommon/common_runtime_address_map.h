@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 /*
 * This file contains addresses that are visible to both host and device compiled code.
 */
