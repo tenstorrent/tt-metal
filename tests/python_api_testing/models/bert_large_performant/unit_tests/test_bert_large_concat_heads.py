@@ -94,7 +94,6 @@ import pytest
 def test_bert_large_concat_heads_test(
     batch, dtype, in0_mem_config, out_mem_config, request
 ):
-    ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_concat_heads_tm_{request.node.callspec.id}"
     )

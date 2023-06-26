@@ -12,14 +12,6 @@ def test_program_cache():
     tt_lib.program_cache.disable_and_clear()
     pass
 
-
-@pytest.mark.eager_host_side
-@pytest.mark.post_commit
-def test_profiler():
-    tt_lib.profiler.set_profiler_flag(True)
-    assert tt_lib.profiler.get_profiler_flag(), f"Profiler flag should be true"
-    pass
-
 @pytest.mark.eager_host_side
 @pytest.mark.post_commit
 def test_device_arch():

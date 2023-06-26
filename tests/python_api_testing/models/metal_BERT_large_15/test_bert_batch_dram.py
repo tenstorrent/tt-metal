@@ -427,7 +427,6 @@ def test_bert_batch_dram(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_full_{request.node.callspec.id}"
     )
@@ -505,7 +504,6 @@ def test_bert_batch_dram_with_program_cache(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_full_with_program_cache_{request.node.callspec.id}"
     )

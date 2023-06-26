@@ -1,11 +1,71 @@
 #pragma once
 #include <mutex>
+
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+
 using std::unique_lock;
 using std::mutex;
 
 namespace tt::tt_metal{
+
     namespace detail {
 
+        /**
+         * Read device side profiler data and dump results into device side CSV log
+         *
+         * Return value: void
+         *
+         * | Argument      | Description                                       | Type            | Valid Range               | Required |
+         * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+         * | device        | The device holding the program being profiled.    | Device *        |                           | True     |
+         * | program       | The program being profiled.                       | const Program & |                           | True     |
+         * */
+        void DumpDeviceProfileResults(Device *device, const Program &program);
+
+        /**
+         * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
+         *
+         * Return value: void
+         *
+         * | Argument     | Description                                             |  Data type  | Valid range              | required |
+         * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
+         * | output_dir   | The output directory that will hold the outpu CSV logs  | std::string | Any valid directory path | No       |
+         * */
+        void SetProfilerDir(std::string output_dir = "");
+
+        /**
+         * Start a fresh log for the host side profile results
+         *
+         * Return value: void
+         *
+         * | Argument     | Description                                             |  Data type  | Valid range              | required |
+         * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
+         * */
+        void FreshProfilerHostLog();
+
+        /**
+         * Start a fresh log for the device side profile results
+         *
+         * Return value: void
+         *
+         * | Argument     | Description                                             |  Data type  | Valid range              | required |
+         * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
+         * */
+        void FreshProfilerDeviceLog();
+
+        /**
+         * Profile scopes in tt_metal API
+         *
+         * */
+
+        class ProfileTTMetalScope
+        {
+            private:
+                string scopeName = "";
+            public:
+                ProfileTTMetalScope (const string& scopeNameArg);
+                ~ProfileTTMetalScope ();
+        };
 
         inline void GenerateBankToNocCoordHeaders(  Device *device,
                                              build_kernel_for_riscv_options_t *build_options,

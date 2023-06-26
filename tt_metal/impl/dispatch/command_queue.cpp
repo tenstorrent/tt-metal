@@ -647,7 +647,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     detail::GenerateBankToNocCoordHeaders(device, &build_kernel_for_riscv_options, "command_queue");
     generate_binary_for_risc(
-        RISCID::BR, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, arch_name, 0, {}, profile);
+        RISCID::BR, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, arch_name, 0, {});
 
     // Currently hard-coded. TODO(agrebenisan): Once we add support for multiple dispatch cores, this can be refactored,
     // but don't yet have a plan for where this variable should exist.

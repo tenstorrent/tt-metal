@@ -4,40 +4,15 @@
 #include <filesystem>
 
 #include "tools/profiler/profiler.hpp"
+#include "tools/profiler/profiler_state.hpp"
 #include "hostdevcommon/profiler_common.h"
 
 #define HOST_SIDE_LOG "profile_log_host.csv"
 #define DEVICE_SIDE_LOG "profile_log_device.csv"
 
-Profiler::Profiler()
-{
-    do_profile_host = false;
-    host_new_log = true;
-    device_new_log = true;
-    output_dir = std::filesystem::path("tt_metal/tools/profiler/logs");
-    std::filesystem::create_directories(output_dir);
-}
+namespace tt {
 
-void Profiler::setHostDoProfile(bool profile_flag)
-{
-    do_profile_host = profile_flag;
-}
-
-void Profiler::setDeviceNewLogFlag(bool new_log_flag)
-{
-    device_new_log = new_log_flag;
-}
-
-void Profiler::setHostNewLogFlag(bool new_log_flag)
-{
-    host_new_log = new_log_flag;
-}
-
-void Profiler::setOutputDir(std::string new_output_dir)
-{
-    std::filesystem::create_directories(new_output_dir);
-    output_dir = new_output_dir;
-}
+namespace tt_metal {
 
 TimerPeriodInt Profiler::timerToTimerInt(TimerPeriod period)
 {
@@ -50,131 +25,52 @@ TimerPeriodInt Profiler::timerToTimerInt(TimerPeriod period)
     return ret;
 }
 
-void Profiler::markStart(std::string timer_name)
+void Profiler::dumpHostResults(const std::string& timer_name, const std::vector<std::pair<std::string,std::string>>& additional_fields)
 {
-    if (do_profile_host)
+    auto timer = name_to_timer_map[timer_name];
+
+    auto timer_period_ns = timerToTimerInt(timer);
+    TT_ASSERT (timer_period_ns.start != 0 , "Timer start cannot be zero on : " + timer_name);
+    TT_ASSERT (timer_period_ns.stop != 0 , "Timer stop cannot be zero on : " + timer_name);
+
+    std::filesystem::path log_path = output_dir / HOST_SIDE_LOG;
+    std::ofstream log_file;
+
+    if (host_new_log|| !std::filesystem::exists(log_path))
     {
-        name_to_timer_map[timer_name].start = steady_clock::now();
-    }
-}
+        log_file.open(log_path);
 
-void Profiler::markStop(std::string timer_name, bool dumpResults)
-{
-    if (do_profile_host)
+        log_file << "Name" << ", ";
+        log_file << "Start timer count [ns]"  << ", ";
+        log_file << "Stop timer count [ns]"  << ", ";
+        log_file << "Delta timer count [ns]";
+
+        for (auto &field: additional_fields)
+        {
+            log_file  << ", "<< field.first;
+        }
+
+        log_file << std::endl;
+        host_new_log = false;
+    }
+    else
     {
-        name_to_timer_map[timer_name].stop = steady_clock::now();
-        if (dumpResults)
-        {
-            dumpHostResults();
-        }
+        log_file.open(log_path, std::ios_base::app);
     }
-}
 
+    log_file << timer_name << ", ";
+    log_file << timer_period_ns.start  << ", ";
+    log_file << timer_period_ns.stop  << ", ";
+    log_file << timer_period_ns.delta;
 
-void Profiler::dumpHostResults(const std::vector<std::pair<std::string,std::string>>& additional_fields, std::string name_prepend)
-{
-    if (do_profile_host)
+    for (auto &field: additional_fields)
     {
-        const int large_width = 30;
-        const int medium_width = 25;
-
-        for (auto timer : name_to_timer_map)
-        {
-            auto timer_period_ns = timerToTimerInt(timer.second);
-            TT_ASSERT (timer_period_ns.start != 0 , "Timer start cannot be zero on : " + timer.first);
-            TT_ASSERT (timer_period_ns.stop != 0 , "Timer stop cannot be zero on : " + timer.first);
-        }
-        std::filesystem::path log_path = output_dir / HOST_SIDE_LOG;
-        std::ofstream log_file;
-
-        if (host_new_log || !std::filesystem::exists(log_path))
-        {
-            log_file.open(log_path);
-
-            log_file << "Section Name" << ", ";
-            log_file << "Function Name" << ", ";
-            log_file << "Start timer count [ns]"  << ", ";
-            log_file << "Stop timer count [ns]"  << ", ";
-            log_file << "Delta timer count [ns]";
-
-            for (auto &field: additional_fields)
-            {
-                log_file  << ", "<< field.first;
-            }
-
-            log_file << std::endl;
-            host_new_log = false;
-        }
-        else
-        {
-            log_file.open(log_path, std::ios_base::app);
-        }
-
-        for (auto timer : name_to_timer_map)
-        {
-            auto timer_period_ns = timerToTimerInt(timer.second);
-            log_file << name_prepend << ", ";
-            log_file << timer.first << ", ";
-            log_file << timer_period_ns.start  << ", ";
-            log_file << timer_period_ns.stop  << ", ";
-            log_file << timer_period_ns.delta;
-
-            for (auto &field: additional_fields)
-            {
-                log_file  << ", "<< field.second;
-            }
-
-            log_file << std::endl;
-        }
-
-        log_file.close();
-
-        name_to_timer_map.clear();
+        log_file  << ", "<< field.second;
     }
-}
 
-void Profiler::dumpHostResults(std::string name_prepend)
-{
-    dumpHostResults({}, name_prepend);
-}
+    log_file << std::endl;
 
-void Profiler::dumpDeviceResults (
-        tt_cluster *cluster,
-        int pcie_slot,
-        const vector<CoreCoord> &worker_cores){
-
-    for (const auto &worker_core : worker_cores) {
-        readRiscProfilerResults(
-            cluster,
-            pcie_slot,
-            worker_core,
-            "NCRISC",
-            PRINT_BUFFER_NC);
-        readRiscProfilerResults(
-            cluster,
-            pcie_slot,
-            worker_core,
-            "BRISC",
-            PRINT_BUFFER_BR);
-        readRiscProfilerResults(
-            cluster,
-            pcie_slot,
-            worker_core,
-            "TRISC_0",
-            PRINT_BUFFER_T0);
-	readRiscProfilerResults(
-	    cluster,
-	    pcie_slot,
-	    worker_core,
-	    "TRISC_1",
-	    PRINT_BUFFER_T1);
-	readRiscProfilerResults(
-	    cluster,
-	    pcie_slot,
-	    worker_core,
-	    "TRISC_2",
-	    PRINT_BUFFER_T2);
-    }
+    log_file.close();
 }
 
 void Profiler::readRiscProfilerResults(
@@ -260,3 +156,116 @@ void Profiler::dumpDeviceResultToFile(
     log_file << std::endl;
     log_file.close();
 }
+
+Profiler::Profiler()
+{
+#if defined(PROFILER)
+    host_new_log = true;
+    device_new_log = true;
+    output_dir = std::filesystem::path("tt_metal/tools/profiler/logs");
+    std::filesystem::create_directories(output_dir);
+#endif
+}
+
+void Profiler::markStart(const std::string& timer_name)
+{
+#if defined(PROFILER)
+    name_to_timer_map[timer_name].start = steady_clock::now();
+#endif
+}
+
+void Profiler::markStop(const std::string& timer_name, const std::vector<std::pair<std::string,std::string>>& additional_fields)
+{
+#if defined(PROFILER)
+    name_to_timer_map[timer_name].stop = steady_clock::now();
+    dumpHostResults(timer_name, additional_fields);
+#endif
+}
+
+void Profiler::setDeviceNewLogFlag(bool new_log_flag)
+{
+#if defined(PROFILER)
+    device_new_log = new_log_flag;
+#endif
+}
+
+void Profiler::setHostNewLogFlag(bool new_log_flag)
+{
+#if defined(PROFILER)
+    host_new_log = new_log_flag;
+#endif
+}
+
+void Profiler::setOutputDir(const std::string& new_output_dir)
+{
+#if defined(PROFILER)
+    std::filesystem::create_directories(new_output_dir);
+    output_dir = new_output_dir;
+#endif
+}
+
+void Profiler::dumpDeviceResults (
+        tt_cluster *cluster,
+        int pcie_slot,
+        const vector<CoreCoord> &worker_cores){
+#if defined(PROFILER)
+    for (const auto &worker_core : worker_cores) {
+        readRiscProfilerResults(
+            cluster,
+            pcie_slot,
+            worker_core,
+            "NCRISC",
+            PRINT_BUFFER_NC);
+        readRiscProfilerResults(
+            cluster,
+            pcie_slot,
+            worker_core,
+            "BRISC",
+            PRINT_BUFFER_BR);
+        readRiscProfilerResults(
+            cluster,
+            pcie_slot,
+            worker_core,
+            "TRISC_0",
+            PRINT_BUFFER_T0);
+	readRiscProfilerResults(
+	    cluster,
+	    pcie_slot,
+	    worker_core,
+	    "TRISC_1",
+	    PRINT_BUFFER_T1);
+	readRiscProfilerResults(
+	    cluster,
+	    pcie_slot,
+	    worker_core,
+	    "TRISC_2",
+	    PRINT_BUFFER_T2);
+    }
+#endif
+}
+
+bool getHostProfilerState ()
+{
+    bool profile_host = false;
+#if defined(PROFILER)
+    profile_host = true;
+#endif
+    return profile_host;
+}
+
+bool getDeviceProfilerState ()
+{
+    bool profile_device = false;
+#if defined(PROFILER)
+    const char *TT_METAL_DEVICE_PROFILER = std::getenv("TT_METAL_DEVICE_PROFILER");
+    if (TT_METAL_DEVICE_PROFILER != nullptr && TT_METAL_DEVICE_PROFILER[0] == '1')
+    {
+        profile_device = true;
+    }
+#endif
+    return profile_device;
+}
+
+}  // namespace tt_metal
+
+}  // namespace tt

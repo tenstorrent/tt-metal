@@ -164,7 +164,6 @@ def test_bert_large_ff1_matmul_test(
     gelu_activation,
     request,
 ):
-    ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_ff1_matmul_{request.node.callspec.id}"
     )

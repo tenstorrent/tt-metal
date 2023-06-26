@@ -35,7 +35,6 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
     );
 
     constexpr int loop_size = 200;
-    constexpr bool profile_device = true;
     brisc_kernel->add_define("LOOP_COUNT",loop_count);
     ncrisc_kernel->add_define("LOOP_COUNT",loop_count);
     trisc_kernel->add_define("LOOP_COUNT",loop_count);
@@ -44,12 +43,9 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
     ncrisc_kernel->add_define("LOOP_SIZE",loop_size);
     trisc_kernel->add_define("LOOP_SIZE",loop_size);
 
-    pass &= tt_metal::CompileProgram(device, program, profile_device);
+    pass &= tt_metal::CompileProgram(device, program);
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
-    if (profile_device)
-        tt_metal::DumpDeviceProfileResults(device, program);
-    tt_metal::DumpHostProfileResults(run_name);
 
     return pass;
 }
@@ -65,8 +61,6 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
-        extern bool enable_fw_profile_hack;
-        enable_fw_profile_hack = true;
         pass &= tt_metal::InitializeDevice(device);
 
         int loop_count = 20;

@@ -246,7 +246,7 @@ void tt_cluster::reset_device_aiclk() {
 void tt_cluster::set_power_state(tt_DevicePowerState device_state) {
     std::stringstream ss;
     ss << "Setting silicon device power state to " << device_state;
-    tt::log_info(tt::LogLLRuntime, "{}", ss.str());
+    tt::log_info("{}", ss.str());
     device->set_power_state(device_state);
 }
 

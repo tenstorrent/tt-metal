@@ -184,7 +184,7 @@ int main(int argc, char **argv) {
             dram_buffer_size, false);
 
         vector<uint32_t> golden = gold_standard_untilize(src_vec, {num_tiles_r * 32, num_tiles_c * 32});
-        pass &= tt_metal::CompileProgram(device, program, false);
+        pass &= tt_metal::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

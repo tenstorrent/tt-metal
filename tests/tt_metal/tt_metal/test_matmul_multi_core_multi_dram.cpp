@@ -411,9 +411,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        constexpr bool profile_device = false;
-        pass &= tt_metal::CompileProgram(device, program, profile_device);
+        pass &= tt_metal::CompileProgram(device, program);
         tt::log_assert(program.get_worker_core_range_set().ranges().size() >= 1, "Invalid core range set");
+
 
         CommandQueue cq(device);
 
@@ -462,11 +462,6 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
         EnqueueProgram(cq, program, false);
-        if (profile_device) {
-            tt_metal::DumpDeviceProfileResults(device, program);
-        }
-
-        tt_metal::DumpHostProfileResults("Init");
 
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");

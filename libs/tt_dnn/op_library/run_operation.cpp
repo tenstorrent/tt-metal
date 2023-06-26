@@ -76,7 +76,7 @@ std::vector<Tensor> run_without_program_cache(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
 
-    auto profile_scope = op_profiler::ProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
+    auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
     auto do_profile = op_profiler::get_profiler_flag();
     if (do_profile) { setup_profiler(operation, input_tensors); }
 
@@ -88,11 +88,13 @@ std::vector<Tensor> run_without_program_cache(
     auto program_with_callbacks = operation.create_program(input_tensors, optional_input_tensors, output_tensors);
     auto& program = program_with_callbacks.program;
 
-    CompileProgram(device, program, do_profile);
+    CompileProgram(device, program);
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
         EnqueueProgram(*HACK_CQ, program, false);
-
+        // Only need to dump device data when in dispatch mode
+        // LaunchKernel automatically dumps device data
+        op_profiler::dump_device_profiler_results(device, program);
     } else {
         ConfigureDeviceWithProgram(device, program);
         WriteRuntimeArgsToDevice(device, program);
@@ -100,7 +102,6 @@ std::vector<Tensor> run_without_program_cache(
     }
 
     op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
-    op_profiler::dump_device_profiler_results(device, program);
 
     return output_tensors;
 }
@@ -110,7 +111,7 @@ std::vector<Tensor> run_with_program_cache(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
 
-    auto profile_scope = op_profiler::ProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
+    auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
     auto do_profile = op_profiler::get_profiler_flag();
     if (do_profile) { setup_profiler(operation, input_tensors); }
 
@@ -120,7 +121,7 @@ std::vector<Tensor> run_with_program_cache(
     auto output_tensors = operation.create_output_tensors(input_tensors);
 
     auto& program_with_callbacks = program_cache::get_or_create(
-        operation, input_tensors, optional_input_tensors, output_tensors, device, do_profile
+        operation, input_tensors, optional_input_tensors, output_tensors, device
     );
 
     override_runtime_args(
@@ -133,7 +134,9 @@ std::vector<Tensor> run_with_program_cache(
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
         EnqueueProgram(*HACK_CQ, program, false);
-
+        // Only need to dump device data when in dispatch mode
+        // LaunchKernel automatically dumps device data
+        op_profiler::dump_device_profiler_results(device, program);
     } else {
         ConfigureDeviceWithProgram(device, program);
         WriteRuntimeArgsToDevice(device, program);
@@ -141,7 +144,6 @@ std::vector<Tensor> run_with_program_cache(
     }
 
     op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
-    op_profiler::dump_device_profiler_results(device, program);
 
     return output_tensors;
 }
@@ -174,7 +176,7 @@ std::vector<Tensor> run(
 ) {
     log_operation(operation, input_tensors);
 
-    auto profile_scope = op_profiler::ProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);
+    auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);
     auto do_profile = op_profiler::get_profiler_flag();
     if (do_profile) { detail::setup_profiler(operation, input_tensors); }
 

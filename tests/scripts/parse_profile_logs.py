@@ -5,7 +5,6 @@
 
         testLocation ="stable_diffusion_reports"
         os.system(f"rm -rf {testLocation}")
-        ttl.profiler.set_profiler_flag(True)
         ttl.profiler.set_profiler_location(testLocation)
 
 

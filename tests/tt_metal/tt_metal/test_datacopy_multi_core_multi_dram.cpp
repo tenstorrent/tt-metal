@@ -420,8 +420,6 @@ int main(int argc, char **argv) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
-        tt_metal::DumpHostProfileResults("Init");
-
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");
 
@@ -434,7 +432,6 @@ int main(int argc, char **argv) {
                 uint32_t dram_address = ((tile_id / 8) * single_tile_size) + dst_dram_addr;
                 std::vector<uint32_t> result_vec;
                 tt_metal::ReadFromDeviceDRAMChannel(device, dram_bank, dram_address, single_tile_size, result_vec);
-                tt_metal::DumpHostProfileResults("ReadFromDeviceDRAM_" + std::to_string(i) + "_" + std::to_string(j));
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 auto result_flat_layout = convert_to_flat_layout(result_bfp16);
 

@@ -174,6 +174,5 @@ int main(int argc, char **argv) {
     }
 
     TT_ASSERT(pass);
-    tt_metal::DumpHostProfileResults();
     return 0;
 }

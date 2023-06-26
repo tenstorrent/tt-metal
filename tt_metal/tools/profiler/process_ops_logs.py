@@ -139,8 +139,13 @@ def parse_ops_logs(opsFolder):
     paths = sorted(Path(opsFolder).iterdir(), key=os.path.getmtime, reverse=True)
     assert paths, f"{opsFolder} is empty. Use -i option to choose the correct logs dir"
 
+    opsDeviceFolder = os.path.normpath(opsFolder)
+    if "_device" not in opsDeviceFolder:
+        opsDeviceFolder = f"{os.path.normpath(opsFolder)}_device"
+
     for opCandidate in paths:
         opCandidatePath = os.path.join(opsFolder, opCandidate)
+        opCandidateDevicePath = os.path.join(opsDeviceFolder, os.path.basename(os.path.normpath(opCandidate)))
         if os.path.isdir(opCandidatePath):
             if "unknown" in str(opCandidate).lower():
                 continue
@@ -149,36 +154,36 @@ def parse_ops_logs(opsFolder):
                 logger.warning(f"Skipped: {opLogPath} dir, no host side log found.")
                 continue
             with open(opLogPath, "r") as csvFile:
-                csvReader = csv.reader(csvFile, delimiter=",")
-                for lineCount, row in enumerate(csvReader):
-                    if lineCount > 0:
-                        op_folder_name = row[1].strip()
+                csvReader = csv.DictReader(csvFile)
+                for row in csvReader:
+                    try:
+                        op_folder_name = row["Name"].strip()
                         op_name = op_folder_name
                         extractName = re.findall(r".*tt.*tt_metal:*\d*(.*)E*", op_name)
                         if extractName:
                             op_name = extractName.pop()
 
-                        start_ts = int(row[2].strip())
-                        end_ts = int(row[3].strip())
-                        delta_time = int(row[4].strip())
+                        start_ts = int(row[" Start timer count [ns]"].strip())
+                        end_ts = int(row[" Stop timer count [ns]"].strip())
+                        delta_time = int(row[" Delta timer count [ns]"].strip())
 
-                        global_call_count = int(row[5].strip())
-                        call_count = int(row[6].strip())
-                        stack_size = int(row[7].strip())
+                        global_call_count = int(row[" Global Call Count"].strip())
+                        call_count = int(row[" Call Count"].strip())
+                        stack_size = int(row[" Stack Size"].strip())
 
-                        inputs = parse_io_data(row[8].strip(), "INPUT")
+                        inputs = parse_io_data(row[" Inputs"].strip(), "INPUT")
                         if len(inputs.keys()) > maxInputCount:
                             maxInputCount = len(inputs.keys())
 
-                        outputs = parse_io_data(row[9].strip(), "OUTPUT")
+                        outputs = parse_io_data(row[" Outputs"].strip(), "OUTPUT")
                         if len(outputs.keys()) > maxOutputCount:
                             maxOutputCount = len(outputs.keys())
 
-                        mathFidelity = row[10].strip()
-                        parallelizationStrategy = row[11].strip()
-                        preferredName = row[12].strip().split("tt::tt_metal::")[-1]
-                        metadata = row[13].strip()
-                        op_type = row[14].strip()
+                        mathFidelity = row[" Math Fidelity"].strip()
+                        parallelizationStrategy = row[" Parallelization Strategy"].strip()
+                        preferredName = row[" Preferred Name"].strip().split("tt::tt_metal::")[-1]
+                        metadata = row[" Meta Data"].strip()
+                        op_type = row[" Type"].strip()
 
                         if preferredName:
                             if op_type != "tt_dnn_device":
@@ -217,15 +222,15 @@ def parse_ops_logs(opsFolder):
                             "ATTRIBUTES": metadata,
                         }
 
-                        append_device_time_data(opCandidatePath, call_count, timeDataDict)
+                        append_device_time_data(opCandidateDevicePath, call_count, timeDataDict)
                         append_detail_host_time_data(opCandidatePath, call_count, timeDataDict)
 
                         if op_name in ops.keys():
                             ops[op_name].append(timeDataDict)
                         else:
                             ops[op_name] = [timeDataDict]
-                    else:
-                        assert "Start timer count [ns]" in row[2], f"CSV {opLogPath} has bad header format"
+                    except KeyError as e:
+                        assert False, f"CSV {opLogPath} has bad header format"
     return ops
 
 

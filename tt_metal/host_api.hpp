@@ -33,84 +33,6 @@ class Program;
 class Buffer;
 
 // ==================================================
-//                  HOST API: reports
-// ==================================================
-
-
-
-// ==================================================
-//                  HOST API: profiler
-// ==================================================
-
-/**
- * Dump host side profiler results into the host side CSV log
- *
- * Return value: void
- *
- * | Argument       | Description                                                                  |  Data type  | Valid range  | required |
- * |----------------|------------------------------------------------------------------------------|-------------|--------------|----------|
- * | name_prepend   | The name or description to be prepended to all rows in the CSV for this dump | std::string | Any string   | No       |
- * */
-void DumpHostProfileResults(std::string name_prepend = "");
-
-/**
- * Read device side profiler data and dump results into device side CSV log
- *
- * Return value: void
- *
- * | Argument      | Description                                       | Type            | Valid Range                                            | Required |
- * |---------------|---------------------------------------------------|-----------------|--------------------------------------------------------|----------|
- * | device        | The device holding the program being profiled.    | Device *        |                                                        | True     |
- * | program       | The program being profiled.                       | const Program & |                                                        | True     |
- * */
-void DumpDeviceProfileResults(Device *device, const Program &program);
-
-
-
-/**
- * Enable/Disable host side profiling of tt_metal API
- *
- * Return value: void
- *
- * | Argument     | Description                                                |  Data type  | Valid range              | required |
- * |--------------|------------------------------------------------------------|-------------|--------------------------|----------|
- * | do_profile   | Enable or Disable the host side profiling through this arg | bool        | true/false               | Yes      |
- * */
-void SetHostProfilerFlag(bool do_profile);
-
-/**
- * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
- *
- * Return value: void
- *
- * | Argument     | Description                                             |  Data type  | Valid range              | required |
- * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
- * | output_dir   | The output directory that will hold the outpu CSV logs  | std::string | Any valid directory path | No       |
- * */
-void SetProfilerDir(std::string output_dir = "");
-
-/**
- * Start a fresh log for the host side profile results
- *
- * Return value: void
- *
- * | Argument     | Description                                             |  Data type  | Valid range              | required |
- * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
- * */
-void FreshProfilerHostLog();
-
-/**
- * Start a fresh log for the device side profile results
- *
- * Return value: void
- *
- * | Argument     | Description                                             |  Data type  | Valid range              | required |
- * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
- * */
-void FreshProfilerDeviceLog();
-
-
-// ==================================================
 //                  HOST API: host and device
 // ==================================================
 Host *GetHost();
@@ -624,9 +546,8 @@ void ClearCompileCache();
  * |----------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
  * | device         | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
  * | program        | The program to compile                                           | Program & |                                                    | Yes      |
- * | profile_kernel | Set the compile flag for kernels to report profiling timer marks | bool      | default false                                      | No       |
  */
-bool CompileProgram(Device *device, Program &program, bool profile_kernel = false);
+bool CompileProgram(Device *device, Program &program);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores

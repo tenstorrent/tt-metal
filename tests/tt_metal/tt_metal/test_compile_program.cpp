@@ -53,7 +53,7 @@ KernelCacheStatus CompileProgramTestWrapper(Device *device, Program &program, bo
     auto root_dir = get_kernel_compile_outpath(device->pcie_slot());
     std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->pcie_slot());
 
-    CompileProgram(device, program, profile_kernel);
+    CompileProgram(device, program);
 
     std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->pcie_slot());
 
@@ -338,7 +338,6 @@ int main(int argc, char **argv) {
         Device *device = CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
         constexpr bool profile_device = true;
-        extern bool enable_fw_profile_hack;
         pass &= InitializeDevice(device);
 
         pass &= test_compile_program_in_loop(device);

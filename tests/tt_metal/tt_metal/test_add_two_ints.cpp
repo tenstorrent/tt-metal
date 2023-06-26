@@ -3,6 +3,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tools/profiler/profiler_state.hpp"
 
 ////////////////////////////////////////////////////////////////////////////
 // Runs the add_two_ints kernel on BRISC to add two ints in L1
@@ -33,10 +34,6 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
 
-        constexpr bool profile_device = true;
-        extern bool enable_fw_profile_hack;
-        enable_fw_profile_hack = profile_device;
-
         pass &= tt_metal::InitializeDevice(device);
 
         ////////////////////////////////////////////////////////////////////////////
@@ -53,12 +50,12 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program, profile_device);
+        pass &= tt_metal::CompileProgram(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        if (profile_device == false){
+        if (getDeviceProfilerState() == false){
             StartDebugPrintServer(device);
         }
         tt_metal::SetRuntimeArgs(add_two_ints_kernel, core, first_runtime_args);
@@ -67,15 +64,11 @@ int main(int argc, char **argv) {
         tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
-        if (profile_device){
-            tt_metal::DumpDeviceProfileResults(device, program);
-        }
 
         std::vector<uint32_t> first_kernel_result;
         tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, sizeof(int), first_kernel_result);
         log_info(LogVerif, "first kernel result = {}", first_kernel_result[0]);
 
-        tt_metal::DumpHostProfileResults("first");
         ////////////////////////////////////////////////////////////////////////////
         //                  Update Runtime Args and Re-run Application
         ////////////////////////////////////////////////////////////////////////////
@@ -84,15 +77,11 @@ int main(int argc, char **argv) {
         tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
-        if (profile_device){
-            tt_metal::DumpDeviceProfileResults(device, program);
-        }
 
         std::vector<uint32_t> second_kernel_result;
         tt_metal::ReadFromDeviceL1(device, core, BRISC_L1_RESULT_BASE, sizeof(int), second_kernel_result);
         log_info(LogVerif, "second kernel result = {}", second_kernel_result[0]);
 
-        tt_metal::DumpHostProfileResults("second");
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

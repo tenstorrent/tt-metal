@@ -1,20 +1,150 @@
-========================
-Execution Time Profiler
-========================
+=================
+Quick Start Guide
+=================
 
-OPs
-===
+1. Build the tt_metal project with the profiler build flag set as follows:
 
-Ops implemented using the ``operation`` module will automatically be profiled if the profiling flag is enabled during the execution of the op. The op profiling flag can be set using
-``op_profiler::set_profiler_flag`` from the C++ host side or using the ``ttl.profiler.set_profiler_flag`` python function. With the flag set, profiler logs will be generated under
-the default folder. The logs folder can be modified using  ``op_profiler::set_profiler_location`` on C++ host side and the ``ttl.profiler.set_profiler_location`` on the python
-side.
+..  code-block:: sh
 
-Once ops finish running either as part of a model or as standalone unit tests, the post processing python script ``process_ops_logs.py`` generates a csv of all executed ops and it
-profiling information.
+    make clean
+    make build ENABLE_PROFILER=1
 
-Please refer to the ``ttl.profiler`` module of the python binding docs for info on more API functions available for profiling. Functions such as ``set_preferred_name`` can be used
-while profiling a section, to add more information about the section being profiled.
+2. Determine the execution command for running your model of OP unit test. e.g.
+
+``pytest tests/python_api_testing/models/stable_diffusion/test_residual_block.py``
+
+3. In the same shell, run ``profile_this.py`` to profile the command.
+
+..  code-block:: sh
+
+    cd $TT_METAL_HOME
+    ./tt_metal/tools/profiler/profile_this.py -c "pytest tests/python_api_testing/models/stable_diffusion/test_residual_block.py"
+
+**NOTES**:
+
+- Do not skip ``make clean`` as it is the only way to ensure all effected files are recompiled.
+- Export any environment variables that your command requires and they will be picked up by the ``profile_this.py`` script.
+- Make sure tt_metal python virtual env is setup as per :ref:`Getting Started<Getting Started>`
+- ``-c`` is the only option for the script which is for providing the run the test execution script.
+- If your command actually starts a collection of tests, please refer to the `Profiling OPs`_ section for more info on how to choose log locations for your tests.
+- Once the script finished, it will provide log messages to tell you where the generated ops report csv is stored.
+
+OPs Report
+==========
+
+The OPs profiler report demonstrates the execution flow of the OPs in the pipeline. Each row in the CSV represents an OP executed.
+
+For each OP, multiple data points are provided in the columns of the CSV.
+
+The headers of the columns with their descriptions is below:
+
+- **OP CODE**: Operation name, for C++ level OPs this code is the name of the class for the OP
+
+- **OP TYPE**: Operation type, where the op ran and which part of code it is coming from
+
+    - *python_fallback*: OP fully implemented in python and running on CPU
+    - *tt_dnn_cpu*: OP implemented in C++ and running on CPU
+    - *tt_dnn_device*: OP implemented in C++ and running on DEVICE
+
+- **GLOBAL CALL COUNT**: The index of the op in the execution pipeline
+
+- **ATTRIBUTES**: Any additional attribute or meta-data that can be manually added during the execution of the op
+
+    - ``op_profiler::append_meta_data`` can be used on the C++ side to add to this field
+    - ``ttl.profiler.append_meta_data`` can be used on the Python side to add to this field
+
+- **MATH FIDELITY**: Math fidelity of the fields
+
+    - LoFi
+    - HiFi2
+    - HiFi3
+    - HiFi4
+
+- **CORE COUNT**: The number of cores used on the device for this operation
+
+- **PARALLELIZATION STRATEGY**: How the device kernel parallelizes across device cores
+
+- **HOST START TS**: System clock time stamp stored at the very beginning of the OP execution
+
+- **HOST END TS**: System clock time stamp stored at the very end of the OP execution
+
+- **HOST DURATION [ns]**: Duration of the OP in nanoseconds, calculated as end_ts - start_ts
+
+- **DEVICE START CYCLE**: Tensix cycle count from the earliest RISC of the earliest core of the device that executed the OP kernel
+
+- **DEVICE END CYCLE**: Tensix cycle count from the latest RISC of the latest core of the device that executed the OP kernel
+
+- **DEVICE DURATION [ns]**: Duration on the device for the OP, calculated as (end_cycle - start_cycle)/core_frequency
+
+- **Input & Output Tensor Headers**: Header template is {Input/Output}_{IO Number}_{Field}. e.g. INPUT_0_MEMORY
+
+    - *W*: Tensor batch count
+    - *Z*: Tensor channel count
+    - *Y*: Tensor Height
+    - *X*: Tensor Width
+    - *LAYOUT*:
+        - ROW_MAJOR
+        - TILE
+        - CHANNELS_LAST
+    - *DATA TYPE*:
+        - BFLOAT16
+        - FLOAT32
+        - UINT32
+        - BFLOAT8_B
+    - *MEMORY*
+        - dev_0_dram
+        - dec_0_l1
+        - host
+
+- **CALL DEPTH**: Level of the OP in the call stack. If OP call other OPs the child OP will have a CALL DEPTH one more than the CALL DEPTH of the caller
+
+- **TT_METAL API calls**: Statistics on tt_metal calls, particularly how many times they were called during the OP and what was their average duration in nanoseconds
+
+    - CompileProgram
+    - ConfigureDeviceWithProgram
+    - LaunchKernels
+    - ReadFromDevice
+    - WriteToDevice
+    - DumpDeviceProfileResults
+
+===========
+Deeper Dive
+===========
+
+Automated Script
+================
+
+The ``profile_this.py`` script is an automated script that cover most Models and OPs units test profiling scenarios.
+
+This scripts performs the following items:
+
+1. Checks if the project is correctly built with ``PROFLER="enabled"``
+2. Executes the provided under test command to provide both host and device side profiling data
+3. Post-processes all the collected log locations
+
+Note on step two, because fetching the device profiling data adds high overhead to the actual execution time,
+the under test command is executed twice, once with device profiling and once without.
+The results of the two runs are then stitched together into on csv to present device data alongside host time data
+that is not affected by device download overhead.
+
+Setp 2 above can manually be replicated by:
+
+1. Run you command without device profiling i.e. env variable ``TT_METAL_DEVICE_PROFILER=0``
+2. Run you command with device profiling using the same logs folder location as step 1 i.e. env variable ``TT_METAL_DEVICE_PROFILER=0``
+   te profiler will automatically append ``_device`` to the folder location
+3. run ``process_ops_logs.py`` with the input log location ``-i`` pointed to the logs location set by ``set_profiler_location``
+
+
+Profiling OPs
+=============
+
+Models and OPs unit tests are automatically profiled in PROFILER builds.
+
+By default OPs logs are saved under ``$TT_METAL_HOME/tt_metal/tools/profiler/logs/ops/``.
+
+This folder can be changed by using ``ttl.profiler.set_profiler_location`` function.
+
+Refer to the ``ttl.profiler`` module of the python bindings' docs for info on more API functions available for profiling.
 
 **NOTE**: ``ttl.profiler`` is a separate module from the ``utility_functions.profiler`` module. ``utility_functions.profiler`` will be deprecated once all of its features are
 covered by ``ttl.profiler``.
@@ -43,123 +173,15 @@ Post-processing ops profiler
     - Custom webapp port
 
 
-Host Side
-=========
-
-Host API is profiled by wrapping the portion of the code that needs profiling with start and end
-markers with the same timer name. After the execution of the wrapped code, the start, end and the
-delta in between them for all the timers is recorded in a CSV for further post processing.
-
-Setup
------
-
-For profiling any module on the host side, an object of the of the ``Profiler`` class is needed
-in order to record the marked times and dump the result to a CSV. The ``Profiler`` is defined under
-the ``tools/profiler/profiler.hpp`` header which can be include as follows.
-
-..  code-block:: C++
-
-    #include "tools/profiler/profiler.hpp"
-
-The module Make procedure should also include the profiler library. This can be done by adding the
-the ``-lprofiler`` flag to the ``LDFLAG`` argument in the ``module.mk`` of that module. For example
-for tests under ``tt_metal``, which uses the profiler, the following is the ``LDFLAG`` line in ``tt_metal/tests/module.mk``.
-
-..  code-block:: MAKEFILE
-
-    TT_METAL_TESTS_LDFLAGS = -ltt_metal_impl -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -ldl -lcommon -lprofiler -lstdc++fs -pthread -lyaml-cpp
-
-With the instance of the ``Profiler`` class, ``markStart`` and ``markStop`` functions can be used to
-profile the module. Taking ``tt_metal`` as an example, ``tt_metal_profiler`` is
-instantiated as a static member of the module ``tt_metal/tt_metal.cpp`` as follows.
-
-..  code-block:: C++
-
-    static Profiler tt_metal_profiler = Profiler();
-    tt_metal_profiler.setHostDoProfile(true);
-
-
-In functions such as ``LaunchKernels`` the entire code within the function is wrapped under the
-``markStart`` and ``markStop`` calls with the timer name ``"LaunchKernels"``.
-
-..  code-block:: C++
-
-    bool LaunchKernels(Device *device, Program &program) {
-
-        tt_metal_profiler.markStart("LaunchKernels");
-        bool pass = true;
-
-        auto cluster = device->cluster();
-
-        <Internals of LaunchKernels>
-
-        cluster->broadcast_remote_tensix_risc_reset(pcie_slot, TENSIX_ASSERT_SOFT_RESET);
-
-        tt_metal_profiler.markStop("LaunchKernels");
-        return pass;
-    }
-
-After the execution of all wrapped code. A call to  ``tt_metal::DumpHostProfileResults`` will process the deltas on all
-timers and dump the results into a CSV called ``profile_log_host.csv``. The location of the CSV is
-assigned by ``tt_metal::SetProfilerDir`` or it will be the default location ``tt_metal/tools/profiler/logs/``.
-
-The ``tt_metal::DumpHostProfileResults`` also flushes all the timers data after the dump. This is so that the same
-object can be used to perform multiple consecutive measurements on the same timer name. The ``name_append`` argument adds
-a ``Section name`` column to the CSV that demonstrates which row in the CSV it
-belongs to.
-
-``tt_metal\tests\test_add_two_ints.cpp`` is a good example that demonstrates this scenario.
-``LaunchKernels`` is called twice in this test, if we only dump results once at the end of the
-execution, we will only get the results on the last call to that function. With the use of sections
-names we can call ``DumpHostProfileResults`` twice and get and output such as the following in the
-CSV.
-
-
-..  code-block:: c++
-
-    Section Name, Function Name, Start timer count [ns], Stop timer count [ns], Delta timer count [ns]
-    first, LaunchKernels, 675598390620333, 675598390740682, 120349
-    first, ConfigureDeviceWithProgram, 675598152012369, 675598390619993, 238607624
-    first, CompileProgram, 675597384816840, 675598152009299, 767192459
-    second, LaunchKernels, 675598625865918, 675598625981107, 115189
-    second, ConfigureDeviceWithProgram, 675598392545035, 675598625864988, 233319953
-
-
-Device Side
-===========
+Profiling Device
+================
 
 Any point on the device side code can be marked with a time marker. The markers are stored in a statically assigned L1 location.
-After LaunchKernel the markers are fetched from all the cores on the device. Default markers are present in device FW that mark kernel and FW start and end times.
-Post processing scripts are provided to perform various statistical analysis on the markers data.
+As part of tt_metal api ``LaunchKernel`` the markers are fetched from all the cores on the device.
 
-Setup
------
+Because downloading profiler results from device through has high overheads, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set for ``LaunchKernel`` to perform the download.
 
-On the host side minimal changes are necessary on the code.
-
-1. The compile flag for device side profiling has to be set, this is done by setting the flag in ``tt_metal::CompileProgram``.
-2. For each kernel launch through ``tt_metal::LaunchKernels(device, program);``  that you want device side profiler markers dumped,
-   A call to ``tt_metal::DumpDeviceProfileResults(device, program);`` has to be made to append the markers to
-   the current test device side output ``profile_log_device.csv``
-
-e.g.
-
-..  code-block:: c++
-
-    constexpr bool profile_device = true;
-    pass &= tt_metal::CompileProgram(device, program, profile_device);
-    .
-    .
-    .
-    .
-    .
-    tt_metal::WriteRuntimeArgsToDevice(device, add_two_ints_kernel, core, second_runtime_args);
-    pass &= tt_metal::LaunchKernels(device, program);
-    if (profile_device){
-        tt_metal::DumpDeviceProfileResults(device, program);
-    }
-
-After this setup, default markers will be generated and can be post-processed.
+Default markers are present in device FW(i.e. ``.cc`` files) that mark kernel and FW start and end times.
 
 Default markers are:
 
@@ -168,7 +190,7 @@ Default markers are:
 3. Kernel end
 4. FW end
 
-The generated csv is ``profile_log_device.csv`` is saved under ``tt_metal/tools/profiler/logs`` by default.
+The generated csv is ``profile_log_device.csv`` and is saved under ``tt_metal/tools/profiler/logs`` by default.
 
 Sample generated csv for a run on core 0,0:
 

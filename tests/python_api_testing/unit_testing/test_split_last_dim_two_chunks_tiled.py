@@ -80,11 +80,9 @@ def getTensorFromBuff(buff):
 def test_split_tiled_w(
     shape, in_mem_config, out_mem_config, dtype=ttl.tensor.DataType.BFLOAT16
 ):
-    profile = False
     profile_location = "tt_metal/tools/profiler/logs/splitTwoChunks/"
     os.system(f"rm -rf {profile_location}")
 
-    ttl.profiler.set_profiler_flag(profile)
     ttl.profiler.set_profiler_location(profile_location)
 
     assert shape[0] == 1

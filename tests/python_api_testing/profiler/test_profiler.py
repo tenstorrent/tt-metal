@@ -24,7 +24,6 @@ def one_second_profile (name):
 def test_nested_profiling():
     testLocation ="tt_metal/tools/profiler/logs/test_profiler/nested_profiling"
     os.system(f"rm -rf {testLocation}")
-    ttl.profiler.set_profiler_flag(True)
     ttl.profiler.set_profiler_location(testLocation)
 
     one_second_profile ("first_level_1")

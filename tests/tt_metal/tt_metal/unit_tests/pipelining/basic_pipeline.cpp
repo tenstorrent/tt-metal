@@ -197,8 +197,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         }
     }
 
-    constexpr bool profile_device = false;
-    tt_metal::CompileProgram(device, program, profile_device);
+    tt_metal::CompileProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
@@ -212,9 +211,6 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    if (profile_device){
-        tt_metal::DumpDeviceProfileResults(device, program);
-    }
     log_info(LogTest, "Kernels done.");
 
     log_info(LogTest, "Reading results from device...");

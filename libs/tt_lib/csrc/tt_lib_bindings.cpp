@@ -3098,16 +3098,6 @@ void ProfilerModule(py::module &m_profiler) {
         .value("python_fallback", op_profiler::OpType::python_fallback)
         .value("custom_zone", op_profiler::OpType::custom_zone);
 
-    m_profiler.def("set_profiler_flag", &op_profiler::set_profiler_flag, R"doc(
-        Sets the profiling flag.
-
-        +------------------+------------------------+-----------------------+-------------+----------+
-        | Argument         | Description            | Data type             | Valid range | Required |
-        +==================+========================+=======================+=============+==========+
-        | flag             | Profiling state        | bool                  | true/false  | Yes      |
-        +------------------+------------------------+-----------------------+-------------+----------+
-    )doc");
-
     m_profiler.def("get_profiler_flag", &op_profiler::get_profiler_flag, R"doc(
         Gets the profiling flag.
     )doc");

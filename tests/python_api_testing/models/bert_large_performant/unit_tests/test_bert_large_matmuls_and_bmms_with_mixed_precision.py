@@ -333,7 +333,6 @@ def test_bert_large_matmul(
     out_mem_config,
     request,
 ):
-    ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_{request.node.callspec.id}"
     )
@@ -408,7 +407,6 @@ def test_bert_large_bmm(
     out_mem_config,
     request,
 ):
-    ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_{request.node.callspec.id}"
     )

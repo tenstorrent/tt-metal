@@ -18,15 +18,12 @@
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 
-// TODO(MO): hack until ticket #1184 is in
-bool enable_fw_profile_hack = false;
-
 namespace tt {
 
 namespace tt_metal {
 
 namespace detail {
-    inline void CompileBlankKernel(Device *device, bool profile_kernel) {
+    inline void CompileBlankKernel(Device *device) {
         // Crude way to check if blank_op needs to be compiled or not
         // TODO(pgk):
         //  - fw is compiled every run
@@ -53,7 +50,7 @@ namespace detail {
 
         generate_binaries_params_t default_params;
         detail::GenerateBankToNocCoordHeaders(device, &blank_build_options, blank_build_options.name);
-        generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params, profile_kernel);
+        generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params);
 
         compiled = true;
     }
@@ -120,32 +117,8 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 }
 }  // namespace
 
-static Profiler tt_metal_profiler = Profiler();
 
 void ClearCompileCache() { detail::HashLookup::inst().clear(); }
-
-void DumpHostProfileResults(std::string name_prepend){
-    tt_metal_profiler.dumpHostResults(name_prepend);
-}
-
-void DumpDeviceProfileResults(Device *device, const Program &program) {
-    tt_metal_profiler.markStart("DumpDeviceProfileResults");
-    TT_ASSERT(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
-    auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(program.logical_cores());
-
-    auto cluster = device->cluster();
-    auto pcie_slot = device->pcie_slot();
-    tt_metal_profiler.dumpDeviceResults(cluster, pcie_slot, worker_cores_used_in_program);
-    tt_metal_profiler.markStop("DumpDeviceProfileResults");
-}
-
-void SetHostProfilerFlag(bool do_profile) { tt_metal_profiler.setHostDoProfile(do_profile); }
-
-void SetProfilerDir(std::string output_dir) { tt_metal_profiler.setOutputDir(output_dir); }
-
-void FreshProfilerHostLog() { tt_metal_profiler.setHostNewLogFlag(true); }
-
-void FreshProfilerDeviceLog() { tt_metal_profiler.setDeviceNewLogFlag(true); }
 
 Host *GetHost() { return new Host(); }
 
@@ -165,7 +138,10 @@ bool InitializeDevice(Device *device) {
                 detail::GenerateBankToNocCoordHeaders(device, &build_options, "");
                 std::string arch_name = tt::get_string_lowercase(device->arch());
                 generate_binaries_params_t default_params;
-                generate_binaries_all_riscs(&build_options, "", arch_name, default_params, enable_fw_profile_hack);
+                generate_binaries_all_riscs(&build_options,
+                                            "",
+                                            arch_name,
+                                            default_params);
 
                 char *dbg_print = std::getenv("TT_KERNEL_DEBUG_PRINT");
                 if (dbg_print != nullptr) {
@@ -432,7 +408,7 @@ uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, u
 }
 
 void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
-    tt_metal_profiler.markStart("WriteToDevice");
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDevice");
 
     uint32_t page_size = buffer.page_size();
     TT_ASSERT(buffer.size() % page_size == 0);
@@ -468,7 +444,6 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
         bank_index = (bank_index + 1) % num_banks;
         data_index += num_entries_per_page;
     }
-    tt_metal_profiler.markStop("WriteToDevice");
 }
 
 void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
@@ -485,7 +460,7 @@ void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
 }
 
 void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
-    tt_metal_profiler.markStart("ReadFromDevice");
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDevice");
 
     host_buffer.clear();  // overwrite the data
     uint32_t page_size = buffer.page_size();
@@ -521,7 +496,6 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
         bank_index = (bank_index + 1) % num_banks;
     }
 
-    tt_metal_profiler.markStop("ReadFromDevice");
 }
 
 void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
@@ -541,28 +515,27 @@ void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
 bool ReadFromDeviceDRAMChannel(
     Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer) {
-    tt_metal_profiler.markStart("ReadFromDeviceDRAMChannel");
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDeviceDRAMChannel");
+
     bool pass = true;
     device->cluster()->read_dram_vec(host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, address, size);
-    tt_metal_profiler.markStop("ReadFromDeviceDRAMChannel");
     return pass;
 }
 
 bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer) {
-    tt_metal_profiler.markStart("WriteToDeviceDRAMChannel");
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDeviceDRAMChannel");
+
     bool pass = true;
     device->cluster()->write_dram_vec(host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, address);
-    tt_metal_profiler.markStop("WriteToDeviceDRAMChannel");
     return pass;
 }
 
 bool WriteToDeviceL1(
     Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer) {
-    tt_metal_profiler.markStart("WriteToDeviceL1");
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDeviceL1");
     bool pass = true;
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     llrt::write_hex_vec_to_core(device->cluster(), device->pcie_slot(), worker_core, host_buffer, address);
-    tt_metal_profiler.markStop("WriteToDeviceL1");
     return pass;
 }
 
@@ -572,11 +545,10 @@ bool ReadFromDeviceL1(
     uint32_t address,
     uint32_t size,
     std::vector<uint32_t> &host_buffer) {
-    tt_metal_profiler.markStart("ReadFromDeviceL1");
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDeviceL1");
     bool pass = true;
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     host_buffer = llrt::read_hex_vec_from_core(device->cluster(), device->pcie_slot(), worker_core, address, size);
-    tt_metal_profiler.markStop("ReadFromDeviceL1");
     return pass;
 }
 
@@ -584,7 +556,6 @@ bool GenerateBinaries(
     Device *device,
     build_kernel_for_riscv_options_t *build_options,
     const std::string &op_path_suffix,
-    bool profile_kernel,
     Kernel *kernel) {
     std::string arch_name = tt::get_string_lowercase(device->arch());
 
@@ -599,23 +570,22 @@ bool GenerateBinaries(
                         op_path_suffix,
                         arch_name,
                         dm_kernel->noc(),
-                        dm_kernel->compile_time_args(),
-                        profile_kernel);
-                } break;
+                        dm_kernel->compile_time_args());
+                }
+                break;
                 case (DataMovementProcessor::RISCV_1): {
                     generate_binary_for_ncrisc(
                         build_options,
                         op_path_suffix,
                         arch_name,
                         dm_kernel->noc(),
-                        dm_kernel->compile_time_args(),
-                        profile_kernel);
+                        dm_kernel->compile_time_args());
                 } break;
                 default: TT_ASSERT(false, "Unsupported data movement processor!");
             }
         } else if (auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel)) {
             generate_binaries_for_triscs(
-                build_options, op_path_suffix, arch_name, compute_kernel->compile_time_args(), profile_kernel);
+                build_options, op_path_suffix, arch_name, compute_kernel->compile_time_args());
         }
     } catch (std::runtime_error &ex) {
         log_error(tt::LogMetal, "EXCEPTION in GenerateBinaries: ", ex.what());
@@ -640,12 +610,11 @@ void SetCircularBufferDataFormat(
 #endif
 
 size_t KernelCompileHash(
-    Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &pcie_slot, bool profile_kernel) {
+    Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &pcie_slot) {
     string compile_hash_str = std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc));
     compile_hash_str += kernel->compile_time_args_hash();
     compile_hash_str += std::to_string(kernel->define_args_hash());
     compile_hash_str += std::to_string(std::hash<std::string>{}(kernel->name()));
-    compile_hash_str += std::to_string(size_t(profile_kernel));
 
     if (kernel->kernel_type() == KernelType::DataMovement) {
         auto data_movement_kernel = dynamic_cast<DataMovementKernel *>(kernel);
@@ -669,7 +638,6 @@ size_t KernelCompileHash(
         f << kernel->name() << " :: " << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
           << " :: " << kernel->compile_time_args_hash() << " :: " << kernel->define_args_hash()
           << " :: " << std::hash<std::string>{}(kernel->name()) << " :: ";
-        << profile_kernel << " :: ";
         if (auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel)) {
             f << dm_kernel->noc() << " :: ";
         } else {
@@ -706,13 +674,13 @@ void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &bui
     }
 }
 
-void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profile_kernel) {
+void CompileKernel(Device *device, Program &program, Kernel *kernel) {
     build_kernel_for_riscv_options_t build_options(device->pcie_slot(), kernel->name());
 
     SetBuildKernelOptions(kernel, build_options);
     SetCircularBufferDataFormat(device, program, kernel, build_options);
 
-    auto kernel_hash = KernelCompileHash(kernel, build_options, device->pcie_slot(), profile_kernel);
+    auto kernel_hash = KernelCompileHash(kernel, build_options, device->pcie_slot());
     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash);
 
     bool cache_hit = true;
@@ -721,7 +689,7 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
         if ( not detail::HashLookup::inst().exists(kernel_hash) ) detail::HashLookup::inst().add(kernel_hash);
     } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
         cache_hit = false;
-        GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
+        GenerateBinaries(device, &build_options, kernel_path_suffix, kernel);
     }
 
     if (detail::CompilationReporter::enabled()) {
@@ -731,7 +699,7 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
     kernel->set_binary_path(kernel_path_suffix);
 }
 
-void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
+void AddBlankKernels(Device *device, Program &program) {
     // This can be smarter by combining core ranges into maximal rectangles but this code can be removed once we load BRISC FW separately from the kernel binary
     std::set<CoreRange> unique_core_ranges_without_brisc_kernel,
                         unique_core_ranges_without_ncrisc_kernel,
@@ -777,12 +745,12 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
     }
 
     for (const auto &blank_kernel : blanks) {
-        CompileKernel(device, program, blank_kernel, profile_kernel);
+        CompileKernel(device, program, blank_kernel);
         blank_kernel->read_binaries(device->pcie_slot());
     }
 }
 
-bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
+bool CompileProgram(Device *device, Program &program) {
     log_assert(
         device->is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
@@ -791,11 +759,12 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE == nullptr) {
-        tt::tt_metal::detail::CompileBlankKernel(device, profile_kernel);
+        tt::tt_metal::detail::CompileBlankKernel(device);
     }
 
     bool pass = true;
-    tt_metal_profiler.markStart("CompileProgram");
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("CompileProgram");
+    bool profile_kernel = getDeviceProfilerState();
     std::vector<std::future<void>> events;
     log_assert(
         !(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
@@ -804,7 +773,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     {
         tf::Taskflow tf;
 
-        tf.emplace([device, &program, profile_kernel] { AddBlankKernels(device, program, profile_kernel); });
+        tf.emplace([device, &program] { AddBlankKernels(device, program); });
 
         // Currently we want to support both slow and fast dispatch until we
         // fully move over to fast, so using this env var method to set all
@@ -813,15 +782,15 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
 
         if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
             for (auto kernel : program.kernels()) {
-                tf.emplace([kernel, device, &program, profile_kernel] {
+                tf.emplace([kernel, device, &program] {
                     kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", 1);
-                    CompileKernel(device, program, kernel, profile_kernel);
+                    CompileKernel(device, program, kernel);
                 });
             }
         } else {
             for (auto kernel : program.kernels()) {
-                tf.emplace([kernel, device, &program, profile_kernel] {
-                    CompileKernel(device, program, kernel, profile_kernel);
+                tf.emplace([kernel, device, &program] {
+                    CompileKernel(device, program, kernel);
                 });
             }
         }
@@ -844,8 +813,6 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(program, device);
     }
-
-    tt_metal_profiler.markStop("CompileProgram");
     return pass;
 }
 
@@ -872,7 +839,8 @@ void ConfigureKernelGroup(const KernelGroup &kernel_group, Device *device, const
 bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     bool pass = true;
 
-    tt_metal_profiler.markStart("ConfigureDeviceWithProgram");
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ConfigureDeviceWithProgram");
+
     std::vector<CoreCoord> worker_cores;
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
@@ -931,7 +899,6 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(
         cluster, pcie_slot, riscs_options, worker_cores);                                // PROF_END("LOAD_BLANK")
 
-    tt_metal_profiler.markStop("ConfigureDeviceWithProgram");
     return pass;
 }
 
@@ -1009,8 +976,9 @@ llrt::TensixRiscsOptions GetRiscOptionFromCoreConfig(bool core_runs_ncrisc, bool
 }
 
 bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
-    tt_metal_profiler.markStart("LaunchKernels");
     bool pass = true;
+    {//Profiler scope start
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchKernels");
 
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
@@ -1048,7 +1016,8 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
     // Reset the device that was running
     cluster->broadcast_remote_tensix_risc_reset(pcie_slot, TENSIX_ASSERT_SOFT_RESET);
 
-    tt_metal_profiler.markStop("LaunchKernels");
+    }//Profiler scope end
+    detail::DumpDeviceProfileResults(device,program);
     return pass;
 }
 

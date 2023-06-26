@@ -22,7 +22,7 @@ Program init_compile_and_configure_program(Device *device, const CoreRangeSet &c
         tt_metal::NOC::RISCV_0_default
     );
 
-    CompileProgram(device, program, /*profile_device=*/false);
+    CompileProgram(device, program);
     return std::move(program);
 }
 

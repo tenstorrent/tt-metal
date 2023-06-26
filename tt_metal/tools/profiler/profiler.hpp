@@ -7,11 +7,16 @@
 #include <filesystem>
 
 #include "llrt/llrt.hpp"
+#include "tools/profiler/profiler_state.hpp"
 
 using std::chrono::steady_clock;
 using std::chrono::duration;
 using std::chrono::duration_cast;
 using std::chrono::nanoseconds;
+
+namespace tt {
+
+namespace tt_metal {
 
 // struct for holding start, stop and duration of a timer period in integer format
 struct TimerPeriodInt {
@@ -28,9 +33,6 @@ struct TimerPeriod {
 
 class Profiler {
     private:
-        // Do prfoile flag
-        bool do_profile_host = false;
-
         // Holds name to timers
         std::unordered_map <std::string, TimerPeriod> name_to_timer_map;
 
@@ -45,6 +47,11 @@ class Profiler {
 
         // Turn steady clock start and stop into integer start, stop and duration
         TimerPeriodInt timerToTimerInt(TimerPeriod period);
+        //
+        //Traverse all timers and dump the results, appending addtional fields
+        void dumpHostResults(
+                const std::string& timer_name,
+                const std::vector<std::pair<std::string,std::string>>& additional_fields = {});
 
         // Dumping profile result to file
         void dumpDeviceResultToFile(
@@ -67,14 +74,11 @@ class Profiler {
         //Constructor
         Profiler();
 
-        //Enable/disable host side profiling on host side
-        void setHostDoProfile(bool profile_flag);
-
         //Mark the steady_clock for the start of the asked name
-        void markStart(std::string timer_name);
+        void markStart(const std::string& timer_name);
 
         //Mark the steady_clock time for the end of the asked name
-        void markStop(std::string timer_name, bool dumpResults = true);
+        void markStop(const std::string& timer_name, const std::vector<std::pair<std::string,std::string>>& additional_fields = {});
 
         //Set the host side file flag
         void setHostNewLogFlag(bool new_log_flag);
@@ -83,14 +87,12 @@ class Profiler {
         void setDeviceNewLogFlag(bool new_log_flag);
 
         //Change the output dir of the profile logs
-        void setOutputDir(std::string new_output_dir);
-
-        //Traverse all timers and dump the results, appending addtional fields
-        void dumpHostResults(const std::vector<std::pair<std::string,std::string>>& additional_fields, std::string name_append = "");
-
-        //Traverse all timers and dump the results with only default fields
-        void dumpHostResults(std::string name_append = "");
+        void setOutputDir(const std::string& new_output_dir);
 
         //Traverse all cores on the device and dump the device profile results
         void dumpDeviceResults(tt_cluster *cluster, int pcie_slot, const vector<CoreCoord> &worker_cores);
 };
+
+}  // namespace tt_metal
+
+}  // namespace tt

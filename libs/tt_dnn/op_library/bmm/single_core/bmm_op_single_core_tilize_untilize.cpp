@@ -476,7 +476,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     SetRuntimeArgs(writer, core_range, writer_rt_args);
 
     // Compile and launch
-    bool pass = CompileProgram(device, program, false);
+    bool pass = CompileProgram(device, program);
 
     TT_ASSERT(pass);
 

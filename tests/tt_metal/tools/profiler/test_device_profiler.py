@@ -10,6 +10,7 @@ import tests.tt_metal.tools.profiler.common as common
 REPO_PATH = common.get_repo_path()
 TT_METAL_PATH = f"{REPO_PATH}/tt_metal"
 PROFILER_DIR = f"{TT_METAL_PATH}/tools/profiler/"
+PROFILER_LOG_DIR = f"{PROFILER_DIR}/logs/"
 PROFILER_OUT_DIR = f"{PROFILER_DIR}/output/device"
 GS_PROG_EXMP_DIR = "programming_examples/profiler/device/grayskull"
 
@@ -17,7 +18,7 @@ GS_PROG_EXMP_DIR = "programming_examples/profiler/device/grayskull"
 def run_device_profiler_test(doubleRun=False, setup=False):
     name = inspect.stack()[1].function
     profilerRun = os.system(
-        f"cd {REPO_PATH} && " f"make {GS_PROG_EXMP_DIR}/{name} && " f"build/{GS_PROG_EXMP_DIR}/{name}"
+        f"cd {REPO_PATH} && " f"make {GS_PROG_EXMP_DIR}/{name} && " f"rm -rf {PROFILER_LOG_DIR}/profile_log_device.csv && " f"build/{GS_PROG_EXMP_DIR}/{name}"
     )
     assert profilerRun == 0
 

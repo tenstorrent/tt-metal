@@ -212,7 +212,7 @@ TEST_F(CommandQueueHarness, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode
     auto dummy_reader_kernel = CreateDataMovementKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
-    CompileProgram(this->device, program, false);
+    CompileProgram(this->device, program);
 
     EnqueueProgram(*this->cq, program, false);
     Finish(*this->cq);

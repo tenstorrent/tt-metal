@@ -16,8 +16,7 @@ struct ProgramCache {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors,
-        Device* device,
-        bool profile_device
+        Device* device
     ) {
         auto program_hash = op.compute_program_hash(input_tensors, optional_input_tensors);
         if (this->cache_.count(program_hash) > 0) {
@@ -28,7 +27,7 @@ struct ProgramCache {
             tt::log_debug(tt::LogOp, "Program Cache: MISS - Compiling new program \"{}\"", program_hash);
             this->cache_[program_hash] = op.create_program(input_tensors, optional_input_tensors, output_tensors);
             auto& program = this->cache_[program_hash].program;
-            tt_metal::CompileProgram(device, program, profile_device);
+            tt_metal::CompileProgram(device, program);
             return this->cache_[program_hash];
         }
     }

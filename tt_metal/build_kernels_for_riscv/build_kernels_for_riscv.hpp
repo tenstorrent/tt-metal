@@ -23,8 +23,7 @@ void generate_binary_for_risc(
     const std::string &out_dir_path,
     const std::string& arch_name,
     const std::uint8_t noc_index=0,
-    const std::vector<std::uint32_t>& kernel_compile_time_args = {},
-    bool profile_kernel = false);
+    const std::vector<std::uint32_t>& kernel_compile_time_args = {});
 
 struct generate_binaries_params_t {
     bool            skip_hlkc = false;
@@ -46,18 +45,17 @@ struct generate_binaries_params_t {
 
 void generate_binaries_all_riscs(
     tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string& out_dir_path, const std::string& arch_name,
-    generate_binaries_params_t params, bool profile_kernel = false);
+    generate_binaries_params_t params);
 
 inline void generate_binary_for_brisc(
     tt::build_kernel_for_riscv_options_t* topts,
     const std::string &dir,
     const std::string& arch_name,
     const std::uint8_t noc_index=0,
-    const std::vector<std::uint32_t>& kernel_compile_time_args = {},
-    bool profile_kernel = false)
+    const std::vector<std::uint32_t>& kernel_compile_time_args = {})
 {
     // PROF_BEGIN("CCGEN_BR")
-    generate_binary_for_risc(RISCID::BR, topts, dir, arch_name, noc_index, kernel_compile_time_args, profile_kernel);
+    generate_binary_for_risc(RISCID::BR, topts, dir, arch_name, noc_index, kernel_compile_time_args);
     // PROF_END("CCGEN_BR")
 }
 
@@ -66,11 +64,10 @@ inline void generate_binary_for_ncrisc(
     const std::string &dir,
     const std::string& arch_name,
     const std::uint8_t noc_index=1,
-    const std::vector<std::uint32_t>& kernel_compile_time_args = {},
-    bool profile_kernel = false)
+    const std::vector<std::uint32_t>& kernel_compile_time_args = {})
 {
     // PROF_BEGIN("CCGEN_NC")
-    generate_binary_for_risc(RISCID::NC, topts, dir, arch_name, noc_index, kernel_compile_time_args, profile_kernel);
+    generate_binary_for_risc(RISCID::NC, topts, dir, arch_name, noc_index, kernel_compile_time_args);
     // PROF_END("CCGEN_NC")
 }
 
@@ -84,8 +81,7 @@ void generate_binaries_for_triscs(
     tt::build_kernel_for_riscv_options_t* topts,
     const std::string &dir,
     const std::string& arch_name,
-    const std::vector<std::uint32_t>& kernel_compile_time_args = {},
-    bool profile_kernel = false);
+    const std::vector<std::uint32_t>& kernel_compile_time_args = {});
 
 void generate_bank_to_noc_coord_descriptor(
     tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,

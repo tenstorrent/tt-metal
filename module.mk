@@ -1,5 +1,5 @@
 CONFIG ?= assert
-BACKEND_PROFILER_EN ?= 0
+ENABLE_PROFILER ?= 0
 ENABLE_CODE_TIMERS ?= 0
 # TODO: enable OUT to be per config (this impacts all scripts that run tests)
 # OUT ?= build_$(DEVICE_RUNNER)_$(CONFIG)
@@ -38,11 +38,6 @@ else
   # Need to always define this versim disabled flag for cpp
   CONFIG_CFLAGS += -DTT_METAL_VERSIM_DISABLED
 endif
-
-ifeq ($(BACKEND_PROFILER_EN), 1)
-CONFIG_CFLAGS += -DBACKEND_PERF_PROFILER
-endif
-
 ifeq ($(ENABLE_CODE_TIMERS), 1)
 CONFIG_CFLAGS += -DTT_ENABLE_CODE_TIMERS
 endif
@@ -108,6 +103,10 @@ set_up_kernels:
 
 set_up_kernels/clean:
 	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short clean
+
+ifeq ($(ENABLE_PROFILER), 1)
+CFLAGS += -DPROFILER
+endif
 
 LIBS_TO_BUILD = \
 	common \

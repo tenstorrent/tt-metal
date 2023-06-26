@@ -9,6 +9,7 @@
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 #include "dev_mem_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
+#include "tools/profiler/profiler_state.hpp"
 
 using namespace std;
 using namespace tt;
@@ -400,8 +401,8 @@ static CompileState pre_compile_for_risc(
     const std::string &out_dir_path,
     const std::string& arch_name,
     const std::uint8_t noc_index,
-    const std::vector<std::uint32_t>& kernel_compile_time_args,
-    bool profile_kernel) {
+    const std::vector<std::uint32_t>& kernel_compile_time_args)
+{
 
     // default ARCH_NAME is grayskull in Makefile
     TT_ASSERT( (arch_name.compare("grayskull") == 0) || (arch_name.compare("wormhole") == 0) || (arch_name.compare("wormhole_b0") == 0) );
@@ -426,7 +427,7 @@ static CompileState pre_compile_for_risc(
 
     ctx.is_fw_build_ = build_kernel_for_riscv_options->fw_build_;
     ctx.noc_index = noc_index;
-    ctx.profile_kernel = profile_kernel;
+    ctx.profile_kernel = tt::tt_metal::getDeviceProfilerState();
     ctx.compile_time_args = kernel_compile_time_args;
     ctx.kernel_inc = fs::absolute(kernel_dir).string();
 
@@ -614,8 +615,8 @@ void generate_binary_for_risc(RISCID risc_id,
     const std::string &out_dir_path,
     const std::string& arch_name,
     const std::uint8_t noc_index,
-    const std::vector<std::uint32_t>& kernel_compile_time_args,
-    bool profile_kernel) {
+    const std::vector<std::uint32_t>& kernel_compile_time_args)
+{
 
     CompileState state = pre_compile_for_risc(
         risc_id,
@@ -623,8 +624,7 @@ void generate_binary_for_risc(RISCID risc_id,
         out_dir_path,
         arch_name,
         noc_index,
-        kernel_compile_time_args,
-        profile_kernel);
+        kernel_compile_time_args);
 
     compile_for_risc(risc_id, build_kernel_for_riscv_options, state);
 
@@ -1057,23 +1057,23 @@ void generate_bank_to_noc_coord_descriptor(
 
 void generate_binaries_all_riscs(
     tt::build_kernel_for_riscv_options_t* opts, const std::string& out_dir_path, const std::string& arch_name,
-    generate_binaries_params_t p, bool profile_kernel)
+    generate_binaries_params_t p)
 {
     generate_descriptors(opts, out_dir_path);
 
     std::vector<std::thread> threads;
     std::function<void()> lambdas[] = {
-        [opts, out_dir_path, arch_name, p, profile_kernel] () {
+        [opts, out_dir_path, arch_name, p] () {
             generate_binaries_for_triscs(
-                opts, out_dir_path, arch_name, p.compute_kernel_compile_time_args, profile_kernel);
+                opts, out_dir_path, arch_name, p.compute_kernel_compile_time_args);
         },
-        [opts, out_dir_path, arch_name, p, profile_kernel] () {
+        [opts, out_dir_path, arch_name, p] () {
             generate_binary_for_ncrisc(
-                opts, out_dir_path, arch_name, p.nc_noc_index, p.nc_kernel_compile_time_args, profile_kernel);
+                opts, out_dir_path, arch_name, p.nc_noc_index, p.nc_kernel_compile_time_args);
         },
-        [opts, out_dir_path, arch_name, p, profile_kernel] () {
+        [opts, out_dir_path, arch_name, p] () {
             generate_binary_for_brisc(
-                opts, out_dir_path, arch_name, p.br_noc_index, p.br_kernel_compile_time_args, profile_kernel);
+                opts, out_dir_path, arch_name, p.br_noc_index, p.br_kernel_compile_time_args);
         },
     };
 
@@ -1093,14 +1093,13 @@ void generate_binaries_for_triscs(
     tt::build_kernel_for_riscv_options_t* topts,
     const std::string &dir,
     const std::string& arch_name,
-    const std::vector<std::uint32_t>& kernel_compile_time_args,
-    bool profile_kernel)
+    const std::vector<std::uint32_t>& kernel_compile_time_args)
 {
 
     generate_src_for_triscs(topts, dir, arch_name, kernel_compile_time_args);
-    auto lambda0 = [=]() { generate_binary_for_risc(RISCID::TR0, topts, dir, arch_name, 0, kernel_compile_time_args, profile_kernel); };
-    auto lambda1 = [=]() { generate_binary_for_risc(RISCID::TR1, topts, dir, arch_name, 0, kernel_compile_time_args, profile_kernel); };
-    auto lambda2 = [=]() { generate_binary_for_risc(RISCID::TR2, topts, dir, arch_name, 0, kernel_compile_time_args, profile_kernel); };
+    auto lambda0 = [=]() { generate_binary_for_risc(RISCID::TR0, topts, dir, arch_name, 0, kernel_compile_time_args); };
+    auto lambda1 = [=]() { generate_binary_for_risc(RISCID::TR1, topts, dir, arch_name, 0, kernel_compile_time_args); };
+    auto lambda2 = [=]() { generate_binary_for_risc(RISCID::TR2, topts, dir, arch_name, 0, kernel_compile_time_args); };
     if (0) {
         lambda0();
         lambda1();
