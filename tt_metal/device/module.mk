@@ -81,7 +81,7 @@ DEVICE_CXXFLAGS += -O3
 else ifeq ($(CONFIG), ci)
 DEVICE_CXXFLAGS += -O3  # significantly smaller artifacts
 else ifeq ($(CONFIG), assert)
-DEVICE_CXXFLAGS += -O3 -g
+DEVICE_CXXFLAGS += -O3 -g -DDEBUG
 else ifeq ($(CONFIG), asan)
 DEVICE_CXXFLAGS += -O3 -g -fsanitize=address
 else ifeq ($(CONFIG), ubsan)
