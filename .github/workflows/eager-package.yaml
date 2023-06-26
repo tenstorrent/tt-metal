@@ -1,0 +1,64 @@
+name: eager - Package
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: True
+        type: string
+    secrets:
+      CHECKOUT_TOKEN:
+        required: True
+
+jobs:
+  build-eager-package:
+    strategy:
+      matrix:
+        arch: [grayskull, wormhole_b0]
+        os: [ubuntu-20.04]
+    runs-on: ${{ matrix.os }}
+    environment: ${{ inputs.environment }}
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+    steps:
+      - name: Install pkg deps
+        run: |
+          sudo apt update
+          sudo apt install \
+            software-properties-common=0.99.9.11 \
+            build-essential=12.8ubuntu1.1 \
+            python3.8-venv=3.8.10-0ubuntu1~20.04.8 \
+            libgoogle-glog-dev=0.4.0-1build1 \
+            ruby=1:2.7+1 \
+            libyaml-cpp-dev=0.6.2-4ubuntu1 \
+            git=1:2.25.1-1ubuntu3.11 \
+            git-lfs=2.9.2-1 \
+            clang-6.0=1:6.0.1-14 \
+            libboost-all-dev=1.71.0.0ubuntu2 \
+            libsndfile1=1.0.28-7ubuntu0.1
+      - name: Install doxygen
+        run: |
+          curl -L "https://www.doxygen.nl/files/doxygen-1.9.6.linux.bin.tar.gz" -o doxygen-1.9.6.linux.bin.tar.gz
+          tar -xvf doxygen-1.9.6.linux.bin.tar.gz
+          cd doxygen-1.9.6
+          sudo make install
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: true
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: make build
+      # TODO: (RK) - should replace with single command python -m build
+      - name: Build sdist
+        run: |
+          source build/python_env/bin/activate
+          python -m build --sdist
+      - name: Build wheel
+        run: |
+          source build/python_env/bin/activate
+          python -m build --wheel
