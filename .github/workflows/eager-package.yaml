@@ -24,7 +24,12 @@ jobs:
     steps:
       - name: Install pkg deps
         run: |
+          sudo add-apt-repository ppa:git-core/ppa
           sudo apt update
+          sudo apt remove \
+            git \
+            git-lfs \
+            git-man
           sudo apt install \
             software-properties-common=0.99.9.11 \
             build-essential=12.8ubuntu1.1 \
@@ -32,8 +37,8 @@ jobs:
             libgoogle-glog-dev=0.4.0-1build1 \
             ruby=1:2.7+1 \
             libyaml-cpp-dev=0.6.2-4ubuntu1 \
-            git=1:2.25.1-1ubuntu3.11 \
-            git-lfs=2.9.2-1 \
+            git \
+            git-lfs \
             clang-6.0=1:6.0.1-14 \
             libboost-all-dev=1.71.0.0ubuntu2 \
             libsndfile1=1.0.28-7ubuntu0.1
