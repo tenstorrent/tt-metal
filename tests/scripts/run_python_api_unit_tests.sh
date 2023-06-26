@@ -30,4 +30,4 @@ pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit
 
 # BERT large via new enqueue APIs. I know this is not a unit test, but I would like to avoid BERT large breaking, so this
 # is a safe place to put it for the time being.
-env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py -k "test_bert_batch_dram and not test_bert_batch_dram_with_operation_cache"
+env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py -k "test_bert_batch_dram and not test_bert_batch_dram_with_program_cache"
