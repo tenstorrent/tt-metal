@@ -81,17 +81,9 @@ struct CoreRange {
     CoreCoord end;
 
     CoreRange(CoreCoord start, CoreCoord end) {
-        // tt::log_assert(
-        //     end.x >= start.x and end.y >= start.y,
-        //     "Invalid core range for start: {}, end: {}", start.str(), end.str());
-
-        if (not (end.x >= start.x and end.y >= start.y)) {
-            tt::log_warning("Incorrectly specified start coord to come after end coord! For now"
-            ", we are swapping the two, but we will eventually assert that you supplied valid coordinates!");
-            CoreCoord temp = start;
-            start = end;
-            end = start;
-        }
+        tt::log_assert(
+            end.x >= start.x and end.y >= start.y,
+            "Invalid core range for start: {}, end: {}", start.str(), end.str());
 
         this->start = start;
         this->end = end;
