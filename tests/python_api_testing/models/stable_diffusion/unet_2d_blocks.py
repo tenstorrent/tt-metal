@@ -15,7 +15,8 @@ import torch
 
 from diffusers import StableDiffusionPipeline
 
-from libs import tt_lib as ttl
+# from libs import tt_lib as ttl
+import tt_lib as ttl
 
 from typing import Optional
 
@@ -24,7 +25,7 @@ from upsample_2d import TtUpsample2D as Upsample2D
 from downsample_2d import TtDownsample2D as Downsample2D
 from transformer_2d import TtTransformer2DModel as Transformer2DModel
 
-from libs.tt_lib.fallback_ops import fallback_ops
+from tt_lib.fallback_ops import fallback_ops
 
 ####################### UNet Mid Block Cross Attention #######################
 

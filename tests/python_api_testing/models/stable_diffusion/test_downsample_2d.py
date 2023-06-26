@@ -15,10 +15,11 @@ from diffusers import StableDiffusionPipeline
 import numpy as np
 from loguru import logger
 
-from libs import tt_lib as ttl
-from libs.tt_lib.fallback_ops import fallback_ops
-from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
-from utility_functions import comp_allclose_and_pcc, comp_pcc
+# from libs import tt_lib as ttl
+import tt_lib as ttl
+from tt_lib.fallback_ops import fallback_ops
+from utility_functions_new import torch_to_tt_tensor, tt_to_torch_tensor
+from utility_functions_new import comp_allclose_and_pcc, comp_pcc
 
 from downsample_2d import TtDownsample2D
 

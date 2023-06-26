@@ -16,9 +16,10 @@ import torch
 from diffusers import StableDiffusionPipeline
 from loguru import logger
 
-from libs import tt_lib as ttl
-from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
-from utility_functions import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tensor_rm
+# from libs import tt_lib as ttl
+import tt_lib as ttl
+from utility_functions_new import torch_to_tt_tensor, tt_to_torch_tensor
+from utility_functions_new import comp_pcc, comp_allclose_and_pcc, torch_to_tt_tensor_rm
 from upsample_nearest2d import TtUpsampleNearest2d
 
 

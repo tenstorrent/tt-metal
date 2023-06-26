@@ -23,9 +23,10 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, HeunDi
 from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
-from utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
-from utility_functions import enable_compile_cache
-from libs import tt_lib as ttl
+from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
+from utility_functions_new import enable_compile_cache, disable_compile_cache
+# from libs import tt_lib as ttl
+import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 
 
@@ -101,7 +102,7 @@ def demo():
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
     # enable_compile_cache()
-
+    disable_compile_cache()
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
 
@@ -133,9 +134,9 @@ def demo():
     # prompt = ["car"]
     prompt = ["oil painting frame of Breathtaking mountain range with a clear river running through it, surrounded by tall trees and misty clouds, serene, peaceful, mountain landscape, high detail"]
 
-    height = 256                        # default height of Stable Diffusion
-    width = 256                         # default width of Stable Diffusion
-    num_inference_steps = 50           # Number of denoising steps
+    height = 64                        # default height of Stable Diffusion
+    width = 64                         # default width of Stable Diffusion
+    num_inference_steps = 2           # Number of denoising steps
     guidance_scale = 7.5                # Scale for classifier-free guidance
     generator = torch.manual_seed(174)    # 10233 Seed generator to create the inital latent noise
     batch_size = len(prompt)
@@ -222,6 +223,8 @@ def demo():
         # tt_latents = torch.Tensor(latents_dict[iter])
         # save things required!
         iter += 1
+        enable_compile_cache()
+
 
     latents = last_latents
     for key, val in pcc_res.items():

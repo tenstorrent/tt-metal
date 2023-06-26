@@ -12,8 +12,9 @@ import torch
 from diffusers import StableDiffusionPipeline
 from loguru import logger
 
-from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc
-from libs import tt_lib as ttl
+from utility_functions_new import torch_to_tt_tensor, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc
+# from libs import tt_lib as ttl
+import tt_lib as ttl
 from feedforward import TtFeedForward
 
 

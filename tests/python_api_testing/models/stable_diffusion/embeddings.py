@@ -12,9 +12,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
-from libs import tt_lib as ttl
+# from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.stable_diffusion.utils import make_linear
-from libs.tt_lib.fallback_ops import fallback_ops
+from tt_lib.fallback_ops import fallback_ops
 
 
 class TtTimestepEmbedding(nn.Module):

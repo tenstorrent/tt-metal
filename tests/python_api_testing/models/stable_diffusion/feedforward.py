@@ -12,9 +12,9 @@ import torch.nn as nn
 
 from typing import Optional
 
-from libs.tt_lib.fallback_ops import fallback_ops
-from libs import tt_lib as ttl
-from utility_functions import pad_weight, tilize_to_list, torch_to_tt_tensor, tt_to_torch_tensor
+from tt_lib.fallback_ops import fallback_ops
+# from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.stable_diffusion.utils import make_linear
 
 

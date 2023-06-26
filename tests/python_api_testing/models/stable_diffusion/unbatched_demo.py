@@ -23,9 +23,10 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, HeunDi
 from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
-from utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
-from utility_functions import enable_compile_cache
-from libs import tt_lib as ttl
+from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
+from utility_functions_new import enable_compile_cache, disable_compile_cache
+# from libs import tt_lib as ttl
+import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 
 
@@ -53,7 +54,6 @@ def save_image_and_latents(latents, iter, vae, pre_fix="", pre_fix2=""):
     torch.save(_latents, f"{pre_fix}{pre_fix2}latents_{iter}.pt")
 
 def guide(noise_pred_uncond, noise_pred_text, guidance_scale, t): # will return latents
-    # noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
     return noise_pred
 
@@ -64,7 +64,7 @@ def latent_expansion(latents, scheduler, t):
     return conditioned, unconditioned
 
 
-def make_tt_unet(state_dict):
+def make_tt_unet(state_dict, device):
     tt_unet = tt_unet_condition(sample_size = 64,
                                 in_channels = 4,
                                 out_channels = 4,
@@ -91,6 +91,7 @@ def make_tt_unet(state_dict):
                                 upcast_attention = False,
                                 resnet_time_scale_shift = 'default',
                                 state_dict=state_dict,
+                                device=device,
                                 base_address="")
     return tt_unet
 
@@ -101,7 +102,6 @@ def demo():
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
-    # enable_compile_cache()
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
@@ -114,30 +114,32 @@ def demo():
     unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
 
     # 4. load the K-LMS scheduler with some fitting parameters.
+    # Throughout the generation process, scheduler is internally changed, hence we need one for torch and one for TT
     scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
     tt_scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    #scheduler = PNDMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    #scheduler = HeunDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    #scheduler = DPMSolverMultistepScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
 
+    disable_compile_cache()
     torch_device = "cpu"
     vae.to(torch_device)
     text_encoder.to(torch_device)
     unet.to(torch_device)
 
     state_dict = unet.state_dict()
-    tt_unet = make_tt_unet(state_dict)
+    tt_unet = make_tt_unet(state_dict, device)
     tt_unet.config = unet.config
 
+    # experiment name is associated with saved latents and images
     experiment_name = "mountain_fallback_nolatentupdate"
-    # prompt = ["a photo of an astronaut riding a horse on mars"]
-    # prompt = ["car"]
-    prompt = ["oil painting frame of Breathtaking mountain range with a clear river running through it, surrounded by tall trees and misty clouds, serene, peaceful, mountain landscape, high detail"]
+    # prompt = ["a photo of an astronaut riding a horse on mars"] # guidance 7.5
+    prompt = ["oil painting frame of Breathtaking mountain range with a clear river running through it, surrounded by tall trees and misty clouds, serene, peaceful, mountain landscape, high detail"] # guidance 7.5
     # prompt = ["Skull on Fire"] # guidance = 12
 
-    height = 256                        # default height of Stable Diffusion
-    width = 256                         # default width of Stable Diffusion
-    num_inference_steps = 50           # Number of denoising steps
+    # height and width much be divisible by 32, and can be as little as 64x64
+    # 64x64 images are not coherent; but useful for a quick pcc test.
+
+    height = 64                        # default height of Stable Diffusion
+    width = 64                         # default width of Stable Diffusion
+    num_inference_steps = 2           # Number of denoising steps
     guidance_scale = 7.5               # Scale for classifier-free guidance
     generator = torch.manual_seed(174)    # 10233 Seed generator to create the inital latent noise
     batch_size = len(prompt)
@@ -150,9 +152,10 @@ def demo():
     uncond_input = tokenizer([""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt")
     uncond_embeddings = text_encoder(uncond_input.input_ids.to(torch_device))[0]
 
-    #For classifier-free guidance, we need to do two forward passes: one with the conditioned input (text_embeddings),
+    # For classifier-free guidance, we need to do two forward passes: one with the conditioned input (text_embeddings),
     # and another with the unconditional embeddings (uncond_embeddings).
     # In practice, we can concatenate both into a single batch to avoid doing two forward passes.
+    # in this demo, each forward pass will be done independently.
     _text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
 
     # Initial random noise
@@ -169,13 +172,18 @@ def demo():
     latents_dict = {}
     pcc_res = {}
     iter = 0
+
+    ############## Beginning of Image Generation by Torch ##############
+
     # torch Denoising loop
     for t in tqdm(scheduler.timesteps):
         # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
         conditioned, unconditioned = latent_expansion(latents, scheduler, t)
         # predict the noise residual
         with torch.no_grad():
+            # first forward pass; conditioned on the prompt
             noise_pred_cond = unet(conditioned, t, encoder_hidden_states=text_embeddings).sample
+            # second forward pass; un-conditioned
             noise_pred_uncond = unet(unconditioned, t, encoder_hidden_states=uncond_embeddings).sample
         # perform guidance
         noise_pred = guide(noise_pred_uncond, noise_pred_cond, guidance_scale, t)
@@ -185,19 +193,18 @@ def demo():
 
         save_image_and_latents(latents, iter, vae, pre_fix=f"{experiment_name}_torch", pre_fix2="")
         iter += 1
-        # save things required!
 
-
+    # saving the final image generated by torch
     latents = 1 / 0.18215 * latents
     with torch.no_grad():
         image = vae.decode(latents).sample
-
     # Image post-processing
     image = (image / 2 + 0.5).clamp(0, 1)
     image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
     images = (image * 255).round().astype("uint8")
     pil_images = [Image.fromarray(image) for image in images][0]
     pil_images.save(f"{experiment_name}_torch.png")
+    ############## End of Image Generation by Torch ##############
 
     iter = 0
     last_latents = None
@@ -207,15 +214,18 @@ def demo():
         # tt_latent_model_input = latent_expansion(tt_latents, tt_scheduler, t)
         tt_conditioned, tt_unconditioned = latent_expansion(tt_latents, tt_scheduler, t)
 
+        # the initial embedding step is constant propped here
+
         _t_cond = constant_prop_time_embeddings(t, tt_conditioned, unet.time_proj)
         _t_uncond = constant_prop_time_embeddings(t, tt_unconditioned, unet.time_proj)
-
         _t_cond = torch_to_tt_tensor_rm(_t_cond, device, put_on_device=False)
         _t_uncond = torch_to_tt_tensor_rm(_t_uncond, device, put_on_device=False)
         tt_conditioned = torch_to_tt_tensor_rm(tt_conditioned, device, put_on_device=False)
         tt_unconditioned = torch_to_tt_tensor_rm(tt_unconditioned, device, put_on_device=False)
         tt_text_embeddings = torch_to_tt_tensor_rm(text_embeddings, device, put_on_device=False)
-        tt_uncond_embeddings = torch_to_tt_tensor_rm(tt_uncond_embeddings, device, put_on_device=False)
+        tt_uncond_embeddings = torch_to_tt_tensor_rm(uncond_embeddings, device, put_on_device=False)
+        # end of constant prop
+
         # predict the noise residual
         with torch.no_grad():
             tt_noise_pred_cond = tt_unet(tt_conditioned, _t_cond, encoder_hidden_states=tt_text_embeddings)
@@ -230,9 +240,11 @@ def demo():
         pcc_res[iter] = comp_allclose_and_pcc(latents_dict[iter], tt_latents)
         logger.info(f"{iter}, {pcc_res[iter]}")
         last_latents = tt_latents
-        # tt_latents = torch.Tensor(latents_dict[iter])
         # save things required!
         iter += 1
+        # we enable compile cache after the first iteration
+        enable_compile_cache()
+
 
     latents = last_latents
     for key, val in pcc_res.items():

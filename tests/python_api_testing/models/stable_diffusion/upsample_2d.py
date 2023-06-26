@@ -14,10 +14,9 @@ from torch.nn import functional as F
 from diffusers import StableDiffusionPipeline
 import numpy as np
 
-from libs import tt_lib as ttl
-from libs.tt_lib.fallback_ops import fallback_ops
-from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
-from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc
+# from libs import tt_lib as ttl
+import tt_lib as ttl
+from tt_lib.fallback_ops import fallback_ops
 
 from upsample_nearest2d import TtUpsampleNearest2d
 

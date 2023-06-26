@@ -14,11 +14,11 @@ from torch import nn
 from torch.nn import functional as F
 from diffusers import StableDiffusionPipeline
 
-from libs import tt_lib as ttl
-from libs.tt_lib.fallback_ops import fallback_ops
+# from libs import tt_lib as ttl
+import tt_lib as ttl
+from tt_lib.fallback_ops import fallback_ops
 
 
-from python_api_testing.fused_ops.softmax import softmax as TtSoftmax
 
 from python_api_testing.models.stable_diffusion.utils import make_linear
 
@@ -165,7 +165,9 @@ class TtCrossAttention(nn.Module):
         if attention_mask is not None:
             attention_scores = ttl.tensor.add(attention_scores, attention_mask)
 
+        from python_api_testing.fused_ops.softmax import softmax as TtSoftmax
         attention_probs = TtSoftmax(attention_scores)
+        # attention_probs = fallback_ops.softmax(attention_scores, dim=-1)
 
         return attention_probs
 

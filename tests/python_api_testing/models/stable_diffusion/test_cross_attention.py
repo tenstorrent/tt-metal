@@ -12,9 +12,10 @@ import torch
 from diffusers import StableDiffusionPipeline
 from loguru import logger
 
-from libs import tt_lib as ttl
-from utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
-from utility_functions import comp_pcc, comp_allclose_and_pcc
+# from libs import tt_lib as ttl
+import tt_lib as ttl
+from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
+from utility_functions_new import comp_pcc, comp_allclose_and_pcc
 from cross_attention import TtCrossAttention
 
 

@@ -1,6 +1,7 @@
 
-from libs import tt_lib as ttl
-from libs.tt_lib import tensor
+# from libs import tt_lib as ttl
+import tt_lib as ttl
+from tt_lib import tensor
 
 
 

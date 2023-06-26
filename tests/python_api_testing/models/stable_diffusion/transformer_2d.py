@@ -13,10 +13,9 @@ import torch.nn as nn
 import torch
 from diffusers import StableDiffusionPipeline
 
-from libs import tt_lib as ttl
-from utility_functions import comp_pcc, comp_allclose_and_pcc
-from utility_functions import torch_to_tt_tensor_rm, torch_to_tt_tensor, tt_to_torch_tensor
-from libs.tt_lib.fallback_ops import fallback_ops
+# from libs import tt_lib as ttl
+import tt_lib as ttl
+from tt_lib.fallback_ops import fallback_ops
 from cross_attention import TtCrossAttention
 from feedforward import TtFeedForward
 from utils import make_linear

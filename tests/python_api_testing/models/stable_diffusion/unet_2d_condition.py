@@ -10,7 +10,7 @@ from unet_2d_blocks import TtUNetMidBlock2DCrossAttn as UNetMidBlock2DCrossAttn
 from unet_2d_blocks import TtCrossAttnDownBlock2D as CrossAttnDownBlock2D
 from unet_2d_blocks import TtCrossAttnUpBlock2D as CrossAttnUpBlock2D
 
-from libs.tt_lib.fallback_ops import fallback_ops
+from tt_lib.fallback_ops import fallback_ops
 
 
 def get_down_block(down_block_type,

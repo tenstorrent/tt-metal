@@ -11,9 +11,9 @@ from torch import nn
 from torch.nn import functional as F
 
 import numpy as np
-from libs import tt_lib as ttl
-from libs.tt_lib.fallback_ops import fallback_ops
-from utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
+# from libs import tt_lib as ttl
+import tt_lib as ttl
+from tt_lib.fallback_ops import fallback_ops
 
 
 class TtUpsampleNearest2d(nn.Module):

@@ -7,8 +7,9 @@ sys.path.append(f"{f}/../..")
 
 import torch
 
-from libs import tt_lib as ttl
-from utility_functions import untilize, tilize, tilize_to_list, torch_to_tt_tensor_rm
+# from libs import tt_lib as ttl
+import tt_lib as ttl
+from utility_functions_new import torch_to_tt_tensor_rm
 
 from python_api_testing.models.stable_diffusion.fused_ops import Linear as SDLinear
 
