@@ -1,35 +1,35 @@
 #include <cstdint>
 
-#include "llk_3c.h"
+#include "compute_kernel_api.h"
 
 namespace NAMESPACE {
-void MAIN {    
+void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
-    init_sfpu(CB::c_in0);
+    init_sfpu(tt::CB::c_in0);
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(CB::c_out0, per_core_block_dim);
+        cb_reserve_back(tt::CB::c_out0, per_core_block_dim);
         for(uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            acquire_dst(DstMode::Half);
+            acquire_dst(tt::DstMode::Half);
 
             // Pop tile after tile, copy to DST and pack
-            cb_wait_front(CB::c_in0, 1);
+            cb_wait_front(tt::CB::c_in0, 1);
 
-            copy_tile(CB::c_in0, 0, 0);
+            copy_tile(tt::CB::c_in0, 0, 0);
             // SFPU_OP expected to be defined via add_define as one of
             // exp_tile, gelu_tile, recip_tile. etc followed by pack_tile
-            
+
             SFPU_OP_AND_PACK
             // comes from add_define in kernel config
             // Also is expected to include pack_tile(0, CB::c_out0);
 
-            cb_pop_front(CB::c_in0, 1);
+            cb_pop_front(tt::CB::c_in0, 1);
 
-            release_dst(DstMode::Half);
+            release_dst(tt::DstMode::Half);
         }
-        cb_push_back(CB::c_out0, per_core_block_dim);
+        cb_push_back(tt::CB::c_out0, per_core_block_dim);
     }
 }
 }

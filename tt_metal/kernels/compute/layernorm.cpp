@@ -6,7 +6,7 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "llk_3c.h"
+#include "compute_kernel_api.h"
 
 //#include "debug_print.h"
 //#include "tt_metal/tools/profiler/kernel_profiler.hpp"

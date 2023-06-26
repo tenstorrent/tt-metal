@@ -2,7 +2,7 @@
 
 #define ELTWISE_OP_CODE 0 // TODO(AP): temporary - refactor
 
-#include "llk_3c.h"
+#include "compute_kernel_api.h"
 
 namespace NAMESPACE {
 

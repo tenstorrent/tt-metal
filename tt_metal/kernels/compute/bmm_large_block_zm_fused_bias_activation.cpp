@@ -1,6 +1,6 @@
 #include <cstdint>
 
-#include "llk_3c.h"
+#include "compute_kernel_api.h"
 namespace NAMESPACE {
 void MAIN {
 

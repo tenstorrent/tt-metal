@@ -3,7 +3,7 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "llk_3c.h"
+#include "compute_kernel_api.h"
 
 #include "debug_print.h"
 

@@ -22,14 +22,14 @@ namespace unit_tests::sfpu_util {
 
 const map<string, string> sfpu_op_to_op_name = {
     // FIXME: #1157
-    {"relu", "relu_min_tile_init(); relu_min_tile(0,0x0); pack_tile(0, CB::c_out0);"},
-    {"exponential", "exp_tile_init(); exp_tile(0); pack_tile(0, CB::c_out0);"},
-    {"reciprocal", "recip_tile_init(); recip_tile(0); pack_tile(0, CB::c_out0);"},
-    {"gelu", "gelu_tile_init(); gelu_tile(0); pack_tile(0, CB::c_out0);"},
-    {"sqrt", "sqrt_tile_init(); sqrt_tile(0); pack_tile(0, CB::c_out0);"},
-    {"sigmoid", "sigmoid_tile_init(); sigmoid_tile(0); pack_tile(0, CB::c_out0);"},
-    {"log", "log_tile_init(); log_tile(0); pack_tile(0, CB::c_out0);"},
-    {"tanh", "tanh_tile_init(); tanh_tile(0); pack_tile(0, CB::c_out0);"},
+    {"relu", "relu_min_tile_init(); relu_min_tile(0,0x0); pack_tile(0, tt::CB::c_out0);"},
+    {"exponential", "exp_tile_init(); exp_tile(0); pack_tile(0, tt::CB::c_out0);"},
+    {"reciprocal", "recip_tile_init(); recip_tile(0); pack_tile(0, tt::CB::c_out0);"},
+    {"gelu", "gelu_tile_init(); gelu_tile(0); pack_tile(0, tt::CB::c_out0);"},
+    {"sqrt", "sqrt_tile_init(); sqrt_tile(0); pack_tile(0, tt::CB::c_out0);"},
+    {"sigmoid", "sigmoid_tile_init(); sigmoid_tile(0); pack_tile(0, tt::CB::c_out0);"},
+    {"log", "log_tile_init(); log_tile(0); pack_tile(0, tt::CB::c_out0);"},
+    {"tanh", "tanh_tile_init(); tanh_tile(0); pack_tile(0, tt::CB::c_out0);"},
 };
 
 bfloat16 sfpu_function(const string& op_name, const bfloat16& input) {

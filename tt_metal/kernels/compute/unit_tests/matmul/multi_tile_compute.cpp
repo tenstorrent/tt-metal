@@ -1,6 +1,6 @@
 #include <cstdint>
 
-#include "llk_3c.h"
+#include "compute_kernel_api.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -18,7 +18,7 @@ void MAIN {
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
     mm_init();
-    acquire_dst(DstMode::Half);
+    acquire_dst(tt::DstMode::Half);
 
     uint32_t out_tile_index = 0;
     uint32_t in0_index_r_offset = 0;
@@ -45,6 +45,6 @@ void MAIN {
         pack_tile(tile_index, out_cb);
     }
     cb_push_back(out_cb, out_num_tiles);
-    release_dst(DstMode::Half);
+    release_dst(tt::DstMode::Half);
 }
 }  // namespace NAMESPACE

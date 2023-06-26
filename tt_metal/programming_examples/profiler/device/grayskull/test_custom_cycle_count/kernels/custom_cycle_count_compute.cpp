@@ -1,5 +1,5 @@
 #include <cstdint>
-#include "llk_3c.h"
+#include "compute_kernel_api.h"
 
 /**
  * LOOP_COUNT and LOOP_SIZE provide the ability to decide how many cycles this kernel takes.

@@ -49,7 +49,7 @@ docs/source/frameworks/tt_dispatch.rst @DrJessop @davorchap
 tt_metal/src/firmware/**/module.mk @tt-rkim
 tt_metal/src/firmware/**/Makefile @tt-rkim
 # tt_metal/src/meta/ @davorchap @pgkeller @DrJessop @tt-rkim
-tt_metal/src/ckernels/**/llk_lib/llk_3c.h @davorchap @kkwong10 @muthutt
+tt_metal/src/ckernels/**/llk_lib/compute_kernel_api.h @davorchap @kkwong10 @muthutt
 tt_metal/src/firmware/riscv/common/dataflow_api.h @davorchap @DrJessop
 
 # metal - profiler

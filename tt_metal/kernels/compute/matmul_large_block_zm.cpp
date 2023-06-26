@@ -1,6 +1,6 @@
 #include <cstdint>
 
-#include "llk_3c.h"
+#include "compute_kernel_api.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 namespace NAMESPACE {
