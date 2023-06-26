@@ -366,7 +366,6 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
             HACK_CQ = make_unique<CommandQueue>(tensor.buffer()->device());
         }
         EnqueueReadBuffer(*HACK_CQ, *tensor.buffer(), device_data, true);
-        Finish(*HACK_CQ);
     } else {
         ReadFromBuffer(*tensor.buffer(), device_data);
     }
