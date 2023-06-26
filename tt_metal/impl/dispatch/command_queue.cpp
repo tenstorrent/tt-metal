@@ -563,9 +563,9 @@ CommandQueue::CommandQueue(Device* device) {
 }
 
 CommandQueue::~CommandQueue() {
-    if (this->device->cluster_is_initialized()) {
-        this->finish();
-    }
+    // if (this->device->cluster_is_initialized()) {
+    //     this->finish();
+    // }
 }
 
 void CommandQueue::enqueue_command(shared_ptr<Command> command, bool blocking) {
