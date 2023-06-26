@@ -85,6 +85,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
 
+    // Not exactly half-half; this seems to get slightly better perf for fused qkv and selfout
+    // TODO: Experiment with different splits?
     CoreRange in0_receiver_in1_receiver_left_half{
         .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
         .end={(std::size_t) start_core_x + 4, (std::size_t) start_core_y + num_cores_r - 1}};

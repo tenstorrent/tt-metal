@@ -74,10 +74,10 @@ operation::ProgramWithCallbacks create_program(
 
     CoreRange left_half{
         .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + 4, (std::size_t) start_core_y + num_cores_r - 1}};
+        .end={(std::size_t) start_core_x + 5, (std::size_t) start_core_y + num_cores_r - 1}};
 
     CoreRange right_half{
-        .start={(std::size_t) start_core_x + 5, (std::size_t) start_core_y},
+        .start={(std::size_t) start_core_x + 6, (std::size_t) start_core_y},
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     // Compile time args
@@ -275,13 +275,12 @@ operation::ProgramWithCallbacks create_program(
             (std::uint32_t) (per_core_M / out_subblock_h), // out_num_subblocks_h
 
             (std::uint32_t) M * N, // MtNt
-            (std::uint32_t) num_output_blocks_per_core[i] // batch
         };
 
         // left half
-        if (core_idx_x <= 4) {
+        if (core_idx_x <= 5) {
             tt_metal::SetRuntimeArgs(mm_kernel_in0_reader, core, mm_reader_args);
-            mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
+            mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end());
             tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer, core, mm_reader_args);
             reader_kernels.push_back(mm_kernel_in0_reader);
             writer_kernels.push_back(mm_kernel_in1_reader_writer);
@@ -289,7 +288,7 @@ operation::ProgramWithCallbacks create_program(
         // right half
         else {
             tt_metal::SetRuntimeArgs(mm_kernel_in0_reader_other_noc_setup, core, mm_reader_args);
-            mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end()-1);
+            mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end());
             tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer_other_noc_setup, core, mm_reader_args);
             reader_kernels.push_back(mm_kernel_in0_reader_other_noc_setup);
             writer_kernels.push_back(mm_kernel_in1_reader_writer_other_noc_setup);
