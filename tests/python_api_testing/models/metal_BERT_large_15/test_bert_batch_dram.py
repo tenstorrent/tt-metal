@@ -29,7 +29,7 @@ from utility_functions import profiler
 
 
 class TtBertBatchDram(torch.nn.Module):
-    def __init__(self, config, hugging_face_reference_model, device):
+    def __init__(self, config, hugging_face_reference_model, device, mem_config):
         super().__init__()
 
         # NOTE: Once we make embeddings run on device, pass in state dict
@@ -47,7 +47,7 @@ class TtBertBatchDram(torch.nn.Module):
 
         self.encoders = torch.nn.ModuleList(
             [
-                TtBertEncoder(config, encoder_idx, state_dict, device)
+                TtBertEncoder(config, encoder_idx, state_dict, device, mem_config)
                 for encoder_idx in range(config.num_hidden_layers)
             ]
         )
@@ -80,15 +80,16 @@ class TtBertBatchDram(torch.nn.Module):
         # QA linear
         # TODO: Replace with custom op with fused bias?
         def qa_linear_(activation):
-            output = ttl.tensor.matmul(activation, weight)
+            output = ttl.tensor.matmul(activation, weight, mem_config)
             output_plus_bias = ttl.tensor.bcast(
-                output, bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
+                output, bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H, mem_config
             )
             return output_plus_bias
 
         self.qa_linear = qa_linear_
 
         self.device = device
+        self.mem_config = mem_config
 
     def forward(self, PERF_CNT, input_ids, attention_mask=None, token_type_ids=None):
         for i in range(PERF_CNT):
@@ -109,7 +110,7 @@ class TtBertBatchDram(torch.nn.Module):
                     ttl.tensor.DataType.BFLOAT16,
                     ttl.tensor.Layout.ROW_MAJOR,
                 ).to(ttl.tensor.Layout.TILE)
-                tt_attention_mask = tt_attention_mask.to(self.device)
+                tt_attention_mask = tt_attention_mask.to(self.device, self.mem_config)
             else:
                 tt_attention_mask = attention_mask
 
@@ -129,7 +130,7 @@ class TtBertBatchDram(torch.nn.Module):
                 ttl.tensor.DataType.BFLOAT16,
                 ttl.tensor.Layout.ROW_MAJOR,
             ).to(ttl.tensor.Layout.TILE)
-            tt_embeddings = tt_embeddings.to(self.device)
+            tt_embeddings = tt_embeddings.to(self.device, self.mem_config)
             hidden_states = tt_embeddings  # pad_embeddings #
 
             self.hidden_states_list.append(hidden_states)
@@ -142,8 +143,8 @@ class TtBertBatchDram(torch.nn.Module):
             print(f"Running BERT model {i}")
             # profiler.start("_run_encoders")
 
-            hidden_states = self.hidden_states_list[i]
-            attention_mask = self.tt_attention_mask_list[i]
+            hidden_states = self.hidden_states_list.pop(0)
+            attention_mask = self.tt_attention_mask_list.pop(0)
 
             for encoder in self.encoders:
                 # profiler.start("__one_encoder")
@@ -169,6 +170,7 @@ def run_bert_question_and_answering_inference(
     real_input,
     attention_mask,
     token_type_ids,
+    dram,
     pcc,
     model_location_generator,
     PERF_CNT,
@@ -177,8 +179,9 @@ def run_bert_question_and_answering_inference(
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
+    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.BASIC if dram else ttl.device.MemoryAllocator.L1_BANKING)
     host = ttl.device.GetHost()
+    mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1)
 
     if on_weka:
         model_name = str(
@@ -205,6 +208,7 @@ def run_bert_question_and_answering_inference(
         hugging_face_reference_model.config,
         hugging_face_reference_model,
         device,
+        mem_config,
     )
 
     profiler.start("processing_of_input")
@@ -272,7 +276,7 @@ def run_bert_question_and_answering_inference(
     profiler.start("first_model_run_with_compile", force_enable=True)
     tt_out_list = tt_bert_model(1, **bert_input)
     profiler.end("first_model_run_with_compile", force_enable=True)
-
+    del tt_out_list
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
     enable_compile_cache()
@@ -356,8 +360,12 @@ def run_bert_question_and_answering_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, 0.98),),
+    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, dram, pcc",
+    (
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, True, 0.98),
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, False, 0.98),
+    ),
+    ids=["DRAM", "L1"],
 )
 def test_bert_batch_dram(
     model_version,
@@ -367,6 +375,7 @@ def test_bert_batch_dram(
     real_input,
     attention_mask,
     token_type_ids,
+    dram,
     pcc,
     model_location_generator,
 ):
@@ -389,14 +398,19 @@ def test_bert_batch_dram(
         real_input,
         attention_mask,
         token_type_ids,
+        dram,
         pcc,
         model_location_generator,
         PERF_CNT,
     )
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, 0.98),),
+    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, dram, pcc",
+    (
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, True, 0.98),
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, False, 0.98),
+    ),
+    ids=["DRAM", "L1"],
 )
 def test_bert_batch_dram_with_program_cache(
     use_program_cache,
@@ -407,6 +421,7 @@ def test_bert_batch_dram_with_program_cache(
     real_input,
     attention_mask,
     token_type_ids,
+    dram,
     pcc,
     model_location_generator,
 ):
@@ -429,6 +444,7 @@ def test_bert_batch_dram_with_program_cache(
         real_input,
         attention_mask,
         token_type_ids,
+        dram,
         pcc,
         model_location_generator,
         PERF_CNT,
@@ -446,6 +462,7 @@ if __name__ == "__main__":
         True,
         True,
         True,
+        False,
         0.98,
         model_location_generator_,
     )

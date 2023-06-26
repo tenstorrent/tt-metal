@@ -25,8 +25,7 @@ def convert_to_datatype_on_device(x, target_dtype, host, device):
     return x
 
 
-def run_matmul_with_dataformat(matmul, target_dtype, device, in0, in1, bias=None, gelu_activation=False):
-
+def run_matmul_with_dataformat(matmul, target_dtype, device, output_mem_config, in0, in1, bias=None, gelu_activation=False):
     assert isinstance(in0, ttl.tensor.Tensor)
     assert isinstance(in1, ttl.tensor.Tensor)
     if bias is not None:
@@ -45,7 +44,7 @@ def run_matmul_with_dataformat(matmul, target_dtype, device, in0, in1, bias=None
             matmul_args.append(bias)
         if gelu_activation:
             matmul_args.append(gelu_activation)
-        return matmul(*matmul_args)
+        return matmul(*matmul_args, mem_config=output_mem_config)
 
     src_dtype = in0.dtype()
 
@@ -102,12 +101,11 @@ def run_matmul_with_dataformat(matmul, target_dtype, device, in0, in1, bias=None
         matmul_args.append(bias)
     if gelu_activation:
         matmul_args.append(gelu_activation)
-    output = matmul(*matmul_args)
+    output = matmul(*matmul_args, mem_config=output_mem_config)
 
     logger.warning(
         f"Converting tensor {output.shape()} from {output.dtype()} to {src_dtype}!"
     )
-    mem_config = ttl.tensor.MemoryConfig(True, -1, output.buffer_type())
     output = output.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
     output = (
         ttl.tensor.Tensor(
@@ -117,7 +115,7 @@ def run_matmul_with_dataformat(matmul, target_dtype, device, in0, in1, bias=None
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
-        .to(device, mem_config)
+        .to(device, output_mem_config)
     )
 
     return output

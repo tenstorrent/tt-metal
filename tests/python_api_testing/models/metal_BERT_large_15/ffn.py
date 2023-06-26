@@ -21,7 +21,7 @@ from tests.python_api_testing.models.metal_BERT_large_15.utils import (
 
 
 def feed_forward(
-    ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device
+    ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device, mem_config
 ):
     # Weights pre-transposed on host​. No on-the fly transpose of W.
     # ff1_weighta = ttl.tensor.transpose(ff1_weighta)
@@ -36,6 +36,8 @@ def feed_forward(
             ttl.tensor.bert_large_ff1_matmul,
             ttl.tensor.DataType.BFLOAT16,
             device,
+            # Force DRAM to fit tensors in L1
+            ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
             activation,
             ff1_weighta,
             ff1_biasa,
@@ -54,6 +56,7 @@ def feed_forward(
             ttl.tensor.bert_large_ff2_matmul,
             ttl.tensor.DataType.BFLOAT16,
             device,
+            mem_config,
             activation,
             ff2_weighta,
             ff2_biasa
@@ -65,9 +68,12 @@ def feed_forward(
     def feed_forward_(activation):
         # profiler.start("__ffn")
         ff1_output_plus_bias_act = op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa)
+        # Don't deallocate activations here since it is used by more ops in encoder
+        # activation.deallocate()
         ff2_output_plus_bias = op14_MM_bias(
             ff1_output_plus_bias_act, ff2_weighta, ff2_biasa
         )
+        ff1_output_plus_bias_act.deallocate()
         # profiler.end("__ffn")
 
         return ff2_output_plus_bias
@@ -76,7 +82,7 @@ def feed_forward(
 
 
 class TtFeedForwardModel(torch.nn.Module):
-    def __init__(self, encoder_idx, state_dict, device):
+    def __init__(self, encoder_idx, state_dict, device, mem_config):
         super().__init__()
 
         # FF1 params
@@ -160,6 +166,7 @@ class TtFeedForwardModel(torch.nn.Module):
             encoder0_ff2_weight,
             encoder0_ff2_bias,
             device,
+            mem_config,
         )
 
     def forward(self, activation):
@@ -190,12 +197,13 @@ def summarize_stats(t, name):
 
 
 def run_ffn_inference(
-    model_version, batch, seq_len, on_weka, pcc, model_location_generator
+    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
 ):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
-    ttl.device.InitializeDevice(device)
+    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.BASIC if dram else ttl.device.MemoryAllocator.L1_BANKING)
     host = ttl.device.GetHost()
+    mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1)
 
     if on_weka:
         model_name = str(
@@ -211,7 +219,7 @@ def run_ffn_inference(
         model_name, torchscript=False
     )
     tt_ffn_model = TtFeedForwardModel(
-        0, hugging_face_reference_model.state_dict(), device
+        0, hugging_face_reference_model.state_dict(), device, mem_config
     )
     pytorch_ffn_model = PytorchFeedForwardModel(hugging_face_reference_model)
 
@@ -253,14 +261,14 @@ def run_ffn_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, 0.99),),
+    "model_version, batch, seq_len, on_weka, dram, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),),
 )
 def test_ffn_inference(
-    model_version, batch, seq_len, on_weka, pcc, model_location_generator
+    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
 ):
     run_ffn_inference(
-        model_version, batch, seq_len, on_weka, pcc, model_location_generator
+        model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
     )
 
 
@@ -269,6 +277,7 @@ if __name__ == "__main__":
         "phiyodr/bert-large-finetuned-squad2",
         9,
         384,
+        True,
         True,
         0.99,
         model_location_generator_,

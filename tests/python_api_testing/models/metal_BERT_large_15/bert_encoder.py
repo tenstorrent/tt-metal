@@ -24,12 +24,13 @@ from tests.python_api_testing.models.metal_BERT_large_15.utils import (
 
 
 class TtBertEncoder(torch.nn.Module):
-    def __init__(self, config, encoder_idx, state_dict, device):
+    def __init__(self, config, encoder_idx, state_dict, device, mem_config):
         super().__init__()
         self.device = device
+        self.mem_config = mem_config
 
         # MHA part
-        self.mha = TtMultiHeadAttentionModel(config, encoder_idx, state_dict, device)
+        self.mha = TtMultiHeadAttentionModel(config, encoder_idx, state_dict, device, mem_config)
 
         self.attention_output_weight = pad_weight(
             torch.transpose(
@@ -100,7 +101,7 @@ class TtBertEncoder(torch.nn.Module):
         )
 
         # FFN part
-        self.ffn = TtFeedForwardModel(encoder_idx, state_dict, device)
+        self.ffn = TtFeedForwardModel(encoder_idx, state_dict, device, mem_config)
 
         # FFN layernorm part
         gamma1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.weight"]
@@ -138,6 +139,7 @@ class TtBertEncoder(torch.nn.Module):
             ttl.tensor.bert_large_selfout_matmul,
             ttl.tensor.DataType.BFLOAT16,
             self.device,
+            self.mem_config,
             mha_res,
             attention_output_weight,
             attention_output_bias,
@@ -148,14 +150,13 @@ class TtBertEncoder(torch.nn.Module):
 
     def op12_add_layernorm(self, activation, mha_out):
         # profiler.start("__op12_add_layernorm")
-        out_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM)
         mha_out_add_and_norm = ttl.tensor.add_layernorm_gamma_beta(
             activation,
             mha_out,
             self.layer_norm_eps,
             self.mha_gamma,
             self.mha_beta,
-            out_mem_config,
+            self.mem_config,
         )
         # profiler.end("__op12_add_layernorm")
 
@@ -163,14 +164,13 @@ class TtBertEncoder(torch.nn.Module):
 
     def op15_add_layernorm(self, mha_out_add_and_norm, ffn_out):
         # profiler.start("__op15_add_layernorm")
-        out_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM)
         ffn_out_add_and_norm = ttl.tensor.add_layernorm_gamma_beta(
             mha_out_add_and_norm,
             ffn_out,
             self.layer_norm_eps,
             self.ffn_gamma,
             self.ffn_beta,
-            out_mem_config,
+            self.mem_config,
         )
         # profiler.end("__op15_add_layernorm")
 
@@ -180,16 +180,23 @@ class TtBertEncoder(torch.nn.Module):
         assert activation.shape() == [9, 1, 384, 1024]
         # MHA - OP1 - OP10 ------------------------------->
         mha_res = self.mha(activation, attention_mask)
+        # Don't deallocate activations here since it is used by more ops
+        # activation.deallocate()
 
         mha_out = self.op11_mm_plus_bias(
             mha_res, self.attention_output_weight, self.attention_output_bias
         )
+        mha_res.deallocate()
         mha_out_add_and_norm = self.op12_add_layernorm(activation, mha_out)
+        activation.deallocate()
+        mha_out.deallocate()
 
         # FFN - OP13 - OP14 ----------------------------->
         ffn_out = self.ffn(mha_out_add_and_norm)
 
         ffn_out_add_and_norm = self.op15_add_layernorm(mha_out_add_and_norm, ffn_out)
+        mha_out_add_and_norm.deallocate()
+        ffn_out.deallocate()
         return ffn_out_add_and_norm
 
 
@@ -203,12 +210,13 @@ class PytorchBertEncoder(torch.nn.Module):
 
 
 def run_bert_encoder_inference(
-    model_version, batch, seq_len, on_weka, pcc, model_location_generator
+    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
 ):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
-    ttl.device.InitializeDevice(device)
+    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.BASIC if dram else ttl.device.MemoryAllocator.L1_BANKING)
     host = ttl.device.GetHost()
+    mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1)
 
     if on_weka:
         model_name = str(
@@ -230,6 +238,7 @@ def run_bert_encoder_inference(
         0,
         hugging_face_reference_model.state_dict(),
         device,
+        mem_config
     )
     pytorch_bert_model = PytorchBertEncoder(hugging_face_reference_model)
 
@@ -265,7 +274,7 @@ def run_bert_encoder_inference(
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
-        .to(device)
+        .to(device, mem_config)
     )
 
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input, tt_bert_attention_mask).to(
@@ -290,11 +299,11 @@ def run_bert_encoder_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, 0.99),),
+    "model_version, batch, seq_len, on_weka, dram, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),),
 )
 def test_bert_encoder_inference(
-    model_version, batch, seq_len, on_weka, pcc, model_location_generator
+    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
 ):
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
@@ -303,7 +312,7 @@ def test_bert_encoder_inference(
 
     ttl.profiler.start_profiling("entire_run")
     run_bert_encoder_inference(
-        model_version, batch, seq_len, on_weka, pcc, model_location_generator
+        model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
     )
     ttl.profiler.stop_profiling("entire_run")
 
@@ -313,6 +322,7 @@ if __name__ == "__main__":
         "phiyodr/bert-large-finetuned-squad2",
         9,
         384,
+        True,
         True,
         0.99,
         model_location_generator_,

@@ -52,7 +52,7 @@ def tt2torch_tensor(tt_tensor):
     return py_output
 
 
-def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
+def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
     assert isinstance(num_heads, int) and num_heads > 0
 
     # Weights pre-transposed on host​. No on-the fly transpose of W​
@@ -82,6 +82,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             reciprocal_of_sqrt_hidden_dim_tensor,
             ttl.tensor.BcastOpMath.MUL,
             ttl.tensor.BcastOpDim.HW,
+            mem_config,
         )
 
     def op1_qkv_fused(activation, qkv_weight, qkv_bias):
@@ -90,6 +91,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             ttl.tensor.bert_large_fused_qkv_matmul,
             ttl.tensor.DataType.BFLOAT16,
             device,
+            mem_config,
             activation,
             qkv_weight,
             qkv_bias,
@@ -100,14 +102,14 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def op2_split(qkv):
         # profiler.start("___op2_split")
-        Q, K, V = ttl.tensor.bert_large_split_fused_qkv(qkv)
+        Q, K, V = ttl.tensor.bert_large_split_fused_qkv(qkv, mem_config)
         # profiler.end("___op2_split")
 
         return Q, K, V
 
     def op3_create_heads(Q):
         # profiler.start("___op3_make_attention_heads")
-        q_heads = ttl.tensor.bert_large_create_q_head(Q)
+        q_heads = ttl.tensor.bert_large_create_q_head(Q, mem_config)
         # profiler.end("___op3_make_attention_heads")
 
         return q_heads
@@ -115,14 +117,14 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     def op4_create_heads(K):
         # profiler.start("___op4_make_attention_heads")
         # NOTE: This merges in transpose_hw (op6)
-        k_heads = ttl.tensor.bert_large_create_k_head(K)
+        k_heads = ttl.tensor.bert_large_create_k_head(K, mem_config)
         # profiler.end("___op4_make_attention_heads")
 
         return k_heads
 
     def op5_create_heads(V):
         # profiler.start("___op5_make_attention_heads")
-        v_heads = ttl.tensor.bert_large_create_v_head(V)
+        v_heads = ttl.tensor.bert_large_create_v_head(V, mem_config)
         # profiler.end("___op5_make_attention_heads")
 
         return v_heads
@@ -140,6 +142,8 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             ttl.tensor.bert_large_pre_softmax_bmm,
             ttl.tensor.DataType.BFLOAT16,
             device,
+            # Force DRAM to fit tensors in L1, PCC issue
+            ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
             Q_heads,
             K_T_heads,
         )
@@ -170,6 +174,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             ttl.tensor.bert_large_post_softmax_bmm,
             ttl.tensor.DataType.BFLOAT16,
             device,
+            mem_config,
             attention_scores,
             V_heads,
         )
@@ -184,7 +189,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             return x
         else:
             # profiler.start("___op10_unmake_attention_heads")
-            retval = ttl.tensor.bert_large_concat_heads(x)
+            retval = ttl.tensor.bert_large_concat_heads(x, mem_config)
             # profiler.end("___op10_unmake_attention_heads")
 
             return retval
@@ -192,25 +197,37 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     def mha_(activation, attention_mask):
         # profiler.start("__mha")
         qkv = op1_qkv_fused(activation, qkv_weight, qkv_bias)
+        # activation.deallocate()
         Q, K, V = op2_split(qkv)
+        qkv.deallocate()
 
         Q_heads = op3_create_heads(Q)
+        Q.deallocate()
         K_T_heads = op4_create_heads(K)
+        K.deallocate()
         V_heads = op5_create_heads(V)
+        V.deallocate()
 
         """
         # No longer needed as op4 already returns K_head transposed
         K_T_heads = op6_transpose_hw(K_heads)
         """
         qkt = op7_bmm(Q_heads, K_T_heads)
+        Q_heads.deallocate()
+        K_T_heads.deallocate()
 
         attention_scores = op8_scale_mask_softmax(qkt, attention_mask)
+        # Should be a no-op deallocate since it was moved?
+        # qkt.deallocate()
         weighted_activation = op9_bmm(attention_scores, V_heads)
+        attention_scores.deallocate()
+        V_heads.deallocate()
 
         res = op10_unmake_attention_heads(
             weighted_activation
         )  # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
         # profiler.end("__mha")
+        weighted_activation.deallocate()
 
         return res
 
@@ -218,7 +235,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
 
 class TtMultiHeadAttentionModel(torch.nn.Module):
-    def __init__(self, config, encoder_idx, state_dict, device):
+    def __init__(self, config, encoder_idx, state_dict, device, mem_config):
         super().__init__()
         qw = pad_weight(
             state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"]
@@ -243,7 +260,7 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
         hidden_dim = qw.shape[-1]
 
         self.mha = mha(
-            qw, qb, kw, kb, vw, vb, hidden_dim, config.num_attention_heads, device
+            qw, qb, kw, kb, vw, vb, hidden_dim, config.num_attention_heads, device, mem_config
         )
 
     def forward(self, activation, attention_mask=None):
@@ -265,12 +282,13 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
 
 
 def run_mha_inference(
-    model_version, batch, seq_len, on_weka, pcc, model_location_generator
+    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
 ):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
-    ttl.device.InitializeDevice(device)
+    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.BASIC if dram else ttl.device.MemoryAllocator.L1_BANKING)
     host = ttl.device.GetHost()
+    mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1)
 
     if on_weka:
         model_name = str(
@@ -290,6 +308,7 @@ def run_mha_inference(
         0,
         hugging_face_reference_model.state_dict(),
         device,
+        mem_config,
     )
     pytorch_mha_model = PytorchMultiHeadAttentionModel(hugging_face_reference_model)
 
@@ -331,16 +350,16 @@ def run_mha_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, 0.99),),
+    "model_version, batch, seq_len, on_weka, dram, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),),
 )
 def test_mha_inference(
-    model_version, batch, seq_len, on_weka, pcc, model_location_generator
+    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
 ):
     # enable_compile_cache()
 
     run_mha_inference(
-        model_version, batch, seq_len, on_weka, pcc, model_location_generator
+        model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
     )
 
 
@@ -349,6 +368,7 @@ if __name__ == "__main__":
         "phiyodr/bert-large-finetuned-squad2",
         9,
         384,
+        True,
         True,
         0.99,
         model_location_generator_,
