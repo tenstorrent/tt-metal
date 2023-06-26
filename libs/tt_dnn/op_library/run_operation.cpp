@@ -86,13 +86,17 @@ std::vector<Tensor> run_with_program_cache(
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
+    auto profile_run_with_program_cache = op_profiler::ProfileScope(op.get_type_name());
+
     op.validate(input_tensors, optional_input_tensors);
 
     auto device = detail::get_device(input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
 
+    auto do_profile = op_profiler::get_profiler_flag();
+
     auto& program_with_callbacks = program_cache::get_or_create(
-        op, input_tensors, optional_input_tensors, output_tensors, device
+        op, input_tensors, optional_input_tensors, output_tensors, device, do_profile
     );
 
     override_runtime_args(
@@ -125,6 +129,9 @@ std::vector<Tensor> run_with_program_cache(
         circular_buffer->deallocate();
     }
 
+    op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
+    op_profiler::dump_device_profiler_results(device, program);
+
     return output_tensors;
 }
 
@@ -136,7 +143,6 @@ std::vector<Tensor> run(
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
 ) {
     if (program_cache::is_enabled() and op.supports_program_caching()) {
-        TT_ASSERT (op_profiler::get_profiler_flag() == false , "Refer to ticket #1162 regarding profiling and program caching");
         return detail::run_with_program_cache(op, input_tensors, optional_input_tensors);
     } else {
         if (program_cache::is_enabled()) {

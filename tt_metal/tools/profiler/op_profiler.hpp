@@ -405,7 +405,9 @@ namespace op_profiler {
 
     static void dump_device_profiler_results (Device *device, Program &program)
     {
-        if (detail::operationProfiler.get_profiler_flag())
+        //TODO: (MO) Added this for now until #1184 is finished to be able to disable device profiling
+        const char *TT_METAL_PROFILER = std::getenv("TT_METAL_PROFILER");
+        if (detail::operationProfiler.get_profiler_flag() && TT_METAL_PROFILER == nullptr)
         {
             tt::tt_metal::DumpDeviceProfileResults(device, program);
         }
