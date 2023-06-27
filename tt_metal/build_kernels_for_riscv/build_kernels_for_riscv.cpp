@@ -112,6 +112,7 @@ struct CompileState {
             // TODO(AP): allocating the vec every time is suboptimal
             includes = move(vector<string>({
                 "",
+                "tt_metal/include",
                 "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/llk_lib/",
                 "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/common/inc",
                 "tt_metal/src/ckernels/sfpi/include",
@@ -130,6 +131,7 @@ struct CompileState {
         } else if (is_brisc()) {
             includes = move(vector<string>({
                 "",
+                "tt_metal/include",
                 "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/common/inc",
                 "tt_metal/src/ckernels/sfpi/include",
                 "tt_metal/src/ckernels/sfpi/include/" + get_string_aliased_arch_lowercase(arch),
@@ -146,6 +148,7 @@ struct CompileState {
         } else {
             includes = move(vector<string>({
                 "",
+                "tt_metal/include",
                 "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/common/inc",
                 "tt_metal/src/ckernels/sfpi/include",
                 "tt_metal/src/ckernels/sfpi/include/" + get_string_aliased_arch_lowercase(arch),
