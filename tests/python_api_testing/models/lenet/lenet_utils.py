@@ -5,6 +5,7 @@ import tt_lib
 from lenet.reference.lenet import LeNet5
 from PIL import Image
 
+
 def load_torch_lenet(weka_path, num_classes):
     model2 = LeNet5(num_classes).to("cpu")
     checkpoint = torch.load(weka_path, map_location=torch.device("cpu"))

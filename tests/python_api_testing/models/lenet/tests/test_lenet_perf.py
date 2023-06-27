@@ -23,6 +23,7 @@ from tt.lenet import lenet5
 from lenet_utils import load_torch_lenet, prepare_image
 from utility_functions_new import torch2tt_tensor
 
+
 @pytest.mark.parametrize(
     "pcc, PERF_CNT",
     ((0.99, 2),),
@@ -56,11 +57,7 @@ def test_lenet_perf_inference(
         _, torch_predicted = torch.max(torch_output.data, -1)
         profiler.end("\nExec time of reference model")
 
-        tt_image = torch2tt_tensor(
-            image,
-            device,
-            tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        tt_image = torch2tt_tensor(image, device, tt_lib.tensor.Layout.ROW_MAJOR)
 
         profiler.start("\nExecution time of tt_vgg first run")
         tt_output = tt_lenet(tt_image)

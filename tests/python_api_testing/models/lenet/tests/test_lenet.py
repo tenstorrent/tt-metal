@@ -17,6 +17,7 @@ from tt.lenet import lenet5
 from utility_functions_new import comp_pcc
 from utility_functions_new import torch2tt_tensor
 
+
 @pytest.mark.parametrize(
     "pcc",
     ((0.99),),
@@ -45,11 +46,7 @@ def test_lenet_inference(
         torch_output = torch_LeNet(image).unsqueeze(1).unsqueeze(1)
         _, torch_predicted = torch.max(torch_output.data, -1)
 
-        tt_image = torch2tt_tensor(
-            image,
-            device,
-            tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        tt_image = torch2tt_tensor(image, device, tt_lib.tensor.Layout.ROW_MAJOR)
 
         tt_output = tt_lenet(tt_image)
         tt_output = tt_output.to(host)
