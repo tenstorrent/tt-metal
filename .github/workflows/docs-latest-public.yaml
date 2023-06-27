@@ -18,9 +18,9 @@ jobs:
   build-deploy-docs:
     env:
       DOCS_VERSION: latest
-    runs-on:
-      group: corporate-docs
+    runs-on: ubuntu-20.04
     steps:
+      - uses: ./.github/actions/install-metal-deps-ubuntu-20.04
       - uses: actions/checkout@v3
         with:
           submodules: recursive
