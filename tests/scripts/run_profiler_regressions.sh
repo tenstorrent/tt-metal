@@ -17,5 +17,9 @@ cd $TT_METAL_HOME
 source build/python_env/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
 
-pytest $TT_METAL_HOME/tests/tt_metal/tools/profiler/test_device_logs.py -vvv
-pytest $TT_METAL_HOME/tests/tt_metal/tools/profiler/test_device_profiler.py -vvv
+if [[ $1 == "FW" ]]; then
+    pytest $TT_METAL_HOME/tests/tt_metal/tools/profiler/test_device_profiler.py -vvv
+else
+    pytest $TT_METAL_HOME/tests/tt_metal/tools/profiler/test_device_logs.py -vvv
+    pytest $TT_METAL_HOME/tests/tt_metal/tools/profiler/test_device_profiler.py -vvv
+fi

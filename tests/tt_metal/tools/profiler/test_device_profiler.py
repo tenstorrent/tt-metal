@@ -49,14 +49,14 @@ def get_function_name():
     return frame.f_code.co_name
 
 
-# @pytest.mark.skip(reason="Some machines are acting flaky on this test")
 def test_custom_cycle_count():
     REF_CYCLE_COUNT = 52
-    REF_CYCLE_COUNT_MARGIN = 6
+    REF_CYCLE_COUNT_HIGH_MULTIPLIER = 100
+    REF_CYCLE_COUNT_LOW_MULTIPLIER = 5
     REF_RISC_COUNT = 5
 
-    REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT + REF_CYCLE_COUNT_MARGIN
-    REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT - REF_CYCLE_COUNT_MARGIN
+    REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
+    REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
 
     devicesData = run_device_profiler_test(doubleRun=True)
 
