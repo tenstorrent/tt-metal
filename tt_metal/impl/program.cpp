@@ -4,11 +4,11 @@
 
 namespace tt::tt_metal {
 
-std::vector<std::reference_wrapper<Semaphore>> Program::semaphores_on_core(const CoreCoord &core) const {
-    std::vector<std::reference_wrapper<Semaphore>> semaphores;
-    for (auto semaphore : this->semaphores_) {
-        if (semaphore.initialized_on_logical_core(core)) {
-            semaphores.push_back(semaphore);
+auto Program::semaphores_on_core(const CoreCoord &core) const {
+    std::vector<std::reference_wrapper<const Semaphore>> semaphores;
+    for ( const Semaphore & s : this->semaphores_) {
+        if (s.initialized_on_logical_core(core)) {
+            semaphores.emplace_back(std::cref(s));
         }
     }
     return semaphores;

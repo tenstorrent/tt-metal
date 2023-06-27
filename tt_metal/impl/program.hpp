@@ -53,7 +53,7 @@ class Program {
 
     std::vector<CircularBuffer *> circular_buffers_on_core(const CoreCoord &core) const;
 
-    std::vector<std::reference_wrapper<Semaphore>> semaphores_on_core(const CoreCoord &core) const;
+    auto semaphores_on_core(const CoreCoord &core) const;
 
     size_t num_semaphores ( const CoreCoord & core ) const;
     size_t num_semaphores () const;
