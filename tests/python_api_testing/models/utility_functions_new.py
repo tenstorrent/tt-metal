@@ -357,11 +357,35 @@ def torch_to_tt_tensor(py_tensor, device):
 
     return tt_tensor
 
-def write_dict_to_file(csv_path, dict_res):
-    columns = ", ".join([str(d) for d in dict_res.keys()])
-    values = ", ".join(["{:.2f}".format(d) for d in dict_res.values()])
+def prep_report(model_name: str, batch_size: int, inference_and_compile_time: float, inference_time: float, comments: str, inference_time_cpu: float=None):
 
-    with open(csv_path, "w") as csvfile:
-        csvfile.write(columns)
-        csvfile.write("\n")
-        csvfile.write(values)
+    def write_dict_to_file(csv_path, dict_res):
+        columns = ", ".join([str(d) for d in dict_res.keys()])
+        # values = ", ".join([("{:.2f}".format(d) if isinstance(d, float) else str(d)) for d in dict_res.values()])
+        values = ", ".join([d for d in dict_res.values()])
+
+        with open(csv_path, "w") as csvfile:
+            csvfile.write(columns)
+            csvfile.write("\n")
+            csvfile.write(values)
+
+
+    compile_time = inference_and_compile_time - inference_time
+    gs_throughput = batch_size * (1/inference_time)
+    cpu_throughput = batch_size * (1/inference_time_cpu) if inference_time_cpu else "unknown"
+    cpu_throughput = "{:.5f}".format(cpu_throughput) if not isinstance(cpu_throughput, str) else cpu_throughput
+    dict_res = {
+        "Model": model_name,
+        "Setting": comments,
+        "Batch": str(batch_size),
+        "First Run (sec)": "{:.2f}".format(inference_and_compile_time),
+        "Second Run (sec)":  "{:.2f}".format(inference_time),
+        "Compile Time (sec)": "{:.2f}".format(compile_time),
+        "Inference Time GS (sec)": "{:.2f}".format(inference_time),
+        "Throughput GS (batch*inf/sec)": "{:.2f}".format(gs_throughput),
+        "Inference Time CPU (sec)": "{:.2f}".format(inference_time_cpu),
+        "Throughput CPU (batch*inf/sec)": cpu_throughput,
+    }
+
+    csv_file = f"perf_{model_name}.csv"
+    write_dict_to_file(csv_file, dict_res)

@@ -25,7 +25,7 @@ from tqdm.auto import tqdm
 
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
 from utility_functions_new import enable_compile_cache, disable_compile_cache
-from utility_functions_new import write_dict_to_file
+from utility_functions_new import prep_report
 import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 
@@ -103,7 +103,7 @@ def test_perf():
     profiler = Profiler()
     first_key = "first_iter"
     second_key = "second_iter"
-    reference_key = "ref_iter"
+    cpu_key = "ref_iter"
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
@@ -125,7 +125,12 @@ def test_perf():
     )
 
     # 4. load the K-LMS scheduler with some fitting parameters.
-    scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+    scheduler = LMSDiscreteScheduler(
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        num_train_timesteps=1000,
+    )
     tt_scheduler = LMSDiscreteScheduler(
         beta_start=0.00085,
         beta_end=0.012,
@@ -196,25 +201,26 @@ def test_perf():
     tt_latents = torch.tensor(latents)
 
     ##### torch
-    profiler.start(reference_key)
+    profiler.start(cpu_key)
     for t in tqdm(scheduler.timesteps):
         conditioned, unconditioned = latent_expansion(latents, scheduler, t)
-            # predict the noise residual
+        # predict the noise residual
         with torch.no_grad():
             # first forward pass; conditioned on the prompt
-            noise_pred_cond = unet(conditioned, t, encoder_hidden_states=text_embeddings).sample
+            noise_pred_cond = unet(
+                conditioned, t, encoder_hidden_states=text_embeddings
+            ).sample
             # second forward pass; un-conditioned
-            noise_pred_uncond = unet(unconditioned, t, encoder_hidden_states=uncond_embeddings).sample
+            noise_pred_uncond = unet(
+                unconditioned, t, encoder_hidden_states=uncond_embeddings
+            ).sample
         # perform guidance
         noise_pred = guide(noise_pred_uncond, noise_pred_cond, guidance_scale, t)
         # compute the previous noisy sample x_t -> x_t-1
         latents = scheduler.step(noise_pred, t, latents).prev_sample
         break
-    profiler.end(reference_key)
-    profiler.get(reference_key)
+    profiler.end(cpu_key)
     #### end of torch
-
-
 
     profiler_key = first_key
 
@@ -269,17 +275,13 @@ def test_perf():
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
-    ref_time = profiler.get(reference_key)
-    compiler_time = first_iter_time - second_iter_time
-    throughput = BATCH_SIZE / second_iter_time
-    dict_res = {
-        "reference_time (s)": ref_time,
-        "first_iter_time (s)": first_iter_time,
-        "second_iter_time (s)": second_iter_time,
-        "compiler_time (s)": compiler_time,
-        "throughput (it/s)": throughput,
-    }
+    cpu_time = profiler.get(cpu_key)
 
-    csv_file = "perf_unbatched_stable_diffusion.csv"
-
-    write_dict_to_file(csv_file, dict_res)
+    prep_report(
+        "unbatched_stable_diffusion",
+        BATCH_SIZE,
+        first_iter_time,
+        second_iter_time,
+        "v1.4",
+        cpu_time,
+    )
