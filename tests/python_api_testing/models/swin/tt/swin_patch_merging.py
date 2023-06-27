@@ -76,10 +76,15 @@ class TtSwinPatchMerging(nn.Module):
         # [batch_size, height/2, width/2, num_channels]
         input_feature_3 = input_feature[:, 1::2, 1::2, :]
         # [batch_size, height/2, width/2, 4*num_channels]
-        input_feature = torch.cat(
+        input_feature_0 = torch_to_tt_tensor_rm(input_feature_0, self.device)
+        input_feature_1 = torch_to_tt_tensor_rm(input_feature_1, self.device)
+        input_feature_2 = torch_to_tt_tensor_rm(input_feature_2, self.device)
+        input_feature_3 = torch_to_tt_tensor_rm(input_feature_3, self.device)
+
+        input_feature = fallback_ops.concat(
             [input_feature_0, input_feature_1, input_feature_2, input_feature_3], -1
         )
-        input_feature = torch_to_tt_tensor_rm(input_feature, self.device)
+
         input_feature = fallback_ops.reshape(
             input_feature, 1, batch_size, -1, 4 * num_channels
         )
