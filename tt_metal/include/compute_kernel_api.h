@@ -14,10 +14,6 @@
     #define ALWI inline __attribute__((always_inline))
 #endif
 
-// #define ALWI inline __attribute__((always_inline))
-
-// #define TRISC_NUM 3
-
 #ifdef TRISC_MATH
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
@@ -27,7 +23,6 @@
 #include "llk_math_reduce.h"
 #define MATH(x) x
 #define MAIN math_main()
-// #define TRISC_ID 1
 #else
 #define MATH(x)
 #endif
@@ -37,7 +32,6 @@
 #include "llk_pack.h"
 #define PACK(x) x
 #define MAIN pack_main()
-// #define TRISC_ID 2
 #else
 #define PACK(x)
 #endif
@@ -52,7 +46,6 @@
 #include "llk_unpack_untilize.h"
 #define UNPACK(x) x
 #define MAIN unpack_main()
-// #define TRISC_ID 0
 #else
 #define UNPACK(x)
 #endif
@@ -1053,6 +1046,3 @@ ALWI void graph_interpreter_init() // TODO(AP): probably duplicated, remove
 }
 
 } // namespace ckernel
-
-// TODO(AP): use of namespace in a header
-// using namespace tt; // for CB::c_in visibility
