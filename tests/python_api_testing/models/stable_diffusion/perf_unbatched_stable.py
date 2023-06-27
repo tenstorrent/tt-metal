@@ -101,6 +101,9 @@ def make_tt_unet(state_dict, device):
 
 def test_perf():
     profiler = Profiler()
+    first_key = "first_iter"
+    second_key = "second_iter"
+    reference_key = "ref_iter"
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
@@ -122,6 +125,7 @@ def test_perf():
     )
 
     # 4. load the K-LMS scheduler with some fitting parameters.
+    scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
     tt_scheduler = LMSDiscreteScheduler(
         beta_start=0.00085,
         beta_end=0.012,
@@ -186,13 +190,32 @@ def test_perf():
     )
     latents = latents.to(torch_device)
 
+    scheduler.set_timesteps(NUM_INFERENCE_STEPS)
     tt_scheduler.set_timesteps(NUM_INFERENCE_STEPS)
     latents = latents * tt_scheduler.init_noise_sigma
     tt_latents = torch.tensor(latents)
-    iter = 0
 
-    first_key = "first_iter"
-    second_key = "second_iter"
+    ##### torch
+    profiler.start(reference_key)
+    for t in tqdm(scheduler.timesteps):
+        conditioned, unconditioned = latent_expansion(latents, scheduler, t)
+            # predict the noise residual
+        with torch.no_grad():
+            # first forward pass; conditioned on the prompt
+            noise_pred_cond = unet(conditioned, t, encoder_hidden_states=text_embeddings).sample
+            # second forward pass; un-conditioned
+            noise_pred_uncond = unet(unconditioned, t, encoder_hidden_states=uncond_embeddings).sample
+        # perform guidance
+        noise_pred = guide(noise_pred_uncond, noise_pred_cond, guidance_scale, t)
+        # compute the previous noisy sample x_t -> x_t-1
+        latents = scheduler.step(noise_pred, t, latents).prev_sample
+        break
+    profiler.end(reference_key)
+    profiler.get(reference_key)
+    #### end of torch
+
+
+
     profiler_key = first_key
 
     iter = 0
@@ -246,9 +269,11 @@ def test_perf():
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
+    ref_time = profiler.get(reference_key)
     compiler_time = first_iter_time - second_iter_time
     throughput = BATCH_SIZE / second_iter_time
     dict_res = {
+        "reference_time (s)": ref_time,
         "first_iter_time (s)": first_iter_time,
         "second_iter_time (s)": second_iter_time,
         "compiler_time (s)": compiler_time,

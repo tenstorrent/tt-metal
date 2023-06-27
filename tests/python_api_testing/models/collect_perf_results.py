@@ -7,7 +7,7 @@ def merge_perf_files():
     csvfiles = [f for f in listdir(mypath) if isfile(join(mypath, f)) and ".csv" in f]
     merge_res = open("perf.csv", "w")
     merge_res.write(
-        "model, first_iter_time, second_iter_time, compiler_time, throughput \n"
+        "model, reference_time(s), first_iter_time (s), second_iter_time (s), compiler_time (s), throughput (it/s) \n"
     )
 
     for csvfile in csvfiles:

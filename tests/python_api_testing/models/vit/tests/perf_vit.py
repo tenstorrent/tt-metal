@@ -22,12 +22,12 @@ from tt.modeling_vit import vit_for_image_classification
 
 BATCH_SIZE = 1
 
-
 def test_perf():
     profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"
+    reference_key = "ref_key"
     profiler_key = first_key
 
     dataset = load_dataset("huggingface/cats-image")
@@ -51,25 +51,35 @@ def test_perf():
     tt_model = vit_for_image_classification(device)
 
     with torch.no_grad():
+        profiler.start(reference_key)
+        logits = HF_model(**inputs).logits
+        profiler.end(reference_key)
+
         profiler.start(first_key)
         tt_output = tt_model(tt_inputs)[0]
         profiler.end(first_key)
+
         enable_compile_cache()
+
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]
         profiler.end(second_key)
 
+
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
+    ref_time = profiler.get(reference_key)
     compiler_time = first_iter_time - second_iter_time
     throughput = BATCH_SIZE / second_iter_time
     dict_res = {
+        "reference_time (s)": ref_time,
         "first_iter_time (s)": first_iter_time,
         "second_iter_time (s)": second_iter_time,
         "compiler_time (s)": compiler_time,
         "throughput (it/s)": throughput,
     }
 
-    csv_file = "perf_vit.csv"
+    model_name = "vit"
+    csv_file = f"perf_{model_name}.csv"
 
     write_dict_to_file(csv_file, dict_res)
