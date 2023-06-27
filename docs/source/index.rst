@@ -33,6 +33,12 @@ Welcome to TT-Metal documentation!
 
    dev_onboarding/get_started
 
+.. toctree::
+   :caption: Resources
+
+   resources/support
+   resources/contributing
+
 Indices and tables
 ==================
 

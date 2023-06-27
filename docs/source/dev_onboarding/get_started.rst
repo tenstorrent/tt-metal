@@ -84,35 +84,3 @@ If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests whic
 ::
 
     ./tests/scripts/run_tt_lib_regressions.sh
-
-
-.. only:: not html
-
-    Setting up a TT Cloud Bare-Metal Machine
-    ----------------------------------------
-
-    Developing on a TT cloud bare-metal machine requires some additional setup for
-    things to go smoothly. First, you'll need access to the Colocation Cloud VPN
-    from Tenstorrent. Please reach out to your assigned Tenstorrent customer team
-    if you're an external evaluator, or to IT if you're an internal developer for
-    access.
-
-    After you've connected VPN, it's time to log onto your machine. The cloud team
-    should now have given you an IP and credentials to access your machine. It
-    should be a generic login through SSH. Once you SSH in, you will create a user
-    here. Pick a username for yourself that will be recorded on this machine.
-
-    ::
-
-        sudo adduser <USERNAME>
-        sudo usermod -aG sudo <USERNAME>
-
-    You'll be prompted for various pieces of information throughout this process.
-    Please fill out the prompts and choose a secure password.
-
-    Next, re-log back into your machine under the new username. This will be your
-    new account on this machine.
-
-    You will need to grant this machine SSH access to the Github organization. Read
-    more about SSH `here
-    <https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account>`_.

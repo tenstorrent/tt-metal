@@ -1,6 +1,6 @@
 ---
-name: Development - Feature request
-about: Suggest an idea / change for this project
+name: For external users - Propose a feature
+about: Suggest an idea / change for this project (Please make a blank issue below if you're a developer!)
 title: "[Feature Request] ..."
 labels: feature-request
 assignees: ''
