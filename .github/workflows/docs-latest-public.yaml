@@ -20,12 +20,14 @@ jobs:
       DOCS_VERSION: latest
     runs-on: ubuntu-20.04
     steps:
-      - uses: ./.github/actions/install-metal-deps-ubuntu-20.04
       - uses: actions/checkout@v3
         with:
           submodules: recursive
           token: ${{ secrets.CHECKOUT_TOKEN }}
           lfs: true
+      - uses: ./.github/actions/install-metal-deps-ubuntu-20.04
+        with:
+          os: ubuntu-20.04
       - name: Build tt-metal
         run: make build
       - name: Activate and build docs
