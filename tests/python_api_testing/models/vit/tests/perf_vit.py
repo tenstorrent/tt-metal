@@ -17,18 +17,8 @@ from loguru import logger
 import tt_lib
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
 from utility_functions_new import disable_compile_cache, enable_compile_cache
+from utility_functions_new import write_dict_to_file
 from tt.modeling_vit import vit_for_image_classification
-
-
-def write_dict_to_file(csv_path, dict_res):
-    columns = ", ".join([str(d) for d in dict_res.keys()])
-    values = ", ".join([str(d) for d in dict_res.values()])
-
-    with open(csv_path, "w") as csvfile:
-        csvfile.write(columns)
-        csvfile.write("\n")
-        csvfile.write(values)
-
 
 BATCH_SIZE = 1
 
@@ -74,10 +64,10 @@ def test_perf():
     compiler_time = first_iter_time - second_iter_time
     throughput = BATCH_SIZE / second_iter_time
     dict_res = {
-        "first_iter_time": first_iter_time,
-        "second_iter_time": second_iter_time,
-        "compiler_time": compiler_time,
-        "throughput": throughput,
+        "first_iter_time (s)": first_iter_time,
+        "second_iter_time (s)": second_iter_time,
+        "compiler_time (s)": compiler_time,
+        "throughput (it/s)": throughput,
     }
 
     csv_file = "perf_vit.csv"

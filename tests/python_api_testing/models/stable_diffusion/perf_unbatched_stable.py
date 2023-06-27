@@ -25,7 +25,7 @@ from tqdm.auto import tqdm
 
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
 from utility_functions_new import enable_compile_cache, disable_compile_cache
-
+from utility_functions_new import write_dict_to_file
 import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 
@@ -97,16 +97,6 @@ def make_tt_unet(state_dict, device):
         base_address="",
     )
     return tt_unet
-
-
-def write_dict_to_file(csv_path, dict_res):
-    columns = ", ".join([str(d) for d in dict_res.keys()])
-    values = ", ".join([str(d) for d in dict_res.values()])
-
-    with open(csv_path, "w") as csvfile:
-        csvfile.write(columns)
-        csvfile.write("\n")
-        csvfile.write(values)
 
 
 def test_perf():
@@ -259,10 +249,10 @@ def test_perf():
     compiler_time = first_iter_time - second_iter_time
     throughput = BATCH_SIZE / second_iter_time
     dict_res = {
-        "first_iter_time": first_iter_time,
-        "second_iter_time": second_iter_time,
-        "compiler_time": compiler_time,
-        "throughput": throughput,
+        "first_iter_time (s)": first_iter_time,
+        "second_iter_time (s)": second_iter_time,
+        "compiler_time (s)": compiler_time,
+        "throughput (it/s)": throughput,
     }
 
     csv_file = "perf_unbatched_stable_diffusion.csv"

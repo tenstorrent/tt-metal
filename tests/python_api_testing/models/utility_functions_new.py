@@ -356,3 +356,12 @@ def torch_to_tt_tensor(py_tensor, device):
     )
 
     return tt_tensor
+
+def write_dict_to_file(csv_path, dict_res):
+    columns = ", ".join([str(d) for d in dict_res.keys()])
+    values = ", ".join([str(d) for d in dict_res.values()])
+
+    with open(csv_path, "w") as csvfile:
+        csvfile.write(columns)
+        csvfile.write("\n")
+        csvfile.write(values)
