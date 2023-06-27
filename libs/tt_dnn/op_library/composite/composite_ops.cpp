@@ -121,17 +121,21 @@ Tensor clip(const Tensor& a,float low, float high) {
 //
 //     x1 = (x * slope) + shift
 //     y = tensor.clip(x1, 0, 1)
-Tensor hard_sigmoid(const Tensor& a) {
-    Tensor a_mac = mac_scalar(a,0.2f,0.5f);//multiply and add.
+// 
+// PyTorch version:
+// hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
+Tensor hard_sigmoid(const Tensor& a,float scale,float shift) {
+    Tensor a_mac = mac_scalar(a,scale,shift);//multiply and add.
     Tensor a_clip = relu_max(a_mac,1.0f);
     return std::move(a_clip);
 }
 
 // Function @hard_swish
 //use transformation y = x * hard_sigmoid( x ) by broadcast
-//Ref:
-Tensor hard_swish(const Tensor& a) {
-    Tensor a_sigmoid = hard_sigmoid(a);
+//Ref: PyTorch
+//hard swish(x) = x*hard_sigmoid(x,scale,shift)
+Tensor hard_swish(const Tensor& a,float scale,float shift) {
+    Tensor a_sigmoid = hard_sigmoid(a,scale,shift);
     Tensor result_sq = mul(a_sigmoid,a);
     return std::move(result_sq);
 }
@@ -347,7 +351,6 @@ Tensor cbrt(const Tensor &input_a) {
   Tensor t3 = mul(t2,sign(input_a));
   return std::move(t3);
 }
-
 
 }//namespace tt_metal
 

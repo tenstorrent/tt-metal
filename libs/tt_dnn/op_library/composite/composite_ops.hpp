@@ -114,6 +114,16 @@ Tensor threshold(const Tensor &input_a,float threshold, float value);
 
 //cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
 Tensor cbrt(const Tensor &input_a);
+
+//PyTorch version:
+//hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
+// 
+//for Theano version use scale = 1.0/5.0f = 0.2f with shift = 0.5f.
+Tensor hard_sigmoid(const Tensor& tensor_a,float scale = 1.0f/6.0f,float shift = 0.5f);
+
+//hard swish(x) = x*hard_sigmoid(x,scale,shift)
+Tensor hard_swish(const Tensor& a,float scale = 1.0f/6.0f,float shift = 0.5f);
+
 } //namespace tt_metal
 
 } //namespace tt

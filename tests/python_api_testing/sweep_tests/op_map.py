@@ -131,6 +131,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sigmoid,
         "pytorch_op": pytorch_ops.sigmoid,
     },
+    "eltwise-hard_sigmoid": {
+        "tt_lib_op": tt_lib_ops.eltwise_hard_sigmoid,
+        "pytorch_op": pytorch_ops.hard_sigmoid,
+    },    
+    "eltwise-hard_swish": {
+        "tt_lib_op": tt_lib_ops.eltwise_hard_swish,
+        "pytorch_op": pytorch_ops.hard_swish,
+    },
     "eltwise-log": {
         "tt_lib_op": tt_lib_ops.eltwise_log,
         "pytorch_op": pytorch_ops.log,

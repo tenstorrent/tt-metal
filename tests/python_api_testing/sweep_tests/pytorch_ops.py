@@ -164,6 +164,11 @@ def relu(x, *args, **kwargs):
 def sigmoid(x, *args, **kwargs):
     return torch.sigmoid(x)
 
+def hard_sigmoid(x,*args,**kwargs):
+    return torch.nn.functional.hardsigmoid(x)
+
+def hard_swish(x,*args,**kwargs):
+    return torch.nn.functional.hardswish(x)
 
 def log(x, *args, **kwargs):
     return torch.log(x)

@@ -848,6 +848,44 @@ void TensorModule(py::module &m_tensor) {
         +----------+-------------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("hard_sigmoid", &hard_sigmoid,
+		 py::arg().noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, R"doc(
+        Applies the hard sigmoid function to the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | Tensor sigmoid is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | scale    | scale value (PyTorch default) | float     | default to 1.0/6.0f          | No       |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | shift    | shift value (PyTorch default) | float     | default to 0.5f              | No       |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("hard_swish", &hard_swish,
+		 py::arg().noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, R"doc(
+        Applies the hard swish function to the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | Tensor sigmoid is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | scale    | scale value (PyTorch default) | float     | default to 1.0/6.0f          | No       |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | shift    | shift value (PyTorch default) | float     | default to 0.5f              | No       |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("exp", &exp, R"doc(
         Returns a new tensor with the exponential of the elements of the input tensor ``arg0``.
 
