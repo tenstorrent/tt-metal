@@ -155,6 +155,8 @@ class TtBertBatchDram(torch.nn.Module):
 
             # profiler.start("_qa_linear")
             res = self.qa_linear(hidden_states)
+            # Move tensor to host to ensure all ops have finished during fast dispatch
+            res = res.to(ttl.device.GetHost())
             # profiler.end("_qa_linear")
 
             tt_out_list.append(res)
@@ -293,7 +295,7 @@ def run_bert_question_and_answering_inference(
     for i in range(PERF_CNT):
         profiler.start("processing_output_to_string")
 
-        tt_out = tt_out_list[i].to(host)
+        tt_out = tt_out_list[i]
         tt_untilized_output = torch.Tensor(
             tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()
         ).reshape(batch, 1, seq_len, -1)
