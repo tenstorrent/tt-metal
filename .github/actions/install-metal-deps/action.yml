@@ -22,18 +22,15 @@ runs:
         if ! jq -e ".\"${{ inputs.os }}\" != null" $GITHUB_ACTION_PATH/dependencies.json; then
           echo "${{ inputs.os }} does not exist as a supported os in $GITHUB_ACTION_PATH/dependencies.json"
         fi
-    - name: Retrieve pkg deps based on OS
+    - name: Retrieve and install pkg deps based on OS
       id: retrieve-pkg-deps
       shell: bash
       run: |
         DEPENDENCIES=$(jq -r --arg os "${{ inputs.os }}" '.[$os] | .[]' $GITHUB_ACTION_PATH/dependencies.json)
-        echo "dependencies=$DEPENDENCIES" >> $GITHUB_OUTPUT
-    - name: Install pkg deps
-      shell: bash
-      run: |
+        echo $DEPENDENCIES
         sudo add-apt-repository ppa:git-core/ppa
         sudo apt-get update
-        sudo apt install ${{ steps.retrieve-pkg-deps.outputs.dependencies }}
+        sudo apt install $DEPENDENCIES
     - name: Install doxygen
       shell: bash
       run: |
