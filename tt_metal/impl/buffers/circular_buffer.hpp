@@ -9,6 +9,13 @@ namespace tt {
 namespace tt_metal {
 
 class CircularBuffer {
+   private:
+    enum State : uint8_t {
+        UNALLOCATED = 0,
+        ADDRESS_SPECIFIED = 1,
+        ALLOCATED = 2,
+    };
+
    public:
     CircularBuffer(
         Device *device,
@@ -54,7 +61,7 @@ class CircularBuffer {
     void deallocate();
 
     bool is_allocated() {
-        return this->allocated_on_device_;
+        return this->state_ == State::ALLOCATED;
     }
 
    private:
@@ -68,7 +75,7 @@ class CircularBuffer {
     u32 size_;
     u32 address_;
     DataFormat data_format_;              // e.g. fp16, bfp8
-    bool allocated_on_device_;
+    State state_ = State::UNALLOCATED;
 };
 
 }  // namespace tt_metal
