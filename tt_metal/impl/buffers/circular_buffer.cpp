@@ -81,23 +81,34 @@ void CircularBuffer::reserve(Device* device) {
 }
 
 void CircularBuffer::deallocate() {
-    if (this->state_ == State::ALLOCATED) {
-        if (this->device_ == nullptr or this->device_->closed_) {
-            return;
+    switch (this->state_) {
+        case State::UNALLOCATED: break;
+        case State::ADDRESS_SPECIFIED: {
+            log_warning("Circular buffer at address {} KB has not been allocated on device, calling deallocate will reset the address!", this->address_);
+            this->state_ = State::UNALLOCATED;
         }
-        for (auto core_range : this->core_range_set_.ranges()) {
-            auto start = core_range.start;
-            auto end = core_range.end;
-            for (auto x = start.x; x <= end.x; x++) {
-                for (auto y = start.y; y <= end.y; y++) {
-                    CoreCoord logical_core({.x=x, .y=y});
-                    auto bank_ids = this->device_->bank_ids_from_logical_core(logical_core);
-                    TT_ASSERT(bank_ids.size() == 1);
-                    allocator::deallocate_buffer(*this->device_->allocator_, bank_ids.at(0), this->address_, BufferType::L1);
+        break;
+        case State::ALLOCATED: {
+            if (this->device_ == nullptr or this->device_->closed_) {
+                return;
+            }
+            for (auto core_range : this->core_range_set_.ranges()) {
+                auto start = core_range.start;
+                auto end = core_range.end;
+                for (auto x = start.x; x <= end.x; x++) {
+                    for (auto y = start.y; y <= end.y; y++) {
+                        CoreCoord logical_core({.x=x, .y=y});
+                        auto bank_ids = this->device_->bank_ids_from_logical_core(logical_core);
+                        TT_ASSERT(bank_ids.size() == 1);
+                        allocator::deallocate_buffer(*this->device_->allocator_, bank_ids.at(0), this->address_, BufferType::L1);
+                    }
                 }
             }
+            this->state_ = State::UNALLOCATED;
         }
-        this->state_ = State::UNALLOCATED;
+        break;
+        default:
+            log_assert(false, "Unsupported state for circular buffer");
     }
 }
 
