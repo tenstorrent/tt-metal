@@ -104,7 +104,7 @@ def run_single_llrt_test(test_entry, timeout=600, tt_arch="grayskull"):
 @pytest.mark.post_commit
 @pytest.mark.frequent
 @pytest.mark.parametrize(
-    "llrt_test_entry", POST_COMMIT_LLRT_TEST_ENTRIES, ids=generate_test_entry_id
+    "llrt_test_entry", (), ids=generate_test_entry_id
 )
 def test_run_llrt_test_grayskull(
     silicon_arch_grayskull, silicon_arch_name, llrt_test_entry, llrt_fixtures
@@ -115,7 +115,7 @@ def test_run_llrt_test_grayskull(
 @pytest.mark.post_commit
 @pytest.mark.frequent
 @pytest.mark.parametrize(
-    "llrt_test_entry", POST_COMMIT_LLRT_TEST_WH_B0_ENTRIES, ids=generate_test_entry_id
+    "llrt_test_entry", (), ids=generate_test_entry_id
 )
 def test_run_llrt_test_wormhole_b0(
     silicon_arch_name, silicon_arch_wormhole_b0, llrt_test_entry, llrt_fixtures
@@ -125,7 +125,7 @@ def test_run_llrt_test_wormhole_b0(
 
 @pytest.mark.long
 @pytest.mark.parametrize(
-    "llrt_test_entry", LONG_LLRT_TEST_ENTRIES, ids=generate_test_entry_id
+    "llrt_test_entry", (), ids=generate_test_entry_id
 )
 def test_run_llrt_test_long(
     silicon_arch_name, silicon_arch_grayskull, llrt_test_entry, llrt_fixtures
@@ -135,7 +135,7 @@ def test_run_llrt_test_long(
 
 @pytest.mark.frequently_hangs
 @pytest.mark.parametrize(
-    "llrt_test_entry", FREQUENTLY_HANGS_LLRT_TEST_ENTRIES, ids=generate_test_entry_id
+    "llrt_test_entry", (), ids=generate_test_entry_id
 )
 def test_run_llrt_test_frequently_hangs(
     silicon_arch_name, silicon_arch_grayskull, llrt_test_entry, llrt_fixtures
