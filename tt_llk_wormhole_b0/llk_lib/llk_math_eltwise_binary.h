@@ -27,43 +27,46 @@ template <
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool is_fp32_dest_acc_en = false>
-inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false) {
+inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
     constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
     constexpr uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
-    
+
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
 
         if constexpr (eltwise_binary_type == ELWMUL) {
-
-            if constexpr (is_fp32_dest_acc_en) {
+            if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
                 #pragma GCC unroll 0
-                for(std::uint32_t i = 0; i < 8; i++) {
+                for (std::uint32_t i = 0; i < 8; i++) {
                     TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 3) + i);
-                }    
+                }
             } else {
                 #pragma GCC unroll 0
-                for(std::uint32_t i = 0; i < 4; i++) {
+                for (std::uint32_t i = 0; i < 4; i++) {
                     TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + i);
-                }   
+                }
             }
         } else if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
-
+            static_assert(
+                !(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE && (Dst == DstSync::SyncTile16) ||
+                  (Dst == DstSync::SyncTile2)),
+                "Dst clear in DstSync::SyncTile16 or DstSync::SyncTile2 dst sync mode is not supported!");
+            /*
             if (clear_dest_acc) {
                 if constexpr (is_fp32_dest_acc_en) {
                     #pragma GCC unroll 0
                     for(std::uint32_t i = 0; i < 8; i++) {
                         TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 3) + i);
-                    }    
+                    }
                 } else {
                     #pragma GCC unroll 0
                     for(std::uint32_t i = 0; i < 4; i++) {
                         TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + i);
-                    }   
+                    }
                 }
             }
+            */
         }
-
     } else {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     }
@@ -105,7 +108,7 @@ inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false)
                 for (std::uint32_t n = 0; n < 2; n++) {  // N-num faces
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                         //fp32 zeroacc can only clear 8x16 datums at a time, need to call twice per 16x16 face
-                        if constexpr (is_fp32_dest_acc_en) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + n*2);
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + ((n*2)+1));
                         } else {
@@ -118,7 +121,7 @@ inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false)
                 for (std::uint32_t n = 0; n < outerloop; n++) {  // N-num faces
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
-                        if constexpr (is_fp32_dest_acc_en) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + n*2);
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + ((n*2)+1));
                         } else {
@@ -134,7 +137,7 @@ inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false)
                 for (std::uint32_t n = 0; n < 2; n++) {  // N-num faces
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
-                        if constexpr (is_fp32_dest_acc_en) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + 2 + n*2);
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + 2 + ((n*2)+1));
                         } else {
@@ -148,7 +151,7 @@ inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false)
                 for (std::uint32_t n = 0; n < outerloop; n++) {  // N-num faces
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
-                        if constexpr (is_fp32_dest_acc_en) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + 2 + n*2);
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + 2 + ((n*2)+1));
                         } else {
@@ -167,7 +170,7 @@ inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false)
                 for (std::uint32_t n = 0; n < 4; n++) {  // N-num faces
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
-                        if constexpr (is_fp32_dest_acc_en) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + n*2);
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + ((n*2)+1));
                         } else {
@@ -181,7 +184,7 @@ inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false)
                 for (std::uint32_t n = 0; n < outerloop; n++) {  // N-num faces
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
-                        if constexpr (is_fp32_dest_acc_en) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + n*2);
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + ((n*2)+1));
                         } else {
