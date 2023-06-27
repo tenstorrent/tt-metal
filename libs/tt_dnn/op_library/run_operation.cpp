@@ -117,7 +117,6 @@ std::vector<Tensor> run_with_program_cache(
             HACK_CQ = make_unique<CommandQueue>(device);
         }
         EnqueueProgram(*HACK_CQ, program, false);
-        Finish(*HACK_CQ);
 
     } else {
         ConfigureDeviceWithProgram(device, program);
