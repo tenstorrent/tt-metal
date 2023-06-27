@@ -34,6 +34,10 @@ class FreeList : public Algorithm {
 
     void clear();
 
+    Statistics get_statistics() const;
+
+    void dump_blocks(std::ofstream &out) const;
+
    private:
     struct Block {
         u32 address;
@@ -44,9 +48,7 @@ class FreeList : public Algorithm {
         Block *next_free = nullptr;
     };
 
-    void dump_block(const Block *block, const std::string &preamble) const;
-
-    void dump_blocks() const;
+    void dump_block(const Block *block, std::ofstream &out) const;
 
     bool is_allocated(const Block *block) const;
 

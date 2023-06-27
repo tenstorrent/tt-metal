@@ -56,6 +56,10 @@ class BankManager {
 
     void clear();
 
+    Statistics get_statistics(u32 bank_id) const;
+
+    void dump_blocks(u32 bank_id, std::ofstream &out) const;
+
    private:
     constexpr static u32 min_allocation_size_bytes_ = 32;
     // DRAM -> L1 and L1 -> DRAM transfers need to have 32B alignment, which means:
@@ -103,6 +107,10 @@ i32 dram_bank_offset_from_bank_id(const Allocator &allocator, u32 bank_id);
 std::vector<u32> bank_ids_from_dram_channel(const Allocator &allocator, u32 dram_channel);
 
 std::vector<u32> bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core);
+
+Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type, u32 bank_id);
+
+void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, u32 bank_id, std::ofstream &out);
 
 BankIdToRelativeAddress alloc_one_bank_per_storage_unit(const AllocatorConfig & config, BankManager &bank_manager, u32 starting_bank_id, u32 size, u32 page_size, bool bottom_up);
 

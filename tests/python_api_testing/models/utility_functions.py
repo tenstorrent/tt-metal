@@ -141,6 +141,20 @@ def disable_compilation_reports():
     return ttl.device.DisableCompilationReports()
 
 
+def enable_memory_reports():
+    """
+    Enables generating reports of memory allocation statistics in .reports/tt_metal dir
+    """
+    return ttl.device.EnableMemoryReports()
+
+
+def disable_memory_reports():
+    """
+    Disables generating reports of memory allocation statistics
+    """
+    return ttl.device.DisableMemoryReports()
+
+
 def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)

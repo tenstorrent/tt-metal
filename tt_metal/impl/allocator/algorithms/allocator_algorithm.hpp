@@ -5,6 +5,8 @@
 #include <vector>
 #include "hostdevcommon/common_values.hpp"
 
+#include "tt_metal/impl/allocator/allocator_types.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -38,6 +40,10 @@ class Algorithm {
     virtual void deallocate(u32 address) = 0;
 
     virtual void clear() = 0;
+
+    virtual Statistics get_statistics() const = 0;
+
+    virtual void dump_blocks(std::ofstream &out) const = 0;
 
    protected:
     u32 max_size_bytes_;

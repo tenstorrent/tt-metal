@@ -1,6 +1,7 @@
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 #include "common/assert.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace tt {
@@ -356,39 +357,53 @@ void FreeList::clear() {
     this->init();
 }
 
+Statistics FreeList::get_statistics() const {
+    Statistics stats{
+        .total_allocatable_size_bytes = this->max_size_bytes_,
+        .total_allocated_bytes = 0,
+        .total_free_bytes = 0,
+        .largest_free_block_bytes = 0
+    };
+
+    Block *curr_block = this->block_head_;
+    while (curr_block != nullptr) {
+        if (this->is_allocated(curr_block)) {
+            stats.total_allocated_bytes += curr_block->size;
+        } else {
+            stats.total_free_bytes += curr_block->size;
+            if (curr_block->size >= stats.largest_free_block_bytes) {
+                stats.largest_free_block_bytes = curr_block->size;
+                stats.largest_free_block_addrs.push_back(curr_block->address);
+            }
+        }
+        curr_block = curr_block->next_block;
+    }
+    if (stats.total_allocated_bytes == 0) {
+        stats.total_free_bytes = this->max_size_bytes_;
+        stats.largest_free_block_bytes = this->max_size_bytes_;
+    }
+    return stats;
+}
+
 FreeList::~FreeList() {
     this->reset();
 }
 
-void FreeList::dump_block(const Block *block, const std::string &preamble) const {
-    auto alloc_status = this->is_allocated(block) ? "allocated" : "free";
-    std::cout << preamble
-              << "\taddress: " << block->address
-              << "\tsize: " << block->size
-              << "\t" << alloc_status
-              << "\n";
+void FreeList::dump_block(const Block *block, std::ofstream &out) const {
+    auto alloc_status = this->is_allocated(block) ? "Y" : "N";
+    out << ",,,Address (KB):," << (block->address) / 1024 << "\n"
+        << ",,,Size (KB):," << (block->size) / 1024 << "\n"
+        << ",,,Allocated (Y/N):," << alloc_status << "\n";
 }
 
-void FreeList::dump_blocks() const {
-    std::cout << "DUMPING MEMORY BLOCKS:" << std::endl;
+void FreeList::dump_blocks(std::ofstream &out) const {
+    out << ",,Blocks:\n";
     Block *curr_block = this->block_head_;
-    if (this->block_head_ != nullptr) {
-        this->dump_block(this->block_head_, "Block head");
-    }
-    if (this->free_block_head_ != nullptr) {
-        this->dump_block(this->free_block_head_, "Free block head");
-    }
     while (curr_block != nullptr) {
-        this->dump_block(curr_block, "Block");
+        this->dump_block(curr_block, out);
         curr_block = curr_block->next_block;
     }
-    if (this->block_tail_ != nullptr) {
-        this->dump_block(this->block_tail_, "Block tail");
-    }
-    if (this->free_block_tail_ != nullptr) {
-        this->dump_block(this->free_block_tail_, "Free block tail");
-    }
-    std::cout << "\n";
+    out << "\n";
 }
 
 }  // namespace allocator

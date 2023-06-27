@@ -78,6 +78,14 @@ struct AllocDescriptor {
     InitAndAllocFuncs l1;
 };
 
+struct Statistics {
+    size_t total_allocatable_size_bytes = 0;
+    size_t total_allocated_bytes = 0;
+    size_t total_free_bytes = 0;
+    size_t largest_free_block_bytes = 0;
+    std::vector<u32> largest_free_block_addrs;  // addresses (relative to bank) that can hold the largest_free_block_bytes
+};
+
 }
 
 }

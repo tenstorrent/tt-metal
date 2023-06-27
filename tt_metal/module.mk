@@ -17,10 +17,11 @@ include $(TT_METAL_HOME)/tt_metal/programming_examples/module.mk
 TT_METAL_LIB = $(LIBDIR)/libtt_metal.a
 TT_METAL_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
 TT_METAL_INCLUDES = $(COMMON_INCLUDES)
-TT_METAL_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal_impl
+TT_METAL_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal_impl -ltt_metal_detail
 TT_METAL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 include $(TT_METAL_HOME)/tt_metal/impl/module.mk
+include $(TT_METAL_HOME)/tt_metal/detail/module.mk
 
 TT_METAL_SRCS = \
 	tt_metal/tt_metal.cpp
@@ -33,7 +34,7 @@ TT_METAL_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 tt_metal: $(TT_METAL_LIB)
 
-$(TT_METAL_LIB): $(COMMON_LIB) $(TT_METAL_OBJS) $(TT_METAL_IMPL_LIB) $(LLRT_LIB) $(BUILD_KERNELS_FOR_RISCV_LIB)
+$(TT_METAL_LIB): $(COMMON_LIB) $(TT_METAL_OBJS) $(TT_METAL_IMPL_LIB) $(TT_METAL_DETAIL_LIB) $(LLRT_LIB) $(BUILD_KERNELS_FOR_RISCV_LIB)
 	@mkdir -p $(LIBDIR)
 	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(LDFLAGS) $(TT_METAL_LDFLAGS)
 

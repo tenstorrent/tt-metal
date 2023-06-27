@@ -212,6 +212,16 @@ void BankManager::clear() {
     }
 }
 
+Statistics BankManager::get_statistics(u32 bank_id) const {
+    this->validate_bank_id(bank_id);
+    return this->bank_id_to_allocator_.at(bank_id)->get_statistics();
+}
+
+void BankManager::dump_blocks(u32 bank_id, std::ofstream &out) const {
+    this->validate_bank_id(bank_id);
+    this->bank_id_to_allocator_.at(bank_id)->dump_blocks(out);
+}
+
 u32 find_max_address(const std::vector<std::pair<u32, u32>> &candidate_addr_ranges) {
     u32 max_address = candidate_addr_ranges[0].second;
     for (auto candidate_addr_range : candidate_addr_ranges) {
@@ -341,6 +351,30 @@ std::vector<u32> bank_ids_from_dram_channel(const Allocator &allocator, u32 dram
 std::vector<u32> bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core) {
     TT_ASSERT(allocator.logical_core_to_bank_ids.find(logical_core) != allocator.logical_core_to_bank_ids.end());
     return allocator.logical_core_to_bank_ids.at(logical_core);
+}
+
+Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type, u32 bank_id) {
+    Statistics stats;
+    switch (buffer_type) {
+        case BufferType::DRAM: return allocator.dram_manager.get_statistics(bank_id);
+        case BufferType::L1: return allocator.l1_manager.get_statistics(bank_id);
+        default: {
+            log_assert(false, "Unsupported buffer type!");
+        }
+    }
+    return stats;
+}
+
+void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, u32 bank_id, std::ofstream &out) {
+    switch (buffer_type) {
+        case BufferType::DRAM: allocator.dram_manager.dump_blocks(bank_id, out);
+        break;
+        case BufferType::L1: allocator.l1_manager.dump_blocks(bank_id, out);
+        break;
+        default: {
+            log_assert(false, "Unsupported buffer type!");
+        }
+    }
 }
 
 BankIdToRelativeAddress alloc_one_bank_per_storage_unit(const AllocatorConfig &config, BankManager &bank_manager, u32 starting_bank_id, u32 size, u32 page_size, bool bottom_up) {

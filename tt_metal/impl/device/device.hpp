@@ -71,6 +71,10 @@ class Device {
     std::vector<uint32_t> bank_ids_from_logical_core(const CoreCoord &logical_core) const;
     bool cluster_is_initialized() const { return cluster_ != nullptr; }
 
+    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, u32 bank_id) const;
+
+    void dump_memory_blocks(const BufferType &buffer_type, u32 bank_id, std::ofstream &out) const;
+
    private:
     void check_allocator_is_initialized() const;
 
