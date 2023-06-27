@@ -25,7 +25,7 @@ template <
     DstSync Dst = DstSync::SyncFull,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false) {
+inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true /*not used*/) {
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
 
@@ -35,14 +35,19 @@ inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false)
             TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 2);
             TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 3);
         } else if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
+            static_assert(
+                !(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE && (Dst == DstSync::SyncTile16) ||
+                  (Dst == DstSync::SyncTile2)),
+                "Dst clear in DstSync::SyncTile16 or DstSync::SyncTile2 dst sync mode is not supported!");
+            /*
             if (clear_dest_acc) {
                 TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 0);
                 TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 1);
                 TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 2);
                 TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 3);
             }
+            */
         }
-
     } else {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     }
