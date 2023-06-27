@@ -409,6 +409,10 @@ namespace op_profiler {
         const char *TT_METAL_PROFILER = std::getenv("TT_METAL_PROFILER");
         if (detail::operationProfiler.get_profiler_flag() && TT_METAL_PROFILER == nullptr)
         {
+            //TODO: (MO) This global is temporary need to update once the new interface is in
+            if (HACK_CQ) {
+                Finish(*HACK_CQ);
+            }
             tt::tt_metal::DumpDeviceProfileResults(device, program);
         }
     }
