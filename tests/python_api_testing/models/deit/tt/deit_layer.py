@@ -25,7 +25,7 @@ class TtDeiTLayer(nn.Module):
 
     def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
-        print()
+
         self.attention = TtDeiTAttention(config, device, state_dict, base_address = f'{base_address}.attention')
         self.intermediate = TtDeiTIntermediate(config, device, state_dict, base_address = f'{base_address}.intermediate')
         self.output = TtDeiTOutput(config, device, state_dict, base_address = f'{base_address}.output')
