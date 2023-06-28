@@ -543,6 +543,12 @@ void send_dispatch_kernel_to_device(Device* device) {
     CoreCoord dispatch_core = {1, 11};
     tt::llrt::test_load_write_read_risc_binary(device->cluster(), "command_queue/brisc/brisc.hex", 0, dispatch_core, 0);
 
+    // Initialize cq pointers
+    u32 fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;
+    vector<u32> fifo_addr_vector = {fifo_addr};
+    tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, fifo_addr_vector, CQ_READ_PTR);
+    tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, fifo_addr_vector, CQ_WRITE_PTR);
+
     // Deassert reset of dispatch core BRISC. TODO(agrebenisan): Refactor once Paul's changes in
     tt::llrt::internal_::setup_riscs_on_specified_core(
         device->cluster(), 0, tt::llrt::TensixRiscsOptions::BRISC_ONLY, {dispatch_core});

@@ -163,14 +163,6 @@ void setup_cq_read_write_interface() {
     cq_read_interface.fifo_limit = fifo_addr + fifo_size - 1;
     cq_read_interface.fifo_rd_ptr = fifo_addr;
     cq_read_interface.fifo_size = fifo_size;
-
-    // Setting up here rather than in init sync registers function
-    // since these are not registers, rather they are L1 values
-    // Read ptr
-    get_cq_read_ptr()[0] = fifo_addr;
-
-    // Write ptr
-    get_cq_write_ptr()[0] = fifo_addr;
 }
 
 // replicated from ckernels_defs.h, which are currently not included in BRISC / NCRISC builds
