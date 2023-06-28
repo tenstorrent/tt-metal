@@ -10,7 +10,6 @@ from functools import partial
 from pathlib import Path
 from setuptools import setup, Extension, find_namespace_packages
 from setuptools.command.build_ext import build_ext
-from setuptools_scm.version import ScmVersion, guess_next_version
 
 
 class BudaEagerBuildConstants:
@@ -55,14 +54,43 @@ def get_arch_name():
     return attempt_get_env_var("ARCH_NAME")
 
 
-def get_buda_eager_version_scheme(buda_eager_build_config, version: ScmVersion):
-    return version.format_next_version(guess_next_version)
+def get_buda_eager_local_version_scheme(buda_eager_build_config, version):
+    from setuptools_scm.version import ScmVersion, guess_next_version
+    arch_name = buda_eager_build_config.arch_name
+
+    if version.dirty:
+        return f"+g{version.node}.{arch_name}"
+    else:
+        return ""
+
+
+def get_buda_eager_main_version_scheme(buda_eager_build_config, version):
+    from setuptools_scm.version import ScmVersion, guess_next_version
+    is_release_version = version.distance == 0
+    is_dirty = version.dirty
+    is_clean_prod_build = (not is_dirty) and is_release_version
+
+    arch_name = buda_eager_build_config.arch_name
+
+    if is_clean_prod_build:
+        return version.format_with("{tag}+{arch_name}", arch_name=arch_name)
+    elif is_dirty and not is_release_version:
+        return version.format_with("{tag}.dev{distance}", arch_name=arch_name)
+    elif is_dirty and is_release_version:
+        return version.format_with("{tag}", arch_name=arch_name)
+    else:
+        assert not is_dirty and not is_release_version
+        return version.format_with("{tag}.dev{distance}+{arch_name}", arch_name=arch_name)
+
 
 
 def get_version(buda_eager_build_config):
     return {
         "version_scheme": partial(
-            get_buda_eager_version_scheme, buda_eager_build_config
+            get_buda_eager_main_version_scheme, buda_eager_build_config
+        ),
+        "local_scheme": partial(
+            get_buda_eager_local_version_scheme, buda_eager_build_config
         ),
     }
 
@@ -78,6 +106,14 @@ buda_eager_build_config = BudaEagerBuildConfig()
 
 
 class BudaEagerBuild(build_ext):
+    @staticmethod
+    def get_buda_eager_build_env():
+        return {
+            **os.environ.copy(),
+            "TT_METAL_HOME": Path(__file__).parent,
+            "TT_METAL_ENV": "production",
+        }
+
     def run(self):
         assert (
             len(self.extensions) == 1
@@ -90,7 +126,7 @@ class BudaEagerBuild(build_ext):
             ), f"Editable install detected in a non-srcdir environment, aborting"
             return
 
-        build_env = {**os.environ.copy(), "TT_METAL_HOME": Path(__file__).parent}
+        build_env = BudaEagerBuild.get_buda_eager_build_env()
         subprocess.check_call(["make", "build"], env=build_env)
 
         fullname = self.get_ext_fullname(ext.name)
