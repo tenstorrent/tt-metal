@@ -76,13 +76,13 @@ void MAIN {
                                 pack_tile(i, tt::CB::c_intermed1);
                             }
                             cb_push_back(tt::CB::c_intermed1, out_subblock_num_tiles);
-                            release_dst(DstMode::Half);
+                            release_dst(tt::DstMode::Half);
 
                             // Redundant wait since we know data was just pushed
                             cb_wait_front(tt::CB::c_intermed1, out_subblock_num_tiles);
                             cb_wait_front(tt::CB::c_in3, in1_per_core_w);
                             add_bcast_rows_init_short();
-                            acquire_dst(DstMode::Half);
+                            acquire_dst(tt::DstMode::Half);
                             for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                                 uint32_t bcast_tile_idx = in1_index_subblock_offset;
                                 for (uint32_t k = 0; k < out_subblock_w; k++, i++) {

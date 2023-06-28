@@ -47,10 +47,10 @@ inline void reblock_and_untilize(
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             for (uint32_t w = 0; w < out_subblock_w; w++) {
                 uint32_t tile_index = block_offset + within_block_index + w;
-                acquire_dst(DstMode::Half);
+                acquire_dst(tt::DstMode::Half);
                 copy_tile(interm_cb_id, tile_index, 0);
                 pack_tile(0, reblock_cb_id);
-                release_dst(DstMode::Half);
+                release_dst(tt::DstMode::Half);
             }
             block_offset += out_subblock_num_tiles;
         }
