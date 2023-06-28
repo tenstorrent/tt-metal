@@ -81,7 +81,8 @@ struct ProgramSection {
 struct ProgramSrcToDstAddrMap {
     vector<u32> program_vector;
     vector<ProgramSection> program_sections;
-    vector<u32> worker_noc_coords;
+    vector<pair<u32, u32>> multicast_message_noc_coords;
+    u32 num_workers;
 };
 
 ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Program& program);

@@ -50,10 +50,11 @@ class DeviceCommand {
     // Command header
     static constexpr u32 finish_idx = 0;
     static constexpr u32 num_workers_idx = 1;
-    static constexpr u32 data_size_in_bytes_idx = 2;
-    static constexpr u32 num_relay_buffer_reads_idx = 3;
-    static constexpr u32 num_relay_buffer_writes_idx = 4;
-    static constexpr u32 num_relay_program_writes_idx = 5;
+    static constexpr u32 num_multicast_messages_idx = 2;
+    static constexpr u32 data_size_in_bytes_idx = 3;
+    static constexpr u32 num_relay_buffer_reads_idx = 4;
+    static constexpr u32 num_relay_buffer_writes_idx = 5;
+    static constexpr u32 num_relay_program_writes_idx = 6;
 
     static_assert(CONTROL_SECTION_NUM_ENTRIES == 16);
     u32 worker_launch_idx = CONTROL_SECTION_NUM_ENTRIES;  // So far, we unicast the de-assert until Almeet provides
@@ -95,7 +96,8 @@ class DeviceCommand {
     void finish();  // Creates a finish command, in which the command queue is blocked until the device notifies host of
                     // completion.
 
-    void set_num_workers(u32 num_workers);  // Specifies how many cores to de-assert
+    void set_num_workers(u32 num_workers);
+    void set_num_multicast_messages(u32 num_multicast_messages);  // Specifies how many core ranges to deassert
 
     void set_worker_noc_coord(u32 noc_coord);
 
@@ -140,7 +142,7 @@ class DeviceCommand {
     // number of bytes in buffer following command, if applicable
     void set_data_size_in_bytes(u32 data_size_in_bytes);
 
-    void set_worker_core_noc_coord(u32 core_coord);
+    void set_multicast_message_noc_coord(u32 core_coord, u32 num_messages);
 
     u32 get_data_size_in_bytes() const;
 

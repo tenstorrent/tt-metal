@@ -5,6 +5,7 @@
 DeviceCommand::DeviceCommand() {
     this->desc.at(this->finish_idx) = 0;
     this->desc.at(this->num_workers_idx) = 0;
+    this->desc.at(this->num_multicast_messages_idx) = 0;
     this->desc.at(this->data_size_in_bytes_idx) = 0;
     this->desc.at(this->num_relay_buffer_reads_idx) = 0;
     this->desc.at(this->num_relay_buffer_writes_idx) = 0;
@@ -15,9 +16,12 @@ void DeviceCommand::finish() { this->desc.at(this->finish_idx) = 1; }
 
 void DeviceCommand::set_num_workers(u32 num_workers) { this->desc.at(this->num_workers_idx) = num_workers; }
 
-void DeviceCommand::set_worker_core_noc_coord(u32 noc_coord) {
+void DeviceCommand::set_num_multicast_messages(u32 num_multicast_messages) { this->desc.at(this->num_multicast_messages_idx) = num_multicast_messages; }
+
+void DeviceCommand::set_multicast_message_noc_coord(u32 noc_coord, u32 num_messages) {
     this->desc.at(this->worker_launch_idx) = noc_coord;
-    this->worker_launch_idx++;
+    this->desc.at(this->worker_launch_idx + 1) = num_messages;
+    this->worker_launch_idx += 2;
 }
 
 void DeviceCommand::add_buffer_relay(

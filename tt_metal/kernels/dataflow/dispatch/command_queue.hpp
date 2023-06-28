@@ -273,33 +273,36 @@ FORCE_INLINE void write_program(u32 num_program_relays, volatile u32*& command_p
     #endif
 }
 
-FORCE_INLINE void launch_program(u32 num_workers, volatile u32*& command_ptr) {
+FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, volatile u32*& command_ptr) {
 
     // Never launch a program when this tool is used.
     #ifdef TT_METAL_DISPATCH_MAP_DUMP
     return;
     #endif
 
+    // DPRINT << "NUMW: " << num_workers << ", NUMMM: " << num_multicast_messages << ENDL();
     if (not num_workers)
         return;
 
     volatile uint32_t* message_addr_ptr = reinterpret_cast<volatile uint32_t*>(DISPATCH_MESSAGE_ADDR);
     *message_addr_ptr = 0;
-    for (u32 i = 0; i < num_workers; i++) {
+    for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
+        u32 num_messages = command_ptr[i + 1];
         u64 deassert_addr = worker_core_noc_coord | TENSIX_SOFT_RESET_ADDR;
-        noc_semaphore_set_remote(DEASSERT_RESET_SRC_L1_ADDR, deassert_addr);
+        noc_semaphore_set_multicast(DEASSERT_RESET_SRC_L1_ADDR, deassert_addr, num_messages);
     }
+
     noc_async_write_barrier();
 
     // Wait on worker cores to notify me that they have completed
     while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers);
-
-    for (u32 i = 0; i < num_workers; i++) {
+    for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
+        u32 num_messages = command_ptr[i + 1];
         u64 assert_addr = worker_core_noc_coord | TENSIX_SOFT_RESET_ADDR;
 
-        noc_semaphore_set_remote(ASSERT_RESET_SRC_L1_ADDR, assert_addr);
+        noc_semaphore_set_multicast(ASSERT_RESET_SRC_L1_ADDR, assert_addr, num_messages);
     }
     noc_async_write_barrier();
 }

@@ -416,6 +416,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         constexpr bool profile_device = false;
         pass &= tt_metal::CompileProgram(device, program, profile_device);
+        tt::log_assert(program.logical_core_range_set().ranges().size() >= 1, "Invalid core range set");
 
         CommandQueue cq(device);
 
