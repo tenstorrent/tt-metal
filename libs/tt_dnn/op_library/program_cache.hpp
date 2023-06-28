@@ -72,12 +72,12 @@ static bool is_enabled() {
 }
 
 static void enable() {
-    tt::log_debug(tt::LogOp, "Program Cache: enabled.");
+    tt::log_info(tt::LogOp, "Program Cache: enabled.");
     detail::PROGRAM_CACHE.enable();
 }
 
 static void disable_and_clear() {
-    tt::log_debug(tt::LogOp, "Program Cache: disabled and cleared.");
+    tt::log_info(tt::LogOp, "Program Cache: disabled and cleared.");
     detail::PROGRAM_CACHE.disable();
     detail::PROGRAM_CACHE.clear();
 }
