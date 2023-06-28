@@ -13,8 +13,9 @@ third_party/ @tt-rkim @TT-billteng @kkwong10
 
 # Build stuff
 
-MANIFEST.in @tt-rkim @tt-aho
-setup.py @tt-rkim @tt-aho
+MANIFEST.in @tt-rkim
+setup.py @tt-rkim
+pyproject.toml @tt-rkim
 
 Makefile @tt-rkim
 /module.mk @tt-rkim
