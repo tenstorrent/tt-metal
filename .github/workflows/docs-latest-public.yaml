@@ -17,7 +17,9 @@ concurrency:
 jobs:
   build-deploy-docs:
     env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       DOCS_VERSION: latest
+    environment: dev
     runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v3
