@@ -64,6 +64,17 @@ namespace ckernel::unpacker
      unpack_config_t f;
    } unpack_config_u;
 
+   typedef struct {
+     uint32_t x: 12;
+     uint32_t y: 12;
+     uint32_t reserved : 8;
+   } unpack_xy_stride_t; 
+
+   typedef union {
+     uint32_t val;
+     unpack_xy_stride_t f;
+   } unpack_xy_stride_u;
+
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
    inline void unpacker_addr_counter_init()
    {
@@ -261,7 +272,7 @@ namespace ckernel::unpacker
       return rmw_val;
    }
 
-   inline void reconfig_unpacker_data_format(const uint src_operand_id, const uint32_t tile_addr, const uint32_t out_df_addr) {
+   inline void reconfig_unpacker_data_format(const uint src_operand_id, const uint32_t tile_addr, const uint32_t out_df_addr, const uint32_t out_df_stride) {
 
       //volatile uint *cfg = get_cfg_pointer();
       // Set first 32 bites of tile descriptor, only need data format change
@@ -272,8 +283,8 @@ namespace ckernel::unpacker
       tile_descriptor.f.x_dim        = 256; 
 
       //cfg[tile_addr]=tile_descriptor.val[0];
-      TT_SETDMAREG(0, (tile_descriptor.val[0] & 0xffff), 0, LO_16(p_gpr_unpack::TMP0));
-      TT_SETDMAREG(0, ((tile_descriptor.val[0] >> 16) & 0xffff), 0, HI_16(p_gpr_unpack::TMP0));
+      TT_SETDMAREG(0, LOWER_HALFWORD(tile_descriptor.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
+      TT_SETDMAREG(0, UPPER_HALFWORD(tile_descriptor.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
       TT_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, tile_addr);
       TTI_NOP;TTI_NOP;
    
@@ -284,9 +295,20 @@ namespace ckernel::unpacker
       config.f.throttle_mode = 2;
 
       //cfg[out_df_addr]=config.val[0];
-      TT_SETDMAREG(0, (config.val[0] & 0xffff), 0, LO_16(p_gpr_unpack::TMP0));
-      TT_SETDMAREG(0, ((config.val[0] >> 16) & 0xffff), 0, HI_16(p_gpr_unpack::TMP0));
+      TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
+      TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
+
+      // Set ch1/dst address stride 
+      uint x_stride = (uint) (unpack_dst_format[src_operand_id]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[src_operand_id]&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
+      uint y_stride = 16*16*x_stride;
+      unpack_xy_stride_u xy_stride = {0};
+      xy_stride.f.y = y_stride;
+      TT_SETDMAREG(0, LOWER_HALFWORD(xy_stride.val), 0, LO_16(p_gpr_unpack::TMP1));
+      TT_SETDMAREG(0, UPPER_HALFWORD(xy_stride.val), 0, HI_16(p_gpr_unpack::TMP1));
+
       TT_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, out_df_addr);
+      TT_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, out_df_stride);
+
       TTI_NOP;TTI_NOP;
    
       // Clear context ID

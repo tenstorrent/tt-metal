@@ -80,7 +80,10 @@ inline void llk_unpack_reconfig_data_format_srca_impl(const std::uint32_t srca_o
         alu_config_data);
 
     reconfig_unpacker_data_format(
-        srca_operand_id, THCON_SEC0_REG0_TileDescriptor_ADDR32, THCON_SEC0_REG2_Out_data_format_ADDR32);
+        srca_operand_id,
+        THCON_SEC0_REG0_TileDescriptor_ADDR32,
+        THCON_SEC0_REG2_Out_data_format_ADDR32,
+        UNP0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
 }
 
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
@@ -109,7 +112,10 @@ inline void llk_unpack_reconfig_data_format_srcb_impl(std::uint32_t srcb_operand
         alu_config_data);
 
     reconfig_unpacker_data_format(
-        srcb_operand_id, THCON_SEC1_REG0_TileDescriptor_ADDR32, THCON_SEC1_REG2_Out_data_format_ADDR32);
+        srcb_operand_id,
+        THCON_SEC1_REG0_TileDescriptor_ADDR32,
+        THCON_SEC1_REG2_Out_data_format_ADDR32,
+        UNP1_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
 }
 
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
@@ -137,9 +143,15 @@ inline void llk_unpack_reconfig_data_format_impl(std::uint32_t srca_operand_id, 
         ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, alu_src_mask, alu_src_format, alu_config_data);
 
     reconfig_unpacker_data_format(
-        srca_operand_id, THCON_SEC0_REG0_TileDescriptor_ADDR32, THCON_SEC0_REG2_Out_data_format_ADDR32);
+        srca_operand_id,
+        THCON_SEC0_REG0_TileDescriptor_ADDR32,
+        THCON_SEC0_REG2_Out_data_format_ADDR32,
+        UNP0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     reconfig_unpacker_data_format(
-        srcb_operand_id, THCON_SEC1_REG0_TileDescriptor_ADDR32, THCON_SEC1_REG2_Out_data_format_ADDR32);
+        srcb_operand_id,
+        THCON_SEC1_REG0_TileDescriptor_ADDR32,
+        THCON_SEC1_REG2_Out_data_format_ADDR32,
+        UNP1_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
 }
 
 inline void llk_unpack_reconfig_data_format(
