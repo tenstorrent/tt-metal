@@ -293,10 +293,10 @@ def run_bert_question_and_answering_inference(
     profiler.end(f"model_run_{PERF_CNT}_times_for_inference", PERF_CNT)
 
     # output postprocessing
-    for i in range(PERF_CNT):
+    for j in range(PERF_CNT):
         profiler.start("processing_output_to_string")
 
-        tt_out = tt_out_list[i]
+        tt_out = tt_out_list[j]
         tt_untilized_output = torch.Tensor(
             tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()
         ).reshape(batch, 1, seq_len, -1)
@@ -346,7 +346,7 @@ def run_bert_question_and_answering_inference(
 
                 pt_answer = nlp.postprocess([pt_res], **postprocess_params)
                 logger.info(f"PT: {pt_answer}")
-                logger.info(f"PL: {pl_answer}")
+                logger.info(f"PL: {pl_answer[i]}")
 
         profiler.end("processing_output_to_string")
 

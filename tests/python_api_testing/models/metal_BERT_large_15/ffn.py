@@ -239,7 +239,7 @@ def run_ffn_inference(
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE)
-    tilized_ffn_input = tilized_ffn_input.to(device)
+    tilized_ffn_input = tilized_ffn_input.to(device, mem_config)
 
     tt_out = tt_ffn_model(tilized_ffn_input).to(host)
     tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
@@ -259,10 +259,15 @@ def run_ffn_inference(
     if not passing:
         logger.error(f"Output PCC < {pcc}")
 
+    assert(passing)
+
 
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka, dram, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),),
+    (
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, False, 0.99),
+    ),
 )
 def test_ffn_inference(
     model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator

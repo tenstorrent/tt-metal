@@ -264,7 +264,7 @@ def run_bert_encoder_inference(
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
-        .to(device)
+        .to(device, mem_config)
     )
     tt_bert_attention_mask = (
         ttl.tensor.Tensor(
@@ -284,7 +284,7 @@ def run_bert_encoder_inference(
         tt_out.shape()
     )
 
-    # ttl.device.CloseDevice(device)
+    ttl.device.CloseDevice(device)
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
@@ -296,11 +296,14 @@ def run_bert_encoder_inference(
 
     if not passing:
         logger.error(f"Output PCC < {pcc}")
-
+    assert(passing)
 
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka, dram, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),),
+    (
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, False, 0.99),
+    ),
 )
 def test_bert_encoder_inference(
     model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator

@@ -276,8 +276,8 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
         # Disable dropout
         self.mha.eval()
 
-    def forward(self, x):
-        result = self.mha(x)[0]
+    def forward(self, x, attention_mask):
+        result = self.mha(x, attention_mask)[0]
         return result
 
 
@@ -318,7 +318,9 @@ def run_mha_inference(
         torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size)
         * 2
     ) - 1
-    pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
+    bert_attention_mask = torch.zeros(batch, 1, 1, seq_len)
+    extended_bert_attention_mask = torch.zeros(batch, 1, 32, seq_len)
+    pytorch_out = pytorch_mha_model(mha_input.squeeze(1), bert_attention_mask).unsqueeze(1)
 
     pad_mha_input = pad_activation(mha_input)
     tt_mha_input = ttl.tensor.Tensor(
@@ -327,9 +329,20 @@ def run_mha_inference(
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE)
-    tt_mha_input = tt_mha_input.to(device)
+    tt_mha_input = tt_mha_input.to(device, mem_config)
 
-    tt_out = tt_mha_model(tt_mha_input).to(host)
+    tt_bert_attention_mask = (
+        ttl.tensor.Tensor(
+            extended_bert_attention_mask.reshape(-1).tolist(),
+            extended_bert_attention_mask.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(device, mem_config)
+    )
+
+    tt_out = tt_mha_model(tt_mha_input, tt_bert_attention_mask).to(host)
     tt_out1 = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         tt_out.shape()
     )
@@ -345,13 +358,17 @@ def run_mha_inference(
     if not passing:
         logger.error(f"Output PCC < {pcc}")
 
+    assert(passing)
     # print_diff_argmax(pytorch_out, tt_out1)
     # assert np.allclose(pytorch_out.detach().numpy(), tt_out1, 1e-5, 0.17)
 
 
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka, dram, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),),
+    (
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),
+        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, False, 0.99),
+    ),
 )
 def test_mha_inference(
     model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
