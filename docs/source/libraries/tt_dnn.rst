@@ -39,22 +39,92 @@ Below, is an example of how to declare a new operation with all of the methods r
         operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
     };
 
-Program Caching
+Profiler
 ----------------------------
 
-One of the features supported by operation infra is program caching. It provides an ability for an operation to cache the program and simply reload it the next time the same operation is used.
+Profiler is supported out of the box for any op.
 
-In order for an op to be cachable, it needs to implement the following method:
+And there are 2 special methods that can be optionally implemented to set the preferred_name and parallelization_strategy.
 
 .. code-block::
 
-    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    // Implement `get_parallelization_strategy`` to set the parallelization strategy on the profiler
+    struct <NewOperation> {
+        <ParallelizationStrategyEnum> get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    };
 
-Program caching is an optional feature which can enabled by running:
+
+    // Implement `std::ostream& operator<<` to set the preferred name on the profiler
+    std::ostream& operator<<(std::ostream& os, const <NewOperation>& op);
+
+
+Program Caching
+----------------------------
+
+Program caching provides an ability for an operation to cache the program and simply reload it the next time the same operation is used.
+
+It can be enabled by running:
 
 .. code-block::
 
     tt::tt_metal::program_cache::enable()
+
+And it can be disabled by running:
+
+.. code-block::
+
+    tt::tt_metal::program_cache::disable_and_clear()
+
+Number of entries can be queried using:
+
+.. code-block::
+
+    tt::tt_metal::program_cache::num_entries()
+
+In order for an op to be cachable, it needs to implement the following:
+
+.. code-block::
+
+    struct <NewOperation> {
+       // Mandatory methods
+
+        // Implement `compute_program_hash`` method
+        operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+
+        // Return type of `create_program`` needs to implement override_runtime_args_callback
+        // i.e.:
+        operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+
+            Program program{};
+
+            // ...
+
+            auto override_runtime_args_callback = [unary_reader_kernel, unary_writer_kernel](
+                const std::vector<Buffer*>& input_buffers,
+                const std::vector<Buffer*>& output_buffers
+            ) {
+
+                auto src_dram_buffer = input_buffers.at(0);
+                auto dst_dram_buffer = output_buffers.at(0);
+
+                CoreCoord core = {0, 0};
+
+                {
+                    auto runtime_args = GetRuntimeArgs(unary_reader_kernel, core);
+                    runtime_args[0] = src_dram_buffer->address();
+                    SetRuntimeArgs(unary_reader_kernel, core, runtime_args);
+                }
+
+                {
+                    auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+                    runtime_args[0] = dst_dram_buffer->address();
+                    SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+                }
+            };
+
+            return {std::move(program), override_runtime_args_callback};
+        }
+    };
 
 
 tt-DNN API through ``tt_lib``
