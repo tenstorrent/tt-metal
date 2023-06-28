@@ -18,7 +18,7 @@ void MAIN {
     uint32_t batch = get_compile_time_arg_val(11); // batch dim
 
     #ifdef FUSE_BIAS
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(CB::c_intermed1, CB::c_in3);
+        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(tt::CB::c_intermed1, tt::CB::c_in3);
     #endif
     mm_init();
 
@@ -31,22 +31,22 @@ void MAIN {
         {
             bool last_out = block == (num_blocks-1);
 
-            cb_wait_front(CB::c_in0, in0_block_num_tiles);
-            cb_wait_front(CB::c_in1, in1_block_num_tiles);
+            cb_wait_front(tt::CB::c_in0, in0_block_num_tiles);
+            cb_wait_front(tt::CB::c_in1, in1_block_num_tiles);
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
-                    acquire_dst(DstMode::Half);
+                    acquire_dst(tt::DstMode::Half);
 
                     if (enable_reload) {
                         copy_tile_to_dst_init_short();
-                        cb_wait_front(CB::c_intermed0, out_subblock_num_tiles);
+                        cb_wait_front(tt::CB::c_intermed0, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            copy_tile(CB::c_intermed0, i, i);
+                            copy_tile(tt::CB::c_intermed0, i, i);
                         }
-                        cb_pop_front(CB::c_intermed0, out_subblock_num_tiles);
+                        cb_pop_front(tt::CB::c_intermed0, out_subblock_num_tiles);
                         mm_init_short();
                     }
 
@@ -59,7 +59,7 @@ void MAIN {
                             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                 int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                 int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                matmul_tiles(CB::c_in0, CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                                matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
                                 in1_index_inner_dim_offset += in1_per_core_w;
                             }
                             dst_index++;
@@ -71,26 +71,26 @@ void MAIN {
 
                         #ifdef FUSE_BIAS
                             // Move matmul result to interm buffer
-                            cb_reserve_back(CB::c_intermed1, out_subblock_num_tiles);
+                            cb_reserve_back(tt::CB::c_intermed1, out_subblock_num_tiles);
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                pack_tile(i, CB::c_intermed1);
+                                pack_tile(i, tt::CB::c_intermed1);
                             }
-                            cb_push_back(CB::c_intermed1, out_subblock_num_tiles);
+                            cb_push_back(tt::CB::c_intermed1, out_subblock_num_tiles);
                             release_dst(DstMode::Half);
 
                             // Redundant wait since we know data was just pushed
-                            cb_wait_front(CB::c_intermed1, out_subblock_num_tiles);
-                            cb_wait_front(CB::c_in3, in1_per_core_w);
+                            cb_wait_front(tt::CB::c_intermed1, out_subblock_num_tiles);
+                            cb_wait_front(tt::CB::c_in3, in1_per_core_w);
                             add_bcast_rows_init_short();
                             acquire_dst(DstMode::Half);
                             for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                                 uint32_t bcast_tile_idx = in1_index_subblock_offset;
                                 for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                                    add_tiles_bcast_rows(CB::c_intermed1, CB::c_in3, i, bcast_tile_idx, i);
+                                    add_tiles_bcast_rows(tt::CB::c_intermed1, tt::CB::c_in3, i, bcast_tile_idx, i);
                                     bcast_tile_idx++;
                                 }
                             }
-                            cb_pop_front(CB::c_intermed1, out_subblock_num_tiles);
+                            cb_pop_front(tt::CB::c_intermed1, out_subblock_num_tiles);
                         #endif
                         // TODO: Can easily generalize for other sfpu activations
                         #ifdef FUSE_GELU_ACTIVATION
@@ -100,26 +100,26 @@ void MAIN {
                             }
                         #endif
                         // Pack out to output buffer
-                        cb_reserve_back(CB::c_out0, out_subblock_num_tiles);
+                        cb_reserve_back(tt::CB::c_out0, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, CB::c_out0);
+                            pack_tile(i, tt::CB::c_out0);
                         }
-                        cb_push_back(CB::c_out0, out_subblock_num_tiles);
+                        cb_push_back(tt::CB::c_out0, out_subblock_num_tiles);
                     } else {
                         // Wait for tiles in output buffer to be written out since interm and output share memory
                         if (block == 0) {
-                            cb_reserve_back(CB::c_out0, out_num_tiles_to_wait);
+                            cb_reserve_back(tt::CB::c_out0, out_num_tiles_to_wait);
                             out_num_tiles_to_wait += out_subblock_num_tiles;
                         }
                         // Move partial result to interm buffer
-                        cb_reserve_back(CB::c_intermed0, out_subblock_num_tiles);
+                        cb_reserve_back(tt::CB::c_intermed0, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, CB::c_intermed0);
+                            pack_tile(i, tt::CB::c_intermed0);
                         }
-                        cb_push_back(CB::c_intermed0, out_subblock_num_tiles);
+                        cb_push_back(tt::CB::c_intermed0, out_subblock_num_tiles);
                     }
 
-                    release_dst(DstMode::Half);
+                    release_dst(tt::DstMode::Half);
                     in1_index_subblock_offset += out_subblock_w;
                 }
                 in0_index_subblock_offset += in0_subblock_num_tiles;
@@ -127,8 +127,8 @@ void MAIN {
 
             if (spill) enable_reload = true;
 
-            cb_pop_front(CB::c_in0, in0_block_num_tiles);
-            cb_pop_front(CB::c_in1, in1_block_num_tiles);
+            cb_pop_front(tt::CB::c_in0, in0_block_num_tiles);
+            cb_pop_front(tt::CB::c_in1, in1_block_num_tiles);
 
         }
     }

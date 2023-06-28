@@ -7,8 +7,8 @@
 
 #include "debug_print.h"
 
-ALWI void ACQ() { acquire_dst(DstMode::Half); }
-ALWI void REL() { release_dst(DstMode::Half); }
+ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
+ALWI void REL() { release_dst(tt::DstMode::Half); }
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -24,7 +24,7 @@ void MAIN {
     uint32_t Ht = get_compile_time_arg_val(1);
     uint32_t Wt = get_compile_time_arg_val(2);
 
-    binary_op_init_common(CB::c_in0, CB::c_in2);
+    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2);
     //UNPACK(( DPRINT << "NCHt=" << NCHt << " Wt=" << Wt << ENDL() ));
 
     constexpr uint32_t onetile = 1;
@@ -32,16 +32,16 @@ void MAIN {
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    constexpr auto cb_bcast_scaler = CB::c_in2;
-    constexpr auto cb_fused_scale = CB::c_in3;
-    constexpr auto cb_fused_attn = CB::c_in4;
-    constexpr auto cb_exps = CB::c_intermed0;
-    constexpr auto cb_scale_mask = CB::c_intermed3;
-    constexpr auto cb_sumexps = CB::c_intermed1;
-    constexpr auto cb_recips = CB::c_intermed2;
+    constexpr auto cb_bcast_scaler = tt::CB::c_in2;
+    constexpr auto cb_fused_scale = tt::CB::c_in3;
+    constexpr auto cb_fused_attn = tt::CB::c_in4;
+    constexpr auto cb_exps = tt::CB::c_intermed0;
+    constexpr auto cb_scale_mask = tt::CB::c_intermed3;
+    constexpr auto cb_sumexps = tt::CB::c_intermed1;
+    constexpr auto cb_recips = tt::CB::c_intermed2;
     constexpr auto ndst = BLOCK_SIZE;
-    constexpr auto cb_in0 = CB::c_in0;
-    constexpr auto cb_out0 = CB::c_out0;
+    constexpr auto cb_in0 = tt::CB::c_in0;
+    constexpr auto cb_out0 = tt::CB::c_out0;
 
     //UNPACK(( { DPRINT << "Initial rd ptr(cb_exps): " << CB_RD_PTR(cb_exps) << ENDL(); } ));
 
@@ -178,7 +178,7 @@ void MAIN {
                             //if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
                             //if (ht == 1) UNPACK(( DPRINT << "rem8_2=" << rem8 << ENDL() ));
                 ACQ();
-                cb_reserve_back(CB::c_out0, ndst);
+                cb_reserve_back(tt::CB::c_out0, ndst);
                 for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
                         //UNPACK(( DPRINT << "ExpsInBcast:[" << ht << "," << wt << "]" << ENDL() ));
                         //UNPACK(( DPRINT << TSLICE(cb_exps, wt+wt8, s8) << ENDL() ));
@@ -186,11 +186,11 @@ void MAIN {
                         //UNPACK(( DPRINT << TSLICE(cb_recips, 0, s8) << ENDL() ));
                     // wt+wt8 since we pop Wt after the entire loop
                     mul_tiles_bcast<BroadcastType::COL>(cb_exps, cb_recips, wt+wt8, 0, wt8); // tile *= 1/(sum(exp(x)))
-                    pack_tile(wt8, CB::c_out0);
+                    pack_tile(wt8, tt::CB::c_out0);
                         //if (ht == 1) PACK(( DPRINT << "exp*RecipSumExps[" << ht << "," << wt+wt8 << "]" << ENDL() ));
                         //if (ht == 1) PACK(( DPRINT << TSLICE(CB::c_out0, 0, s8) << ENDL() ));
                 }
-                cb_push_back(CB::c_out0, ndst);
+                cb_push_back(tt::CB::c_out0, ndst);
                 REL();
             }
             cb_pop_front(cb_recips, 1);

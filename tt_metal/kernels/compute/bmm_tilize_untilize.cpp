@@ -103,13 +103,13 @@ void MAIN {
     bool spill = in0_num_blocks_w > 1;
 
     // CB indices
-    uint32_t in0_cb_id                                = CB::c_in0;
-    uint32_t in1_cb_id                                = CB::c_in1;
-    uint32_t tilized_in0_cb_id                        = CB::c_intermed0;
-    uint32_t matmul_partials_cb                       = CB::c_intermed1;
-    uint32_t untilize_mode_final_matmul_partials_cb   = CB::c_intermed2;
-    uint32_t untilize_mode_reblock_cb                 = CB::c_intermed3;
-    uint32_t out_cb_id                                = CB::c_out0;
+    uint32_t in0_cb_id                                = tt::CB::c_in0;
+    uint32_t in1_cb_id                                = tt::CB::c_in1;
+    uint32_t tilized_in0_cb_id                        = tt::CB::c_intermed0;
+    uint32_t matmul_partials_cb                       = tt::CB::c_intermed1;
+    uint32_t untilize_mode_final_matmul_partials_cb   = tt::CB::c_intermed2;
+    uint32_t untilize_mode_reblock_cb                 = tt::CB::c_intermed3;
+    uint32_t out_cb_id                                = tt::CB::c_out0;
 
     // MATH((DPRINT << "C: START" << ENDL()));
 
@@ -131,7 +131,7 @@ void MAIN {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                        acquire_dst(DstMode::Half);
+                        acquire_dst(tt::DstMode::Half);
                         if (enable_reload) {
                             copy_tile_to_dst_init_short();
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
@@ -166,7 +166,7 @@ void MAIN {
                                                     : out_cb_id)
                                                 : matmul_partials_cb,
                                              out_subblock_num_tiles);
-                        release_dst(DstMode::Half);
+                        release_dst(tt::DstMode::Half);
                         in1_index_subblock_offset += out_subblock_w;
                     } // for in1_num_subblocks
                     if (last_out && untilize_out) {

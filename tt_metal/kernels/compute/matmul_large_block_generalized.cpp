@@ -125,12 +125,12 @@ void MAIN {
     // interm3:
     //   if under untilize mode, this is the CB we write to so that we can
     //   reblock the output
-    uint32_t in0_cb                                   = CB::c_in0;
-    uint32_t tilize_mode_tilized_in0_cb               = CB::c_intermed0;
-    uint32_t matmul_partials_cb                       = CB::c_intermed1;
-    uint32_t untilize_mode_final_matmul_partials_cb   = CB::c_intermed2;
-    uint32_t untilize_mode_reblock_cb                 = CB::c_intermed3;
-    uint32_t out0_cb                                  = CB::c_out0;
+    uint32_t in0_cb                                   = tt::CB::c_in0;
+    uint32_t tilize_mode_tilized_in0_cb               = tt::CB::c_intermed0;
+    uint32_t matmul_partials_cb                       = tt::CB::c_intermed1;
+    uint32_t untilize_mode_final_matmul_partials_cb   = tt::CB::c_intermed2;
+    uint32_t untilize_mode_reblock_cb                 = tt::CB::c_intermed3;
+    uint32_t out0_cb                                  = tt::CB::c_out0;
     mm_init();
     for(uint32_t block_in0_h = 0; block_in0_h < num_blocks_in0_h; block_in0_h++) {
         for(uint32_t block_in1_w = 0; block_in1_w < num_blocks_in1_w; block_in1_w++) {
@@ -149,14 +149,14 @@ void MAIN {
                     cb_wait_front(in0_cb, in0_block_num_tiles);
                 }
 
-                cb_wait_front(CB::c_in1, in1_block_num_tiles);
+                cb_wait_front(tt::CB::c_in1, in1_block_num_tiles);
 
                 int in0_index_subblock_offset = 0;
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
-                        acquire_dst(DstMode::Half);
+                        acquire_dst(tt::DstMode::Half);
 
                         if (enable_reload) {
                             copy_tile_to_dst_init_short();
@@ -178,9 +178,9 @@ void MAIN {
                                     int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                     int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
                                     if  (tilize_in) {
-                                        matmul_tiles(tilize_mode_tilized_in0_cb, CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                                        matmul_tiles(tilize_mode_tilized_in0_cb, tt::CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
                                     } else {
-                                        matmul_tiles(in0_cb, CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                                        matmul_tiles(in0_cb, tt::CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
                                     }
                                     in1_index_inner_dim_offset += in1_per_core_w;
                                 }
@@ -197,7 +197,7 @@ void MAIN {
                         } else {
                             pack_matmul_subblock(matmul_partials_cb, out_subblock_num_tiles);
                         }
-                        release_dst(DstMode::Half);
+                        release_dst(tt::DstMode::Half);
 
                         in1_index_subblock_offset += out_subblock_w;
                     }
@@ -229,7 +229,7 @@ void MAIN {
                 } else {
                     cb_pop_front(in0_cb, in0_block_num_tiles);
                 }
-                cb_pop_front(CB::c_in1, in1_block_num_tiles);
+                cb_pop_front(tt::CB::c_in1, in1_block_num_tiles);
             }
         }
 

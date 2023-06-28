@@ -15,29 +15,29 @@ void MAIN {
     union { float f; uint32_t u; } u; u.u = scaler;
 
     //reduce_init(REDUCE_OP, REDUCE_DIM, CB::c_in0, u.f);
-    reduce_init_v2<true>(REDUCE_OP, REDUCE_DIM, CB::c_in0, CB::c_in2);
+    reduce_init_v2<true>(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2);
 
-    cb_wait_front(CB::c_in2, 1); // scaler tile from the reader
+    cb_wait_front(tt::CB::c_in2, 1); // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
         constexpr int onetile = 1;
         int reduce_dst_idx = 0;
-        acquire_dst(DstMode::Half);
+        acquire_dst(tt::DstMode::Half);
         for(uint32_t ht = 0; ht < Ht; ++ht) {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             for(uint32_t wt = 0; wt < Wt; ++wt) {
-                cb_wait_front(CB::c_in0, onetile);
+                cb_wait_front(tt::CB::c_in0, onetile);
                 // REDUCE_OP/DIM is expected to come from add_define
                 //reduce_tile(REDUCE_OP, REDUCE_DIM, CB::c_in0, 0, reduce_dst_idx, scaler);
-                reduce_tile_v2(REDUCE_OP, REDUCE_DIM, CB::c_in0, CB::c_in2, 0, 0, reduce_dst_idx);
-                cb_pop_front(CB::c_in0, onetile);
+                reduce_tile_v2(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
+                cb_pop_front(tt::CB::c_in0, onetile);
             }
         }
-        cb_reserve_back(CB::c_out0, onetile);
-        pack_tile(reduce_dst_idx, CB::c_out0);
-        cb_push_back(CB::c_out0, onetile);
-        release_dst(DstMode::Half);
+        cb_reserve_back(tt::CB::c_out0, onetile);
+        pack_tile(reduce_dst_idx, tt::CB::c_out0);
+        cb_push_back(tt::CB::c_out0, onetile);
+        release_dst(tt::DstMode::Half);
     }
 }
 }
