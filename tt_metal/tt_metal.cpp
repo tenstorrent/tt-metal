@@ -120,6 +120,17 @@ bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
                                         default_params,
                                         enable_fw_profile_hack);
 
+            // Thread safety: this may cause grief if done twice
+            char *dbg_print = std::getenv("TT_KERNEL_DEBUG_PRINT");
+            if (dbg_print != nullptr) {
+                uint32_t x, y;
+                sscanf(dbg_print, "%d,%d", &x, &y);
+                auto hart_mask = DPRINT_HART_BR;
+                CoreCoord coord = {x, y};
+                tt_start_debug_print_server(device->cluster(), {0}, {coord}, hart_mask);
+                log_debug(tt::LogMetal, "Started debug print server on core {}", coord.str());
+            }
+
             globally_initialized = true;
         }
 
