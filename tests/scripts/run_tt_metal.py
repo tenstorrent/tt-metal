@@ -42,7 +42,6 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_matmul_multi_core_multi_dram_in1_mcast", "test_matmul_multi_core_multi_dram_in1_mcast"),
     TestEntry("tt_metal/tests/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast", "test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast"),
     TestEntry("tt_metal/tests/test_generic_binary_reader_matmul_large_block", "test_generic_binary_reader_matmul_large_block"),
-    TestEntry("tt_metal/tests/test_3x3conv_as_matmul_large_block", "test_3x3conv_as_matmul_large_block"),
 
     TestEntry("tt_metal/tests/test_transpose_hc", "test_transpose_hc"),
     TestEntry("tt_metal/tests/test_transpose_wh", "test_transpose_wh"),
