@@ -65,13 +65,13 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
 void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
     uint32_t page_size = get_page_size(tensor.dtype(), tensor.layout(), buffer_size_bytes, tensor.shape());
     uint32_t starting_bank_id = 0;
-    tensor.buffer_ = new Buffer(tensor.device(), buffer_size_bytes, starting_bank_id, page_size, tensor.buffer_type());
+    tensor.buffer_ = std::make_shared<Buffer>(tensor.device(), buffer_size_bytes, starting_bank_id, page_size, tensor.buffer_type());
 }
 
 void allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
     TT_ASSERT(tensor.mem_config_.bank_id != -1);
     uint32_t starting_bank_id = tensor.mem_config_.bank_id;
-    tensor.buffer_ = new Buffer(tensor.device(), buffer_size_bytes, starting_bank_id, buffer_size_bytes, tensor.buffer_type());
+    tensor.buffer_ = std::make_shared<Buffer>(tensor.device(), buffer_size_bytes, starting_bank_id, buffer_size_bytes, tensor.buffer_type());
 }
 
 void allocate_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {

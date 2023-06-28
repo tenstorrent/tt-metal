@@ -140,7 +140,7 @@ class Tensor {
 
         Device *device() const { return device_; }
 
-        Buffer *buffer() const { return buffer_; }
+        Buffer *buffer() const { return buffer_.get(); }
 
         void *data_ptr() const { return data_; }
 
@@ -175,13 +175,17 @@ class Tensor {
         template <typename T>
         friend void tensor_impl::move_device_data(Tensor &&src, Tensor &dst);
 
-        void *data_ = nullptr;                      // Unpopulated if tensor is on device
         std::array<uint32_t, 4> shape_;             // Outer-most dimension first
         std::array<uint32_t, 4> strides_;           // Outer-most dimension first
         DataType dtype_;
         Layout layout_;
+
+        // Host Storage
+        void *data_ = nullptr;                      // Unpopulated if tensor is on device
+
+        // Device Storage
         Device *device_ = nullptr;                  // Set if tensor is allocated on device
-        Buffer *buffer_ = nullptr;                  // Tensors on device are backed by an underlying buffer
+        std::shared_ptr<Buffer> buffer_ = nullptr;  // Tensors on device are backed by an underlying buffer
         MemoryConfig mem_config_;
 };
 

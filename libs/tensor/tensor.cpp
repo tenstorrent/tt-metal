@@ -248,8 +248,7 @@ void Tensor::free_buffer() {
         return;
     }
     DeallocateBuffer(*this->buffer_);
-    delete this->buffer_;
-    this->buffer_ = nullptr;
+    this->buffer_.reset();
 }
 
 }  // namespace tt_metal
