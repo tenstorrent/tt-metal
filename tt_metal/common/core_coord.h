@@ -225,47 +225,63 @@ class CoreRangeSet {
       vcr.insert(vcr.end(), ranges_.begin(), ranges_.end());
       std::vector<CoreRange> diffs;
 
-      //Diff pair-wise CoreRanges
-      for ( unsigned i = 0; i < vcr.size(); i++){
-        for (unsigned j = i+1; j < vcr.size(); j++){
-
-          auto d1 = vcr[i].diff(vcr[j]);
-          auto d2 = vcr[j].diff(vcr[i]);
-
-          if (d1.size() < d2.size() )
-          {
-            diffs.insert(diffs.end(), d1.begin(), d1.end());
-            diffs.push_back( vcr[j]);
+      // Remove subsumed CoreRanges
+      for (auto it1 = vcr.begin(); it1 != vcr.end(); it1++){
+        for (auto it2 = vcr.begin(); it2 != vcr.end(); ){
+          if ( it1 == it2 ){
+            ++it2;
+            continue;
           }
-          else{
-            diffs.insert(diffs.end(), d2.begin(), d2.end());
-            diffs.push_back( vcr[i]);
-          }
-        }
-      }
-
-      // Remove subsumed CoreRanges, and also try to merge adjacent CoreRanges
-      std::sort( diffs.begin(), diffs.end() );
-      for (auto it1 = diffs.begin(); it1 != diffs.end(); it1++){
-        for (auto it2 = diffs.begin(); it2 != diffs.end(); ){
-          if ( it1 == it2 ) continue;
           else if ( it1->contains(*it2)){
-            it2 = diffs.erase(it2);
-          }
-          else if (it2->contains(*it1)){
-            *it1 = *it2;
-            it2 = diffs.erase(it2);
+            it2 = vcr.erase(it2);
           }
           else if ( auto merged = it1->merge(*it2) ){
             *it1 = merged.value();
-            it2 = diffs.erase(it2);
+            it2 = vcr.erase(it2);
           }
           else{
             ++it2;
           }
         }
       }
-      ranges_ = {diffs.begin(), diffs.end()};
+
+      //Diff pair-wise CoreRanges
+      // for ( unsigned i = 0; i < vcr.size(); i++){
+      //   for (unsigned j = i+1; j < vcr.size(); j++){
+
+      //     auto d1 = vcr[i].diff(vcr[j]);
+      //     auto d2 = vcr[j].diff(vcr[i]);
+
+      //     if (d1.size() < d2.size() )
+      //     {
+      //       diffs.insert(diffs.end(), d1.begin(), d1.end());
+      //       diffs.push_back( vcr[j]);
+      //     }
+      //     else{
+      //       diffs.insert(diffs.end(), d2.begin(), d2.end());
+      //       diffs.push_back( vcr[i]);
+      //     }
+      //   }
+      // }
+
+      // std::sort( diffs.begin(), diffs.end() );
+      // Try to merge adjacent CoreRanges
+      // for (auto it1 = vcr.begin(); it1 != vcr.end(); it1++){
+      //   for (auto it2 = vcr.begin(); it2 != vcr.end(); ){
+      //     if ( it1 == it2 ){
+      //         ++it2;
+      //         continue;
+      //     }
+      //     if ( auto merged = it1->merge(*it2) ){
+      //       *it1 = merged.value();
+      //       it2 = vcr.erase(it2);
+      //     }
+      //     else{
+      //       ++it2;
+      //     }
+      //   }
+      // }
+      ranges_ = {vcr.begin(), vcr.end()};
     }
 
     void merge ( const CoreRangeSet & s )
