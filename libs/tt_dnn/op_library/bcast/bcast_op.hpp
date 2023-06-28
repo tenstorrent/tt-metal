@@ -42,6 +42,7 @@ struct EltwiseBinaryBroadcast {
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    BcastOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
 
 inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {
@@ -90,7 +91,5 @@ const char* get_compute_name(BcastOpDim::Enum bcast_dim);
 const char* get_math_to_op_define(BcastOpMath::Enum bcast_math);
 
 void add_defines(ComputeKernel * bcast_kernel, BcastOpDim::Enum bcast_dim, BcastOpMath::Enum bcast_math);
-
-BcastOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a);
 
 } // namespace bcast_op_utils

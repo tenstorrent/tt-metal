@@ -24,6 +24,7 @@ struct Transpose {
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    TransposeOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
 
 // TODO: Accept parallelization
@@ -42,11 +43,3 @@ Program transpose_hc_multi_core(const Tensor &a, Tensor &output);
 }  // namespace tt_metal
 
 }  // namespace tt
-
-namespace transpose_op_utils {
-
-using namespace tt::tt_metal;
-
-TransposeOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, TransposeOpDim::Enum transpose_dim);
-
-} // namespace transpose_op_utils

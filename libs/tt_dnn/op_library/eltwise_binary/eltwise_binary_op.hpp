@@ -31,7 +31,10 @@ struct EltwiseBinary {
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
+
+std::ostream& operator<<(std::ostream& os, const EltwiseBinary& op);
 
 inline Tensor add(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
@@ -54,7 +57,5 @@ namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
 void add_defines(ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_type);
-
-BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, const Tensor &b);
 
 } // namespace eltwise_binary_op_utils

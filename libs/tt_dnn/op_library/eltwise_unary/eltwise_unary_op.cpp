@@ -158,18 +158,6 @@ void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type
 }
 
 
-
-UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a){
-    uint32_t num_tiles = a.volume() / TILE_HW;
-    if(num_tiles > 1){
-        return UnaryOpParallelizationStrategy::MULTI_CORE;
-    }
-    else{
-        return UnaryOpParallelizationStrategy::SINGLE_CORE;
-    }
-}
-
-
 } // namespace eltwise_unary_op_utils
 
 namespace tt {
@@ -191,11 +179,7 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<s
     const auto& input_tensor = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
 
-    auto parallelization_strategy = eltwise_unary_op_utils::get_parallelization_strategy(input_tensor);
-
-    op_profiler::set_preferred_name(this->op_type);
-    op_profiler::set_parallelization_strategy(parallelization_strategy);
-
+    auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     switch (parallelization_strategy){
         case UnaryOpParallelizationStrategy::MULTI_CORE:
             return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_type,param);
@@ -210,10 +194,36 @@ operation::Hash EltwiseUnary::compute_program_hash(const std::vector<std::refere
     const auto& input_tensor = input_tensors.at(0).get();
 
     return fmt::format(
-        "eltwise_unary_{}_{}",
-         magic_enum::enum_name(this->op_type),
+        "{}_{}",
+         *this,
          operation::hash_tensor(input_tensor)
     );
+}
+
+
+UnaryOpParallelizationStrategy::Enum EltwiseUnary::get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
+    if (num_tiles > 1) {
+        return UnaryOpParallelizationStrategy::MULTI_CORE;
+    }
+    else{
+        return UnaryOpParallelizationStrategy::SINGLE_CORE;
+    }
+}
+
+std::ostream& operator<<(std::ostream& os, const EltwiseUnary& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << ".op_type=" << magic_enum::enum_name(op.op_type);
+    os << ",.param=";
+    if (op.param.has_value()) {
+        os << op.param.value();
+    } else {
+        os << "std::nullopt";
+    }
+    os << "}";
+    return os;
 }
 
 }  // namespace tt_metal

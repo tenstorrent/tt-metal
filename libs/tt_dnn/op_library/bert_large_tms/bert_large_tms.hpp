@@ -31,6 +31,8 @@ struct BertLargeTM {
     operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
 
+std::ostream& operator<<(std::ostream& os, const BertLargeTM& op);
+
 inline std::vector<Tensor> bert_large_split_fused_qkv(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
     return operation::run(BertLargeTM{BertLargeTMOpType::SPLIT_FUSED_QKV, mem_config}, {std::cref(input_tensor_a)});
 }

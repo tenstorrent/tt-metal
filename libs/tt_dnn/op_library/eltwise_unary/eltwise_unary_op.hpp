@@ -31,7 +31,10 @@ struct EltwiseUnary {
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
+
+std::ostream& operator<<(std::ostream& os, const EltwiseUnary& op);
 
 Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor);
 
@@ -77,7 +80,5 @@ using namespace tt::tt_metal;
 bool get_op_approx_mode(UnaryOpType::Enum op_type);
 string get_op_name(UnaryOpType::Enum op_type, std::optional<float> param={});
 void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type, std::optional<float> param={});
-
-UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &input_tensor);
 
 } // namespace eltwise_unary_op_utils

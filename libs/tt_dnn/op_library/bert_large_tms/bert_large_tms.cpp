@@ -62,10 +62,6 @@ operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<st
     CoreCoord compute_and_storage_grid_size = {12, 9};
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
 
-    Program program;
-
-    op_profiler::set_preferred_name(this->bert_large_tm_op_type);
-
     switch (this->bert_large_tm_op_type) {
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
             return  multi_core_split_fused_qkv(input_tensor, output_tensors, compute_and_storage_grid_size);
@@ -92,6 +88,15 @@ operation::Hash BertLargeTM::compute_program_hash(const std::vector<std::referen
          operation::hash_memory_config(this->output_mem_config),
          operation::hash_tensor(input_tensor)
     );
+}
+
+std::ostream& operator<<(std::ostream& os, const BertLargeTM& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << ".bert_large_tm_op_type=" << magic_enum::enum_name(op.bert_large_tm_op_type);
+    // TODO(arakhmati): add output_mem_config
+    os << "}";
+    return os;
 }
 
 } // namespace tt_metal

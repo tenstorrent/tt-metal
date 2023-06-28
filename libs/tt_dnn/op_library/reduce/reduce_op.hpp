@@ -38,6 +38,7 @@ struct Reduce {
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    ReduceOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 
 };
 
@@ -54,7 +55,5 @@ using namespace tt::tt_metal;
 string dim_to_kernel_name(ReduceOpDim::Enum reduce_dim, ReduceOpMath::Enum reduce_op);
 
 void add_defines(ComputeKernel * reduce_kernel, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim);
-
-ReduceOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, ReduceOpDim::Enum reduce_dim);
 
 } // namespace reduce_op_utils

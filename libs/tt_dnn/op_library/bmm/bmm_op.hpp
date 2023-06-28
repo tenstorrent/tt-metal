@@ -57,22 +57,24 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_padding (const Ten
 operation::ProgramWithCallbacks bmm_multi_core_reuse_mcast_padding  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
 
 struct Matmul {
-    const MemoryConfig& output_mem_config;
+    const MemoryConfig output_mem_config;
     void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
 
 
 struct BatchedMatmul {
-    const MemoryConfig& output_mem_config;
+    const MemoryConfig output_mem_config;
     void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
 
 
@@ -107,7 +109,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const 
 
 struct BertLargeMatmul {
     const BertLargeMatmulOpType bert_large_matmul_op_type;
-    const MemoryConfig& output_mem_config;
+    const MemoryConfig output_mem_config;
     const bool fuse_gelu_activation;
 
     void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const;
@@ -123,6 +125,8 @@ struct BertLargeMatmul {
         const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
     ) const;
 };
+
+std::ostream& operator<<(std::ostream& os, const BertLargeMatmul& op);
 
 
 inline Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
@@ -171,7 +175,5 @@ using namespace tt::tt_metal;
 tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w);
 
 CoreCoord get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols);
-
-BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, const Tensor &b);
 
 }

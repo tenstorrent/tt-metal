@@ -177,8 +177,11 @@ CoreCoord get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols, uin
     return core_range;
 }
 
-BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a, const Tensor &b){
-    const auto& ashape = a.shape(), bshape = b.shape();
+BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    const auto& input_tensor_b = input_tensors.at(1).get();
+
+    const auto& ashape = input_tensor_a.shape(), bshape = input_tensor_b.shape();
     uint32_t num_output_tiles = ashape[0] * ashape[1] * ashape[2] * bshape[3] / TILE_HW; // Output M x N
 
     // Parameters for large matmul with reuse
@@ -188,7 +191,7 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
     uint32_t Nt = bshape[3]/TILE_WIDTH;
     uint32_t in0_block_w = 2;
 
-    tt::tt_metal::Device *device = a.device();
+    tt::tt_metal::Device *device = input_tensor_a.device();
     auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
     uint32_t num_cores_x = compute_and_storage_grid_size.x;
     uint32_t num_cores_y = compute_and_storage_grid_size.y;
@@ -246,7 +249,8 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
     }
     else if (num_output_tiles > 1) {
         return BmmOpParallelizationStrategy::MULTI_CORE;
-    }else {
+    }
+    else {
         return BmmOpParallelizationStrategy::SINGLE_CORE;
     }
 }
@@ -258,7 +262,8 @@ namespace tt {
 namespace tt_metal {
 
 Tensor large_bmm(const Tensor& a, const Tensor& b, bool tilize_act, bool untilize_out) {
-    if (bmm_op_utils::get_parallelization_strategy(a, b) != BmmOpParallelizationStrategy::SINGLE_CORE) {
+    auto parallelization_strategy = BatchedMatmul{}.get_parallelization_strategy({a, b});
+    if (parallelization_strategy != BmmOpParallelizationStrategy::SINGLE_CORE) {
         log_warning("WARNING: Only single core mode supported for large_bmm. Falling back to single core.");
     }
     return large_bmm_single_core(a, b, tilize_act, untilize_out);
@@ -308,8 +313,7 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<std::re
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
-    auto parallelization_strategy = bmm_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b);
-    op_profiler::set_parallelization_strategy (parallelization_strategy);
+    auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
     switch (parallelization_strategy){
         case BmmOpParallelizationStrategy::MULTI_CORE:
@@ -344,6 +348,11 @@ operation::Hash Matmul::compute_program_hash(const std::vector<std::reference_wr
     );
 }
 
+BmmOpParallelizationStrategy::Enum Matmul::get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    return bmm_op_utils::get_parallelization_strategy(input_tensors);
+}
+
+
 void BatchedMatmul::validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0).get();
     const auto& input_tensor_b = input_tensors.at(1).get();
@@ -369,8 +378,7 @@ operation::ProgramWithCallbacks BatchedMatmul::create_program(const std::vector<
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
-    auto parallelization_strategy = bmm_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b);
-    op_profiler::set_parallelization_strategy (parallelization_strategy);
+    auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
     switch (parallelization_strategy){
         case BmmOpParallelizationStrategy::MULTI_CORE:
@@ -410,6 +418,10 @@ operation::Hash BatchedMatmul::compute_program_hash(const std::vector<std::refer
          operation::hash_tensor(input_tensor_a),
          operation::hash_tensor(input_tensor_b)
     );
+}
+
+BmmOpParallelizationStrategy::Enum BatchedMatmul::get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    return bmm_op_utils::get_parallelization_strategy(input_tensors);
 }
 
 /*
@@ -524,8 +536,6 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
     uint32_t in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N;
     bool fuse_batch = true;
 
-    op_profiler::set_preferred_name(this->bert_large_matmul_op_type);
-
     switch (this->bert_large_matmul_op_type) {
         case BertLargeMatmulOpType::FUSED_QKV:
             compute_and_storage_grid_size = {12, 9};
@@ -605,6 +615,16 @@ operation::Hash BertLargeMatmul::compute_program_hash(
          operation::hash_tensor(input_tensor_b),
          bias_tensor.has_value() ? operation::hash_tensor(bias_tensor.value().get()) : "nullopt"
     );
+}
+
+std::ostream& operator<<(std::ostream& os, const BertLargeMatmul& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << ".bert_large_tm_op_type=" << magic_enum::enum_name(op.bert_large_matmul_op_type);
+    // TODO(arakhmati): add output_mem_config
+    os << ", .fuse_gelu_activation=" << op.fuse_gelu_activation;
+    os << "}";
+    return os;
 }
 
 }  // namespace tt_metal

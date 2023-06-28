@@ -56,25 +56,6 @@ void add_defines(ComputeKernel* k, BcastOpDim::Enum bcast_dim, BcastOpMath::Enum
     k->add_define("BCAST_DIM", bdim_to_llkdim_define[int(bcast_dim)]);
 }
 
-BcastOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &input_tensor_a, BcastOpDim::Enum bcast_dim){
-    uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
-    uint32_t Ht = input_tensor_a.shape()[2] / TILE_HEIGHT;
-    uint32_t Wt = input_tensor_a.shape()[3] / TILE_WIDTH;
-
-    if(Ht > 1 and bcast_dim == BcastOpDim::H){
-        return BcastOpParallelizationStrategy::MULTI_CORE_H;
-    }
-    else if(Wt > 1 and bcast_dim == BcastOpDim::W){
-        return BcastOpParallelizationStrategy::MULTI_CORE_W;
-    }
-    else if(num_tiles > 1 and bcast_dim == BcastOpDim::HW){
-        return BcastOpParallelizationStrategy::MULTI_CORE_HW;
-    }
-    else{
-        return BcastOpParallelizationStrategy::SINGLE_CORE;
-    }
-}
-
 } // namespace bcast_op_utils
 
 
@@ -139,9 +120,7 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
-    auto parallelization_strategy = bcast_op_utils::get_parallelization_strategy(input_tensor_a, this->dim);
-
-    op_profiler::set_parallelization_strategy(parallelization_strategy);
+    auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
     switch (parallelization_strategy){
         case BcastOpParallelizationStrategy::MULTI_CORE_H:
@@ -168,6 +147,27 @@ operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<s
         operation::hash_tensor(input_tensor_a),
         operation::hash_tensor(input_tensor_b)
     );
+}
+
+BcastOpParallelizationStrategy::Enum EltwiseBinaryBroadcast::get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+
+    uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
+    uint32_t Ht = input_tensor_a.shape()[2] / TILE_HEIGHT;
+    uint32_t Wt = input_tensor_a.shape()[3] / TILE_WIDTH;
+
+    if(Ht > 1 and this->dim == BcastOpDim::H){
+        return BcastOpParallelizationStrategy::MULTI_CORE_H;
+    }
+    else if(Wt > 1 and this->dim == BcastOpDim::W){
+        return BcastOpParallelizationStrategy::MULTI_CORE_W;
+    }
+    else if(num_tiles > 1 and this->dim == BcastOpDim::HW){
+        return BcastOpParallelizationStrategy::MULTI_CORE_HW;
+    }
+    else{
+        return BcastOpParallelizationStrategy::SINGLE_CORE;
+    }
 }
 
 }  // namespace tt_metal

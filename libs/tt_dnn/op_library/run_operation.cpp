@@ -43,12 +43,20 @@ void override_runtime_args(
     override_runtime_args_callback(input_buffers, output_buffers);
 }
 
+void setup_profiler(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
+    auto profiler_info = op.create_profiler_info(input_tensors);
+    op_profiler::set_preferred_name(profiler_info.preferred_name);
+    op_profiler::set_parallelization_strategy(profiler_info.parallelization_strategy);
+}
+
 std::vector<Tensor> run_without_program_cache(
     const Operation& op,
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
-    auto profile_run_without_program_cache = op_profiler::ProfileScope(op.get_type_name());
+    auto profile_scope = op_profiler::ProfileScope(op.get_type_name());
+    auto do_profile = op_profiler::get_profiler_flag();
+    if (do_profile) { setup_profiler(op, input_tensors); }
 
     op.validate(input_tensors, optional_input_tensors);
 
@@ -56,9 +64,7 @@ std::vector<Tensor> run_without_program_cache(
     auto output_tensors = op.create_output_tensors(input_tensors);
 
     auto program_with_callbacks = op.create_program(input_tensors, optional_input_tensors, output_tensors);
-
     auto& program = program_with_callbacks.program;
-    auto do_profile = op_profiler::get_profiler_flag();
 
     CompileProgram(device, program, do_profile);
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
@@ -77,20 +83,38 @@ std::vector<Tensor> run_without_program_cache(
     return output_tensors;
 }
 
+struct CircularBufferContext {
+    Program& program;
+
+    CircularBufferContext(Device* device, Program& program) : program(program) {
+        for (auto& circular_buffer :  this->program.circular_buffers()) {
+            if (not circular_buffer->is_allocated()) {
+                circular_buffer->reserve(device);
+            }
+        }
+    }
+
+    ~CircularBufferContext() {
+        for (auto& circular_buffer : this->program.circular_buffers()) {
+            circular_buffer->deallocate();
+        }
+    }
+};
+
 
 std::vector<Tensor> run_with_program_cache(
     const Operation& op,
     const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
     const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
 
-    auto profile_run_with_program_cache = op_profiler::ProfileScope(op.get_type_name());
+    auto profile_scope = op_profiler::ProfileScope(op.get_type_name());
+    auto do_profile = op_profiler::get_profiler_flag();
+    if (do_profile) { setup_profiler(op, input_tensors); }
 
     op.validate(input_tensors, optional_input_tensors);
 
     auto device = detail::get_device(input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
-
-    auto do_profile = op_profiler::get_profiler_flag();
 
     auto& program_with_callbacks = program_cache::get_or_create(
         op, input_tensors, optional_input_tensors, output_tensors, device, do_profile
@@ -102,11 +126,8 @@ std::vector<Tensor> run_with_program_cache(
     );
 
     auto& program = program_with_callbacks.program;
-    for (auto& circular_buffer : program.circular_buffers()) {
-        if (not circular_buffer->is_allocated()) {
-            circular_buffer->reserve(device);
-        }
-    }
+
+    auto cb_context = CircularBufferContext(device, program);
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
@@ -116,10 +137,6 @@ std::vector<Tensor> run_with_program_cache(
         ConfigureDeviceWithProgram(device, program);
         WriteRuntimeArgsToDevice(device, program);
         LaunchKernels(device, program);
-    }
-
-    for (auto& circular_buffer : program.circular_buffers()) {
-        circular_buffer->deallocate();
     }
 
     op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);

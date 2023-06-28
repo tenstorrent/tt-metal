@@ -23,16 +23,6 @@ void add_defines(ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_ty
     eltwise_binary_kernel->add_define("ELTWISE_OP_CODE", op_code.c_str());
 }
 
-BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &input_tensor_a, const Tensor &input_tensor_b){
-    uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
-    if(num_tiles > 1){
-        return BinaryOpParallelizationStrategy::MULTI_CORE;
-    }
-    else{
-        return BinaryOpParallelizationStrategy::SINGLE_CORE;
-    }
-}
-
 }  // eltwise_binary_op_utils
 
 namespace tt {
@@ -60,10 +50,7 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
     const auto& input_tensor_b = input_tensors.at(1).get();
     auto& output_tensor = output_tensors.at(0);
 
-    auto parallelization_strategy = eltwise_binary_op_utils::get_parallelization_strategy(input_tensor_a, input_tensor_b);
-
-    op_profiler::set_preferred_name(this->op_type);
-    op_profiler::set_parallelization_strategy(parallelization_strategy);
+    auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
     switch (parallelization_strategy){
         case BinaryOpParallelizationStrategy::MULTI_CORE:
@@ -85,6 +72,25 @@ operation::Hash EltwiseBinary::compute_program_hash(const std::vector<std::refer
          operation::hash_tensor(input_tensor_a),
          operation::hash_tensor(input_tensor_b)
     );
+}
+
+BinaryOpParallelizationStrategy::Enum EltwiseBinary::get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0).get();
+    uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
+    if(num_tiles > 1){
+        return BinaryOpParallelizationStrategy::MULTI_CORE;
+    }
+    else{
+        return BinaryOpParallelizationStrategy::SINGLE_CORE;
+    }
+}
+
+std::ostream& operator<<(std::ostream& os, const EltwiseBinary& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << ".op_type=" << magic_enum::enum_name(op.op_type);
+    os << "}";
+    return os;
 }
 
 }  // namespace tt_metal
