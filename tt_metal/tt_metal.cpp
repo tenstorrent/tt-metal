@@ -174,10 +174,23 @@ Device *CreateDevice(tt::ARCH arch, int pcie_slot) {
     return new Device(arch, pcie_slot);
 }
 bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
-    return device->initialize(memory_allocator);
+    bool init = device->initialize(memory_allocator);
+    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
+    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
+        HACK_CQ = std::make_unique<CommandQueue>(device);
+    }
+    return init;
 }
 
-bool CloseDevice(Device *device) { return device->close(); }
+bool CloseDevice(Device *device) {
+
+    // Needed to ensure that HACK_CQ doesn't contain a closed device
+    if (HACK_CQ) {
+        HACK_CQ.reset(nullptr);
+    }
+
+    return device->close();
+}
 
 void StartDebugPrintServer(Device* device) {
     tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});

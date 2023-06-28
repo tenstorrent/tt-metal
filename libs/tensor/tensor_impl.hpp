@@ -362,9 +362,6 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        if (not HACK_CQ) {
-            HACK_CQ = make_unique<CommandQueue>(tensor.buffer()->device());
-        }
         EnqueueReadBuffer(*HACK_CQ, *tensor.buffer(), device_data, true);
     } else {
         ReadFromBuffer(*tensor.buffer(), device_data);
@@ -403,9 +400,6 @@ inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        if (not HACK_CQ) {
-            HACK_CQ = make_unique<CommandQueue>(tensor.buffer()->device());
-        }
         EnqueueWriteBuffer(*HACK_CQ, *tensor.buffer(), uint32_data, false);
     } else {
         WriteToBuffer(*tensor.buffer(), uint32_data);

@@ -63,9 +63,6 @@ std::vector<Tensor> run_without_program_cache(
     CompileProgram(device, program, do_profile);
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        if (not HACK_CQ) {
-            HACK_CQ = make_unique<CommandQueue>(device);
-        }
         EnqueueProgram(*HACK_CQ, program, false);
 
     } else {
@@ -113,9 +110,6 @@ std::vector<Tensor> run_with_program_cache(
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        if (not HACK_CQ) {
-            HACK_CQ = make_unique<CommandQueue>(device);
-        }
         EnqueueProgram(*HACK_CQ, program, false);
 
     } else {
