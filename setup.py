@@ -4,53 +4,107 @@ import sys
 import sysconfig
 import platform
 import subprocess
+from dataclasses import dataclass
+from functools import partial
 
-from distutils.version import LooseVersion
+from pathlib import Path
 from setuptools import setup, Extension, find_namespace_packages
 from setuptools.command.build_ext import build_ext
-
-
-def is_editable_install(build_extension):
-    return not os.path.exists(build_extension.build_lib)
+from setuptools_scm.version import ScmVersion, guess_next_version
 
 
 class BudaEagerBuildConstants:
     BUDA_EAGER_SO_SRC_LOCATION = "build/lib/libtt_lib_csrc.so"
 
 
+class EnvVarNotFoundException(Exception):
+    pass
+
+
+def attempt_get_env_var(env_var_name):
+    if env_var_name not in os.environ:
+        raise EnvVarNotFoundException(f"{env_var_name} is not provided")
+    return os.environ[env_var_name]
+
+
+def get_is_srcdir_build():
+    build_dir = Path(__file__).parent
+
+    assert build_dir.is_dir()
+
+    git_dir = build_dir / ".git"
+
+    is_srcdir_build = git_dir.exists()
+
+    if is_srcdir_build:
+        assert git_dir.is_dir(), f"{git_dir} is named .git/ but is not a directory"
+
+    return is_srcdir_build
+
+
+def get_is_dev_build():
+    try:
+        is_dev_build = attempt_get_env_var("TT_METAL_ENV") == "dev"
+    except EnvVarNotFoundException as e:
+        is_dev_build = False
+
+    return is_dev_build
+
+
+def get_arch_name():
+    return attempt_get_env_var("ARCH_NAME")
+
+
+def get_buda_eager_version_scheme(buda_eager_build_config, version: ScmVersion):
+    return version.format_next_version(guess_next_version)
+
+
+def get_version(buda_eager_build_config):
+    return {
+        "version_scheme": partial(
+            get_buda_eager_version_scheme, buda_eager_build_config
+        ),
+    }
+
+
+@dataclass(frozen=True)
+class BudaEagerBuildConfig:
+    is_dev_build = get_is_dev_build()
+    is_srcdir_build = get_is_srcdir_build()
+    arch_name = get_arch_name()
+
+
+buda_eager_build_config = BudaEagerBuildConfig()
+
+
 class BudaEagerBuild(build_ext):
     def run(self):
         assert (
             len(self.extensions) == 1
-        ), f"Detected more than 1 extension module - aborting"
+        ), f"Detected more than 1 extension module - aborting because we shouldn't be doing more yet"
 
-        for ext in self.extensions:
-            if is_editable_install(self):
-                continue
+        ext = self.extensions[0]
+        if self.is_editable_install_():
+            assert (
+                buda_eager_build_config.is_srcdir_build
+            ), f"Editable install detected in a non-srcdir environment, aborting"
+            return
 
-            fullname = self.get_ext_fullname(ext.name)
-            filename = self.get_ext_filename(fullname)
+        build_env = {**os.environ.copy(), "TT_METAL_HOME": Path(__file__).parent}
+        subprocess.check_call(["make", "build"], env=build_env)
 
-            build_lib = self.build_lib
-            full_lib_path = build_lib + "/" + filename
+        fullname = self.get_ext_fullname(ext.name)
+        filename = self.get_ext_filename(fullname)
 
-            src = BudaEagerBuildConstants.BUDA_EAGER_SO_SRC_LOCATION
-            self.copy_file(src, full_lib_path)
+        build_lib = self.build_lib
+        full_lib_path = build_lib + "/" + filename
 
+        src = BudaEagerBuildConstants.BUDA_EAGER_SO_SRC_LOCATION
+        self.copy_file(src, full_lib_path)
 
-short_hash = (
-    subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
-    .decode("ascii")
-    .strip()
-)
-date = (
-    subprocess.check_output(
-        ["git", "show", "-s", "--format=%cd", "--date=format:%y%m%d", "HEAD"]
-    )
-    .decode("ascii")
-    .strip()
-)
-version = "0.1." + date + "+dev.gs." + short_hash
+    def is_editable_install_(self):
+        return not os.path.exists(self.build_lib)
+
 
 # Empty sources in order to force a BudaEagerBuild execution
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
@@ -63,6 +117,7 @@ packages = find_namespace_packages(
 
 setup(
     url="http://www.tenstorrent.com",
+    use_scm_version=get_version(buda_eager_build_config),
     packages=packages,
     package_dir={"": "libs"},
     long_description_content_type="text/markdown",

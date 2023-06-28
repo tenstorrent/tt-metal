@@ -1,0 +1,9 @@
+# Things we never wanna see
+prune build/
+prune .git/
+prune .github/
+prune tt_metal/**/.git/
+prune tt_metal/**/.github/
+prune docs/doxygen_build/
+prune docs/build/
+exclude .pre-commit-config.yaml
