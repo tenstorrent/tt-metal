@@ -137,6 +137,15 @@ std::vector<CoreCoord> Program::logical_cores() const {
     return cores_in_program;
 }
 
+CoreRangeSet Program::logical_core_range_set() const {
+    CoreRangeSet s({});
+    for (auto kernel : kernels_ )
+    {
+        s.merge ( kernel->core_range_set());
+    }
+    return s;
+}
+
 Program::~Program() {
     for (auto kernel : kernels_) {
         delete kernel;

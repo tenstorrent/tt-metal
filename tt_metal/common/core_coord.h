@@ -5,7 +5,7 @@
 #include <regex>
 #include <set>
 #include <utility>
-
+#include <optional>
 
 #include "common/assert.hpp"
 // #include <boost/functional/hash.hpp>
@@ -89,6 +89,44 @@ struct CoreRange {
         this->end = end;
     }
 
+    std::optional<CoreRange> intersects ( const CoreRange & other ) const
+    {
+        std::size_t x1 = std::max(this->start.x, other.start.x);
+        std::size_t y1 = std::max(this->start.y, other.start.y);
+        std::size_t x2 = std::min(this->end.x, other.end.x);
+        std::size_t y2 = std::min(this->end.y, other.end.y);
+        if (x1<= x2 and y1<= y2)
+            return CoreRange( {x1, y1}, {x2, y2} );
+
+        return {};
+    }
+
+    bool contains ( const CoreRange & other ) const
+    {
+      return this->start.x <= other.start.x <= this->end.x &&
+             this->start.x <= other.end.x <= this->end.x &&
+             this->start.y <= other.start.y <= this->end.y &&
+             this->start.y <= other.end.y <= this->end.y;
+    }
+
+    std::optional<CoreRange> union_rect ( const CoreRange & cr ) const {
+      if ( this->contains(cr) ){
+        return *this;
+      } else if ( cr.contains(*this)){
+        return cr;
+      }
+      else if (this->intersects(cr).has_value()){
+        if ( this->start.x == cr.start.x && this->end.x == cr.end.x){
+          return CoreRange( {this->start.x, std::min(this->end.y, cr.end.y)}, {this->end.x, std::max(this->end.y, cr.end.y)} );
+        }
+        else if ( this->start.y == cr.start.y && this->end.y == cr.end.y){
+          return CoreRange ( {std::min(this->start.x, cr.start.x), this->start.y}, {std::min(this->end.x,cr.end.x), this->end.y});
+        }
+
+      }
+      return {};
+    }
+
     std::string str() const { return "[" + start.str() + " - " + end.str() + "]"; }
 
     size_t size() const { return (this->end.x - this->start.x + 1) * (this->end.y - this->start.y + 1); }
@@ -134,22 +172,45 @@ constexpr inline bool operator<(const CoreRange &left, const CoreRange &right) {
 class CoreRangeSet {
   public:
     CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges) {
-      for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
-        for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
+      for (auto outer_it = core_ranges.begin(); outer_it != core_ranges.end(); outer_it++) {
+        for (auto inner_it = core_ranges.begin(); inner_it != core_ranges.end(); inner_it++) {
           if (outer_it == inner_it) {
             continue;
           }
           CoreRange first_core_range = *outer_it;
           CoreRange second_core_range = *inner_it;
-          bool first_core_left_of_second = first_core_range.end.x < second_core_range.start.x;
-          bool first_core_right_of_second = first_core_range.start.x > second_core_range.end.x;
-          bool first_core_above_second = first_core_range.end.y < second_core_range.start.y;
-          bool first_core_below_second = first_core_range.start.y > second_core_range.end.y;
-          auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or first_core_below_second;
-          if (not no_overlap) {
-            TT_THROW("Cannot create CoreRangeSet with specified core ranges because core ranges " + first_core_range.str() + " and " + second_core_range.str() + " overlap!");
+
+          auto r = first_core_range.union_rect ( second_core_range );
+          if ( r.has_value() ){
+            ranges_.insert(r.value());
+          } else{
+            ranges_.insert(first_core_range );
+            ranges_.insert(second_core_range);
           }
         }
+      }
+    }
+
+    void merge ( const CoreRangeSet & other ){
+      if (this->ranges().empty()) ranges_ = other.ranges_;
+
+      else{
+        std::set<CoreRange> s;
+
+        for (auto c : this->ranges())
+        {
+          for ( auto c1 : other.ranges())
+          {
+            auto r = c1.union_rect( c );
+            if ( r.has_value()){
+              s.insert(r.value());
+            } else{
+              s.insert(c1);
+              s.insert(c);
+            }
+          }
+        }
+        ranges_ = s;
       }
     }
 

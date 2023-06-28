@@ -57,6 +57,8 @@ class Program {
 
     std::vector<CoreCoord> logical_cores() const;
 
+    CoreRangeSet logical_core_range_set() const;
+
     std::vector<std::string> cores_to_ops() const;
 
    private:
