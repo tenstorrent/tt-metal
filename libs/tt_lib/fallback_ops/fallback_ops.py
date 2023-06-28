@@ -245,12 +245,57 @@ def pad(
     +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
     | pad              | The padding size by which to pad some dimensions of input | Tuple[int]       |                                                                           | Yes      |
     +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
-    | mode             | Padding mode                                              | sring            | `constant`, `reflect`, `replicate`, or `circular` (default is `constant`) | No       |
+    | mode             | Padding mode                                              | string           | `constant`, `reflect`, `replicate`, or `circular` (default is `constant`) | No       |
     +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
     | value            | Fill value for `constant` padding                         | int              | default is 0                                                              | No       |
     +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
     """
     return torch.nn.functional.pad(input, pad, mode, value)
+
+
+@convert_tt_tensors_wrapper
+def interpolate(
+    input: ttl_tensor.Tensor,
+    size: Optional[Union[int, Tuple[int]]] = None,
+    scale_factor: Optional[Union[float, Tuple[float]]] = None,
+    mode: str = "nearest",
+    align_corners: Optional[bool] = None,
+    recompute_scale_factor: Optional[bool] = None,
+    antialias: bool = False,
+) -> ttl_tensor.Tensor:
+    r"""
+    Down/up samples the input to either the given size or the given scale_factor
+
+    The algorithm used for interpolation is determined by mode.
+
+    +------------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | Argument               | Description                                               | Data type        | Valid range                                                               | Required |
+    +========================+===========================================================+==================+===========================================================================+==========+
+    | input                  | Input tensor                                              | Tensor           |                                                                           | Yes      |
+    +------------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | size                   | Output spatial size                                       | Tuple[int]       | default is None                                                           | No       |
+    +------------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | scale_factor           | Multiplier for spatial size                               | Tuple[float]     | default is None                                                           | No       |
+    +------------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | mode                   | algorithm used for upsampling                             | string           | `nearest`, `linear`, `bilinear`, `bicubic`, `trilinear`,                  | No       |
+    |                        |                                                           |                  | `area`, or `nearest-exact` (default is `nearest`)                         |          |
+    +------------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | align_corners          | Whether to align center or corner points of corner pixels | bool             | default is None                                                           | No       |
+    +------------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | recompute_scale_factor | Recompute the scale_factor for use in interpolation       | bool             | default is None                                                           | No       |
+    +------------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | antialias              | Flag to apply anti-aliasing                               | bool             | default is False                                                          | No       |
+    +------------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    """
+    return torch.nn.functional.interpolate(
+        input,
+        size,
+        scale_factor,
+        mode,
+        align_corners,
+        recompute_scale_factor,
+        antialias,
+    )
 
 
 @convert_tt_tensors_wrapper
