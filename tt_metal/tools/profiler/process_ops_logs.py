@@ -149,7 +149,10 @@ def parse_ops_logs(opsFolder):
                         metadata = row[13].strip()
 
                         if preferredName:
-                            op_name += "_" + preferredName
+                            if is_op == "Yes":
+                                op_name = preferredName
+                            else:
+                                op_name += "_" + preferredName
 
                         op_to_folder[op_name] = op_folder_name
                         if op_name in op_flavour_to_count.keys():
