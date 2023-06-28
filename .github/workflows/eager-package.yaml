@@ -33,14 +33,14 @@ jobs:
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
-      # TODO: (RK) - should replace with single command python -m build
-      - name: Build sdist
+      - name: Create dev environment for packaging
+        run: make python_env/dev
+      - name: Build Python package distribution
         run: |
           source build/python_env/bin/activate
-          python -m build --sdist
-      - name: Build wheel
-        run: |
-          source build/python_env/bin/activate
-          python -m build --wheel
+          python -m build
+      - name: Upload distribution as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: eager-dist
+          path: dist/
