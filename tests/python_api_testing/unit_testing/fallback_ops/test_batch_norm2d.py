@@ -1,10 +1,9 @@
 import torch
-import libs.tt_lib as ttl
-from tests.python_api_testing.models.utility_functions import (
+import tt_lib as ttl
+from tests.python_api_testing.models.utility_functions_new import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
-from libs.tt_lib.fallback_ops import fallback_ops
 from loguru import logger
 import pytest
 
@@ -101,7 +100,7 @@ def test_BatchNorm_fallback(
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    tt_nn = fallback_ops.BatchNorm2d(
+    tt_nn = ttl.fallback_ops.BatchNorm2d(
         w0,
         b0,
         r_m0,

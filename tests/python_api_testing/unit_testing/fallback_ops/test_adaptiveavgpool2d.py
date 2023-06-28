@@ -1,10 +1,9 @@
 import torch
-import libs.tt_lib as ttl
-from tests.python_api_testing.models.utility_functions import (
+import tt_lib as ttl
+from tests.python_api_testing.models.utility_functions_new import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
-from libs.tt_lib.fallback_ops import fallback_ops
 from loguru import logger
 import pytest
 
@@ -43,7 +42,7 @@ def test_AdaptiveAvgPool2d_fallback(
     if on_device:
         t0 = t0.to(device)
 
-    tt_nn = fallback_ops.AdaptiveAvgPool2d(output_size)
+    tt_nn = ttl.fallback_ops.AdaptiveAvgPool2d(output_size)
     t1 = tt_nn(t0)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(

@@ -1,10 +1,9 @@
 import torch
-import libs.tt_lib as ttl
-from tests.python_api_testing.models.utility_functions import (
+import tt_lib as ttl
+from tests.python_api_testing.models.utility_functions_new import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
-from libs.tt_lib.fallback_ops import fallback_ops
 from loguru import logger
 import pytest
 
@@ -35,7 +34,7 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device):
     if on_device:
         t0 = t0.to(device)
 
-    tt_out = fallback_ops.chunk(t0, chunks, dim)
+    tt_out = ttl.fallback_ops.chunk(t0, chunks, dim)
 
     for i in range(len(pt_out)):
         pt_output = pt_out[i]

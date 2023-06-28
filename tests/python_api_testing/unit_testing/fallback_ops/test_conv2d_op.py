@@ -1,10 +1,9 @@
 import torch
-import libs.tt_lib as ttl
-from tests.python_api_testing.models.utility_functions import (
+import tt_lib as ttl
+from tests.python_api_testing.models.utility_functions_new import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
-from libs.tt_lib.fallback_ops import fallback_ops
 from loguru import logger
 import pytest
 
@@ -111,7 +110,7 @@ def test_conv2d_fallback(
     else:
         b0 = b
 
-    t1 = fallback_ops.conv2d(t0, w0, b0, stride, padding, dilation, groups)
+    t1 = ttl.fallback_ops.conv2d(t0, w0, b0, stride, padding, dilation, groups)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
@@ -272,7 +271,7 @@ def test_Conv2d_fallback(
     else:
         b0 = None
 
-    tt_nn = fallback_ops.Conv2d(
+    tt_nn = ttl.fallback_ops.Conv2d(
         w0,
         b0 if bias else None,
         in_channels,

@@ -1,10 +1,9 @@
 import torch
-import libs.tt_lib as ttl
-from tests.python_api_testing.models.utility_functions import (
+import tt_lib as ttl
+from tests.python_api_testing.models.utility_functions_new import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
-from libs.tt_lib.fallback_ops import fallback_ops
 from loguru import logger
 import pytest
 
@@ -140,7 +139,7 @@ def test_layer_norm_fallback(
     else:
         b0 = None
 
-    t1 = fallback_ops.layer_norm(t0, normalized_shape, w0, b0, eps)
+    t1 = ttl.fallback_ops.layer_norm(t0, normalized_shape, w0, b0, eps)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
@@ -247,7 +246,9 @@ def test_LayerNorm_fallback(
     if on_device:
         b0 = b0.to(device)
 
-    tt_nn = fallback_ops.LayerNorm(w0, b0, normalized_shape, eps, elementwise_affine)
+    tt_nn = ttl.fallback_ops.LayerNorm(
+        w0, b0, normalized_shape, eps, elementwise_affine
+    )
     t1 = tt_nn(t0)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(

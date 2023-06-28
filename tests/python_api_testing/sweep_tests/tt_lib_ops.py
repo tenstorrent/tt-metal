@@ -1,8 +1,6 @@
 import torch
 import tt_lib as ttl
 from python_api_testing.models.helper_funcs import Linear as tt_Linear
-import tt_lib
-from tt_lib.fallback_ops import fallback_ops
 
 
 def setup_host_and_device(func):
@@ -28,25 +26,25 @@ def setup_host_and_device(func):
 def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
     bias = None if len(args) == 0 else args[0]
     tt_bias = None
-    t0 = tt_lib.tensor.Tensor(
+    t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
         dtype,
-        tt_lib.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    tt_weight = tt_lib.tensor.Tensor(
+    tt_weight = ttl.tensor.Tensor(
         weight.reshape(-1).tolist(),
         weight.shape,
         dtype,
-        tt_lib.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.Layout.ROW_MAJOR,
     )
     if bias is not None:
-        tt_bias = tt_lib.tensor.Tensor(
+        tt_bias = ttl.tensor.Tensor(
             bias.reshape(-1).tolist(),
             bias.shape,
             dtype,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttl.tensor.Layout.ROW_MAJOR,
         )
 
     t0 = t0.to(layout)
@@ -63,7 +61,7 @@ def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
     t1 = tt_linear(t0)
 
     output = torch.Tensor(
-        t1.to(host).to(tt_lib.tensor.Layout.ROW_MAJOR).data()
+        t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
     ).reshape(t1.shape())
 
     return output

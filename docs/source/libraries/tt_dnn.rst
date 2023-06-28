@@ -136,47 +136,47 @@ Fallback Operations
 
 These operations are currently not supported on TT accelerator device and will execute on host machine using Pytorch.
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.full
+.. autofunction:: tt_lib.fallback_ops.full
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.tensor_slice
+.. autofunction:: tt_lib.fallback_ops.tensor_slice
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.reshape
+.. autofunction:: tt_lib.fallback_ops.reshape
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.chunk
+.. autofunction:: tt_lib.fallback_ops.chunk
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.conv2d
+.. autofunction:: tt_lib.fallback_ops.conv2d
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.group_norm
+.. autofunction:: tt_lib.fallback_ops.group_norm
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.layer_norm
+.. autofunction:: tt_lib.fallback_ops.layer_norm
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.pad
+.. autofunction:: tt_lib.fallback_ops.pad
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.interpolate
+.. autofunction:: tt_lib.fallback_ops.interpolate
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.repeat
+.. autofunction:: tt_lib.fallback_ops.repeat
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.repeat_interleave
+.. autofunction:: tt_lib.fallback_ops.repeat_interleave
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.concat
+.. autofunction:: tt_lib.fallback_ops.concat
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.sigmoid
+.. autofunction:: tt_lib.fallback_ops.sigmoid
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.silu
+.. autofunction:: tt_lib.fallback_ops.silu
 
-.. autofunction:: tt_lib.fallback_ops.fallback_ops.softmax
+.. autofunction:: tt_lib.fallback_ops.softmax
 
-.. autoclass:: tt_lib.fallback_ops.fallback_ops.Conv2d
+.. autoclass:: tt_lib.fallback_ops.Conv2d
 
-.. autoclass:: tt_lib.fallback_ops.fallback_ops.BatchNorm2d
+.. autoclass:: tt_lib.fallback_ops.BatchNorm2d
 
-.. autoclass:: tt_lib.fallback_ops.fallback_ops.GroupNorm
+.. autoclass:: tt_lib.fallback_ops.GroupNorm
 
-.. autoclass:: tt_lib.fallback_ops.fallback_ops.LayerNorm
+.. autoclass:: tt_lib.fallback_ops.LayerNorm
 
-.. autoclass:: tt_lib.fallback_ops.fallback_ops.MaxPool2d
+.. autoclass:: tt_lib.fallback_ops.MaxPool2d
 
-.. autoclass:: tt_lib.fallback_ops.fallback_ops.AdaptiveAvgPool2d
+.. autoclass:: tt_lib.fallback_ops.AdaptiveAvgPool2d
 
 Experimental Operations
 =======================

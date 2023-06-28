@@ -1,10 +1,9 @@
 import torch
-import libs.tt_lib as ttl
-from tests.python_api_testing.models.utility_functions import (
+import tt_lib as ttl
+from tests.python_api_testing.models.utility_functions_new import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
-from libs.tt_lib.fallback_ops import fallback_ops
 from loguru import logger
 import pytest
 
@@ -22,7 +21,7 @@ def test_full_fallback(input_shape, fill_value):
     fill_value = torch.Tensor([fill_value]).bfloat16().float().item()
     pt_out = torch.full(input_shape, fill_value)
 
-    t0 = fallback_ops.full(input_shape, fill_value)
+    t0 = ttl.fallback_ops.full(input_shape, fill_value)
 
     output = torch.Tensor(t0.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t0.shape()
