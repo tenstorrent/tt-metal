@@ -1,3 +1,20 @@
 [build-system]
-requires = ["setuptools"]
+requires = [
+  "setuptools==68.0.0",
+  "setuptools-scm==7.1.0",
+  "loguru",  # don't need later
+]
 build-backend = "setuptools.build_meta"
+
+[project]
+# To change to eager, or something similar
+name = "metal_libs"
+authors = [
+    {name = "Tenstorrent"},
+    {email = "info@tenstorrent.com"},
+]
+requires-python = ">=3.8,<3.9"
+description = "General compute framework for Tenstorrent devices"
+dynamic = ["version"]
+
+[tool.setuptools_scm]

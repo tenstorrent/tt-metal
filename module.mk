@@ -103,14 +103,15 @@ endif
 include $(TT_METAL_HOME)/tt_metal/common/common.mk
 include $(TT_METAL_HOME)/tt_metal/module.mk
 include $(TT_METAL_HOME)/libs/module.mk
+include $(TT_METAL_HOME)/tests/module.mk
 
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV
 include $(TT_METAL_HOME)/infra/git_hooks/module.mk
-include $(TT_METAL_HOME)/tests/module.mk
 endif
 
 build: $(LIBS_TO_BUILD)
 
-clean: src/ckernels/clean
+clean: src/ckernels/clean eager_package/clean
 	rm -rf $(OUT)
+	rm -rf dist/

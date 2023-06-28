@@ -59,17 +59,10 @@ ext_modules = [buda_eager_lib_C]
 
 packages = find_namespace_packages(
     where="libs",
-    exclude=["*csrc"],
 )
 
 setup(
-    name="tt_lib",
-    version=version,
-    author="Tenstorrent",
     url="http://www.tenstorrent.com",
-    author_email="info@tenstorrent.com",
-    description="General compute framework for Tenstorrent devices",
-    python_requires=">=3.8,<3.9",
     packages=packages,
     package_dir={"": "libs"},
     long_description_content_type="text/markdown",
