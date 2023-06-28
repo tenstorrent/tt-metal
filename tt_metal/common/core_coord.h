@@ -198,8 +198,24 @@ struct CoresInCoreRangeGenerator {
 
 class CoreRangeSet {
   public:
-    CoreRangeSet(const std::set<CoreRange> &core_ranges) {
-      this->merge( core_ranges);
+    CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges) {
+      for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
+        for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
+          if (outer_it == inner_it) {
+            continue;
+          }
+          CoreRange first_core_range = *outer_it;
+          CoreRange second_core_range = *inner_it;
+          bool first_core_left_of_second = first_core_range.end.x < second_core_range.start.x;
+          bool first_core_right_of_second = first_core_range.start.x > second_core_range.end.x;
+          bool first_core_above_second = first_core_range.end.y < second_core_range.start.y;
+          bool first_core_below_second = first_core_range.start.y > second_core_range.end.y;
+          auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or first_core_below_second;
+          if (not no_overlap) {
+            TT_THROW("Cannot create CoreRangeSet with specified core ranges because core ranges " + first_core_range.str() + " and " + second_core_range.str() + " overlap!");
+          }
+        }
+      }
     }
 
 
