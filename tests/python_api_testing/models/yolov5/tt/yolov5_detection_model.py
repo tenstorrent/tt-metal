@@ -15,6 +15,7 @@ from python_api_testing.models.yolov5.tt.yolov5_bottleneck import TtYolov5Bottle
 from python_api_testing.models.yolov5.tt.yolov5_sppf import TtYolov5SPPF
 from python_api_testing.models.yolov5.tt.yolov5_upsample import TtYolov5Upsample
 from python_api_testing.models.yolov5.tt.yolov5_concat import TtYolov5Concat
+from python_api_testing.models.yolov5.tt.yolov5_detect import TtYolov5Detect
 from pathlib import Path
 
 import contextlib
@@ -74,13 +75,9 @@ def parse_model(
     ):  # from, number, module, args
         # m = eval(m) if isinstance(m, str) else m  # eval strings
 
-        # print()
-
         for j, a in enumerate(args):
             with contextlib.suppress(NameError):
                 args[j] = eval(a) if isinstance(a, str) else a  # eval strings
-
-        print(f"{m}")
 
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
 
@@ -114,8 +111,12 @@ def parse_model(
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
 
-            if m == "Segment":
+            if m == "Detect":
+                m = TtYolov5Detect
+            elif m == "Segment":
                 args[3] = make_divisible(args[3] * gw, 8)
+            else:
+                assert False  # Something went wrong
 
         elif m == "nn.Upsample":
             c2 = ch[f]
@@ -166,7 +167,9 @@ class BaseModel(nn.Module):
 
     def _forward_once(self, x, profile=False, visualize=False):
         y, dt = [], []  # outputs
-        for m in self.model:
+        for i, m in enumerate(self.model):
+            logger.debug(f"Running layer {i}")
+
             if m.f != -1:  # if not from previous layer
                 x = (
                     y[m.f]
@@ -175,7 +178,12 @@ class BaseModel(nn.Module):
                 )  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
+
+            # logger.debug(f"Input device {x.device()}")
             x = m(x)  # run
+
+            # logger.debug(f"Result device {x.device()}")
+
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
@@ -218,7 +226,8 @@ class BaseModel(nn.Module):
         # Apply to(), cpu(), cuda(), half() to model tensors that are not parameters or registered buffers
         self = super()._apply(fn)
         m = self.model[-1]  # Detect()
-        if isinstance(m, (Detect, Segment)):
+
+        if isinstance(m, TtYolov5Detect):  # (Detect, Segment)):
             m.stride = fn(m.stride)
             m.grid = list(map(fn, m.grid))
             if isinstance(m.anchor_grid, list):
@@ -261,36 +270,42 @@ class TtYolov5DetectionModel(BaseModel):
             state_dict, base_address, deepcopy(self.yaml), ch=[ch], device=device
         )  # model, savelist
 
-        exit(0)
-
         self.names = [str(i) for i in range(self.yaml["nc"])]  # default names
         self.inplace = self.yaml.get("inplace", True)
 
         # Build strides, anchors
         m = self.model[-1]  # Detect()
-        if isinstance(m, (Detect, Segment)):
+
+        if isinstance(m, TtYolov5Detect):  # (Detect, Segment)):
             s = 256  # 2x min stride
             m.inplace = self.inplace
+
             forward = (
-                lambda x: self.forward(x)[0]
-                if isinstance(m, Segment)
-                else self.forward(x)
+                lambda x: self.forward(x)
+                if isinstance(m, TtYolov5Detect)
+                else self.forward(x)[0]
             )
+
+            zeros_tensor = torch2tt_tensor(torch.zeros(1, ch, s, s), device)
+            forwaded_zeros = forward(zeros_tensor)
+
             m.stride = torch.tensor(
-                [s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))]
+                [s / x.shape[-2] for x in forwaded_zeros]
             )  # forward
+
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
-            self._initialize_biases()  # only run once
+            # self._initialize_biases()  # only run once
 
         # Init weights, biases
-        initialize_weights(self)
+        # initialize_weights(self)
         self.info()
 
     def forward(self, x, augment=False, profile=False, visualize=False):
         if augment:
             return self._forward_augment(x)  # augmented inference, None
+
         return self._forward_once(
             x, profile, visualize
         )  # single-scale inference, train
@@ -347,6 +362,7 @@ class TtYolov5DetectionModel(BaseModel):
         # https://arxiv.org/abs/1708.02002 section 3.3
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
         m = self.model[-1]  # Detect() module
+
         for mi, s in zip(m.m, m.stride):  # from
             b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
             b.data[:, 4] += math.log(

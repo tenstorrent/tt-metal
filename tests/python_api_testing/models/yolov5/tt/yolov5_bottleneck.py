@@ -46,8 +46,6 @@ class TtYolov5Bottleneck(torch.nn.Module):
         self.add = shortcut and c1 == c2
 
     def forward(self, x):
-        logger.debug(f"layout {x.layout()}")
-
         tmp = self.cv1(x)
         conv_res = self.cv2(tmp)
 

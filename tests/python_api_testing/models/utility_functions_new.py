@@ -219,7 +219,12 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, tt_layout=tt_lib.tensor.
         size,
         tt_lib.tensor.DataType.BFLOAT16,
         tt_lib.tensor.Layout.ROW_MAJOR,
-    ).to(tt_layout).to(tt_device, tt_memory_config)
+    ).to(tt_layout)
+
+    if not isinstance(tt_device, tt_lib.device.Host):
+        tt_tensor = tt_tensor.to(tt_device, tt_memory_config)
+    else:
+        tt_tensor = tt_tensor.to(tt_device)
 
     return tt_tensor
 

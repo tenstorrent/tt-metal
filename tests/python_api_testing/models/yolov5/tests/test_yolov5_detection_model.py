@@ -29,7 +29,7 @@ from python_api_testing.models.utility_functions_new import (
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
-def test_Yolov5_model():
+def test_Yolov5_detection_model():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
@@ -46,14 +46,14 @@ def test_Yolov5_model():
     torch.manual_seed(0)
     test_input = torch.rand(1, 3, 256, 256)
 
-    pt_out = refence_module(test_input)
-    logger.info(f"pt_out type {type(pt_out)}")
-    logger.info(f"pt_out len {len(pt_out)}")
-    logger.info(f"pt_out 0-element {pt_out[0].shape}")
-    logger.info(f"pt_out 1-element {pt_out[1][0].shape}")
-    pt_out = pt_out[1][0]
+    with torch.no_grad():
+        refence_module.eval()
+        pt_out = refence_module(test_input)
 
     cfg_path = "tests/python_api_testing/models/yolov5/reference/yolov5s.yaml"
+
+    test_input = torch2tt_tensor(test_input, device)
+    logger.debug(f"test_input device {test_input.device()}")
 
     tt_module = TtYolov5DetectionModel(
         cfg=cfg_path,
@@ -62,25 +62,25 @@ def test_Yolov5_model():
         device=device,
     )
 
-    tt_out = tt_module(test_input)
-    logger.info(f"2 pt_out type {type(tt_out)}")
-    logger.info(f"2 pt_out len {len(tt_out)}")
-    logger.info(f"2 pt_out 0-element {tt_out[0].shape}")
-    logger.info(f"2 pt_out 1-element {tt_out[1].shape}")
-    logger.info(f"2 pt_out 2-element {tt_out[2].shape}")
-    tt_out = tt_out[0]
+    with torch.no_grad():
+        tt_module.eval()
+        tt_out = tt_module(test_input)
 
-    # tt_out = tt2torch_tensor(tt_out)
     tt_lib.device.CloseDevice(device)
 
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.5)
+    does_all_pass, pcc_message = comp_pcc(pt_out[0], tt_out[0], 0.99)
+    logger.info(f"out[0] PCC: {pcc_message}")
 
-    logger.info(comp_allclose(pt_out, tt_out))
-    logger.info(pcc_message)
+    for i in range(len(pt_out[1])):
+        does_pass, pcc_message = comp_pcc(pt_out[1][i], tt_out[1][i], 0.99)
+        logger.info(f"out[1][{i}] PCC: {pcc_message}")
 
-    if does_pass:
-        logger.info("test_Yolov5_sppf Passed!")
+        if not does_pass:
+            does_all_pass = False
+
+    if does_all_pass:
+        logger.info("test_Yolov5_detection_model Passed!")
     else:
-        logger.warning("test_Yolov5_sppf Failed!")
+        logger.warning("test_Yolov5_detection_model Failed!")
 
     assert does_pass

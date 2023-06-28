@@ -33,9 +33,9 @@ class TtYolov5Detect(torch.nn.Module):
         )  # shape(nl,na,2)
         self.m = torch.nn.ModuleList(
             TtYolov5Conv2D(
-                state_dict, f"{base_address}", device, x, self.no * self.na, 1
+                state_dict, f"{base_address}.m.{i}", device, x, self.no * self.na, 1
             )
-            for x in ch
+            for i, x in enumerate(ch)
         )  # output conv
         self.inplace = inplace  # use inplace ops (e.g. slice assignment)
 

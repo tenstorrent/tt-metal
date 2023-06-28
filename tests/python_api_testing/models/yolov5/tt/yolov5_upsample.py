@@ -29,5 +29,8 @@ class TtYolov5Upsample(torch.nn.Module):
     def forward(self, x):
         x = tt2torch_tensor(x)
         x = self.upsample(x)
-        x = torch2tt_tensor(x, device)
+        x = torch2tt_tensor(
+            x, tt_device=self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+        )
+
         return x

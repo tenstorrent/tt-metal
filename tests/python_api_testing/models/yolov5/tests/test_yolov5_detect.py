@@ -41,7 +41,11 @@ def test_Yolov5_detect():
     refence_module = refence_model.model.model[24]
 
     torch.manual_seed(0)
-    test_input = torch.rand(3, 128, 255, 255)
+
+    a = torch.rand(1, 128, 64, 80)
+    b = torch.rand(1, 256, 32, 40)
+    c = torch.rand(1, 512, 16, 20)
+    test_input = [a, b, c]
 
     nc = 80
     anchors = [
@@ -51,9 +55,9 @@ def test_Yolov5_detect():
     ]
     ch = [128, 256, 512]
 
-    pt_out = refence_module(test_input)
-
-    logger.info(f"pt_out shape {pt_out.shape}")
+    with torch.no_grad():
+        refence_module.eval()
+        pt_out = refence_module(test_input)
 
     tt_module = TtYolov5Detect(
         state_dict=refence_model.state_dict(),
@@ -64,19 +68,39 @@ def test_Yolov5_detect():
         ch=ch,
     )
 
-    test_input = torch2tt_tensor(test_input, device)
+    tt_module.anchors = refence_module.anchors
+    tt_module.stride = torch.tensor([8.0, 16.0, 32.0])
 
-    tt_out = tt_module(test_input)
+    tt_a = torch2tt_tensor(
+        a, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+    )
+    tt_b = torch2tt_tensor(
+        b, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+    )
+    tt_c = torch2tt_tensor(
+        c, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+    )
+    test_input = [tt_a, tt_b, tt_c]
+
+    with torch.no_grad():
+        tt_module.eval()
+        tt_out = tt_module(test_input)
+
     tt_lib.device.CloseDevice(device)
 
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
+    does_all_pass, pcc_message = comp_pcc(pt_out[0], tt_out[0], 0.99)
+    logger.info(f"out[0] PCC: {pcc_message}")
 
-    logger.info(comp_allclose(pt_out, tt_out))
-    logger.info(pcc_message)
+    for i in range(len(pt_out[1])):
+        does_pass, pcc_message = comp_pcc(pt_out[1][i], tt_out[1][i], 0.99)
+        logger.info(f"out[1][{i}] PCC: {pcc_message}")
 
-    if does_pass:
-        logger.info("test_Yolov5_c3 Passed!")
+        if not does_pass:
+            does_all_pass = False
+
+    if does_all_pass:
+        logger.info("test_Yolov5_detect Passed!")
     else:
-        logger.warning("test_Yolov5_c3 Failed!")
+        logger.warning("test_Yolov5_detect Failed!")
 
     assert does_pass
