@@ -32,6 +32,7 @@ Welcome to TT-Metal documentation!
    :caption: Developer Onboarding (Internal Devs)
 
    dev_onboarding/get_started
+   dev_onboarding/sfpu_operators
 
 .. toctree::
    :caption: Resources
