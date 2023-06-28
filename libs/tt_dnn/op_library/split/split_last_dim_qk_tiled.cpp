@@ -172,7 +172,45 @@ operation::ProgramWithCallbacks split_last_dim_qk_tiled(
         }
     }
 
-    return {std::move(program)};
+    auto override_runtime_args_callback = [
+            reader_kernel,
+            writer_kernel,
+            num_cores_r,
+            num_cores_c,
+            start_core_x,
+            start_core_y
+        ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+
+        auto dst_0_dram_buffer = output_buffers.at(0);
+        auto dst_1_dram_buffer = output_buffers.at(0);
+
+        for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+            for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+                CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+
+                {
+                    auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+                    runtime_args[1] = src_dram_buffer->address();
+                    SetRuntimeArgs(reader_kernel, core, runtime_args);
+                }
+
+                {
+                    auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+                    runtime_args[1] = dst_0_dram_buffer->address();
+                    runtime_args[2] = dst_1_dram_buffer->address();
+                    SetRuntimeArgs(writer_kernel, core, runtime_args);
+                }
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks SplitLastDimQKTiled::create_program(

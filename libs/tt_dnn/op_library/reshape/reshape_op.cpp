@@ -10,7 +10,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W) {
+operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device!");
@@ -116,10 +116,37 @@ Program reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, 
         num_tiles }
     );
 
-    return program;
+    auto override_runtime_args_callback = [unary_reader_kernel, unary_writer_kernel](
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(unary_reader_kernel, core);
+            runtime_args[0] = src_dram_buffer->address();
+            SetRuntimeArgs(unary_reader_kernel, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
+            runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
+            SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
-Program reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
+operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device!");
@@ -259,7 +286,31 @@ Program reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, in
         writer_kernel_args
     );
 
-    return program;
+    auto override_runtime_args_callback = [unary_reader_kernel, unary_writer_kernel](
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(unary_reader_kernel, core);
+            runtime_args[0] = src_dram_buffer->address();
+            SetRuntimeArgs(unary_reader_kernel, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 void Reshape::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
@@ -303,6 +354,19 @@ operation::ProgramWithCallbacks Reshape::create_program(const std::vector<std::r
         TT_ASSERT(false, "Unsupported layout for reshape");
         return {};
     }
+}
+
+operation::Hash Reshape::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+
+    return fmt::format(
+        "Reshape_{}_{}_{}_{}_{}",
+         this->N,
+         this->C,
+         this->H,
+         this->W,
+         operation::hash_tensor(input_tensor)
+    );
 }
 
 Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {

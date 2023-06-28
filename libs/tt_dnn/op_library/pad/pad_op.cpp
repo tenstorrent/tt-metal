@@ -2,18 +2,21 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+
+#include <fmt/ranges.h>
+
 using namespace tt::constants;
 
 namespace tt {
 
 namespace tt_metal {
 
-Program pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
 
     TT_ASSERT(not a.on_host(), "Operand to pad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -29,7 +32,6 @@ Program pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &o
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t alignment = 32;
 
@@ -123,16 +125,33 @@ Program pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &o
         reader_kernel_args
     );
 
-    // output does not hold any data, contains pointer to buffer on device with the data
-    return program;
+    auto override_runtime_args_callback = [kernel=unary_reader_kernel](
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(kernel, core);
+            runtime_args[0] = src_dram_buffer->address();
+            runtime_args[1] = dst_dram_buffer->address();
+            SetRuntimeArgs(kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
-Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
 
     TT_ASSERT(not a.on_host(), "Operand to pad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program{};
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -147,7 +166,6 @@ Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> 
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 1;
@@ -248,7 +266,25 @@ Program pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> 
         reader_kernel_args
     );
 
-    return program;
+    auto override_runtime_args_callback = [kernel=unary_reader_kernel](
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(kernel, core);
+            runtime_args[0] = src_dram_buffer->address();
+            runtime_args[1] = dst_dram_buffer->address();
+            SetRuntimeArgs(kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 
@@ -285,13 +321,25 @@ operation::ProgramWithCallbacks Pad::create_program(const std::vector<std::refer
     const auto& input_tensor_a = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        return {pad_rm(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
+        return pad_rm(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
     } else if (input_tensor_a.layout() == Layout::TILE) {
-        return {pad_tile(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
+        return pad_tile(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
     } else {
         TT_ASSERT(false, "Unsupported layout for pad");
         return {};
     }
+}
+
+operation::Hash Pad::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+
+    return fmt::format(
+        "Pad_{}_{}_{}_{}",
+         this->output_tensor_shape,
+         this->input_tensor_start,
+         this->pad_value,
+         operation::hash_tensor(input_tensor)
+    );
 }
 
 Tensor pad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
@@ -304,6 +352,7 @@ Tensor pad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_t
     return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
 
 }
+
 
 }  // namespace tt_metal
 

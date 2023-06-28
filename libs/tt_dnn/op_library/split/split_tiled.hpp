@@ -24,6 +24,7 @@ struct SplitTiled {
     operation::ProgramWithCallbacks create_program(
         const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
 };
 
 }  // namespace tt_metal

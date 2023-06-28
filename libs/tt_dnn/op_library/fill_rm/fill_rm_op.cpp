@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Program fill_rm_single_core(const Tensor& any, Tensor &output, uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, float val_hi, float val_lo) {
+operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &output, uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, float val_hi, float val_lo) {
 
     tt_metal::Device *device = any.device();
     tt_metal::Program program = tt_metal::Program();
@@ -62,7 +62,23 @@ Program fill_rm_single_core(const Tensor& any, Tensor &output, uint32_t N, uint3
         { dst_dram_buffer->address(), u32(N*C), u32(H), u32(W), u32(hFill), u32(wFill), u32(bfloat16(val_hi).to_uint16()), u32(bfloat16(val_lo).to_uint16()) }
     );
 
-    return program;
+    auto override_runtime_args_callback = [kernel=binary_reader_kernel](
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            SetRuntimeArgs(kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 void FillRM::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
@@ -82,8 +98,26 @@ std::vector<Tensor> FillRM::create_output_tensors(const std::vector<std::referen
 operation::ProgramWithCallbacks FillRM::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0).get();
     auto& output_tensor = output_tensors.at(0);
-    return {fill_rm_single_core(input_tensor, output_tensor, this->N, this->C, this->H, this->W, this->hFill, this-> wFill, this->val_hi, this->val_lo)};
+    return fill_rm_single_core(input_tensor, output_tensor, this->N, this->C, this->H, this->W, this->hFill, this-> wFill, this->val_hi, this->val_lo);
 
+}
+operation::Hash FillRM::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0).get();
+
+    uint32_t N, C, H, W, hFill, wFill;
+    float val_hi, val_lo;
+    return fmt::format(
+        "FillRM_{}_{}_{}_{}_{}_{}_{}_{}_{}",
+         this->N,
+         this->C,
+         this->H,
+         this->W,
+         this->hFill,
+         this->wFill,
+         this->val_hi,
+         this->val_lo,
+         operation::hash_tensor(input_tensor)
+    );
 }
 
 tt_metal::Tensor fill_rm(uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const tt_metal::Tensor& any, float val_hi, float val_lo) {
