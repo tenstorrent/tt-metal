@@ -47,10 +47,3 @@ jobs:
         run: |
           cd infra/machine_setup
           ./scripts/download_public_machine_setup_assets.sh
-  build-eager-package:
-    # TODO: RK - need to change this to main later
-    uses: ./.github/workflows/eager-package.yaml
-    with:
-      environment: dev
-    secrets:
-      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}

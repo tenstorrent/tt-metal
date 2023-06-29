@@ -1,0 +1,16 @@
+name: eager - Package on main
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+jobs:
+  build-eager-package:
+    # TODO: RK - need to change this to every push later once
+    # we go public
+    uses: ./.github/workflows/eager-package.yaml
+    with:
+      environment: dev
+    secrets:
+      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
