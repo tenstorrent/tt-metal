@@ -30,9 +30,9 @@ def test_Yolov5_concat():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    weights = "python_api_testing/models/yolov5/reference/yolov5s.pt"
+    weights = "tests/python_api_testing/models/yolov5/reference/yolov5s.pt"
     dnn = False
-    data = "python_api_testing/models/yolov5/reference/data/coco128.yaml"
+    data = None
     half = False
 
     refence_model = DetectMultiBackend(
@@ -45,7 +45,6 @@ def test_Yolov5_concat():
     im_2 = torch.rand(1, 64, 512, 640)
 
     pt_out = refence_module([im_1, im_2])
-    logger.info(f"pt_out shape {pt_out.shape}")
 
     tt_module = TtYolov5Concat(
         state_dict=refence_model.state_dict(),
@@ -61,8 +60,6 @@ def test_Yolov5_concat():
     tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     if does_pass:

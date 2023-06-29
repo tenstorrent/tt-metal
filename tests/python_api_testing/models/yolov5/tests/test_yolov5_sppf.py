@@ -30,9 +30,9 @@ def test_Yolov5_sppf():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    weights = "python_api_testing/models/yolov5/reference/yolov5s.pt"
+    weights = "tests/python_api_testing/models/yolov5/reference/yolov5s.pt"
     dnn = False
-    data = "python_api_testing/models/yolov5/reference/data/coco128.yaml"
+    data = None
     half = False
 
     refence_model = DetectMultiBackend(

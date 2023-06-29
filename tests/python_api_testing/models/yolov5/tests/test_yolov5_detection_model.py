@@ -33,9 +33,10 @@ def test_Yolov5_detection_model():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    weights = "python_api_testing/models/yolov5/reference/yolov5s.pt"
+    cfg_path = "tests/python_api_testing/models/yolov5/reference/yolov5s.yaml"
+    weights = "tests/python_api_testing/models/yolov5/reference/yolov5s.pt"
     dnn = False
-    data = "python_api_testing/models/yolov5/reference/data/coco128.yaml"
+    data = None
     half = False
 
     refence_model = DetectMultiBackend(
@@ -50,10 +51,7 @@ def test_Yolov5_detection_model():
         refence_module.eval()
         pt_out = refence_module(test_input)
 
-    cfg_path = "tests/python_api_testing/models/yolov5/reference/yolov5s.yaml"
-
     test_input = torch2tt_tensor(test_input, device)
-    logger.debug(f"test_input device {test_input.device()}")
 
     tt_module = TtYolov5DetectionModel(
         cfg=cfg_path,

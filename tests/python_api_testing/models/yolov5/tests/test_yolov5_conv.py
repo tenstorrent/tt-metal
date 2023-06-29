@@ -31,9 +31,9 @@ def test_Yolov5_Conv2D():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    weights = "python_api_testing/models/yolov5/reference/yolov5s.pt"
+    weights = "tests/python_api_testing/models/yolov5/reference/yolov5s.pt"
     dnn = False
-    data = "python_api_testing/models/yolov5/reference/data/coco128.yaml"
+    data = None
     half = False
     block = 1
 
@@ -50,19 +50,18 @@ def test_Yolov5_Conv2D():
     groups = refence_module.groups
     dilation = refence_module.dilation
 
-    logger.info(f"in_channels {in_channels}")
-    logger.info(f"out_channels {out_channels}")
-    logger.info(f"kernel_size {kernel_size}")
-    logger.info(f"stride {stride}")
-    logger.info(f"padding {padding}")
-    logger.info(f"groups {groups}")
-    logger.info(f"dilation {dilation}")
+    logger.debug(f"in_channels {in_channels}")
+    logger.debug(f"out_channels {out_channels}")
+    logger.debug(f"kernel_size {kernel_size}")
+    logger.debug(f"stride {stride}")
+    logger.debug(f"padding {padding}")
+    logger.debug(f"groups {groups}")
+    logger.debug(f"dilation {dilation}")
 
     torch.manual_seed(0)
     test_input = torch.rand(1, 32, 64, 64)
 
     pt_out = refence_module(test_input)
-    logger.info(f"pt_out shape {pt_out.shape}")
 
     tt_module = TtYolov5Conv2D(
         state_dict=refence_model.state_dict(),
@@ -77,10 +76,12 @@ def test_Yolov5_Conv2D():
         d=dilation[0],
     )
 
-    test_input = torch2tt_tensor(
-        test_input, device
-    )  # , tt_layout=tt_lib.tensor.Layout.ROW_MAJOR) # CHANNELS_LAST
+    # CHANNELS_LAST
+    test_input = torch2tt_tensor(test_input, device)
     tt_out = tt_module(test_input)
+
+    tt_out = tt_out.to(tt_lib.device.GetHost())
+    tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_out = tt2torch_tensor(tt_out)
     tt_lib.device.CloseDevice(device)
@@ -89,8 +90,6 @@ def test_Yolov5_Conv2D():
     logger.debug(f"tt_out shape {tt_out.shape}")
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     if does_pass:
@@ -105,9 +104,9 @@ def test_Yolov5_Silu():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    weights = "python_api_testing/models/yolov5/reference/yolov5s.pt"
+    weights = "tests/python_api_testing/models/yolov5/reference/yolov5s.pt"
     dnn = False
-    data = "python_api_testing/models/yolov5/reference/data/coco128.yaml"
+    data = None
     half = False
     block = 1
 
@@ -118,9 +117,7 @@ def test_Yolov5_Silu():
 
     torch.manual_seed(0)
     test_input = torch.rand(1, 32, 64, 64)
-
     pt_out = refence_module(test_input)
-    logger.info(f"pt_out shape {pt_out.shape}")
 
     test_input = torch2tt_tensor(test_input, device)
     tt_out = fallback_ops.silu(test_input)
@@ -129,8 +126,6 @@ def test_Yolov5_Silu():
     tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     if does_pass:
@@ -145,9 +140,9 @@ def test_Yolov5_conv():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    weights = "python_api_testing/models/yolov5/reference/yolov5s.pt"
+    weights = "tests/python_api_testing/models/yolov5/reference/yolov5s.pt"
     dnn = False
-    data = "python_api_testing/models/yolov5/reference/data/coco128.yaml"
+    data = None
     half = False
     block = 1
 
@@ -166,20 +161,19 @@ def test_Yolov5_conv():
     dilation = refence_module.conv.dilation
     act = refence_module.act
 
-    logger.info(f"in_channels {in_channels}")
-    logger.info(f"out_channels {out_channels}")
-    logger.info(f"kernel_size {kernel_size}")
-    logger.info(f"stride {stride}")
-    logger.info(f"padding {padding}")
-    logger.info(f"groups {groups}")
-    logger.info(f"dilation {dilation}")
-    logger.info(f"act {act}")
+    logger.debug(f"in_channels {in_channels}")
+    logger.debug(f"out_channels {out_channels}")
+    logger.debug(f"kernel_size {kernel_size}")
+    logger.debug(f"stride {stride}")
+    logger.debug(f"padding {padding}")
+    logger.debug(f"groups {groups}")
+    logger.debug(f"dilation {dilation}")
+    logger.debug(f"act {act}")
 
     torch.manual_seed(0)
     test_input = torch.rand(1, 32, 64, 64)
 
     pt_out = refence_module(test_input)
-    logger.info(f"pt_out shape {pt_out.shape}")
 
     tt_module = TtYolov5Conv(
         state_dict=refence_model.state_dict(),
@@ -201,8 +195,6 @@ def test_Yolov5_conv():
     tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     if does_pass:

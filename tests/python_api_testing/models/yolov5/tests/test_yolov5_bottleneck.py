@@ -30,9 +30,9 @@ def test_Yolov5_bottleneck():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    weights = "python_api_testing/models/yolov5/reference/yolov5s.pt"
+    weights = "tests/python_api_testing/models/yolov5/reference/yolov5s.pt"
     dnn = False
-    data = "python_api_testing/models/yolov5/reference/data/coco128.yaml"
+    data = None
     half = False
 
     refence_model = DetectMultiBackend(
@@ -45,14 +45,12 @@ def test_Yolov5_bottleneck():
     shortcut = True
     groups = 1
 
-    logger.info(f"in_channels {in_channels}")
-    logger.info(f"out_channels {out_channels}")
+    logger.debug(f"in_channels {in_channels}")
+    logger.debug(f"out_channels {out_channels}")
 
     torch.manual_seed(0)
     test_input = torch.rand(1, 32, 64, 64)
-
     pt_out = refence_module(test_input)
-    logger.info(f"pt_out shape {pt_out.shape}")
 
     tt_module = TtYolov5Bottleneck(
         state_dict=refence_model.state_dict(),
@@ -74,8 +72,6 @@ def test_Yolov5_bottleneck():
     tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     if does_pass:

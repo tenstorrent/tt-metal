@@ -8,9 +8,10 @@ from python_api_testing.models.utility_functions_new import (
     tt2torch_tensor,
 )
 from python_api_testing.models.conv_on_device_utils_new import (
+    run_conv_on_tt_device,
+    run_conv_on_device_wrapper,
     is_conv_supported_on_device,
 )
-from tt_lib.fused_ops.conv import conv as TtConv
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
@@ -40,36 +41,47 @@ class TtYolov5Conv2D(torch.nn.Module):
     ):
         super().__init__()
 
-        conv_weight = state_dict[f"{base_address}.weight"]
+        self.conv_weight = state_dict[f"{base_address}.weight"]
         bias_key = f"{base_address}.bias"
 
         if bias_key in state_dict:
-            conv_bias = state_dict[bias_key]
+            self.conv_bias = state_dict[bias_key]
         else:
-            conv_bias = None
+            self.conv_bias = None
 
         if p is None:
             p = autopad(k, p, d)
 
         self.device = device
-        conv_on_device = False
+        self.host = tt_lib.device.GetHost()
+        self.conv_on_device = False
 
         # conv_params = [out_channels, in_channels, kernel_size, kernel_size, stride, stride, padding, padding, dilation, groups]
         self.conv_params = [c2, c1, k, k, s, s, p, p, d, g]
 
-        if conv_on_device and is_conv_supported_on_device(self.conv_params):
+        if self.conv_on_device and is_conv_supported_on_device(self.conv_params):
+            self.conv_bias = self.conv_bias.unsqueeze(-1).unsqueeze(-1)
+
             logger.debug(f"Using TtConv for params {self.conv_params}")
-            self.conv = TtConv(
-                conv_weight.reshape(-1).tolist(), self.conv_params, device
+            logger.debug(f"conv_weight shape {self.conv_weight.shape}")
+            logger.debug(f"conv_bias shape {self.conv_bias.shape}")
+
+            self.conv = run_conv_on_device_wrapper(
+                self.conv_weight.reshape(-1).tolist(),
+                self.conv_params,
+                self.device,
+                self.host,
+                conv_bias=None,
             )
 
         else:
+            self.conv_on_device = False
             logger.debug(f"Using fallback_ops.Conv2d for params {self.conv_params}")
 
             # self.conv = nn.Conv2d(c1, c2, k, s, padding, groups=g, dilation=d, bias=False)
             self.conv = fallback_ops.Conv2d(
-                weights=conv_weight,
-                biases=conv_bias,
+                weights=self.conv_weight,
+                biases=self.conv_bias,
                 in_channels=c1,
                 out_channels=c2,
                 kernel_size=k,
@@ -77,11 +89,21 @@ class TtYolov5Conv2D(torch.nn.Module):
                 padding=p,
                 groups=g,
                 dilation=d,
-                bias=conv_bias is not None,
+                bias=self.conv_bias is not None,
             )
 
     def forward(self, x):
-        return self.conv(x)
+        if self.conv_on_device:
+            x = tt2torch_tensor(x)
+            x = self.conv(x)
+            x = x + self.conv_bias
+            x = torch2tt_tensor(
+                x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            )
+        else:
+            x = self.conv(x)
+
+        return x
 
 
 class TtYolov5Conv(torch.nn.Module):
