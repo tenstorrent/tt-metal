@@ -226,18 +226,37 @@ class CoreRangeSet {
       std::vector<CoreRange> vcr (core_ranges.begin(), core_ranges.end() );
       vcr.insert(vcr.end(), ranges_.begin(), ranges_.end());
       std::vector<CoreRange> diffs;
+      std::set<CoreRange> is_covered;
+      // Remove CoreRanges that are completely contained by another CoreRange
+      for (auto it1 = vcr.begin(); it1 != vcr.end(); it1++){
+        for (auto it2 = vcr.begin(); it2 != vcr.end(); it2++ ){
+          if ( it1 == it2 ){
+            continue;
+          }
+          if ( it1->contains(*it2)){
+            // std::cout << it1->str() << " contains " << it2->str() << std::endl;
+            is_covered.insert(*it2);
+          }
+        }
+      }
 
-      // Remove subsumed CoreRanges
+      for (auto it1 = vcr.begin(); it1 != vcr.end(); ){
+        if ( is_covered.find( *it1) != is_covered.end() ){
+          it1 = vcr.erase(it1);
+        }else{
+          it1++;
+        }
+      }
+
+      // Merge CoreRanges, where possible
       for (auto it1 = vcr.begin(); it1 != vcr.end(); it1++){
         for (auto it2 = vcr.begin(); it2 != vcr.end(); ){
           if ( it1 == it2 ){
             ++it2;
             continue;
           }
-          else if ( it1->contains(*it2)){
-            it2 = vcr.erase(it2);
-          }
-          else if ( auto merged = it1->merge(*it2) ){
+          if ( auto merged = it1->merge(*it2) ){
+            // std::cout << "merging " << it1->str() << " and " << it2->str() << std::endl;
             *it1 = merged.value();
             it2 = vcr.erase(it2);
           }
