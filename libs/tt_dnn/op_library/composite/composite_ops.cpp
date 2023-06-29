@@ -1,6 +1,8 @@
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 
+#include "tt_numpy/functions.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -405,32 +407,22 @@ std::function<Tensor(const Tensor& a,float low, float high)> clamp = clip;
 
 //on-device tensor creation 0s with shape
 Tensor zeros(const Shape shape) {
-  return Tensor(shape,Initialize::ZEROS,DataType::BFLOAT16,Layout::ROW_MAJOR);
+  return tt::numpy::zeros(shape, DataType::BFLOAT16);
 }
 
 //on-device tensor creation 1s with shape
 Tensor ones(const Shape shape) {
-  return Tensor(shape,Initialize::ONES,DataType::BFLOAT16,Layout::ROW_MAJOR);
+  return tt::numpy::ones(shape, DataType::BFLOAT16);
 }
 
 //on-device tensor creation with shape and filled with value
-Tensor full(const Shape shape,float value) {
-  Tensor t0 = zeros(shape);
-  return add_unary(t0,value);
+Tensor full(const Shape shape, float value) {
+  return tt::numpy::full(shape, value, DataType::BFLOAT16);
 }
 
 //on-device with increment
 Tensor arange(int32_t start, int32_t end, int32_t step /*= 1*/) {
-  Shape shape = {1,1,1,static_cast<uint32_t>((end-start)/step)};
-  Tensor tbase(shape,Initialize::INCREMENT,DataType::BFLOAT16,Layout::ROW_MAJOR);
-  if ( step == 1 && start == 0 ) {
-    return tbase;
-  }
-  if ( step == 1 ) {
-    return add_unary(tbase,(float)start);
-  }
-
-  return mac_scalar(tbase,(float)step,(float)start);
+  return tt::numpy::arange<bfloat16>(start, end, step);
 }
 
 

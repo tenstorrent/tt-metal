@@ -65,18 +65,6 @@ Tensor::Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, D
     tensor_impl::convert_and_write_data_wrapper(*this, data);
 }
 
-Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType dtype, Layout layout)
-    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
-    tensor_impl::initialize_data_wrapper(*this, init_type);
-}
-
-Tensor::Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config)
-    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device), mem_config_(mem_config) {
-    TT_ASSERT(device != nullptr);
-    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
-    tensor_impl::initialize_data_wrapper(*this, init_type);
-}
-
 Tensor::Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config)
     : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device), mem_config_(mem_config) {
     TT_ASSERT(device != nullptr);
@@ -180,6 +168,13 @@ const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
     strides_ = compute_strides();
 
     return shape_;
+}
+
+Tensor Tensor::reshape(const std::array<uint32_t, 4>& new_shape) const {
+    auto new_tensor = *this;
+    new_tensor.shape_ = new_shape;
+    new_tensor.strides_ = new_tensor.compute_strides();
+    return new_tensor;
 }
 
 }  // namespace tt_metal

@@ -24,8 +24,6 @@ void inline convert_and_write_data_wrapper(Tensor &tensor, std::vector<T> &data)
     write_data_map.at(tensor.dtype())(tensor, data);
 }
 
-void initialize_data_wrapper(Tensor &tensor, Initialize init_type);
-
 Tensor to_host_wrapper(const Tensor &tensor);
 
 Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config);

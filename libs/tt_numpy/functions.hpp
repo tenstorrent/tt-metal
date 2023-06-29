@@ -1,6 +1,8 @@
 #include <tensor/tensor.hpp>
+#include <tensor/tensor_utils.hpp>
 #include <tensor/host_buffer.hpp>
 
+#include <optional>
 #include <random>
 
 namespace tt {
@@ -11,11 +13,61 @@ using Shape = std::array<uint32_t, 4>;
 
 using tt_metal::Tensor;
 using tt_metal::DataType;
-using tt_metal::Initialize;
 using tt_metal::Layout;
 
+namespace detail
+{
+
+template<typename T>
+constexpr static DataType get_data_type() {
+        if constexpr (std::is_same_v<T, uint32_t>) {
+        return DataType::UINT32;
+    }
+    else if constexpr (std::is_same_v<T, float>) {
+        return DataType::FLOAT32;
+    }
+    else if constexpr (std::is_same_v<T, bfloat16>) {
+        return DataType::BFLOAT16;
+    }
+    else {
+        TT_THROW("Unsupported DataType!");
+    }
+}
+
+template<typename T>
+static Tensor full(const Shape& shape, T value) {
+    constexpr DataType data_type = detail::get_data_type<T>();
+    auto host_buffer  = host_buffer::create<T>(tt_metal::volume(shape));
+    auto host_view = host_buffer::view_as<T>(host_buffer);
+    std::fill(std::begin(host_view), std::end(host_view), value);
+    return Tensor(host_buffer, shape, data_type, Layout::ROW_MAJOR);
+}
+
+} // namespace detail
+
+template<typename T>
+static Tensor full(const Shape& shape, const T value, const DataType data_type) {
+    switch (data_type) {
+        case DataType::UINT32: {
+            return detail::full<uint32_t>(shape, value);
+        }
+        case DataType::FLOAT32: {
+            return detail::full<float>(shape, value);
+        }
+        case DataType::BFLOAT16: {
+            return detail::full<bfloat16>(shape, bfloat16(value));
+        }
+        default:
+            TT_THROW("Unsupported DataType!");
+    }
+}
+
 static Tensor zeros(const Shape& shape, const DataType data_type = DataType::BFLOAT16) {
-    return Tensor(shape, Initialize::ZEROS, data_type, Layout::ROW_MAJOR);
+    return full(shape, 0, data_type);
+}
+
+static Tensor ones(const Shape& shape, const DataType data_type = DataType::BFLOAT16) {
+    return full(shape, 1, data_type);
 }
 
 static Tensor zeros_like(const Tensor& input_tensor, std::optional<DataType> data_type = std::nullopt) {
@@ -23,11 +75,30 @@ static Tensor zeros_like(const Tensor& input_tensor, std::optional<DataType> dat
     if (data_type.has_value()) {
         data_type_to_use = data_type.value();
     }
-    auto output_tensor = zeros(input_tensor.shape(), data_type_to_use).to(input_tensor.layout());
+    auto output_tensor = zeros(input_tensor.shape(), data_type_to_use);
+    output_tensor = output_tensor.to(input_tensor.layout());
     if (input_tensor.device() != nullptr) {
         output_tensor = output_tensor.to(input_tensor.device());
     }
     return output_tensor;
+}
+
+template<typename T>
+static Tensor arange(int64_t start, int64_t stop, int64_t step) {
+    constexpr DataType data_type = detail::get_data_type<T>();
+    auto size = (stop - start) / step;
+    auto host_buffer  = host_buffer::create<T>(size);
+    auto host_view = host_buffer::view_as<T>(host_buffer);
+
+    auto index = 0;
+    for (auto value = start; value < stop; value += step) {
+        if constexpr (std::is_same_v<T, bfloat16>) {
+         host_view[index++] = static_cast<T>(static_cast<float>(value));
+        } else {
+         host_view[index++] = static_cast<T>(value);
+        }
+    }
+    return Tensor(host_buffer, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR);
 }
 
 namespace random {
@@ -38,24 +109,45 @@ static void seed(std::size_t seed) {
     RANDOM_GENERATOR = std::mt19937(seed);
 }
 
-static Tensor uniform(bfloat16 low, bfloat16 high, const Shape& shape) {
+template<typename T>
+static Tensor uniform(T low, T high, const Shape& shape) {
+    constexpr DataType data_type = detail::get_data_type<T>();
 
-    auto rand_float = std::bind(std::uniform_real_distribution<float>(low.to_float(), high.to_float()), RANDOM_GENERATOR);
+    auto output_buffer = host_buffer::create<T>(tt_metal::volume(shape));
+    auto output_view = host_buffer::view_as<T>(output_buffer);
 
-    auto volume = shape[0] * shape[1] * shape[2] * shape[3];
-
-    auto output_buffer = host_buffer::create<bfloat16>(volume);
-    auto output_view = host_buffer::view_as<bfloat16>(output_buffer);
-    for (auto index = 0; index < output_view.size(); index++) {
-        output_view[index] = bfloat16(rand_float());
+    if constexpr (std::is_same_v<T, uint32_t> ) {
+        auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);
+        for (auto index = 0; index < output_view.size(); index++) {
+            output_view[index] = rand_value();
+        }
+    } else if constexpr (std::is_same_v<T, float>) {
+        auto rand_value = std::bind(std::uniform_real_distribution<T>(low, high), RANDOM_GENERATOR);
+        for (auto index = 0; index < output_view.size(); index++) {
+            output_view[index] = rand_value();
+        }
+    } else if constexpr (std::is_same_v<T, bfloat16>) {
+        auto rand_value = std::bind(std::uniform_real_distribution<float>(low.to_float(), high.to_float()), RANDOM_GENERATOR);
+        for (auto index = 0; index < output_view.size(); index++) {
+            output_view[index] = bfloat16(rand_value());
+        }
     }
 
-    return Tensor(output_buffer, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+    return Tensor(output_buffer, shape, data_type, Layout::ROW_MAJOR);
 }
 
-static Tensor random(const Shape& shape, const DataType data_type) {
-    TT_ASSERT(data_type ==  DataType::BFLOAT16);
-    return uniform(bfloat16(0.0f), bfloat16(1.0f), shape);
+static Tensor random(const Shape& shape, const DataType data_type = DataType::BFLOAT16) {
+    switch (data_type)
+    {
+        case DataType::UINT32:
+            return uniform(0u, 1u, shape);
+        case DataType::FLOAT32:
+            return uniform(0.0f, 1.0f, shape);
+        case DataType::BFLOAT16:
+            return uniform(bfloat16(0.0f), bfloat16(1.0f), shape);
+        default:
+            TT_THROW("Unsupported DataType!");
+    };
 }
 
 }

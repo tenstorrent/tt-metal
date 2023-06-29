@@ -27,16 +27,6 @@ uint32_t packed_buffer_size_bytes_wrapper(DataType dtype, uint32_t volume_unpack
     return packed_buffer_size_bytes_map.at(dtype)(volume_unpacked_data);
 }
 
-void initialize_data_wrapper(Tensor &tensor, Initialize init_type) {
-    const static std::map<DataType, std::function<void(Tensor &, Initialize)>> initialize_data_map = {
-        {DataType::BFLOAT16, &initialize_data_helper<bfloat16>},
-        {DataType::FLOAT32, &initialize_data_helper<float>},
-        {DataType::UINT32, &initialize_data_helper<uint32_t>},
-        {DataType::BFLOAT8_B, &initialize_data_helper<float>}
-    };
-    return initialize_data_map.at(tensor.dtype())(tensor, init_type);
-}
-
 Tensor to_host_wrapper(const Tensor &tensor) {
     const static std::map<DataType, std::function<Tensor(const Tensor &)>> to_host_map = {
         {DataType::BFLOAT16, &to_host<bfloat16>},

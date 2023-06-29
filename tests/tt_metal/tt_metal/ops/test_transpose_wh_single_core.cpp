@@ -2,6 +2,7 @@
 #include "tensor/tensor.hpp"
 #include "tensor/host_buffer.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include <tt_numpy/functions.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -87,7 +88,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::array<uint32_t, 4> shape = {1, 1, 10*TILE_HEIGHT, 12*TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
+        Tensor a =  tt::numpy::random::random(shape).to(Layout::TILE).to(device);
 
         tt_metal::Tensor c = tt_metal::transpose(a);
 

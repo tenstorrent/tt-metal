@@ -18,15 +18,6 @@ namespace tt {
 
 namespace tt_metal {
 
-// TODO: this is duplicated
-enum class Initialize
-{
-    ZEROS = 0,
-    ONES = 1,
-    INCREMENT = 2,
-    RANDOM = 3
-};
-
 enum class Layout {
     ROW_MAJOR = 0,
     TILE = 1,
@@ -81,10 +72,6 @@ class Tensor {
         // TODO(arakhmati): delete
         Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
 
-        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType dtype, Layout layout);
-
-        Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
-
         Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
 
         Tensor(const Tensor &other) = default;
@@ -119,7 +106,8 @@ class Tensor {
         // ======================================================================================
         //                                  Low Level APIs
         // ======================================================================================
-        const std::array<uint32_t, 4>& reshape(int N, int C, int H, int W);
+        const std::array<uint32_t, 4>& reshape(int N, int C, int H, int W); // TODO: delete this function
+        Tensor reshape(const std::array<uint32_t, 4>& new_shape) const;
 
         // ======================================================================================
         //                                      Getters

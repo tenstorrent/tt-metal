@@ -3,6 +3,7 @@
 #include "tensor/host_buffer.hpp"
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "constants.hpp"
+#include "tt_numpy/functions.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -48,7 +49,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::array<uint32_t, 4> shape = {1, 32, 45, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::ROW_MAJOR, device);
+        Tensor a =  tt::numpy::random::random(shape).to(device);
         Tensor b = tilize_with_zero_padding(a);
         Tensor c =  b.to(host);
         ////////////////////////////////////////////////////////////////////////////

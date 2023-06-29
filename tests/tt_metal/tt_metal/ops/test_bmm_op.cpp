@@ -2,6 +2,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "constants.hpp"
+#include "tt_numpy/functions.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -54,9 +55,9 @@ int main(int argc, char **argv) {
         std::array<uint32_t, 4> shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = Tensor(shapea, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
-        Tensor b = Tensor(shapeb, Initialize::ZEROS, DataType::BFLOAT16, Layout::TILE, device);
-        Tensor b1 = Tensor(shapeb1, Initialize::ZEROS, DataType::BFLOAT16, Layout::TILE, device);
+        Tensor a = tt::numpy::random::random(shapea).to(Layout::TILE).to(device);
+        Tensor b = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
+        Tensor b1 = tt::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
         Tensor mm = bmm(a, b).to(host);
         Tensor mm1 = matmul(a, b1).to(host);

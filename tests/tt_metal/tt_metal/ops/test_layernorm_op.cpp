@@ -1,6 +1,7 @@
 #include "tt_metal/host_api.hpp"
 #include "libs/tensor/tensor.hpp"
 #include "libs/tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include <tt_numpy/functions.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -41,7 +42,7 @@ int main(int argc, char **argv) {
         pass &= InitializeDevice(device);
         tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
         std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-        Tensor a = Tensor(shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE, device);
+        Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);;
         MemoryConfig mem_config{.interleaved=true};
         Tensor c = layernorm(a, 1e-4f, mem_config);
         Tensor d = c.to(host);

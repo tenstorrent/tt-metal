@@ -64,13 +64,6 @@ void TensorModule(py::module &m_tensor) {
         .value("TILE", Layout::TILE)
         .value("CHANNELS_LAST", Layout::CHANNELS_LAST);
 
-    // TODO(agrebenisan): This should probably be in its own module, but here for now.
-    py::enum_<Initialize>(m_tensor, "Initialize")
-        .value("ZEROS", Initialize::ZEROS)
-        .value("ONES",Initialize::ONES)
-        .value("INCREMENT", Initialize::INCREMENT)
-        .value("RANDOM", Initialize::RANDOM);
-
     py::enum_<DataType>(m_tensor, "DataType")
         .value("FLOAT32", DataType::FLOAT32)
         .value("BFLOAT16", DataType::BFLOAT16)
