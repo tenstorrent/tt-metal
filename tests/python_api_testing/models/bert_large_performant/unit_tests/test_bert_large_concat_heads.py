@@ -82,7 +82,11 @@ import pytest
     (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
-def test_bert_large_concat_heads_test(dtype, in0_mem_config, out_mem_config):
+def test_bert_large_concat_heads_test(dtype, in0_mem_config, out_mem_config, request):
+    ttl.profiler.set_profiler_flag(False)
+    ttl.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/BERT_large_concat_heads_tm_{request.node.callspec.id}"
+    )
     run_bert_large_concat_heads_test(dtype, in0_mem_config, out_mem_config)
 
 

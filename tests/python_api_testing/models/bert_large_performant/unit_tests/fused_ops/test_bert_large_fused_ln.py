@@ -215,5 +215,11 @@ import pytest
     (0, 1, 2, 3),
     ids=["LN", "LN_G", "LN_GB", "add_LN_GB"],
 )
-def test_bert_large_layernorm_test(test_id, dtype, in0_mem_config, out_mem_config):
+def test_bert_large_layernorm_test(
+    test_id, dtype, in0_mem_config, out_mem_config, request
+):
+    ttl.profiler.set_profiler_flag(False)
+    ttl.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/BERT_large_fused_layernorm_{request.node.callspec.id}"
+    )
     run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config)

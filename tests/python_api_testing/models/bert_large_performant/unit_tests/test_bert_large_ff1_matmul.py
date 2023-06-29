@@ -16,7 +16,12 @@ import pytest
 
 
 def run_bert_large_ff1_matmul_test(
-    dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config, gelu_activation
+    dtype,
+    in0_mem_config,
+    in1_mem_config,
+    bias_mem_config,
+    out_mem_config,
+    gelu_activation,
 ):
     if (
         dtype == ttl.tensor.DataType.BFLOAT16
@@ -76,7 +81,9 @@ def run_bert_large_ff1_matmul_test(
     else:
         bias_t = None
 
-    t2 = ttl.tensor.bert_large_ff1_matmul(a_t, b_t, bias_t, gelu_activation, out_mem_config)
+    t2 = ttl.tensor.bert_large_ff1_matmul(
+        a_t, b_t, bias_t, gelu_activation, out_mem_config
+    )
     # Check memory of inputs and outputs
     assert a_t.buffer_type() == in0_mem_config.buffer_type
     assert b_t.buffer_type() == in1_mem_config.buffer_type
@@ -123,7 +130,7 @@ def run_bert_large_ff1_matmul_test(
     (
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
-        None
+        None,
     ),
     ids=["bias_DRAM", "bias_L1", "bias_None"],
 )
@@ -149,10 +156,25 @@ def run_bert_large_ff1_matmul_test(
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 def test_bert_large_ff1_matmul_test(
-    dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config, gelu_activation
+    dtype,
+    in0_mem_config,
+    in1_mem_config,
+    bias_mem_config,
+    out_mem_config,
+    gelu_activation,
+    request,
 ):
+    ttl.profiler.set_profiler_flag(False)
+    ttl.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/BERT_large_ff1_matmul_{request.node.callspec.id}"
+    )
     run_bert_large_ff1_matmul_test(
-        dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config, gelu_activation
+        dtype,
+        in0_mem_config,
+        in1_mem_config,
+        bias_mem_config,
+        out_mem_config,
+        gelu_activation,
     )
 
 
@@ -161,13 +183,23 @@ def test_bert_large_ff1_matmul_with_program_cache(use_program_cache):
     dram_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
         run_bert_large_ff1_matmul_test(
-            dtype, dram_mem_config, dram_mem_config, dram_mem_config, dram_mem_config, gelu_activation=False
+            dtype,
+            dram_mem_config,
+            dram_mem_config,
+            dram_mem_config,
+            dram_mem_config,
+            gelu_activation=False,
         )
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1)
     for _ in range(2):
         run_bert_large_ff1_matmul_test(
-            dtype, dram_mem_config, dram_mem_config, dram_mem_config, dram_mem_config, gelu_activation=True
+            dtype,
+            dram_mem_config,
+            dram_mem_config,
+            dram_mem_config,
+            dram_mem_config,
+            gelu_activation=True,
         )
 
     assert ttl.program_cache.num_entries() == 2

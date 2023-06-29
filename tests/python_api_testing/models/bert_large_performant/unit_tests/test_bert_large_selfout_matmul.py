@@ -14,6 +14,7 @@ from python_api_testing.models.utility_functions import (
 import torch
 import pytest
 
+
 def run_bert_large_selfout_matmul_test(
     dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config
 ):
@@ -106,7 +107,7 @@ def run_bert_large_selfout_matmul_test(
     (
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
-        None
+        None,
     ),
     ids=["bias_DRAM", "bias_L1", "bias_None"],
 )
@@ -132,8 +133,12 @@ def run_bert_large_selfout_matmul_test(
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 def test_bert_large_selfout_matmul_test(
-    dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config
+    dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config, request
 ):
+    ttl.profiler.set_profiler_flag(False)
+    ttl.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/BERT_large_selfout_matmul_{request.node.callspec.id}"
+    )
     run_bert_large_selfout_matmul_test(
         dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config
     )
