@@ -92,60 +92,51 @@ class TtBertBatchDram(torch.nn.Module):
         self.device = device
         self.mem_config = mem_config
 
-    def forward(self, PERF_CNT, input_ids, attention_mask=None, token_type_ids=None):
-        for i in range(PERF_CNT):
-            # profiler.start("_calc_embeddings")
+    def model_preprocessing(self, input_ids, attention_mask=None, token_type_ids=None):
+        embeddings = self.embeddings(input_ids, token_type_ids)
+        # Convert to tt tensor
+        pad_embeddings = pad_activation(embeddings)
+        tt_embeddings = ttl.tensor.Tensor(
+            pad_embeddings.reshape(-1).tolist(),
+            (
+                pad_embeddings.shape[0],
+                1,
+                pad_embeddings.shape[-2],
+                pad_embeddings.shape[-1],
+            ),
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        ).to(ttl.tensor.Layout.TILE)
+        tt_embeddings = tt_embeddings.to(self.device, self.mem_config)
 
-            embeddings = self.embeddings(input_ids, token_type_ids)
-            if attention_mask is not None:
-                extended_attention_mask = self.get_extended_attention_mask(
-                    attention_mask, input_ids.shape
-                )
-                extended_attention_mask = torch.clamp(
-                    extended_attention_mask, -100000
-                )  # Limit neg value that goes into exp
-                extended_attention_mask = pad_activation(extended_attention_mask)
-                tt_attention_mask = ttl.tensor.Tensor(
-                    extended_attention_mask.reshape(-1).tolist(),
-                    extended_attention_mask.shape,
-                    ttl.tensor.DataType.BFLOAT16,
-                    ttl.tensor.Layout.ROW_MAJOR,
-                ).to(ttl.tensor.Layout.TILE)
-                tt_attention_mask = tt_attention_mask.to(self.device, self.mem_config)
-            else:
-                tt_attention_mask = attention_mask
-
-            # Add to list mask
-            self.tt_attention_mask_list.append(tt_attention_mask)
-
-            # Convert to ll buda tensor
-            pad_embeddings = pad_activation(embeddings)
-            tt_embeddings = ttl.tensor.Tensor(
-                pad_embeddings.reshape(-1).tolist(),
-                (
-                    pad_embeddings.shape[0],
-                    1,
-                    pad_embeddings.shape[-2],
-                    pad_embeddings.shape[-1],
-                ),
+        if attention_mask is not None:
+            extended_attention_mask = self.get_extended_attention_mask(
+                attention_mask, input_ids.shape
+            )
+            extended_attention_mask = torch.clamp(
+                extended_attention_mask, -100000
+            )  # Limit neg value that goes into exp
+            extended_attention_mask = pad_activation(extended_attention_mask)
+            tt_attention_mask = ttl.tensor.Tensor(
+                extended_attention_mask.reshape(-1).tolist(),
+                extended_attention_mask.shape,
                 ttl.tensor.DataType.BFLOAT16,
                 ttl.tensor.Layout.ROW_MAJOR,
             ).to(ttl.tensor.Layout.TILE)
-            tt_embeddings = tt_embeddings.to(self.device, self.mem_config)
-            hidden_states = tt_embeddings  # pad_embeddings #
+            tt_attention_mask = tt_attention_mask.to(self.device, self.mem_config)
+        else:
+            tt_attention_mask = attention_mask
+        return tt_embeddings, tt_attention_mask
 
-            self.hidden_states_list.append(hidden_states)
-            # profiler.end("_calc_embeddings")
+    def forward(self, PERF_CNT, tt_embeddings, tt_attention_mask = None):
 
         print(f"Num encoders {len(self.encoders)}")
-        tt_out_list = []
 
         for i in range(PERF_CNT):
             print(f"Running BERT model {i}")
             # profiler.start("_run_encoders")
-
-            hidden_states = self.hidden_states_list.pop(0)
-            attention_mask = self.tt_attention_mask_list.pop(0)
+            hidden_states = tt_embeddings
+            attention_mask = tt_attention_mask
 
             for encoder in self.encoders:
                 # profiler.start("__one_encoder")
@@ -156,13 +147,9 @@ class TtBertBatchDram(torch.nn.Module):
 
             # profiler.start("_qa_linear")
             res = self.qa_linear(hidden_states)
-            # Move tensor to host to ensure all ops have finished during fast dispatch
-            res = res.to(ttl.device.GetHost())
             # profiler.end("_qa_linear")
 
-            tt_out_list.append(res)
-
-        return tt_out_list
+        return res
 
 
 def run_bert_question_and_answering_inference(
@@ -265,6 +252,7 @@ def run_bert_question_and_answering_inference(
             bert_input = torch.stack(oneseq)
             bert_input = bert_input.reshape(batch, seq_len)
 
+    tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
     profiler.end("processing_of_input")
 
     # tt_bert_input = ttl.tensor.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
@@ -277,9 +265,12 @@ def run_bert_question_and_answering_inference(
 
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
-    tt_out_list = tt_bert_model(1, **bert_input)
+    tt_out = tt_bert_model(1, *tt_bert_input)
+    ttl.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
-    del tt_out_list
+    del tt_out
+    # Recreate inputs since activations were deallocated
+    tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
     enable_compile_cache()
@@ -289,68 +280,67 @@ def run_bert_question_and_answering_inference(
     print(f"Running BERT model for perf measurement")
 
     profiler.start(f"model_run_{PERF_CNT}_times_for_inference")
-    tt_out_list = tt_bert_model(PERF_CNT, **bert_input)
+    tt_out = tt_bert_model(PERF_CNT, *tt_bert_input)
+    ttl.device.Synchronize()
     profiler.end(f"model_run_{PERF_CNT}_times_for_inference", PERF_CNT)
 
     # output postprocessing
-    for j in range(PERF_CNT):
-        profiler.start("processing_output_to_string")
+    profiler.start("processing_output_to_string")
 
-        tt_out = tt_out_list[j]
-        tt_untilized_output = torch.Tensor(
-            tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(batch, 1, seq_len, -1)
+    tt_untilized_output = torch.Tensor(
+        tt_out.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
+    ).reshape(batch, 1, seq_len, -1)
 
-        tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
-        tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
+    tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
+    tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
 
-        pt_start_logits = pytorch_out.start_logits.detach()
-        pt_end_logits = pytorch_out.end_logits.detach()
+    pt_start_logits = pytorch_out.start_logits.detach()
+    pt_end_logits = pytorch_out.end_logits.detach()
 
-        passing_start, output = comp_pcc(pt_start_logits, tt_start_logits, pcc)
-        logger.info(f"Start Logits {output}")
-        _, output = comp_allclose(
-            pt_start_logits, tt_start_logits, 0.5, 0.5
-        )  # Only interested in reporting atol/rtol, using PCC for pass/fail
-        logger.info(f"Start Logits {output}")
-        if not passing_start:
-            logger.error(f"Start Logits PCC < {pcc}")
+    passing_start, output = comp_pcc(pt_start_logits, tt_start_logits, pcc)
+    logger.info(f"Start Logits {output}")
+    _, output = comp_allclose(
+        pt_start_logits, tt_start_logits, 0.5, 0.5
+    )  # Only interested in reporting atol/rtol, using PCC for pass/fail
+    logger.info(f"Start Logits {output}")
+    if not passing_start:
+        logger.error(f"Start Logits PCC < {pcc}")
 
-        passing_end, output = comp_pcc(pt_end_logits, tt_end_logits, pcc)
-        logger.info(f"End Logits {output}")
-        _, output = comp_allclose(
-            pt_end_logits, tt_end_logits, 0.5, 0.5
-        )  # Only interested in reporting atol/rtol, using PCC for pass/fail
-        logger.info(f"End Logits {output}")
-        if not passing_end:
-            logger.error(f"End Logits PCC < {pcc}")
+    passing_end, output = comp_pcc(pt_end_logits, tt_end_logits, pcc)
+    logger.info(f"End Logits {output}")
+    _, output = comp_allclose(
+        pt_end_logits, tt_end_logits, 0.5, 0.5
+    )  # Only interested in reporting atol/rtol, using PCC for pass/fail
+    logger.info(f"End Logits {output}")
+    if not passing_end:
+        logger.error(f"End Logits PCC < {pcc}")
 
-        if real_input:
-            for i in range(batch):
-                tt_res = {
-                    "start": tt_start_logits[i],
-                    "end": tt_end_logits[i],
-                    "example": single_inputs[i]["example"],
-                    **single_inputs[i]["inputs"],
-                }
+    if real_input:
+        for i in range(batch):
+            tt_res = {
+                "start": tt_start_logits[i],
+                "end": tt_end_logits[i],
+                "example": single_inputs[i]["example"],
+                **single_inputs[i]["inputs"],
+            }
 
-                tt_answer = nlp.postprocess([tt_res], **postprocess_params)
-                logger.info(f"TT: {tt_answer}")
+            tt_answer = nlp.postprocess([tt_res], **postprocess_params)
+            logger.info(f"TT: {tt_answer}")
 
-                pt_res = {
-                    "start": pt_start_logits[i],
-                    "end": pt_end_logits[i],
-                    "example": single_inputs[i]["example"],
-                    **single_inputs[i]["inputs"],
-                }
+            pt_res = {
+                "start": pt_start_logits[i],
+                "end": pt_end_logits[i],
+                "example": single_inputs[i]["example"],
+                **single_inputs[i]["inputs"],
+            }
 
-                pt_answer = nlp.postprocess([pt_res], **postprocess_params)
-                logger.info(f"PT: {pt_answer}")
-                logger.info(f"PL: {pl_answer[i]}")
+            pt_answer = nlp.postprocess([pt_res], **postprocess_params)
+            logger.info(f"PT: {pt_answer}")
+            logger.info(f"PL: {pl_answer[i]}")
 
-        profiler.end("processing_output_to_string")
+    profiler.end("processing_output_to_string")
 
-    del tt_out_list
+    del tt_out
 
     ttl.device.CloseDevice(device)
     profiler.print()
