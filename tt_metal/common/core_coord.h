@@ -109,18 +109,18 @@ struct CoreRange {
                (other.end.y <= this->end.y);
     }
 
-    // Merge adjacent lined-up rectangles
+    // Merge lined-up (in x or y dimension) intersecting/adjacent rectangles
     std::optional<CoreRange> merge ( const CoreRange & cr) const
     {
-        if ( this->start.x == cr.start.x && this->end.x == cr.end.x){
-            if (this->end.y == cr.start.y ) return std::optional<CoreRange> {CoreRange ( {this->start.x, this->start.y}, {this->end.x, cr.end.y})};
-            if ( this->start.y == cr.end.y) return std::optional<CoreRange> { CoreRange ( {this->start.x, cr.start.y}, {this->end.x, this->end.y})};
+        if ( this->start.x == cr.start.x && this->end.x == cr.end.x ){
+            if ( this->intersects(cr) || this->start.y == cr.end.y || this->end.y == cr.start.y){
+                return CoreRange ( {this->start.x, std::min(this->start.y, cr.start.y)} , { this->end.x, std::max( this->end.y, cr.end.y) } );
+            }
         }
-        else if ( this->start.y == cr.start.y && this->end.y == cr.end.y){
-            if (this->end.x == cr.start.x ) return std::optional<CoreRange> { CoreRange ( {this->start.x, this->start.y}, {cr.end.x, cr.end.y})};
-            if ( this->start.x == cr.end.x) return std::optional<CoreRange> { CoreRange ( {cr.start.x, cr.start.y}, {this->end.x, this->end.y})};
+        else if ( this->start.y == cr.start.y && this->end.y == cr.end.y ){
+            if ( this->intersects(cr) || this->start.x == cr.end.x || this->end.x == cr.start.x )
+                return CoreRange ( { std::min( this->start.x, cr.start.x ), this->start.y}, { std::max( this->end.x, cr.end.x) , this->end.y });
         }
-
         return std::nullopt;
     }
 
@@ -198,8 +198,6 @@ struct CoresInCoreRangeGenerator {
 
 class CoreRangeSet {
   public:
-    // CoreRangeSet(const std::set<CoreRange> &core_ranges) {
-    //   this->merge ( core_ranges );
     CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges) {
       for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
         for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
