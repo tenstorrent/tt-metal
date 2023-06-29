@@ -110,13 +110,16 @@ void MAIN {
 
     // MATH((DPRINT << "C: START" << ENDL()));
 
-    MATH(( DPRINT << "in0_num_subblocks (in0_block_h/out_subblock_height_ntiles): " << in0_num_subblocks << ENDL()));
-    MATH(( DPRINT << "in1_num_subblocks (in1_block_w/out_subblock_width_ntiles): " << in1_num_subblocks << ENDL()));
-    MATH(( DPRINT << "out_subblock_h : " << out_subblock_h << ENDL()));
-    MATH(( DPRINT << "out_subblock_w : " << out_subblock_w << ENDL()));
+    // MATH(( DPRINT << "in0_num_subblocks (in0_block_h/out_subblock_height_ntiles): " << in0_num_subblocks << ENDL()));
+    // MATH(( DPRINT << "in1_num_subblocks (in1_block_w/out_subblock_width_ntiles): " << in1_num_subblocks << ENDL()));
+    // MATH(( DPRINT << "out_subblock_h (out_subblock_height_ntiles) : " << out_subblock_h << ENDL()));
+    // MATH(( DPRINT << "out_subblock_w (out_subblock_width_ntiles): " << out_subblock_w << ENDL()));
 
+    bool subblock_begin = true;
+    bool subblock_end = true;
 
     mm_init();
+    // kernel_profiler::mark_time(5);
     for(uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
         // MATH((DPRINT << "C: IN0_H" << ENDL()));
         for(uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
@@ -125,7 +128,9 @@ void MAIN {
             for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 // MATH((DPRINT << "C: IN0_W" << ENDL()));
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
+                // kernel_profiler::mark_time(11);
                 tilize_in(in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
+                // kernel_profiler::mark_time(12);
                 mm_init_short();
                 cb_wait_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
                 cb_wait_front(CB::c_in1, in1_block_num_tiles);
@@ -135,6 +140,7 @@ void MAIN {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         // MATH((DPRINT << "C: IN1_SB" << ENDL()));
+                // kernel_profiler::mark_time(5 + in0_subblock_i * in1_num_subblocks + in1_subblock_i);
                         acquire_dst(DstMode::Half);
 
                         if (enable_reload) {
@@ -175,6 +181,10 @@ void MAIN {
                         }
                         release_dst(DstMode::Half);
                         in1_index_subblock_offset += out_subblock_w;
+
+                // kernel_profiler::mark_time(9 + in0_subblock_i * in1_num_subblocks + in1_subblock_i);
+                // kernel_profiler::mark_time_once(6, &subblock_end);
+
                     } // for in1_num_subblocks
                     if (last_out) {
                         reblock_and_untilize(
@@ -198,6 +208,7 @@ void MAIN {
             } // for in0_num_blocks_w
         } // for in1_num_blocks_w
     } // for in0_num_blocks_h
+    // kernel_profiler::mark_time(6);
 
 } // MAIN
 } // NAMESPACE

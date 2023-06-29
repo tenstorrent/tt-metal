@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
         );
 
         pass &= LaunchKernels(device, program);
-        DumpDeviceProfileResults(device, program);
+        if (profiler_kernel) DumpDeviceProfileResults(device, program);
 
 
         /*

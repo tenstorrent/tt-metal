@@ -212,7 +212,7 @@ int main(int argc, char **argv) {
         );
 
         pass &= LaunchKernels(device, program);
-        tt_metal::DumpDeviceProfileResults(device, program);
+        if (profiler_kernel) tt_metal::DumpDeviceProfileResults(device, program);
 
         /*
          * Read in result into a host vector.
@@ -343,7 +343,7 @@ int main(int argc, char **argv) {
          * Execute.
          */
         pass &= LaunchKernels(device, program_mul);
-        tt_metal::DumpDeviceProfileResults(device, program);
+        if (profiler_kernel) tt_metal::DumpDeviceProfileResults(device, program);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail

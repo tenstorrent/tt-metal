@@ -33,6 +33,7 @@ void kernel_main() {
         for(uint32_t block_h = 0; block_h < num_blocks_h; block_h++) {
             uint32_t block_row_offset = 0;
             for(uint32_t block_w = 0; block_w < num_blocks_w; block_w++) {
+    // kernel_profiler::mark_time(5);
                 uint32_t block_row_id = start_block_row_id;
                 for (uint32_t i = 0; i < num_rows_block / 32; i++) {
                     // We reserve back an entire tile row and issue a bunch of reads
@@ -52,6 +53,7 @@ void kernel_main() {
                     cb_pop_front(cb_id_out0, num_tiles_block_c);
                 }
                 block_row_offset += block_row_size;
+    // kernel_profiler::mark_time(6);
             }
             start_block_row_id += num_rows_block;
         }

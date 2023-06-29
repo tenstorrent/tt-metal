@@ -7,7 +7,7 @@ def print_relative_cycles(file_name):
 
     start = 0
     for line in lines:
-        if "BRISC, 2" in line:
+        if "NCRISC, 2" in line:
             start = int(line.split(",")[-1])
             break
 
@@ -56,7 +56,29 @@ def profile_test_kernel_profiler_overhead(file_name):
             flag = False
             print(cycle_list[i], cycle_list[0])
 
+def extract_in0_row_noc_addr(file_name):
+    f = open(file_name, "r")
+    lines = f.readlines()
+    for line in lines:
+        if line[:16] == "in0_row_noc_addr":
+            print("noc_async_read({}, {}, dim_x);".format(line.split()[-3], line.split()[-1]))
+
+def profile_noc_async_read_and_barrier_time(file_name):
+    f = open(file_name, "r")
+    lines = f.readlines()
+    dic_cycle = {}
+    for line in lines:
+        if "0, 0, 0, NCRISC, 5, " in line:
+            dic_cycle[5] = int(line.split(",")[-1])
+        elif "0, 0, 0, NCRISC, 6, " in line:
+            dic_cycle[6] = int(line.split(",")[-1])
+        elif "0, 0, 0, NCRISC, 7, " in line:
+            dic_cycle[7] = int(line.split(",")[-1])
+    print("issue:", dic_cycle[6]-dic_cycle[5], "barrier: ", dic_cycle[7]-dic_cycle[6])
+
 file_name = sys.argv[1]
-print_relative_cycles(file_name)
+# print_relative_cycles(file_name)
 # test_kernel_profiler_overhead(file_name)
 # profile_test_kernel_profiler_overhead(file_name)
+# extract_in0_row_noc_addr(file_name)
+profile_noc_async_read_and_barrier_time(file_name)

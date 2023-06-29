@@ -157,7 +157,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
 
     // for kernel debug print
     // int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
-    tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
+    // tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
 
     const std::array<uint32_t, 4> out_shape{in0_batch, in0_channel, in0_height, in1_width};
     Tensor output = Tensor(out_shape,
@@ -336,9 +336,14 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
     WriteRuntimeArgsToDevice(device, writer, core, writer_rt_args);
 
     // Compile and launch
-    bool pass = CompileProgram(device, program, false);
+    constexpr bool profiler_kernel = true;
+    bool pass = CompileProgram(device, program, profiler_kernel);
     pass &= ConfigureDeviceWithProgram(device, program);
     pass &= LaunchKernels(device, program);
+    if (profiler_kernel) {
+        DumpDeviceProfileResults(device, program);
+        std::cout << "Dump Device Profile Results" << std::endl;
+    }
     TT_ASSERT(pass);
 
     return output;
