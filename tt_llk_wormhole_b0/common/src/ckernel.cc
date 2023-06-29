@@ -57,7 +57,8 @@ inline void update_overlay_decoupling_mailbox() {
    if (thread_id == 0) {
       uint32_t trisc_epoch_id = PERF_RISC_MAILBOX_PTR->trisc_epoch_id;
       while (PERF_RISC_MAILBOX_PTR->brisc_epoch_id != trisc_epoch_id) {}
-      PERF_RISC_MAILBOX_PTR->overlay_decouple_mask = overlay_decouple_mask;
+      PERF_RISC_MAILBOX_PTR->overlay_input_decouple_mask = overlay_input_decouple_mask;
+      PERF_RISC_MAILBOX_PTR->overlay_output_decouple_mask = overlay_output_decouple_mask;
       PERF_RISC_MAILBOX_PTR->trisc_epoch_id++;
    }
 }
