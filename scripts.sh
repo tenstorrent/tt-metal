@@ -5,6 +5,7 @@
 # export PYTHONPATH=${TT_METAL_HOME}
 # export TT_METAL_ENV=dev
 # export ARCH_NAME=grayskull
+# export TT_METAL_ENV_IS_DEV
 # make build
 # source build/python_env/bin/activate
 
@@ -28,7 +29,7 @@
 # done
 
 # make programming_examples/loopback
-# ./build/programming_examples/loopback 1
+# ./build/programming_examples/loopback 256
 # python3 tt_metal/tools/profiler/custom_profile.py tt_metal/tools/profiler/logs/profile_log_device.csv > test_kernel_profiler_overhead.log
 
 # ~/tt-metal/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objdump -S ~/tt-metal/built_kernels/loopback_dram_copy_blank/14484643849779851437/brisc/brisc.elf > ~/tt-metal/built_kernels/loopback_dram_copy_blank/14484643849779851437/brisc/brisc.asm
@@ -44,10 +45,28 @@
 # pytest tests/python_api_testing/unit_testing/test_bmm_tilize_untilize.py > bmm_tilize_untilize.log
 # python3 tt_metal/tools/profiler/custom_profile.py bmm_tilize_untilize.log > log/bmm_tilize_untilize_64.log
 
-# profile noc_async_read and barrier latency
-for i in {1..10}
+# ./build/test/build_kernels_for_riscv/test_build_kernel_risc_read_speed
+# ./build/test/llrt/test_run_risc_read_speed --buffer-size 32768 --transaction-size 16384
+
+# ./build/test/build_kernels_for_riscv/test_build_kernel_risc_rw_speed_banked_dram
+
+power_of_2() {
+    local n=$1
+    local result=1
+
+    for ((i=1; i<=n; i++)); do
+        result=$((result * 2))
+    done
+
+    echo $result
+}
+
+for buffer_pow in {13..19}
 do
-pytest tests/python_api_testing/unit_testing/test_bmm_tilize_untilize.py
-python3 tt_metal/tools/profiler/custom_profile.py tt_metal/tools/profiler/logs/profile_log_device.csv >> log/issues_barrier_large_matrix_256.log
+for transaction_pow in {6..13}
+do
+buffer=$(power_of_2 $buffer_pow)
+transaction=$(power_of_2 $transaction_pow)
+./build/test/llrt/test_run_risc_rw_speed_banked_dram $buffer 10000 $transaction 2 1 1
 done
-python3 script.py log/issues_barrier_large_matrix_256.log
+done
