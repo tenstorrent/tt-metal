@@ -41,16 +41,12 @@ class TtYolov5Conv2D(torch.nn.Module):
         super().__init__()
 
         conv_weight = state_dict[f"{base_address}.weight"]
-        logger.debug(f"conv_weight shape {conv_weight.shape}")
-
         bias_key = f"{base_address}.bias"
 
         if bias_key in state_dict:
             conv_bias = state_dict[bias_key]
-            logger.debug(f"conv_bias shape {conv_bias.shape}")
         else:
             conv_bias = None
-            logger.debug(f"conv_bias {conv_bias}")
 
         if p is None:
             p = autopad(k, p, d)
