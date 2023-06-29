@@ -1,12 +1,14 @@
 #include "dtx.hpp"
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
+#include "tt_metal/common/logger.hpp"
 
+using namespace std;
 
 bool transpose_xy(DataTransformations * dtx) {
     bool DEBUG = false;
 
-    if (DEBUG) cout << "\n\nPASS: Transpose XY" << endl;
+    if (DEBUG) tt::log_info("\nPASS: Transpose XY");;
 
     // Identify producer TX & Consumer
     TransformationNode * producer = dtx->transformations.back();

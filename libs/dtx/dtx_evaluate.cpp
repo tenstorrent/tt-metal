@@ -3,6 +3,8 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
+
 vector<uint32_t> generate_address_map(DataTransformations * dtx, bool in_bytes, uint32_t num_df_bytes) {
     assert(dtx->transformations.size() == 2);
     auto transformation_node = dtx->transformations.back();

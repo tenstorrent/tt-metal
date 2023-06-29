@@ -1,6 +1,8 @@
 #include "dtx.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
+
 vector<vector<vector<int>>> generate_sliced_ranges(vector<int> shape, vector<int> slice_factors){
     bool DEBUG = true;
 

@@ -9,6 +9,8 @@
 //                      CLASSES
 // ========================================================
 
+using namespace std;
+
 TensorData::TensorData(vector<int> shape) {
     this->shape = shape;
     this->rank = shape.size();
@@ -21,7 +23,7 @@ TensorData::TensorData(vector<int> shape) {
 
 void TensorData::print() {
     bool DEBUG = true;
-    if (DEBUG) cout << "Printing TensorData " << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "Printing TensorData");
 
     vector<int> counter = zeros(this->rank);
     for (int i=0; i<this->volume; i++){
@@ -45,6 +47,7 @@ void TensorData::print() {
     }
 
     /*
+     Please redo the logging in this block if you need again.
     for (int y=0; y<this->shape[0]; y++){
         for (int x=0; x<this->shape[0]; x++){
             int index = y*this->shape[0] + x;
@@ -59,6 +62,7 @@ void TensorData::print() {
 }
 
 void TensorData::generate_csv(string filename){
+    // TODO - RK / NS: Why is this set to true every time?
     bool DEBUG = true;
 
     string full_filename;
@@ -67,7 +71,7 @@ void TensorData::generate_csv(string filename){
     ofstream myfile(full_filename);
 
 
-    if (DEBUG) cout << "Generating csv file: " << full_filename << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "Generating csv file: {}", full_filename);
 
     for (int y=0; y<this->shape[0]; y++){
         for (int x=0; x<this->shape[0]; x++){
@@ -102,7 +106,7 @@ int DTXTensor::volume() {
 }
 
 void DTXTensor::print() {
-    cout << this->get_string() << endl;
+    tt::log_info(tt::LogDTX, "{}", this->get_string());
 }
 
 string DTXTensor::get_string() {
@@ -132,7 +136,7 @@ string DTXTensor::get_string() {
 }
 
 void TensorPair::print_string(){
-    cout << this->get_string() << endl;
+    tt::log_info(tt::LogDTX, "{}", this->get_string());
 }
 
 string TensorPair::get_string() {
@@ -162,30 +166,28 @@ string Transfer::get_string() {
 
 void TransformationNode::print(int spaces) {
 
-    cout << s(spaces) << "Transformation Node: opcode = " << this->opcode << endl;
+    tt::log_info(tt::LogDTX, "{}Transformation Node: opcode = {}", s(spaces), this->opcode);
 
     int group_index = 0;
     for (TensorPairGroup * group : this->groups) {
 
-        cout << s(2 + spaces) << "Group = " << group_index << ";  shape = " << v2s(group->shape) << ", core=" << v2s(group->core) << endl;
+        tt::log_info(tt::LogDTX, "{}Group = {}; shape = {}, core = {}", s(2 + spaces), group_index, v2s(group->shape), v2s(group->core));
 
-        //cout << s(4+spaces) << "TensorPairs:" << endl;
-        cout << s(4+spaces) << "TensorPairs (" << group->tensor_pairs.size() << "):" << endl;
+        tt::log_info(tt::LogDTX, "{}TensorPairs ({}):", s(4+spaces), group->tensor_pairs.size());
         int tp_index = 0;
         for (TensorPair * tp : group->tensor_pairs) {
-            cout << s(6+spaces) << "TensorPair[" << tp_index << "]  " << tp->get_string() << endl;
+            tt::log_info(tt::LogDTX, "{}TensorPair[{}]{}", s(6+spaces), tp_index, tp->get_string());
             tp_index++;
         }
 
-        cout << s(4+spaces) << "Transactions:" << endl;
+        tt::log_info(tt::LogDTX, "{}Transactions:", s(4+spaces));
         int tx_index = 0;
         for (Transfer * tx : group->transfers) {
-            cout << s(6+spaces) << "Transactoin[" << tx_index << "]  " << tx->get_string() << endl;
+            tt::log_info(tt::LogDTX, "{}, Transaction[{}]  {}", s(6+spaces), tx_index, tx->get_string());
             tx_index++;
         }
         group_index++;
     }
-    cout << endl;
 }
 
 void DataTransformations::print() {
@@ -193,9 +195,8 @@ void DataTransformations::print() {
 }
 
 void DataTransformations::print(int spaces) {
-    cout << "\n" << endl;
-    cout << s(spaces) << "DataTransformations -- nodes = " << this->transformations.size() << endl;
-    cout << s(spaces) << "----------------------------------------------------\n" << endl;
+    tt::log_info(tt::LogDTX, "{} DataTransformations -- nodes = {}", s(spaces), this->transformations.size());
+    tt::log_info(tt::LogDTX, "{} ----------------------------------------------------", s(spaces));
     for (int t=0; t<this->transformations.size(); t++) {
         this->transformations[t]->print(spaces+3);
     }

@@ -3,6 +3,7 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
 
 vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order, vector<int> block_shape) {
     bool DEBUG = false;

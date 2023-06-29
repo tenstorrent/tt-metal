@@ -3,10 +3,12 @@
 #include "util_vector_of_ints.hpp"
 #include "dtx_passes.hpp"
 
+using namespace std;
+
 bool convert_abstract_tensor_to_channels_last_layout(DataTransformations * dtx){
     bool DEBUG = false;
     bool pass = true;
-    if (DEBUG) cout << "\n\nPASS: convert_abstract_tensor_to_channels_last_layout - START" << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "PASS: convert_abstract_tensor_to_channels_last_layout - START");
 
     // First add the 2 required transposes
     pass &= transpose_yz(dtx);
@@ -31,13 +33,12 @@ bool convert_abstract_tensor_to_channels_last_layout(DataTransformations * dtx){
     for (int producer_y=0; producer_y<producer_shape[Y(rank)]; producer_y++) {
     for (int producer_z=0; producer_z<producer_shape[Z(rank)]; producer_z++) {
 
-        if (DEBUG) cout << endl;
-        if (DEBUG) cout << s(2) << "producer_y/z = " << producer_z << "," << producer_y << endl;
+        if (DEBUG) tt::log_info(tt::LogDTX, "{}producer_y/z = {}, {}", s(2), producer_z, producer_y);
 
 
         vector<int> sweep_zy = { producer_z, producer_y};
 
-        if (DEBUG) cout << s(4) << "sweep_zy = " << v2s(sweep_zy) << endl;
+        if (DEBUG) tt::log_info("{}sweep_zy = {}", s(4), "sweep_zy = ", v2s(sweep_zy));
 
         // Producer str/end
         vector<int> producer_str = { producer_z, producer_y, 0};
@@ -51,11 +52,11 @@ bool convert_abstract_tensor_to_channels_last_layout(DataTransformations * dtx){
                                         new DTXTensor({consumer_str}, {consumer_end}));
         consumer->groups[0]->tensor_pairs.push_back(tp);
 
-        if (DEBUG) cout << s(6) << "src = " << v2s(producer_str) << "-" << v2s(producer_end) << " ==> " << v2s(consumer_str) << "-" << v2s(consumer_end) << endl;
+        if (DEBUG) tt::log_info(tt::LogDTX, "{}src = {} - {} ==> {} - {}", s(6), v2s(producer_str), v2s(producer_end), v2s(consumer_str), v2s(consumer_end));
 
         consumer_x += producer_shape[X(rank)]; // length of channel
     }}
 
-    if (DEBUG) cout << "\n\nPASS: convert_abstract_tensor_to_channels_last_layout - END\n\n" << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "PASS: convert_abstract_tensor_to_channels_last_layout - END");
     return true;
 }

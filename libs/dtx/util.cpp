@@ -1,7 +1,7 @@
 #include "util.hpp"
 #include "dtx.hpp"
 
-
+using namespace std;
 
 // ========================================================
 //                      DTX HELPERS

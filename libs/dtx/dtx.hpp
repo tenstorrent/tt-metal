@@ -15,8 +15,7 @@
 #include <sstream>
 #include <iomanip>
 
-using namespace std;
-
+#include "tt_metal/common/logger.hpp"
 
 // ========================================================
 //                      CLASSES
@@ -32,25 +31,25 @@ struct tpl_nocopy {
 
 class TensorData : tpl_nocopy<TensorData> {
     public:
-        vector<int> data;
+        std::vector<int> data;
         int rank;
-        vector<int> shape;
+        std::vector<int> shape;
         int volume;
 
-        explicit TensorData(vector<int> shape);
+        explicit TensorData(std::vector<int> shape);
 
         void init_increasing();
         void print();
-        void generate_csv(string filename);
+        void generate_csv(std::string filename);
 };
 
 class DTXTensor : tpl_nocopy<DTXTensor> {
     public:
-        vector<int> str;
-        vector<int> end;
+        std::vector<int> str;
+        std::vector<int> end;
         int rank = -1;
 
-        DTXTensor(vector<int> str, vector<int> end){
+        DTXTensor(std::vector<int> str, std::vector<int> end){
             this->str = str;
             this->end = end;
             this->rank = this->str.size();
@@ -63,7 +62,7 @@ class DTXTensor : tpl_nocopy<DTXTensor> {
         int volume();
 
         void print();
-        string get_string();
+        std::string get_string();
 };
 
 class TensorPair : tpl_nocopy<TensorPair> {
@@ -84,8 +83,8 @@ class TensorPair : tpl_nocopy<TensorPair> {
             this->dst_tensor = dst_tensor;
         }
 
-        string get_string();
-        string get_short_string();
+        std::string get_string();
+        std::string get_short_string();
         void print_string();
         ~TensorPair() {
             delete src_tensor;
@@ -99,22 +98,22 @@ class Transfer : tpl_nocopy<Transfer> {
     int dst_address;
     int size;
     int pad;
-    vector<int> src_soc_core;
+    std::vector<int> src_soc_core;
 
-    string get_string();
+    std::string get_string();
 
 };
 
 class TensorPairGroup : tpl_nocopy<TensorPairGroup> {
     public:
-    vector<int> shape;
-    vector<TensorPair *> tensor_pairs;
+    std::vector<int> shape;
+    std::vector<TensorPair *> tensor_pairs;
 
-    vector<Transfer *> transfers;
+    std::vector<Transfer *> transfers;
 
     // Attributes
     int address;                // Address of buffer this is stored in (L1 or DRAM)
-    vector<int> core = {-1,-1}; // Tensix core
+    std::vector<int> core = {-1,-1}; // Tensix core
     int streaming_id;           // The sequence order that's loaded into a CB or Buffer
     void delete_tensor_pairs() {
         for(auto tp : tensor_pairs) {
@@ -137,10 +136,10 @@ class TensorPairGroup : tpl_nocopy<TensorPairGroup> {
 class TransformationNode : tpl_nocopy<TransformationNode> {
     public:
 
-    string opcode;
-    vector<TensorPairGroup *> groups;
+    std::string opcode;
+    std::vector<TensorPairGroup *> groups;
 
-    TransformationNode(string opcode, int number_of_groups) {
+    TransformationNode(std::string opcode, int number_of_groups) {
         this->opcode = opcode;
         for (int g=0; g<number_of_groups; g++){
             TensorPairGroup * group = new TensorPairGroup();
@@ -173,10 +172,10 @@ class Buffer {
     public:
 
     int address;
-    vector<int> shape;          // 1D: {1024};  2D: {256,256}; 3D: {8, 256, 256}
+    std::vector<int> shape;          // 1D: {1024};  2D: {256,256}; 3D: {8, 256, 256}
     int size;                   // Buffer size, in bytes
 
-    Buffer(int address, int size, vector<int> shape) {
+    Buffer(int address, int size, std::vector<int> shape) {
         this->address = address;
         this->size = size;
         for (int d=0; d<shape.size(); d++) {
@@ -188,7 +187,7 @@ class Buffer {
 
 class DataTransformations : tpl_nocopy<DataTransformations> {
     public:
-    vector<TransformationNode *> transformations;
+    std::vector<TransformationNode *> transformations;
 
     // Helpers
     void print();

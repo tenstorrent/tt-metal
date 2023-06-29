@@ -2,6 +2,7 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
 
 bool generate_groups_outermost_dim(DataTransformations * dtx) {
     bool DEBUG = false;

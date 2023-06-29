@@ -2,6 +2,7 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
 
 bool row_major_memory_store(DataTransformations * dtx) {
     bool DEBUG = false;

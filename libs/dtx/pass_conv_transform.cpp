@@ -4,6 +4,8 @@
 #include "util_vector_of_ints.hpp"
 #include <fstream>
 
+using namespace std;
+
 string get_dtx_output_file_name_suffix(vector<int> activation_shape, vector<int> weight_shape, vector<int> conv_params, vector<int> act_block_shape_yx, vector<int> weight_block_shape_yx, uint32_t num_bytes_of_df) {
     assert(activation_shape.size() == 3);
     assert(weight_shape.size() == 4);

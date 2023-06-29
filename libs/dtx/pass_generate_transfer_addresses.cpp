@@ -2,12 +2,14 @@
 #include "util_vector_of_ints.hpp"
 #include "util.hpp"
 
+using namespace std;
+
 bool generate_transfer_addresses(DataTransformations * dtx){
     bool DEBUG = false;
 
     if (dtx->transformations.size() > 2) throw std::runtime_error("DTX error: your DTX contains more than 2 transformations. First run collapse_transormations(), then generate_transfer_addresses");
 
-    if (DEBUG) cout << "\n----- Starting to Generate Transfers -----\n" << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "\n----- Starting to Generate Transfers -----\n");
 
     TransformationNode * producer_node = dtx->transformations[0];
     TransformationNode * consumer_node = dtx->transformations[1];
@@ -38,13 +40,13 @@ bool generate_transfer_addresses(DataTransformations * dtx){
 
             consumer_group->transfers.push_back(transfer);
 
-            if (DEBUG) cout << transfer->get_string() << endl;
+            if (DEBUG) log_info(tt::LogDTX, "{}", transfer->get_string());
         }
     }
 
     if (DEBUG) dtx->print();
 
-    if (DEBUG) cout << "\n----- Ending Generate Transfers -----\n" << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "\n----- Ending Generate Transfers -----\n");
 
     return true;
 }
@@ -57,7 +59,7 @@ bool generate_transfer_addresses_blocked_data(DataTransformations * dtx){
 
     if (dtx->transformations.size() > 2) throw std::runtime_error("DTX error: your DTX contains more than 2 transformations. First run collapse_transormations(), then generate_transfer_addresses");
 
-    if (DEBUG) cout << "\n----- Starting to Generate Transfers -----\n" << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "\n----- Starting to Generate Transfers -----\n");
 
     TransformationNode * producer_node = dtx->transformations[0];
     TransformationNode * consumer_node = dtx->transformations[1];
@@ -99,13 +101,13 @@ bool generate_transfer_addresses_blocked_data(DataTransformations * dtx){
 
             consumer_group->transfers.push_back(transfer);
 
-            if (DEBUG) cout << transfer->get_string() << endl;
+            if (DEBUG) tt::log_info(tt::LogDTX, "{}",  transfer->get_string());
         }
     }
 
     if (DEBUG) dtx->print();
 
-    if (DEBUG) cout << "\n----- Ending Generate Transfers -----\n" << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "\n----- Ending Generate Transfers -----");
 
     return true;
 }
@@ -116,7 +118,7 @@ bool generate_transfer_addresses_tiled_data(DataTransformations * dtx){
 
     if (dtx->transformations.size() > 2) throw std::runtime_error("DTX error: your DTX contains more than 2 transformations. First run collapse_transormations(), then generate_transfer_addresses");
 
-    if (DEBUG) cout << "\n----- Starting to Generate Transfers -----\n" << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "\n----- Starting to Generate Transfers -----");
 
     TransformationNode * producer_node = dtx->transformations[0];
     TransformationNode * consumer_node = dtx->transformations[1];
@@ -141,13 +143,13 @@ bool generate_transfer_addresses_tiled_data(DataTransformations * dtx){
 
             consumer_group->transfers.push_back(transfer);
 
-            if (DEBUG) cout << transfer->get_string() << endl;
+            if (DEBUG) tt::log_info(tt::LogDTX, "{}", transfer->get_string());
         }
     }
 
     if (DEBUG) dtx->print();
 
-    if (DEBUG) cout << "\n----- Ending Generate Transfers -----\n" << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "\n----- Ending Generate Transfers -----");
 
     return true;
 }

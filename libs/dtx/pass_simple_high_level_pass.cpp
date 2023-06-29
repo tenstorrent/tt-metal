@@ -3,6 +3,8 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
+
 DataTransformations * simple_high_level_pass(vector<int> shape) {
     bool pass = true;
     assert(shape.size() == 3);

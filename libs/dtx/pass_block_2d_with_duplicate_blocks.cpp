@@ -3,6 +3,7 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
 
 vector<vector<int>> dim_order_counting_with_duplicates(vector<int> shape, vector<int> dim_order, vector<int> block_shape, int num_duplicates, int dim_to_duplicate) {
     bool DEBUG = false;

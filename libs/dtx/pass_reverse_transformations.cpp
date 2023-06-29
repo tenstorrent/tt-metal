@@ -2,6 +2,8 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
+
 DataTransformations * reverse_transformations(DataTransformations * fw_dtx) {
     bool DEBUG = false;
     //if (DEBUG) fw_dtx->print();

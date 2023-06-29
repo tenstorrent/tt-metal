@@ -2,6 +2,8 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
+
 bool pad_2d_matrix(DataTransformations * dtx, vector<int> pad_to_nearest) {
     bool DEBUG = false;
     if(DEBUG) cout << "Pad 2d matrix " << endl;

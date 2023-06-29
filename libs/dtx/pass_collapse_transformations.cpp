@@ -2,6 +2,8 @@
 #include "util_vector_of_ints.hpp"
 #include "util.hpp"
 
+using namespace std;
+
 bool collapse_transformations(DataTransformations * dtx, pair<int, int> collapse_range) {
     bool DEBUG = false;
     bool pad = false;

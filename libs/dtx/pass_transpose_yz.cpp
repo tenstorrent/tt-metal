@@ -2,6 +2,8 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
+
 vector<int> flip_yz_dims(vector<int> input) {
     int rank = input.size();
     vector<int> output = input;

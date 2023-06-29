@@ -3,6 +3,7 @@
 #include "util_vector_of_ints.hpp"
 #include "dtx_passes.hpp"
 
+using namespace std;
 
 bool convert_tensor_layout_3d_conv_act_to_2Dmatrix(DataTransformations * dtx,
                                         vector<int> conv_params) {

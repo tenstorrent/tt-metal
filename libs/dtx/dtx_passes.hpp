@@ -10,15 +10,14 @@
 #include <iomanip>
 
 #include "dtx.hpp"
-using namespace std;
 
 // ========================================================
 //                      Helper Functions
 // ========================================================
-vector<vector<vector<int>>> generate_sliced_ranges(vector<int> shape, vector<int> slice_factors);
-vector<vector<int>> generate_list_of_cores_based_on_range(vector<int> cores_start, vector<int> cores_end);
-void tilize_into_row_major_order(vector<int> shape);
-vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order);
+std::vector<std::vector<std::vector<int>>> generate_sliced_ranges(std::vector<int> shape, std::vector<int> slice_factors);
+std::vector<std::vector<int>> generate_list_of_cores_based_on_range(std::vector<int> cores_start, std::vector<int> cores_end);
+void tilize_into_row_major_order(std::vector<int> shape);
+std::vector<std::vector<int>> dim_order_counting(std::vector<int> shape, std::vector<int> dim_order);
 
 
 
@@ -27,7 +26,7 @@ vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order)
 // ========================================================
 
 // WORKS, WELL TESTED - Collapse all the transformations down to 1. Required step before generating transfer addresses
-bool collapse_transformations(DataTransformations * dtx, pair<int,int> collapse_range = {-1,-1});               // TO DO: rename to "merge_transformations"
+bool collapse_transformations(DataTransformations * dtx, std::pair<int,int> collapse_range = {-1,-1});               // TO DO: rename to "merge_transformations"
 
 // WORKS, WELL TESTED, (missing golden check) - Reverse the transformations
 DataTransformations * reverse_transformations(DataTransformations * forward);
@@ -59,21 +58,21 @@ bool row_major_memory_store(DataTransformations * dtx);
 bool row_major_memory_store_blocks(DataTransformations * dtx);
 
 // Slice into tiles (32x32) - WORKS?
-bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order);
+bool tilize_and_store(DataTransformations * dtx, std::vector<int> dim_order);
 
-bool pad_2d_matrix(DataTransformations * dtx, vector<int> pad_to_nearest);
+bool pad_2d_matrix(DataTransformations * dtx, std::vector<int> pad_to_nearest);
 
-bool block_2d_matrix(DataTransformations * dtx, vector<int> dim_order, vector<int> block_shape_yx);
+bool block_2d_matrix(DataTransformations * dtx, std::vector<int> dim_order, std::vector<int> block_shape_yx);
 
-bool block_2d_with_duplicate_blocks(DataTransformations * dtx, vector<int> dim_order, vector<int> block_shape_yx, int num_duplicates, int dim_to_duplicate);
+bool block_2d_with_duplicate_blocks(DataTransformations * dtx, std::vector<int> dim_order, std::vector<int> block_shape_yx, int num_duplicates, int dim_to_duplicate);
 
 // expects only 1 producer group and generates groups for the outermost dimension.
 bool generate_groups_outermost_dim(DataTransformations * dtx);
 
 // Slice into tiles and store into row-major, col-major, or any other dim order - IS THIS NOW OBSOLETE?
-bool slice_into_tiles_and_store(DataTransformations * dtx, vector<int> dim_order);
+bool slice_into_tiles_and_store(DataTransformations * dtx, std::vector<int> dim_order);
 
-bool convert_tensor_layout_3d_conv_act_to_2Dmatrix(DataTransformations * dtx, vector<int> conv_params);
+bool convert_tensor_layout_3d_conv_act_to_2Dmatrix(DataTransformations * dtx, std::vector<int> conv_params);
 bool convert_abstract_tensor_to_channels_last_layout(DataTransformations * dtx);
 
 // Convert from a particular layout, stored in 1 place (ex, CPU), to the same layout, stored in 8 places (ex. device DRAM), with sharding
@@ -86,7 +85,7 @@ bool convert_tensor_layout_Tile1_to_Tile8(DataTransformations * dtx);
 // ========================================================
 
 // Generic slicing of a tensor, based on a slice factor for each dim - WORKS?
-bool parallelize_generic_tensor_slice(DataTransformations * dtx, vector<int> slice_factors, vector<int> cores_start, vector<int> cores_end);
+bool parallelize_generic_tensor_slice(DataTransformations * dtx, std::vector<int> slice_factors, std::vector<int> cores_start, std::vector<int> cores_end);
 
 
 // ========================================================
@@ -97,13 +96,13 @@ bool parallelize_generic_tensor_slice(DataTransformations * dtx, vector<int> sli
 bool random_tile_reshuffle(DataTransformations * dtx);
 
 // Pytorch reshape op
-bool reshape(DataTransformations * dtx, vector<int> reshaped_tensor);
+bool reshape(DataTransformations * dtx, std::vector<int> reshaped_tensor);
 
 // For full Pytorch transposeXY, this needs to be paired with a TransposeXY within the Math Engine
 bool transpose_xy_of_tiles(DataTransformations * dtx);
 
 // Pytorch permute op (with some limitations, can not permute with X-dim, this requires a decomposition into TransposeXY+TransposeY?)
-bool permute(DataTransformations * dtx, vector<int> permute_dims);
+bool permute(DataTransformations * dtx, std::vector<int> permute_dims);
 
 // An abstract Transpose XY, which neds to be canceled out with other TransposeXY transformations,
 // or explicitly executed on the device.
@@ -132,13 +131,13 @@ bool convert_tensor_layout_rowmajor_2_channelslast(DataTransformations * dtx);
 // ========================================================
 //             PART 6: HIGH LEVEL PASSES
 // ========================================================
-vector<uint32_t> generate_address_map(DataTransformations * dtx, bool in_bytes=false, uint32_t num_df_bytes=0);
-vector<vector<float>> evaluate(vector<float> data, vector<uint32_t> address_map, vector<vector<int>> output_shape);
-DataTransformations * simple_high_level_pass(vector<int> shape);
+std::vector<uint32_t> generate_address_map(DataTransformations * dtx, bool in_bytes=false, uint32_t num_df_bytes=0);
+std::vector<std::vector<float>> evaluate(std::vector<float> data, std::vector<uint32_t> address_map, std::vector<std::vector<int>> output_shape);
+DataTransformations * simple_high_level_pass(std::vector<int> shape);
 
-std::pair<vector<uint32_t>, vector<uint32_t>> conv_transform(vector<int> activation_shape,
-                                        vector<int> weight_shape,
-                                        vector<int> conv_params,
+std::pair<std::vector<uint32_t>, std::vector<uint32_t>> conv_transform(std::vector<int> activation_shape,
+                                        std::vector<int> weight_shape,
+                                        std::vector<int> conv_params,
                                         uint32_t act_block_h,
                                         uint32_t act_block_w,
                                         uint32_t weight_block_w,

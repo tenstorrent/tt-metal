@@ -2,10 +2,11 @@
 #include "util.hpp"
 #include "util_vector_of_ints.hpp"
 
+using namespace std;
 
 vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order) {
     bool DEBUG = false;
-    cout << "\n\nHelper function: dim order counting" << endl;
+    tt::log_info(tt::LogDTX, "Helper function: dim order counting");
 
     int rank = shape.size();
     vector<int> shape_reordered;
@@ -15,13 +16,14 @@ vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order)
     int count_size = vector_product(shape);
     vector<int> tile_shape = vector_pad_on_left(TILE_SHAPE, rank-2, 1);
 
+    /*
     if (DEBUG) {
         cout << "shape           = " << v2s(shape) << endl;
         cout << "dim order       = " << v2s(dim_order) << endl;
         cout << "shape reordered = " << v2s(shape_reordered) << endl;
         cout << "count size      = " << count_size << endl;
         cout << "tile shape      = " << v2s(tile_shape) << endl;
-    }
+    }*/
 
     vector<vector<int>> list_of_counted_dims;
     vector<int> counter = zeros(rank);
