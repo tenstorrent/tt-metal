@@ -1102,7 +1102,7 @@ inline void noc_fast_write_inc_num_dests(uint32_t num_issued) {
 }
 
 inline void noc_prepare_deassert_reset_flag(uint32_t l1_addr) {
-    reinterpret_cast<volatile uint32_t*>(l1_addr)[0] = uint32_t(TENSIX_DEASSERT_SOFT_RESET);
+    reinterpret_cast<volatile uint32_t*>(l1_addr)[0] = uint32_t(TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
 }
 
 inline void noc_prepare_assert_reset_flag(uint32_t l1_addr) {
