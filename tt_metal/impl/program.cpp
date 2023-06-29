@@ -16,7 +16,7 @@ auto Program::semaphores_on_core(const CoreCoord &core) const {
 
 std::atomic<u64> Program::program_counter = 0;
 
-Program::Program(): id(program_counter++) {}
+Program::Program(): id(program_counter++),worker_crs_({}) {}
 
 std::vector<ComputeKernel *> Program::compute_kernels() const {
     std::vector<ComputeKernel *> compute_kernels;
@@ -161,13 +161,11 @@ std::vector<CoreCoord> Program::logical_cores() const {
     return cores_in_program;
 }
 
-CoreRangeSet Program::logical_core_range_set() const {
-    CoreRangeSet s({});
+void Program::construct_core_range_set_for_worker_cores() {
     for (auto kernel : kernels_ )
     {
-        s.merge ( kernel->core_range_set());
+        worker_crs_.merge ( kernel->core_range_set());
     }
-    return s;
 }
 
 Program::~Program() {

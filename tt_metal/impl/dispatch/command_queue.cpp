@@ -20,7 +20,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
     vector<ProgramSection>& sections = program_to_device_map.program_sections;
 
     // Initialize the worker notify section
-    for (const CoreRange& core_range : program.logical_core_range_set().ranges()) {
+    for (const CoreRange& core_range : program.get_worker_core_range_set().ranges()) {
         CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
         CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
         program_to_device_map.multicast_message_noc_coords.push_back(std::make_pair(

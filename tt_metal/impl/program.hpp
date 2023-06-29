@@ -35,6 +35,8 @@ class Program {
 
     ~Program();
 
+    void construct_core_range_set_for_worker_cores();
+
     const u64 get_id() const { return this->id; }
 
     std::vector<Kernel *> kernels() const { return kernels_; }
@@ -61,7 +63,7 @@ class Program {
     void init_semaphores ( const Device & device, const CoreCoord &logical_core ) const;
     std::vector<CoreCoord> logical_cores() const;
 
-    CoreRangeSet logical_core_range_set() const;
+    CoreRangeSet get_worker_core_range_set() const { return worker_crs_; };
 
     std::vector<std::string> cores_to_ops() const;
 
@@ -71,7 +73,7 @@ class Program {
     std::vector<Kernel *> kernels_;
     std::vector<CircularBuffer *> circular_buffers_;
     std::vector<Semaphore> semaphores_;
-
+    CoreRangeSet worker_crs_;
     friend DataMovementKernel *CreateDataMovementKernel(
         Program &program,
         const std::string &file_name,
