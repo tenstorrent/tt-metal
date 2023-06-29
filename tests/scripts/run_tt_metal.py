@@ -100,9 +100,6 @@ TT_METAL_TEST_ENTRIES = (
     # Compile unit tests
     TestEntry("tt_metal/tests/test_compile_sets_kernel_binaries", "test_compile_sets_kernel_binaries"),
     TestEntry("tt_metal/tests/test_compile_program", "test_compile_program"),
-
-    # Dispatch Tests
-    # TestEntry("tt_metal/tests/tt_dispatch/test_enqueue_read_and_write", "tt_dispatch/test_enqueue_read_and_write"),
 )
 
 
