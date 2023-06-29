@@ -3,6 +3,8 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_dnn/op_library/composite/composite_ops.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -224,6 +226,48 @@ std::ostream& operator<<(std::ostream& os, const EltwiseUnary& op) {
     }
     os << "}";
     return os;
+}
+
+//unary op version tie
+template<BcastOpMath::Enum OP>
+Tensor tie_binop_to_unary(const Tensor& input_tensor, float value) {
+  Tensor t_value = mk_scalar(value);
+  return bcast(input_tensor,t_value,OP, BcastOpDim::HW);
+}
+
+Tensor div_unary(const Tensor& input_tensor, float value) {
+    return tie_binop_to_unary<BcastOpMath::MUL>(input_tensor,1.0f/value);
+}
+
+Tensor div_unary(float value,const Tensor& input_tensor) {
+    Tensor inv = tie_binop_to_unary<BcastOpMath::MUL>(input_tensor,value);
+    return recip(inv);
+}
+
+
+Tensor mul_unary(const Tensor& input_tensor,float value) {
+    return tie_binop_to_unary<BcastOpMath::MUL>(input_tensor,value);
+}
+
+Tensor sub_unary(const Tensor& input_tensor,float value) {
+    return tie_binop_to_unary<BcastOpMath::SUB>(input_tensor,value);
+}
+
+Tensor sub_unary(float value, const Tensor& input_tensor) {
+  return add_unary(value,neg(input_tensor));
+}
+
+Tensor add_unary(const Tensor& input_tensor,float value) {
+    return tie_binop_to_unary<BcastOpMath::ADD>(input_tensor,value);
+}
+
+// symmetric
+Tensor add_unary(float value, const Tensor& input_tensor) {
+    return add_unary(input_tensor,value);
+}
+
+Tensor mul_unary(float value, const Tensor& input_tensor) {
+    return mul_unary(input_tensor,value);
 }
 
 }  // namespace tt_metal

@@ -2,6 +2,7 @@
 #include <type_traits>
 #include "common/constants.hpp"
 
+#include "tt_dnn/op_library/types.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
@@ -31,22 +32,6 @@ Tensor mk_scalar(T val) {
 // being a scalar or tensor
 Tensor mac(const Tensor& a, const Tensor& b, const Tensor & c);
 Tensor mac_scalar(const Tensor& a, float b, float c);
-
-
-Tensor mk_zero_tensor_like(const Tensor& reference_tensor) {
-  static const Tensor zero = mk_scalar(0.0f);
-  Tensor zero_like = bcast(reference_tensor,zero,BcastOpMath::MUL,BcastOpDim::HW);
-  return std::move(zero_like);
-}
-
-//TODO: enable zeroes(), ones() and eye() type functions on-device using this type of logic
-template<typename T>
-Tensor mk_filled_tensor_like(const Tensor& reference_tensor, T val) {
-  Tensor k = mk_scalar(val);
-  Tensor zero_like = mk_zero_tensor_like(reference_tensor);
-  Tensor result = bcast(zero_like,k,BcastOpMath::ADD,BcastOpDim::HW);
-  return std::move(result);
-}
 
 //Function sign
 //compute sgn(x) = (x>=0) - (x<=0);
@@ -117,12 +102,46 @@ Tensor cbrt(const Tensor &input_a);
 
 //PyTorch version:
 //hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
-// 
+//
 //for Theano version use scale = 1.0/5.0f = 0.2f with shift = 0.5f.
 Tensor hard_sigmoid(const Tensor& tensor_a,float scale = 1.0f/6.0f,float shift = 0.5f);
 
 //hard swish(x) = x*hard_sigmoid(x,scale,shift)
 Tensor hard_swish(const Tensor& a,float scale = 1.0f/6.0f,float shift = 0.5f);
+
+//where - ternary operator y = (predicate) ? value_true : value_false; elementwise
+Tensor where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false);
+
+//on-device tensor creation 0s like @reference_tensor
+Tensor zeros_like(const Tensor& reference_tensor);
+
+//on-device tensor creation 1s like @reference_tensor
+Tensor ones_like(const Tensor& reference_tensor);
+
+//on-device tensor creation with value like @reference_tensor
+Tensor full_like(const Tensor& reference_tensor,float value);
+
+//on-device tensor creation 0s with shape
+Tensor zeros(const Shape shape);
+
+//on-device tensor creation 1s with shape
+Tensor ones(const Shape shape);
+
+Tensor arange(int32_t start, int32_t end, int32_t step = 1);
+
+//on-device tensor creation with shape and filled with value
+Tensor full(const Shape shape,float value);
+
+
+//clip
+Tensor clip(const Tensor& a,float low, float high);
+
+//hardtanh
+Tensor hardtanh(const Tensor& a,float low = -1.0f, float high = +1.0f);
+
+//clamp
+extern std::function<Tensor(const Tensor& a,float low, float high)> clamp;
+
 
 } //namespace tt_metal
 

@@ -15,6 +15,54 @@ op_map = {
     #################### TT-DNN ####################
     ################################################
     # Eltwise unary
+    "eltwise-hardtanh": {
+        "tt_lib_op": tt_lib_ops.hardtanh,
+        "pytorch_op": pytorch_ops.hardtanh,
+    },
+    "eltwise-clip": {
+        "tt_lib_op": tt_lib_ops.clip,
+        "pytorch_op": pytorch_ops.clip,
+    },
+    "eltwise-zeros": {
+        "tt_lib_op": tt_lib_ops.zeros,
+        "pytorch_op": pytorch_ops.zeros,
+    },
+    "eltwise-ones": {
+        "tt_lib_op": tt_lib_ops.ones,
+        "pytorch_op": pytorch_ops.ones,
+    },
+    "eltwise-full": {
+        "tt_lib_op": tt_lib_ops.full,
+        "pytorch_op": pytorch_ops.full,
+    },
+    "eltwise-zeros_like": {
+        "tt_lib_op": tt_lib_ops.zeros_like,
+        "pytorch_op": pytorch_ops.zeros_like,
+    },
+    "eltwise-ones_like": {
+        "tt_lib_op": tt_lib_ops.ones_like,
+        "pytorch_op": pytorch_ops.ones_like,
+    },
+    "eltwise-full_like": {
+        "tt_lib_op": tt_lib_ops.full_like,
+        "pytorch_op": pytorch_ops.full_like,
+    },
+    "eltwise-div_unary": {
+        "tt_lib_op": tt_lib_ops.eltwise_div_unary,
+        "pytorch_op": pytorch_ops.div_unary,
+    },
+    "eltwise-mul_unary": {
+        "tt_lib_op": tt_lib_ops.eltwise_mul_unary,
+        "pytorch_op": pytorch_ops.mul_unary,
+    },
+    "eltwise-sub_unary": {
+        "tt_lib_op": tt_lib_ops.eltwise_sub_unary,
+        "pytorch_op": pytorch_ops.sub_unary,
+    },
+    "eltwise-add_unary": {
+        "tt_lib_op": tt_lib_ops.eltwise_add_unary,
+        "pytorch_op": pytorch_ops.add_unary,
+    },
     "eltwise-ltz": {
         "tt_lib_op": tt_lib_ops.eltwise_ltz,
         "pytorch_op": pytorch_ops.ltz,
@@ -134,7 +182,7 @@ op_map = {
     "eltwise-hard_sigmoid": {
         "tt_lib_op": tt_lib_ops.eltwise_hard_sigmoid,
         "pytorch_op": pytorch_ops.hard_sigmoid,
-    },    
+    },
     "eltwise-hard_swish": {
         "tt_lib_op": tt_lib_ops.eltwise_hard_swish,
         "pytorch_op": pytorch_ops.hard_swish,
@@ -199,6 +247,15 @@ op_map = {
     "eltwise-relu6": {
         "tt_lib_op": tt_lib_ops.eltwise_relu6,
         "pytorch_op": pytorch_ops.relu6,
+    },
+    # Eltwise ternary
+    "eltwise-arange": {
+        "tt_lib_op": tt_lib_ops.arange,
+        "pytorch_op": pytorch_ops.arange,
+    },
+    "eltwise-where": {
+        "tt_lib_op": tt_lib_ops.where,
+        "pytorch_op": pytorch_ops.where,
     },
     # Matmul
     "matmul": {

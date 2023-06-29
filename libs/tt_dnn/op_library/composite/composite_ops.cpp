@@ -5,6 +5,17 @@ namespace tt {
 
 namespace tt_metal {
 
+Tensor mk_zero_tensor_like(const Tensor& reference_tensor);
+
+//TODO: enable zeroes(), ones() and eye() type functions on-device using this type of logic
+template<typename T>
+Tensor mk_filled_tensor_like(const Tensor& reference_tensor, T val) {
+  Tensor k = mk_scalar(val);
+  Tensor zero_like = mk_zero_tensor_like(reference_tensor);
+  Tensor result = bcast(zero_like,k,BcastOpMath::ADD,BcastOpDim::HW);
+  return result;
+}
+
 // Function SILU (same as Swish)
 // use activation Silu[x] = x*Sigmoid[x]
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
@@ -103,14 +114,14 @@ Tensor selu(const Tensor& x,const float scale, const float alpha) {
 std::function<unary_tensor_op_t> swish = silu;
 
 // Function Clip
-//use transformation y = x * sigmoid( x ) by broadcast
-//Ref: https://www.tensorflow.org/api_docs/python/tf/keras/activations/swish
+//use clip y = min( max( x, min_value), max_value) by broadcast
+//Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
 Tensor clip(const Tensor& a,float low, float high) {
-  const Tensor h_const = mk_scalar(high);
-  const Tensor l_const = mk_scalar(low);
-  Tensor a_max = tt::tt_metal::max(a,h_const);
-  Tensor a_clip = ( low == 0.0f ) ? relu(a_max) : tt::tt_metal::min(a_max,l_const);
-    return std::move(a_clip);
+  const Tensor h_const = full_like(a,high);
+  const Tensor l_const = full_like(a,low);
+  Tensor a_max = tt::tt_metal::min(a,h_const);
+  Tensor a_clip = ( low == 0.0f ) ? relu(a_max) : tt::tt_metal::max(a_max,l_const);
+  return std::move(a_clip);
 }
 
 // Function Hard Sigmoid
@@ -121,7 +132,7 @@ Tensor clip(const Tensor& a,float low, float high) {
 //
 //     x1 = (x * slope) + shift
 //     y = tensor.clip(x1, 0, 1)
-// 
+//
 // PyTorch version:
 // hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
 Tensor hard_sigmoid(const Tensor& a,float scale,float shift) {
@@ -210,6 +221,12 @@ Tensor mac_scalar(const Tensor& a, float b, float c) {
   Tensor t_b = mk_scalar(b);
   Tensor t_c = mk_scalar(c);
   return std::move( mac(a,t_b,t_c) );
+}
+
+Tensor mk_zero_tensor_like(const Tensor& reference_tensor) {
+  static const Tensor zero = mk_scalar(0.0f);
+  Tensor zero_like = bcast(reference_tensor,zero,BcastOpMath::MUL,BcastOpDim::HW);
+  return std::move(zero_like);
 }
 
 //Function sign
@@ -328,15 +345,18 @@ Tensor relu6(const Tensor &input_a) {
   return std::move(relu_max(input_a,6.0f));
 }
 
+
+
 //threshold(a,t,v) = (a < t)*v + (a > t)*a
 Tensor threshold(const Tensor &input_a,float threshold, float value) {
-  Tensor t_threshold = mk_scalar(threshold);
   Tensor t_value = mk_scalar(value);
+  Tensor t_threshold = mk_scalar(threshold);
   auto bcast_sub = [](const Tensor& a, const Tensor& b) -> Tensor {
-		    return bcast(a,b,BcastOpMath::SUB, BcastOpDim::HW);
-		  };
-  Tensor t1 = bcast(ltz(bcast_sub(input_a,t_threshold)),t_value,BcastOpMath::MUL, BcastOpDim::HW);
-  Tensor t2 = mul(gtz(bcast_sub(input_a,t_threshold)),input_a);
+		     return bcast(a,b,BcastOpMath::SUB, BcastOpDim::HW);
+		   };
+  Tensor t0 = bcast_sub(input_a,t_threshold);
+  Tensor t1 = bcast(ltz(t0),t_value,BcastOpMath::MUL, BcastOpDim::HW);
+  Tensor t2 = mul(gtz(t0),input_a);
   return std::move(add(t1,t2));
 }
 
@@ -351,6 +371,68 @@ Tensor cbrt(const Tensor &input_a) {
   Tensor t3 = mul(t2,sign(input_a));
   return std::move(t3);
 }
+
+//where - ternary operator y = (predicate) ? value_true : value_false; elementwise
+//           y = (predicate >= 0)*value_true + (predicate < 0)*value_false
+Tensor where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false) {
+  Tensor t2 = mul(gtz(predicate),value_true);
+  Tensor t1 = mul(lez(predicate),value_false);
+  return add(t2,t1);
+}
+
+//on-device tensor creation 0s like @reference_tensor
+Tensor zeros_like(const Tensor& reference_tensor) {
+    return full_like(reference_tensor,0.0f);
+}
+
+//on-device tensor creation 1s like @reference_tensor
+Tensor ones_like(const Tensor& reference_tensor) {
+    return full_like(reference_tensor,1.0f);
+}
+
+//on-device tensor creation with value like @reference_tensor
+Tensor full_like(const Tensor& reference_tensor,float value) {
+    return mac_scalar(reference_tensor,0.0f,value);
+}
+
+//hardtanh
+Tensor hardtanh(const Tensor& a,float low /* = -1.0f */, float high /* = +1.0f */) {
+  return std::move( clip(a, low, high) );
+}
+
+//clamp
+std::function<Tensor(const Tensor& a,float low, float high)> clamp = clip;
+
+//on-device tensor creation 0s with shape
+Tensor zeros(const Shape shape) {
+  return Tensor(shape,Initialize::ZEROS,DataType::BFLOAT16,Layout::ROW_MAJOR);
+}
+
+//on-device tensor creation 1s with shape
+Tensor ones(const Shape shape) {
+  return Tensor(shape,Initialize::ONES,DataType::BFLOAT16,Layout::ROW_MAJOR);
+}
+
+//on-device tensor creation with shape and filled with value
+Tensor full(const Shape shape,float value) {
+  Tensor t0 = zeros(shape);
+  return add_unary(t0,value);
+}
+
+//on-device with increment
+Tensor arange(int32_t start, int32_t end, int32_t step /*= 1*/) {
+  Shape shape = {1,1,1,static_cast<uint32_t>((end-start)/step)};
+  Tensor tbase(shape,Initialize::INCREMENT,DataType::BFLOAT16,Layout::ROW_MAJOR);
+  if ( step == 1 && start == 0 ) {
+    return tbase;
+  }
+  if ( step == 1 ) {
+    return add_unary(tbase,(float)start);
+  }
+
+  return mac_scalar(tbase,(float)step,(float)start);
+}
+
 
 }//namespace tt_metal
 

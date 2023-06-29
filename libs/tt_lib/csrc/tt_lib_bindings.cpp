@@ -724,8 +724,157 @@ void TensorModule(py::module &m_tensor) {
 
         )doc");;
 
+    m_tensor.def("where", &where, R"doc(
+        Perform an ternary where operation on two tensors based on third @predicate.
+
+        where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
+
+        All three input tensors must have BFLOAT16 data type, and be of equal shape.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | predicate tensor     | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | True tensor          | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg2     | False tensor         | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+
+    // *** eltwise binary tied to unary ***
+    m_tensor.def("add_unary", py::overload_cast<const Tensor&,float>(&add_unary), R"doc(
+        Perform an eltwise-binary add on one tensors and one scalar.
+
+        Both inputs, the tensor and scalar, must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | scalar               | scalar    | float value                  | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+    m_tensor.def("add_unary", py::overload_cast<float,const Tensor&>(&add_unary), R"doc(
+        Perform an eltwise-binary add on one tensors and one scalar.
+
+        Both inputs, the tensor and scalar, must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | scalar               | scalar    | float value                  | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+
+    )doc");
+
+    m_tensor.def("sub_unary", py::overload_cast<const Tensor&,float>(&sub_unary), R"doc(
+        Perform an eltwise-binary sub on one tensors and one scalar.
+
+        Both inputs, the tensors and scalar, must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to sub  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | scalar               | scalar    | float value                  | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+    m_tensor.def("sub_unary", py::overload_cast<float,const Tensor&>(&sub_unary), R"doc(
+        Perform an eltwise-binary sub on one tensors and one scalar.
+
+        Both inputs, the tensor and scalar, must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | scalar               | scalar    | float value                  | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+
+    )doc");
+
+    m_tensor.def("mul_unary", py::overload_cast<const Tensor&,float>(&mul_unary), R"doc(
+        Perform an eltwise-binary mul on one tensors and one scalar.
+
+        Both inputs, the tensors and scalar, must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | scalar               | float     | float value                  | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+    m_tensor.def("mul_unary", py::overload_cast<float,const Tensor&>(&mul_unary), R"doc(
+        Perform an eltwise-binary mul on one tensors and one scalar.
+
+        Both inputs, the tensor and scalar, must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | scalar               | scalar    | float value                  | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+
+    )doc");
+
+    m_tensor.def("div_unary", py::overload_cast<const Tensor&,float>(&div_unary), R"doc(
+        Perform an eltwise-binary add on one tensors and one scalar.
+
+        Both inputs, the tensors and scalar, must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to div  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | scalar               | float     | float value                  | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+    m_tensor.def("div_unary", py::overload_cast<float,const Tensor&>(&div_unary), R"doc(
+        Perform an eltwise-binary div on one tensors and one scalar.
+
+        Both inputs, the tensor and scalar, must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | scalar               | scalar    | float value                  | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+
+    )doc");
+
     // *** eltwise binary ***
-    m_tensor.def("add", &add, R"doc(
+    m_tensor.def("add",&add, R"doc(
         Perform an eltwise-binary add on two tensors.
 
         Both input tensors must have BFLOAT16 data type, and be of equal shape.
@@ -848,6 +997,44 @@ void TensorModule(py::module &m_tensor) {
         +----------+-------------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("hardtanh", &hardtanh,
+		 py::arg().noconvert(), py::arg("low") = -1.0f, py::arg("high") = +1.0f, R"doc(
+        Applies the hard tanh function to the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | Tensor tanh is applied to     | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | low      | low value (PyTorch default)   | float     | default to -1.0f             | No       |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | high     | high value (PyTorch default)  | float     | default to +1.0f             | No       |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("clip", &clip, R"doc(
+        Applies the clip function to the elements of the input tensor ``arg0`` between limits ``arg1`` low and
+        the ``arg2`` high limits.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | Tensor tanh is applied to     | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | low      | low value (PyTorch default)   | float     | float value                  | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | high     | high value (PyTorch default)  | float     | float value                  | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("hard_sigmoid", &hard_sigmoid,
 		 py::arg().noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, R"doc(
         Applies the hard sigmoid function to the elements of the input tensor ``arg0``.
@@ -899,6 +1086,114 @@ void TensorModule(py::module &m_tensor) {
         | arg0     | Tensor exp is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+--------------------------+-----------+------------------------------+----------+
     )doc");
+
+
+    m_tensor.def("full_like", &full_like, R"doc(
+        Returns a new tensor with the float value shaped like reference tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | Argument | Description              | Data type | Valid range                  | Required |
+        +==========+==========================+===========+==============================+==========+
+        | arg0     | reference Tensor         | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | arg1     | constant value           | float     | float value                  | Yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("zeros_like", &zeros_like, R"doc(
+        Returns a new tensor with the zero of the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | Argument | Description              | Data type | Valid range                  | Required |
+        +==========+==========================+===========+==============================+==========+
+        | arg0     | reference Tensor         | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+    )doc");
+
+
+    m_tensor.def("ones_like", &ones_like, R"doc(
+        Returns a new tensor with the one of the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | Argument | Description              | Data type | Valid range                  | Required |
+        +==========+==========================+===========+==============================+==========+
+        | arg0     | reference Tensor         | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("zeros", &zeros, R"doc(
+        Returns a new tensor with the zeros in shape specified by input ``arg0``.
+
+        Input shape is specified as a list of 4 integer elements
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | Argument | Description              | Data type | Valid range                  | Required |
+        +==========+==========================+===========+==============================+==========+
+        | arg0     | shape vector             | Vector    | [W, Z, Y, X]                 | Yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("ones", &ones, R"doc(
+        Returns a new tensor with the ones in shape specified by input ``arg0``.
+
+        Input shape is specified as a list of 4 integer elements
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | Argument | Description              | Data type | Valid range                  | Required |
+        +==========+==========================+===========+==============================+==========+
+        | arg0     | shape vector             | Vector    | [W, Z, Y, X]                 | Yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("full", &full, R"doc(
+        Returns a new tensor with the full in shape specified by input ``arg0``.
+
+        Input shape is specified as a list of 4 integer elements
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | Argument | Description              | Data type | Valid range                  | Required |
+        +==========+==========================+===========+==============================+==========+
+        | arg0     | shape vector             | Vector    | [W, Z, Y, X]                 | Yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | arg1     | scalar                   | float     | float                        | Yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("arange", &arange, R"doc(
+        Returns a new 1D tensor with the incremented values in size specified by inputs start, end and step ``arg0``, ``arg1``, and ``arg2``.
+
+        Inpute scalars are integers specifying start, end, and step sizes.
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | Argument | Description              | Data type | Valid range                  | Required |
+        +==========+==========================+===========+==============================+==========+
+        | arg0     | start                    | uint32    | integer                      | yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | arg1     | end                      | uint32    | integer                      | yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+        | arg2     | step                     | uint32    | integer                      | yes      |
+        +----------+--------------------------+-----------+------------------------------+----------+
+    )doc");
+
 
     m_tensor.def("recip", &recip, R"doc(
         Returns a new tensor with the reciprocal of the elements of the input tensor ``arg0``.
