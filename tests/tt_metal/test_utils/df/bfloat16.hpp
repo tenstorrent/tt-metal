@@ -43,8 +43,8 @@ class bfloat16 {
         return *reinterpret_cast<float*>(&uint32_data);
     }
     uint16_t to_packed() const { return uint16_data; }
-    bool operator==(bfloat16 rhs) { return uint16_data == rhs.uint16_data; }
-    bool operator!=(bfloat16 rhs) { return uint16_data != rhs.uint16_data; }
+    bool operator==(const bfloat16 rhs) const { return uint16_data == rhs.uint16_data; }
+    bool operator!=(const bfloat16 rhs) const { return uint16_data != rhs.uint16_data; }
 };
 
 inline ostream& operator<<(ostream& os, const bfloat16& val) {

@@ -13,16 +13,32 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor::Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout)
-    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
-    tensor_impl::convert_and_write_data_wrapper(*this, data);
+Tensor::Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout)
+    : data_(host_buffer), shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
 }
 
-Tensor::Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config)
+Tensor::Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config)
     : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device), mem_config_(mem_config) {
     TT_ASSERT(device != nullptr);
     tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
-    tensor_impl::convert_and_write_data_wrapper(*this, data);
+    switch (dtype) {
+        case DataType::UINT32: {
+            tensor_impl::convert_and_write_data_wrapper<uint32_t>(*this, host_buffer);
+            break;
+        }
+        case DataType::FLOAT32: {
+            tensor_impl::convert_and_write_data_wrapper<float>(*this, host_buffer);
+            break;
+        }
+        case DataType::BFLOAT16: {
+            tensor_impl::convert_and_write_data_wrapper<bfloat16>(*this, host_buffer);
+            break;
+        }
+        case DataType::BFLOAT8_B: {
+            tensor_impl::convert_and_write_data_wrapper<float>(*this, host_buffer);
+            break;
+        }
+    }
 }
 
 Tensor::Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout)
@@ -69,93 +85,17 @@ Tensor::Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layo
     tensor_impl::allocate_buffer_on_device(*this, packed_size_in_bytes);
 }
 
-Tensor::Tensor(const Tensor &other)
-    : shape_(other.shape_), strides_(other.strides_), dtype_(other.dtype_), layout_(other.layout_), device_(other.device_), mem_config_(other.mem_config_) {
-    if (other.on_host()) {
-        // deep copy other.data_ into this->data_
-        tensor_impl::deepcopy_host_data_wrapper(other, *this);
-    } else {
-        // allocate buffer of same size and on same device as other.buffer_ and copy data from other.buffer_ into it
-        tensor_impl::deepcopy_device_data_wrapper(other, *this);
-    }
-}
-
-Tensor &Tensor::operator=(const Tensor &other) {
-    if (this != &other) {
-        bool originally_on_host = this->on_host();
-        if (not originally_on_host) {
-            // Always deallocate in this case because `this` is either updated to be host tensor or gets new buffer
-            // free the buffer before `this` members get updated
-            this->free_buffer();
-        } else {
-            tensor_impl::free_data_wrapper(*this);
-        }
-        this->shape_ = other.shape_;
-        this->strides_ = other.strides_;
-        this->dtype_ = other.dtype_;
-        this->layout_ = other.layout_;
-        this->device_ = other.device_;
-        this->mem_config_ = other.mem_config_;
-
-        if (other.on_host()) {
-            // deep copy other.data_ into this->data_
-            tensor_impl::deepcopy_host_data_wrapper(other, *this);
-        } else {
-            // allocate new buffer of same size and on same device as other.buffer_ and copy data from other.buffer_ into it
-            tensor_impl::deepcopy_device_data_wrapper(other, *this);
-        }
-    }
-    return *this;
-}
-
-Tensor::Tensor(Tensor &&other)
-    : shape_(other.shape_), strides_(other.strides_), dtype_(other.dtype_), layout_(other.layout_), device_(other.device_), mem_config_(other.mem_config_) {
-    if (other.on_host()) {
-        // move other.data_ into this->data_
-        tensor_impl::move_host_data_wrapper(std::move(other), *this);
-    } else {
-        // this owns buffer, does not need to be deallocated from device
-        tensor_impl::move_device_data_wrapper(std::move(other), *this);
-    }
-}
-
-Tensor &Tensor::operator=(Tensor &&other) {
-    if (this != &other) {
-        bool originally_on_host = this->on_host();
-        if (not originally_on_host) {
-            // Always deallocate in this case because `this` is either updated to be host tensor or gets new buffer
-            // free the buffer before `this` members get updated
-            this->free_buffer();
-        } else {
-            tensor_impl::free_data_wrapper(*this);
-        }
-        this->shape_ = other.shape_;
-        this->strides_ = other.strides_;
-        this->dtype_ = other.dtype_;
-        this->layout_ = other.layout_;
-        this->device_ = other.device_;
-        this->mem_config_ = other.mem_config_;
-
-        if (other.on_host()) {
-            // move other.data_ into this->data_
-            tensor_impl::move_host_data_wrapper(std::move(other), *this);
-        } else {
-            // move other.buffer_ into this->buffer_
-            tensor_impl::move_device_data_wrapper(std::move(other), *this);
-        }
-    }
-    return *this;
-}
-
 Tensor::~Tensor() {
     this->deallocate();
 }
 
 void Tensor::deallocate() {
-    if (not on_host()) {
-        this->free_buffer();
+    if (not on_host() and this->is_allocated_on_device() and this->buffer_.use_count() == 1) {
+        DeallocateBuffer(*this->buffer_);
     }
-    tensor_impl::free_data_wrapper(*this);
+
+    this->data_.reset();
+    this->buffer_.reset();
 }
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
@@ -169,7 +109,7 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
 
 Tensor Tensor::to(Host *host) const {
     if (on_host()) {
-        return Tensor(*this);
+        return *this;
     }
     return tensor_impl::to_host_wrapper(*this);
 }
@@ -240,15 +180,6 @@ const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
     strides_ = compute_strides();
 
     return shape_;
-}
-
-void Tensor::free_buffer() {
-    TT_ASSERT(not on_host() && "Tensor needs to have a buffer on device to free it!");
-    if (this->buffer_ == nullptr) {
-        return;
-    }
-    DeallocateBuffer(*this->buffer_);
-    this->buffer_.reset();
 }
 
 }  // namespace tt_metal

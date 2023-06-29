@@ -57,11 +57,11 @@ class bfloat16 {
     uint16_t to_uint16() const {
         return uint16_data;
     }
-    bool operator==(bfloat16 rhs) {
+    bool operator==(const bfloat16 rhs) const {
         return uint16_data == rhs.uint16_data;
     }
-    bool operator!=(bfloat16 rhs) {
-        return uint16_data != rhs.uint16_data;
+    bool operator!=(const bfloat16 rhs) const {
+        return not (*this == rhs);
     }
 };
 

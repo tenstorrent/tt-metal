@@ -7,6 +7,8 @@
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tensor/tensor.hpp"
+#include "tensor/tensor_utils.hpp"
+#include "tensor/host_buffer.hpp"
 
 
 namespace tt {
@@ -19,12 +21,14 @@ using binary_tensor_op_t = Tensor (const Tensor& a, const Tensor& b);
 //Note: inline doesn't allow pybind to work well so we keep few function not inlined.
 
 template<typename T>
-Tensor mk_scalar(T val) {
+Tensor mk_scalar(T value) {
     assert(std::is_scalar<T>::value && "T should be scalar");
-    std::array<unsigned int,4> shape1 = {1,1,1,1};
-    std::vector<bfloat16> val_vec1 = {(bfloat16)val};
-    Tensor scalar = Tensor(val_vec1,shape1,DataType::BFLOAT16,Layout::ROW_MAJOR);
-    return std::move(scalar);
+    std::array<unsigned int,4> shape = {1,1,1,1};
+    auto buffer = host_buffer::create<bfloat16>(volume(shape));
+    auto buffer_view = host_buffer::view_as<bfloat16>(buffer);
+    buffer_view[0] = value;
+    Tensor scalar = Tensor(buffer, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+    return scalar;
 }
 
 // Function: MAC

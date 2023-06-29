@@ -258,11 +258,11 @@ operation::Hash AttentionSoftmaxInPlace::compute_program_hash(
 Tensor scale_mask_softmax_in_place(float scale, std::optional<std::reference_wrapper<const Tensor>> mask, Tensor& input_tensor) {
     std::vector<std::reference_wrapper<const Tensor>> input_tensors{input_tensor};
     operation::run(AttentionSoftmaxInPlace{.scale=scale}, input_tensors, {mask});
-    return std::move(input_tensor);
+    return input_tensor;
 }
 
 Tensor softmax_in_place(Tensor& input_tensor) {
-    return std::move(scale_mask_softmax_in_place(0.0f, std::nullopt, input_tensor)); // 0.0f means unused scale
+    return scale_mask_softmax_in_place(0.0f, std::nullopt, input_tensor); // 0.0f means unused scale
 }
 
 

@@ -1,9 +1,11 @@
 #pragma once
+
 #include <vector>
 #include <array>
 #include <random>
 #include <tuple>
 
+#include "tensor/types.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/host.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
@@ -54,35 +56,29 @@ namespace tensor_impl {
 
     template <typename T>
     void write_data(Tensor &tensor, std::vector<T> &data);
-
-    template <typename T>
-    void free_data(Tensor &tensor);
-
-    template <typename T>
-    void deepcopy_host_data(const Tensor &src, Tensor &dst);
-
-    template <typename T>
-    void move_host_data(Tensor &&src, Tensor &dst);
-
-    template <typename T>
-    void move_device_data(Tensor &&src, Tensor &dst);
 }
 
 class Tensor {
+
     public:
         // ======================================================================================
         //                                  Hi Level APIs
         // ======================================================================================
-        Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
+        Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
 
-        Tensor(std::vector<bfloat16> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
+        // TODO(arakhmati): modify this constructor to take device buffer
+        Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config = {.interleaved=true});
 
+        // TODO(arakhmati): delete
         Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
 
+        // TODO(arakhmati): delete
         Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
 
+        // TODO(arakhmati): delete
         Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
 
+        // TODO(arakhmati): delete
         Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
 
         Tensor(const std::array<uint32_t, 4> &shape, Initialize init_type, DataType dtype, Layout layout);
@@ -91,11 +87,11 @@ class Tensor {
 
         Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
 
-        Tensor(const Tensor &other);
-        Tensor& operator=(const Tensor &other);
+        Tensor(const Tensor &other) = default;
+        Tensor& operator=(const Tensor &other) = default;
 
-        Tensor(Tensor &&other);
-        Tensor& operator=(Tensor &&other);
+        Tensor(Tensor &&other) = default;
+        Tensor& operator=(Tensor &&other) = default;
 
         ~Tensor();
 
@@ -142,7 +138,12 @@ class Tensor {
 
         Buffer *buffer() const { return buffer_.get(); }
 
-        void *data_ptr() const { return data_; }
+        HostBufferDataType* data_ptr() const { return this->data_->data(); }
+
+        const HostBuffer& host_buffer() const { return this->data_; }
+
+        bool is_allocated_on_host() const { return bool(this->data_); }
+        bool is_allocated_on_device() const { return bool(this->buffer_); }
 
         bool on_host() const { return device_ == nullptr; }
 
@@ -158,22 +159,12 @@ class Tensor {
             return {shape_[1]*shape_[2]*shape_[3], shape_[2]*shape_[3], shape_[3], 1};
         }
 
-        void free_buffer();
-
         friend void tensor_impl::allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
         friend void tensor_impl::allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
 
         template <typename T>
         friend void tensor_impl::write_data(Tensor &tensor, std::vector<T> &data);
-        template <typename T>
-        friend void tensor_impl::free_data(Tensor &tensor);
-        template <typename T>
-        friend void tensor_impl::deepcopy_host_data(const Tensor &src, Tensor &dst);
-        template <typename T>
-        friend void tensor_impl::move_host_data(Tensor &&src, Tensor &dst);
-        template <typename T>
-        friend void tensor_impl::move_device_data(Tensor &&src, Tensor &dst);
 
         std::array<uint32_t, 4> shape_;             // Outer-most dimension first
         std::array<uint32_t, 4> strides_;           // Outer-most dimension first
@@ -181,11 +172,11 @@ class Tensor {
         Layout layout_;
 
         // Host Storage
-        void *data_ = nullptr;                      // Unpopulated if tensor is on device
+        HostBuffer data_{};                 // Unpopulated if tensor is on device
 
         // Device Storage
         Device *device_ = nullptr;                  // Set if tensor is allocated on device
-        std::shared_ptr<Buffer> buffer_ = nullptr;  // Tensors on device are backed by an underlying buffer
+        std::shared_ptr<Buffer> buffer_{};  // Tensors on device are backed by an underlying buffer
         MemoryConfig mem_config_;
 };
 

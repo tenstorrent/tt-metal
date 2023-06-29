@@ -26,17 +26,17 @@ struct ResidualLayerNorm {
 };
 
 inline Tensor layernorm(const Tensor &a, float eps, const MemoryConfig& mem_config) {
-    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, std::nullopt, std::nullopt}).at(0));
+    return operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, std::nullopt, std::nullopt}).at(0);
 }
 inline Tensor layernorm_gamma(const Tensor &a, float eps, const Tensor& gamma, const MemoryConfig& mem_config) {
-    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, std::nullopt}).at(0));
+    return operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, std::nullopt}).at(0);
 }
 inline Tensor layernorm_gamma_beta(const Tensor &a, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config) {
-    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, beta}).at(0));
+    return operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, beta}).at(0);
 }
 // computes layernorm(a+b)*gamma+beta
 inline Tensor add_layernorm_gamma_beta(const Tensor &a, const Tensor& b, float eps, const Tensor& gamma, const Tensor& beta, const MemoryConfig& mem_config) {
-    return std::move(operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {b, gamma, beta}).at(0));
+    return operation::run(ResidualLayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {b, gamma, beta}).at(0);
 }
 
 }

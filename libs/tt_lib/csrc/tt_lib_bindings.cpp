@@ -22,6 +22,7 @@
 #include "tt_dnn/op_library/split/split_last_dim_qk_tiled.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "tensor/host_buffer.hpp"
 #include "tensor/tensor_utils.hpp"
 
 #include "tt_lib_bindings.hpp"
@@ -661,28 +662,38 @@ void TensorModule(py::module &m_tensor) {
                 device = tt_tensor.device()
 
         )doc")
-        .def("data", [](const Tensor &self) {
-            std::vector<uint32_t> empty_vec;
-            TT_ASSERT(self.data_ptr() != nullptr);
+        .def("data", [](const Tensor &self) -> std::optional<std::variant<const vector<uint32_t>, const vector<float>, const vector<bfloat16>>> {
+            TT_ASSERT(self.is_allocated_on_host(), "Host buffer must be allocated!");
             switch (self.dtype()) {
-                case DataType::BFLOAT16: {
-                    return py::cast(*reinterpret_cast<std::vector<bfloat16>*>(self.data_ptr()));
+                case DataType::UINT32:
+                {
+                    auto view = host_buffer::view_as<uint32_t>(self);
+                    return std::vector(view.begin(), view.end());
                 }
                 break;
                 case DataType::FLOAT32:
-                    return py::cast(*reinterpret_cast<std::vector<float>*>(self.data_ptr()));
+                {
+                    auto view = host_buffer::view_as<float>(self);
+                    return std::vector(view.begin(), view.end());
+                }
                 break;
-                case DataType::UINT32:
-                    return py::cast(*reinterpret_cast<std::vector<uint32_t>*>(self.data_ptr()));
+                case DataType::BFLOAT16:
+                {
+                    auto view = host_buffer::view_as<bfloat16>(self);
+                    return std::vector(view.begin(), view.end());
+                }
                 break;
                 case DataType::BFLOAT8_B:
-                    return py::cast(*reinterpret_cast<std::vector<float>*>(self.data_ptr()));
+                {
+                    auto view = host_buffer::view_as<float>(self);
+                    return std::vector(view.begin(), view.end());
+                }
                 break;
                 default:
                     TT_ASSERT(false && "Unsupported data type!");
                 break;
             }
-            return py::cast(empty_vec);
+            return std::nullopt;
         }, R"doc(
             Get data in the tensor as a list of numbers.
 

@@ -37,10 +37,10 @@ static Tensor run_without_autoformat(ConcreteOperation&& concrete_op, const Tens
     }
 
     if (not input_tensor.on_host()) {
-        return std::move(run(op, {std::cref(input_tensor)}).at(0));
+        return run(op, {std::cref(input_tensor)}).at(0);
     } else {
         auto input_tensor_on_dev = input_tensor.to(device);
-        return std::move(run(op, {std::cref(input_tensor_on_dev)}).at(0));
+        return run(op, {std::cref(input_tensor_on_dev)}).at(0);
     }
 }
 
@@ -59,12 +59,11 @@ static Tensor run_with_autoformat(ConcreteOperation&& concrete_op, const Tensor 
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape(), pad_c);
     auto output_shape = op.compute_output_shapes({std::cref(input_tensor)}).at(0);
     if (AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {
-        return std::move(run(op, {std::cref(input_tensor)}).at(0));
+        return run(op, {std::cref(input_tensor)}).at(0);
     } else {
         const auto padded_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, pad_value);
-        auto output_tensor = std::move(run(op, {std::cref(padded_tensor)}).at(0));
-        AutoFormat::format_output_tensor(output_tensor, output_shape, device);
-        return output_tensor;
+        auto output_tensor = run(op, {std::cref(padded_tensor)}).at(0);
+        return AutoFormat::format_output_tensor(output_tensor, output_shape, device);
     }
 }
 
@@ -90,23 +89,20 @@ static Tensor run_with_autoformat(ConcreteOperation&& concrete_op, const Tensor 
     auto no_pad_a = AutoFormat::check_input_tensor_format(input_tensor_a, padded_input_shape_a);
     auto no_pad_b = AutoFormat::check_input_tensor_format(input_tensor_b, padded_input_shape_b);
     if (no_pad_a && no_pad_b) {
-        return std::move(run(op, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0));
+        return run(op, {std::cref(input_tensor_a), std::cref(input_tensor_b)}).at(0);
     } else if (no_pad_a) {
         const auto padded_input_tensor_b = AutoFormat::format_input_tensor(input_tensor_b, device, padded_input_shape_b, pad_value);
-        auto output_tensor = std::move(run(op, {std::cref(input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
-        AutoFormat::format_output_tensor(output_tensor, output_shape, device);
-        return output_tensor;
+        auto output_tensor = run(op, {std::cref(input_tensor_a), std::cref(padded_input_tensor_b)}).at(0);
+        return AutoFormat::format_output_tensor(output_tensor, output_shape, device);
     } else if (no_pad_b) {
         const auto padded_input_tensor_a = AutoFormat::format_input_tensor(input_tensor_a, device, padded_input_shape_a, pad_value);
-        auto output_tensor = std::move(run(op, {std::cref(padded_input_tensor_a), std::cref(input_tensor_b)}).at(0));
-        AutoFormat::format_output_tensor(output_tensor, output_shape, device);
-        return output_tensor;
+        auto output_tensor = run(op, {std::cref(padded_input_tensor_a), std::cref(input_tensor_b)}).at(0);
+        return AutoFormat::format_output_tensor(output_tensor, output_shape, device);
     } else {
         const auto padded_input_tensor_a = AutoFormat::format_input_tensor(input_tensor_a, device, padded_input_shape_a, pad_value);
         const auto padded_input_tensor_b = AutoFormat::format_input_tensor(input_tensor_b, device, padded_input_shape_b, pad_value);
-        auto output_tensor = std::move(run(op, {std::cref(padded_input_tensor_a), std::cref(padded_input_tensor_b)}).at(0));
-        AutoFormat::format_output_tensor(output_tensor, output_shape, device);
-        return output_tensor;
+        auto output_tensor = run(op, {std::cref(padded_input_tensor_a), std::cref(padded_input_tensor_b)}).at(0);
+        return AutoFormat::format_output_tensor(output_tensor, output_shape, device);
     }
 }
 

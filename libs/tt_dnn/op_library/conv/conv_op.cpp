@@ -931,7 +931,7 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
              uint32_t out_subblock_h, uint32_t out_subblock_w) {
-    return std::move(operation::run(Conv(in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, conv_params, true), {a, b}).at(0));
+    return operation::run(Conv(in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, conv_params, true), {a, b}).at(0);
 }
 
 Program conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,

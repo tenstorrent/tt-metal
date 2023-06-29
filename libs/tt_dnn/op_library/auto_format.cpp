@@ -79,95 +79,97 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
     return a;
 }
 
-// This function modifies the output tensor in place
-void AutoFormat::format_output_tensor(Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout) {
+
+Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout) {
     bool unpad_output = output.shape() != shape;
     bool convert_layout = output.layout() != target_layout;
 
+    Tensor formatted_output = output;
     // Noop
     if (!unpad_output && !convert_layout) {
-        return;
+        return formatted_output;
     }
 
     // ON DEVICE UNPADDING/CONVERSIONS
-    if (!output.on_host()) {
+    if (!formatted_output.on_host()) {
         if (!unpad_output && convert_layout) {
             // If target layout is tile but shape does not support tile, we don't do any conversions
             if (target_layout == Layout::TILE) {
-                if (output.shape()[2] % TILE_HEIGHT == 0 && output.shape()[3] % TILE_WIDTH == 0) {
-                    output = tilize(output);
-                    return;
+                if (formatted_output.shape()[2] % TILE_HEIGHT == 0 && formatted_output.shape()[3] % TILE_WIDTH == 0) {
+                    formatted_output = tilize(formatted_output);
+                    return formatted_output;
                 } else {
-                    return;
+                    return formatted_output;
                 }
-            } else if (target_layout == Layout::ROW_MAJOR && output.layout() == Layout::TILE && output.shape()[2] % 2 == 0) {
-                output = untilize(output);
-                return;
+            } else if (target_layout == Layout::ROW_MAJOR && formatted_output.layout() == Layout::TILE && formatted_output.shape()[2] % 2 == 0) {
+                formatted_output = untilize(formatted_output);
+                return formatted_output;
             }
         } else if (unpad_output && !convert_layout) {
             // Output can be unpadded and target layout supports the shape
             if ((target_layout == Layout::TILE && shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0) ||
                     target_layout == Layout::ROW_MAJOR && shape[3] % 2 == 0) {
-                output = unpad(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
-                return;
+                formatted_output = unpad(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                return formatted_output;
             // Output is tile but shape cannot be tile
             } else if (target_layout == Layout::TILE && shape[3] % 2 == 0) {
-                output = untilize_with_unpadding(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
-                return;
+                formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                return formatted_output;
             }
         } else if (unpad_output && convert_layout) {
-            if (target_layout == Layout::ROW_MAJOR && output.layout() == Layout::TILE && shape[3] % 2 == 0) {
-                output = untilize_with_unpadding(output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
-                return;
+            if (target_layout == Layout::ROW_MAJOR && formatted_output.layout() == Layout::TILE && shape[3] % 2 == 0) {
+                formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                return formatted_output;
             }
         }
     }
 
     // ON HOST UNPADDING/CONVERSIONS
     auto host = GetHost();
-    // Unpad output if necessary
+    // Unpad formatted_output if necessary
     if (unpad_output) {
-        if (!output.on_host()) {
-            output = output.to(host);
+        if (!formatted_output.on_host()) {
+            formatted_output = formatted_output.to(host);
         }
         // Requires RM for unpad
-        if (output.layout() != Layout::ROW_MAJOR) {
-            output = output.to(Layout::ROW_MAJOR);
+        if (formatted_output.layout() != Layout::ROW_MAJOR) {
+            formatted_output = formatted_output.to(Layout::ROW_MAJOR);
         }
-        output = output.unpad({0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+        formatted_output = formatted_output.unpad({0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
     }
 
     // Converts layout if necessary, result will always be on host
-    if (target_layout != output.layout()) {
-        if (!output.on_host()) {
-            output = output.to(host);
+    if (target_layout != formatted_output.layout()) {
+        if (!formatted_output.on_host()) {
+            formatted_output = formatted_output.to(host);
         }
         // Default to RM layout if we can't match the input layout
-        if (target_layout == Layout::TILE && (output.shape()[2] % TILE_HEIGHT != 0 || output.shape()[3] % TILE_WIDTH != 0)) {
-            if (output.layout() != Layout::ROW_MAJOR) {
-                output = output.to(Layout::ROW_MAJOR);
+        if (target_layout == Layout::TILE && (formatted_output.shape()[2] % TILE_HEIGHT != 0 || formatted_output.shape()[3] % TILE_WIDTH != 0)) {
+            if (formatted_output.layout() != Layout::ROW_MAJOR) {
+                formatted_output = formatted_output.to(Layout::ROW_MAJOR);
             }
         // We do not support CL <-> TILE conversions
-        } else if (target_layout == Layout::CHANNELS_LAST && output.layout() == Layout::TILE ||
-                    target_layout == Layout::TILE && output.layout() == Layout::CHANNELS_LAST) {
-            // No-Op, leave output in CL
+        } else if (target_layout == Layout::CHANNELS_LAST && formatted_output.layout() == Layout::TILE ||
+                    target_layout == Layout::TILE && formatted_output.layout() == Layout::CHANNELS_LAST) {
+            // No-Op, leave formatted_output in CL
         } else {
-            output = output.to(target_layout);
+            formatted_output = formatted_output.to(target_layout);
         }
     }
 
-    // Send output to device if possible
-    if (output.on_host()) {
+    // Send formatted_output to device if possible
+    if (formatted_output.on_host()) {
         // Check that shape is supported on device
-        if ((output.layout() == Layout::ROW_MAJOR && output.shape()[3] % 2 == 0) ||
-            (output.layout() == Layout::CHANNELS_LAST && output.shape()[1] % 2 == 0) ||
-            (output.layout() == Layout::TILE && output.shape()[2] % TILE_HEIGHT == 0 && output.shape()[3] % TILE_WIDTH == 0)) {
-            output = output.to(device);
+        if ((formatted_output.layout() == Layout::ROW_MAJOR && formatted_output.shape()[3] % 2 == 0) ||
+            (formatted_output.layout() == Layout::CHANNELS_LAST && formatted_output.shape()[1] % 2 == 0) ||
+            (formatted_output.layout() == Layout::TILE && formatted_output.shape()[2] % TILE_HEIGHT == 0 && formatted_output.shape()[3] % TILE_WIDTH == 0)) {
+            formatted_output = formatted_output.to(device);
         }
     }
 
     delete host;
 
+    return formatted_output;
 }
 
 }

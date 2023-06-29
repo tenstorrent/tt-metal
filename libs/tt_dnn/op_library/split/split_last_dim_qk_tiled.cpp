@@ -234,16 +234,16 @@ std::vector<Tensor> split_last_dim_qk_tiled(const Tensor &input_tensor, const Me
     auto input_shape = input_tensor.shape();
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_shape);
     if (AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {
-        return std::move(operation::run(op, {std::cref(input_tensor)}));
+        return operation::run(op, {std::cref(input_tensor)});
     } else {
         TT_ASSERT(input_tensor.buffer_type() == tt_metal::BufferType::DRAM, "Untiled splits should be in DRAM");
         TT_ASSERT(mem_config.buffer_type == tt_metal::BufferType::DRAM, "Untiled splits should be in DRAM");
         auto device = input_tensor.device();
         auto output_shape = op.compute_output_shapes({std::cref(input_tensor)}).at(0);
         const auto padded_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape);
-        auto output_tensors = std::move(operation::run(op, {std::cref(padded_tensor)}));
+        auto output_tensors = operation::run(op, {std::cref(padded_tensor)});
         for (auto &output_tensor : output_tensors) {
-            AutoFormat::format_output_tensor(output_tensor, output_shape, device);
+            output_tensor = AutoFormat::format_output_tensor(output_tensor, output_shape, device);
         }
         return output_tensors;
     }

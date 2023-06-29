@@ -1,5 +1,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
+#include "tensor/host_buffer.hpp"
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "constants.hpp"
 
@@ -55,17 +56,17 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::cout << "Moving src data to host to validate" << std::endl;
         Tensor host_a = a.to(host); // Move tensor a to host to validate
-        auto host_vec =  *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
+        auto host_buffer = host_a.host_buffer();
         std::array<uint32_t, 4> cl_shape = {shape[0], shape[2], shape[3], shape[1]};
-        Tensor g = Tensor(host_vec, cl_shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+        Tensor g = Tensor(host_buffer, cl_shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
         // TODO: Update when tensor.pad_to_tile() function is added
         auto padded_shape = g.shape();
         padded_shape[2] = roundup(padded_shape[2], TILE_HEIGHT);
         padded_shape[3] = roundup(padded_shape[3], TILE_WIDTH);
         Tensor padded_g = g.pad(padded_shape, {0,0,0,0}, 0);
         Tensor golden = padded_g.to(Layout::TILE);
-        auto golden_vec =  *reinterpret_cast<std::vector<bfloat16>*>(golden.data_ptr());
-        auto result_vec = *reinterpret_cast<std::vector<bfloat16>*>(c.data_ptr());
+        auto golden_vec =  host_buffer::view_as<bfloat16>(golden);
+        auto result_vec = host_buffer::view_as<bfloat16>(c);
         std::cout << "Validating " << std::endl;
          std::cout << "golden vec size " << golden_vec.size() << std::endl;
         std::cout << "result vec size " << result_vec.size() << std::endl;

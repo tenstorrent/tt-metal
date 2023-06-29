@@ -3,6 +3,8 @@
 #include "tt_numpy/functions.hpp"
 
 #include "tensor/tensor.hpp"
+#include "tensor/host_buffer.hpp"
+
 #include "constants.hpp"
 
 using tt::tt_metal::Host;
@@ -13,15 +15,17 @@ using tt::tt_metal::Layout;
 
 template<typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    auto input_tensor_a_data = *reinterpret_cast<std::vector<bfloat16>*>(input_tensor_a.data_ptr());
-    auto input_tensor_b_data = *reinterpret_cast<std::vector<bfloat16>*>(input_tensor_b.data_ptr());
-    auto output_tensor_data = std::vector<bfloat16>(input_tensor_a_data.size(), 0.0f);
+    auto input_a_view = host_buffer::view_as<bfloat16>(input_tensor_a);
+    auto input_b_view = host_buffer::view_as<bfloat16>(input_tensor_b);
 
-    for (auto index = 0; index < output_tensor_data.size(); index++) {
-        auto value = BinaryFunction{}(input_tensor_a_data[index].to_float(), input_tensor_b_data[index].to_float());
-        output_tensor_data[index] = bfloat16(value);
+    auto output_buffer = host_buffer::create<bfloat16>(input_tensor_a.volume());
+    auto output_view = host_buffer::view_as<bfloat16>(output_buffer);
+
+    for (auto index = 0; index < output_view.size(); index++) {
+        auto value = BinaryFunction{}(input_a_view[index].to_float(), input_b_view[index].to_float());
+        output_view[index] = bfloat16(value);
     }
-    return Tensor(output_tensor_data, input_tensor_a.shape(), input_tensor_a.dtype(), input_tensor_a.layout());
+    return Tensor(output_buffer, input_tensor_a.shape(), input_tensor_a.dtype(), input_tensor_a.layout());
 }
 
 template<auto Operation>

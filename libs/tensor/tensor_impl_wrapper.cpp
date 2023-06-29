@@ -37,16 +37,6 @@ void initialize_data_wrapper(Tensor &tensor, Initialize init_type) {
     return initialize_data_map.at(tensor.dtype())(tensor, init_type);
 }
 
-void free_data_wrapper(Tensor &tensor) {
-    const static std::map<DataType, std::function<void(Tensor &)>> free_data_map = {
-        {DataType::BFLOAT16, &free_data<bfloat16>},
-        {DataType::FLOAT32, &free_data<float>},
-        {DataType::UINT32, &free_data<uint32_t>},
-        {DataType::BFLOAT8_B, &free_data<float>}
-    };
-    return free_data_map.at(tensor.dtype())(tensor);
-}
-
 Tensor to_host_wrapper(const Tensor &tensor) {
     const static std::map<DataType, std::function<Tensor(const Tensor &)>> to_host_map = {
         {DataType::BFLOAT16, &to_host<bfloat16>},
@@ -105,46 +95,6 @@ void print_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print)
         {DataType::BFLOAT8_B, &print<float>}
     };
     print_map.at(tensor.dtype())(tensor, print_layout, pretty_print);
-}
-
-void deepcopy_host_data_wrapper(const Tensor &src, Tensor &dst) {
-    const static std::map<DataType, std::function<void(const Tensor &, Tensor &)>> deepcopy_data_map = {
-        {DataType::BFLOAT16, &deepcopy_host_data<bfloat16>},
-        {DataType::FLOAT32, &deepcopy_host_data<float>},
-        {DataType::UINT32, &deepcopy_host_data<uint32_t>},
-        {DataType::BFLOAT8_B, &deepcopy_host_data<float>}
-    };
-    deepcopy_data_map.at(src.dtype())(src, dst);
-}
-
-void deepcopy_device_data_wrapper(const Tensor &src, Tensor &dst) {
-    const static std::map<DataType, std::function<void(const Tensor &, Tensor &)>> deepcopy_dev_data_map = {
-        {DataType::BFLOAT16, &deepcopy_device_data<bfloat16>},
-        {DataType::FLOAT32, &deepcopy_device_data<float>},
-        {DataType::UINT32, &deepcopy_device_data<uint32_t>},
-        {DataType::BFLOAT8_B, &deepcopy_device_data<float>}
-    };
-    deepcopy_dev_data_map.at(src.dtype())(src, dst);
-}
-
-void move_host_data_wrapper(Tensor &&src, Tensor &dst) {
-    const static std::map<DataType, std::function<void(Tensor &&, Tensor &)>> move_data_map = {
-        {DataType::BFLOAT16, &move_host_data<bfloat16>},
-        {DataType::FLOAT32, &move_host_data<float>},
-        {DataType::UINT32, &move_host_data<uint32_t>},
-        {DataType::BFLOAT8_B, &move_host_data<float>}
-    };
-    move_data_map.at(src.dtype())(std::move(src), dst);
-}
-
-void move_device_data_wrapper(Tensor &&src, Tensor &dst) {
-    const static std::map<DataType, std::function<void(Tensor &&, Tensor &)>> move_dev_data_map = {
-        {DataType::BFLOAT16, &move_device_data<bfloat16>},
-        {DataType::FLOAT32, &move_device_data<float>},
-        {DataType::UINT32, &move_device_data<uint32_t>},
-        {DataType::BFLOAT8_B, &move_device_data<float>}
-    };
-    move_dev_data_map.at(src.dtype())(std::move(src), dst);
 }
 
 }  // namespace tensor_impl

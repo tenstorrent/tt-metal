@@ -2323,7 +2323,7 @@ def datacopy(x, pcie_slot, *args, **kwargs):
     ttl.device.InitializeDevice(device)
 
     try:
-        t0 = (
+        device_tensor = (
             ttl.tensor.Tensor(
                 x.reshape(-1).tolist(),
                 x.shape,
@@ -2334,9 +2334,8 @@ def datacopy(x, pcie_slot, *args, **kwargs):
             .to(device, ttl_tensor_memory_config)
         )
 
-        output = torch.Tensor(
-            t0.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t0.shape())
+        host_tensor = device_tensor.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+        output = torch.as_tensor(host_tensor.data()).reshape(host_tensor.shape())
     finally:
         ttl.device.CloseDevice(device)
 

@@ -1,5 +1,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
+#include "tensor/host_buffer.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "constants.hpp"
 
@@ -19,9 +20,9 @@ bool test_single_tile_single_dram_bank_loopback(Device *device, Host *host) {
     Tensor host_a = Tensor(single_tile_shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE);
     Tensor device_a = host_a.to(device);
     Tensor loopbacked_a = device_a.to(host);
-    auto host_a_data = *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
-    auto loopbacked_a_data = *reinterpret_cast<std::vector<bfloat16>*>(loopbacked_a.data_ptr());
-    pass &=  host_a_data == loopbacked_a_data;
+    auto host_a_data = host_buffer::view_as<bfloat16>(host_a);
+    auto loopbacked_a_data = host_buffer::view_as<bfloat16>(loopbacked_a);
+    pass &= host_a_data == loopbacked_a_data;
 
     return pass;
 }
@@ -33,8 +34,8 @@ bool test_multi_tile_multi_dram_bank_loopback(Device *device, Host *host) {
     Tensor host_a = Tensor(multi_tile_shape, Initialize::RANDOM, DataType::BFLOAT16, Layout::TILE);
     Tensor device_a = host_a.to(device);
     Tensor loopbacked_a = device_a.to(host);
-    auto host_a_data = *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
-    auto loopbacked_a_data = *reinterpret_cast<std::vector<bfloat16>*>(loopbacked_a.data_ptr());
+    auto host_a_data = host_buffer::view_as<bfloat16>(host_a);
+    auto loopbacked_a_data = host_buffer::view_as<bfloat16>(loopbacked_a);
     pass &= host_a_data == loopbacked_a_data;
     return pass;
 }

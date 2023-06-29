@@ -91,7 +91,6 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
 
     # Prepare activations
     A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
-    A_cl_data = A_cl_host.data()
     A = A_cl_host.to(device, ttl.tensor.MemoryConfig(False, 0))
 
     # Prepare weights

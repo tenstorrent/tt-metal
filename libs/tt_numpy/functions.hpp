@@ -1,4 +1,5 @@
 #include <tensor/tensor.hpp>
+#include <tensor/host_buffer.hpp>
 
 #include <random>
 
@@ -43,12 +44,13 @@ static Tensor uniform(bfloat16 low, bfloat16 high, const Shape& shape) {
 
     auto volume = shape[0] * shape[1] * shape[2] * shape[3];
 
-    std::vector<bfloat16> output_tensor_vec(volume, static_cast<bfloat16>(0));
-    for (auto index = 0; index < output_tensor_vec.size(); index++) {
-        output_tensor_vec[index] = bfloat16(rand_float());
+    auto output_buffer = host_buffer::create<bfloat16>(volume);
+    auto output_view = host_buffer::view_as<bfloat16>(output_buffer);
+    for (auto index = 0; index < output_view.size(); index++) {
+        output_view[index] = bfloat16(rand_float());
     }
 
-    return Tensor(output_tensor_vec, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+    return Tensor(output_buffer, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
 }
 
 static Tensor random(const Shape& shape, const DataType data_type) {
@@ -86,12 +88,11 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args ...  a
         return false;
     }
 
-    // TODO: compare only if Tensors have the same data type
-    auto tensor_a_vec = *reinterpret_cast<std::vector<DataType>*>(tensor_a.data_ptr());
-    auto tensor_b_vec = *reinterpret_cast<std::vector<DataType>*>(tensor_b.data_ptr());
+    auto tensor_a_data = host_buffer::view_as<DataType>(tensor_a);
+    auto tensor_b_data = host_buffer::view_as<DataType>(tensor_b);
 
-    for (int index = 0; index < tensor_a_vec.size(); index++) {
-        if (not detail::nearly_equal(tensor_a_vec[index], tensor_b_vec[index], args...)) {
+    for (int index = 0; index < tensor_a_data.size(); index++) {
+        if (not detail::nearly_equal(tensor_a_data[index], tensor_b_data[index], args...)) {
             return false;
         }
     }

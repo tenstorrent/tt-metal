@@ -130,22 +130,22 @@ std::ostream& operator<<(std::ostream& os, const BertLargeMatmul& op);
 
 
 inline Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FUSED_QKV, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::FUSED_QKV, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0);
 }
 inline Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, bool fuse_gelu_activation, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF1, mem_config, fuse_gelu_activation}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF1, mem_config, fuse_gelu_activation}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0);
 }
 inline Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF2, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF2, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0);
 }
 inline Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::SELFOUT, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0));
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::SELFOUT, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0);
 }
 inline Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0));
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0);
 }
 inline Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return std::move(operation::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0));
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0);
 }
 
 

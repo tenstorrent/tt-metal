@@ -72,7 +72,7 @@ public:
     Converter obj(f_);
     std::stringstream ss;
     ss << "0x" << std::hex << obj.u;
-    return std::move(ss.str());
+    return ss.str();
   }
 };
 

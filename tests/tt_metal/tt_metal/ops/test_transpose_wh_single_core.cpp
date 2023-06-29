@@ -1,5 +1,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
+#include "tensor/host_buffer.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 
 #include <algorithm>
@@ -14,16 +15,17 @@ using namespace constants;
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 
-Tensor perform_transpose_wh(Tensor& a) {
-    TT_ASSERT(a.on_host());
-    auto ashape = a.shape();
+Tensor perform_transpose_wh(Tensor& input_tensor) {
+    TT_ASSERT(input_tensor.on_host());
+    auto ashape = input_tensor.shape();
     TT_ASSERT(ashape.size() == 4);
     auto bshape = ashape;
     bshape[2] = ashape[3];
     bshape[3] = ashape[2];
-    TT_ASSERT(a.layout() == tt::tt_metal::Layout::TILE, "This transpose assumes that the data layout is tiled!");
-    std::vector<bfloat16> a_vec = *reinterpret_cast<std::vector<bfloat16>*>(a.data_ptr());
-    std::vector<bfloat16> b_vec(a_vec.size(), 0);
+    TT_ASSERT(input_tensor.layout() == tt::tt_metal::Layout::TILE, "This transpose assumes that the data layout is tiled!");
+    auto input_view = host_buffer::view_as<bfloat16>(input_tensor);
+    auto output_buffer = host_buffer::create<bfloat16>(input_view.size());
+    auto output_view = host_buffer::view_as<bfloat16>(output_buffer);
     auto N = ashape[0];
     auto C = ashape[1];
     auto H = ashape[2];
@@ -40,9 +42,9 @@ Tensor perform_transpose_wh(Tensor& a) {
                         for(auto fw = 0; fw < 2; fw++) {
                             for(auto sth = 0; sth < 16; sth++) {
                                 for(auto stw = 0; stw < 16; stw++) {
-                                    auto a_index = n*C*H*W + c*H*W + ht*Wt*TILE_HEIGHT*TILE_WIDTH + wt*TILE_HEIGHT*TILE_WIDTH + fh*32*16 + fw*16*16 + sth*16 + stw;
-                                    auto b_index = n*C*H*W + c*H*W + wt*Ht*TILE_HEIGHT*TILE_WIDTH + ht*TILE_HEIGHT*TILE_WIDTH + fw*16*32 + fh*16*16 + stw*16 + sth;
-                                    b_vec[b_index] = a_vec[a_index];
+                                    auto input_index = n*C*H*W + c*H*W + ht*Wt*TILE_HEIGHT*TILE_WIDTH + wt*TILE_HEIGHT*TILE_WIDTH + fh*32*16 + fw*16*16 + sth*16 + stw;
+                                    auto output_index = n*C*H*W + c*H*W + wt*Ht*TILE_HEIGHT*TILE_WIDTH + ht*TILE_HEIGHT*TILE_WIDTH + fw*16*32 + fh*16*16 + stw*16 + sth;
+                                    output_view[output_index] = input_view[input_index];
                                 }
                             }
                         }
@@ -51,8 +53,7 @@ Tensor perform_transpose_wh(Tensor& a) {
             }
         }
     }
-    tt_metal::Tensor b = tt_metal::Tensor(b_vec, bshape, a.dtype(), tt::tt_metal::Layout::TILE);
-    return b;
+    return tt_metal::Tensor(output_buffer, bshape, input_tensor.dtype(), tt::tt_metal::Layout::TILE);
 }
 
 int main(int argc, char **argv) {
@@ -96,9 +97,10 @@ int main(int argc, char **argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Tensor host_a = a.to(host); // Move tensor a to host to validate
-        auto host_vec = *reinterpret_cast<std::vector<bfloat16>*>(host_a.data_ptr());
-        auto golden_vec = *reinterpret_cast<std::vector<bfloat16>*>(perform_transpose_wh(host_a).data_ptr());
-        auto result_vec = *reinterpret_cast<std::vector<bfloat16>*>(d.data_ptr());
+        auto host_vec = host_buffer::view_as<bfloat16>(host_a);
+        auto transposed_host_a = perform_transpose_wh(host_a);
+        auto golden_vec = host_buffer::view_as<bfloat16>(transposed_host_a);
+        auto result_vec = host_buffer::view_as<bfloat16>(d);
         if(golden_vec != result_vec) {
             assert(golden_vec.size() == result_vec.size());
             for(uint32_t i = 0; i < golden_vec.size(); i++) {
