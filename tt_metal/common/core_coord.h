@@ -95,7 +95,7 @@ struct CoreRange {
         std::size_t y1 = std::max(this->start.y, other.start.y);
         std::size_t x2 = std::min(this->end.x, other.end.x);
         std::size_t y2 = std::min(this->end.y, other.end.y);
-        if (x1< x2 and y1< y2)
+        if (x1 <= x2 and y1 <= y2)
             return CoreRange( {x1, y1}, {x2, y2} );
 
         return {};
@@ -112,14 +112,12 @@ struct CoreRange {
     // Merge lined-up (in x or y dimension) intersecting/adjacent rectangles
     std::optional<CoreRange> merge ( const CoreRange & cr) const
     {
-        if ( this->start.x == cr.start.x && this->end.x == cr.end.x ){
-            if ( this->intersects(cr) || this->start.y == cr.end.y || this->end.y == cr.start.y){
-                return CoreRange ( {this->start.x, std::min(this->start.y, cr.start.y)} , { this->end.x, std::max( this->end.y, cr.end.y) } );
-            }
-        }
-        else if ( this->start.y == cr.start.y && this->end.y == cr.end.y ){
-            if ( this->intersects(cr) || this->start.x == cr.end.x || this->end.x == cr.start.x )
-                return CoreRange ( { std::min( this->start.x, cr.start.x ), this->start.y}, { std::max( this->end.x, cr.end.x) , this->end.y });
+        if ( this->intersects(cr) ){
+          if ( this->start.x == cr.start.x && this->end.x == cr.end.x )
+            return CoreRange ( {this->start.x, std::min(this->start.y, cr.start.y)} , { this->end.x, std::max( this->end.y, cr.end.y) } );
+
+          else if ( this->start.y == cr.start.y && this->end.y == cr.end.y )
+            return CoreRange ( { std::min( this->start.x, cr.start.x ), this->start.y}, { std::max( this->end.x, cr.end.x) , this->end.y });
         }
         return std::nullopt;
     }
@@ -220,12 +218,13 @@ class CoreRangeSet {
 
 
 
-    void merge ( const std::set<CoreRange> & core_ranges ){
+    CoreRangeSet merge ( const std::set<CoreRange> & core_ranges ){
       std::vector<CoreRange> vcr (core_ranges.begin(), core_ranges.end() );
       vcr.insert(vcr.end(), ranges_.begin(), ranges_.end());
       std::vector<CoreRange> diffs;
-      std::set<CoreRange> is_covered;
-      // Remove CoreRanges that are completely contained by another CoreRange
+      std::set<CoreRange> is_contained;
+
+      // Find all CoreRanges that are completely contained by another CoreRange
       for (auto it1 = vcr.begin(); it1 != vcr.end(); it1++){
         for (auto it2 = vcr.begin(); it2 != vcr.end(); it2++ ){
           if ( it1 == it2 ){
@@ -233,13 +232,14 @@ class CoreRangeSet {
           }
           if ( it1->contains(*it2)){
             // std::cout << it1->str() << " contains " << it2->str() << std::endl;
-            is_covered.insert(*it2);
+            is_contained.insert(*it2);
           }
         }
       }
 
+      // Remove such contained CoreRanges
       for (auto it1 = vcr.begin(); it1 != vcr.end(); ){
-        if ( is_covered.find( *it1) != is_covered.end() ){
+        if ( is_contained.find( *it1) != is_contained.end() ){
           it1 = vcr.erase(it1);
         }else{
           it1++;
@@ -264,7 +264,7 @@ class CoreRangeSet {
         }
       }
 
-      //Diff pair-wise CoreRanges
+      //TODO: Diff CoreRanges
       // for ( unsigned i = 0; i < vcr.size(); i++){
       //   for (unsigned j = i+1; j < vcr.size(); j++){
 
@@ -283,29 +283,13 @@ class CoreRangeSet {
       //   }
       // }
 
-      // std::sort( diffs.begin(), diffs.end() );
-      // Try to merge adjacent CoreRanges
-      // for (auto it1 = vcr.begin(); it1 != vcr.end(); it1++){
-      //   for (auto it2 = vcr.begin(); it2 != vcr.end(); ){
-      //     if ( it1 == it2 ){
-      //         ++it2;
-      //         continue;
-      //     }
-      //     if ( auto merged = it1->merge(*it2) ){
-      //       *it1 = merged.value();
-      //       it2 = vcr.erase(it2);
-      //     }
-      //     else{
-      //       ++it2;
-      //     }
-      //   }
-      // }
       ranges_ = {vcr.begin(), vcr.end()};
+      return *this;
     }
 
-    void merge ( const CoreRangeSet & s )
+    CoreRangeSet merge ( const CoreRangeSet & s )
     {
-      this->merge (s.ranges());
+      return this->merge (s.ranges());
     }
 
     bool core_coord_in_core_ranges(const CoreCoord &core_coord) const {
