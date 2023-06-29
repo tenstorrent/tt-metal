@@ -71,15 +71,13 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict):
         setup.timerAnalysis = {}
 
         devicesData = import_log_run_stats(setup)
+        deviceID = list(devicesData["devices"].keys())[0]  # Assume there is only one device
 
-        start_ID, start_ts, start_risc, start_core = devicesData["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"][
-            "timeseries"
-        ][0]
-        end_ID, end_ts, end_risc, end_core = devicesData["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"][
-            "timeseries"
-        ][-1]
+        timeseriesData = devicesData["devices"][deviceID]["cores"]["DEVICE"]["riscs"]["TENSIX"]["timeseries"]
+        start_ID, start_ts, start_risc, start_core = timeseriesData[0]
+        end_ID, end_ts, end_risc, end_core = timeseriesData[-1]
 
-        cores = list(devicesData["devices"][0]["cores"].keys())
+        cores = list(devicesData["devices"][deviceID]["cores"].keys())
         cores.remove("DEVICE")
 
         delta_time = end_ts - start_ts
@@ -366,7 +364,12 @@ def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
 
 
 @click.command()
-@click.option("-i", "--ops-folder", type=click.Path(exists=True, dir_okay=True), help="Ops profiler logs folder")
+@click.option(
+    "-i",
+    "--ops-folder",
+    type=click.Path(exists=True, dir_okay=True),
+    help="Ops profiler logs folder",
+)
 @click.option("-o", "--output-folder", type=click.Path(), help="Output folder for artifacts")
 @click.option("-n", "--name-append", type=str, help="Name to be appended to default csv name")
 @click.option("-p", "--port", type=int, help="Dashboard webapp port")
