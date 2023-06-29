@@ -45,11 +45,12 @@ void override_runtime_args(
 
 void setup_profiler(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
     auto profiler_info = op.create_profiler_info(input_tensors);
-    if (profiler_info.preferred_name != "None")
-    {
-        op_profiler::set_preferred_name(profiler_info.preferred_name);
+    if (profiler_info.preferred_name.has_value()) {
+        op_profiler::set_preferred_name(profiler_info.preferred_name.value());
     }
-    op_profiler::set_parallelization_strategy(profiler_info.parallelization_strategy);
+    if (profiler_info.parallelization_strategy.has_value()) {
+        op_profiler::set_parallelization_strategy(profiler_info.parallelization_strategy.value());
+    }
 }
 
 std::vector<Tensor> run_without_program_cache(

@@ -65,11 +65,20 @@ void test_operation_infrastructure() {
     auto op = operation::Operation(EltwiseUnary{UnaryOpType::SQRT});
 
     auto program_hash = op.compute_program_hash({input_tensor});
-    TT_ASSERT(program_hash == "tt::tt_metal::EltwiseUnary{.op_type=SQRT,.param=std::nullopt}_1_1_32_32_BFLOAT16_TILE_DRAM", fmt::format("Actual value is {}", program_hash));
+    TT_ASSERT(
+        program_hash == "tt::tt_metal::EltwiseUnary{.op_type=SQRT,.param=std::nullopt}_1_1_32_32_BFLOAT16_TILE_DRAM",
+        fmt::format("Actual value is {}", program_hash)
+    );
 
     auto profiler_info = op.create_profiler_info({input_tensor});
-    TT_ASSERT(profiler_info.preferred_name == "tt::tt_metal::EltwiseUnary{.op_type=SQRT,.param=std::nullopt}", fmt::format("Actual value is {}", profiler_info.preferred_name));
-    TT_ASSERT(profiler_info.parallelization_strategy == "SINGLE_CORE", fmt::format("Actual value is {}", profiler_info.parallelization_strategy));
+    TT_ASSERT(
+        profiler_info.preferred_name.value() == "tt::tt_metal::EltwiseUnary{.op_type=SQRT,.param=std::nullopt}",
+        fmt::format("Actual value is {}", profiler_info.preferred_name.value())
+    );
+    TT_ASSERT(
+        profiler_info.parallelization_strategy.value() == "SINGLE_CORE",
+        fmt::format("Actual value is {}", profiler_info.parallelization_strategy.value())
+    );
 }
 
 void test_numerically() {

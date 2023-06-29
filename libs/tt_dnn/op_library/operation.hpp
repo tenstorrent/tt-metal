@@ -25,8 +25,8 @@ struct ProgramWithCallbacks {
 };
 
 struct ProfilerInfo {
-    std::string preferred_name;
-    std::string parallelization_strategy;
+    std::optional<std::string> preferred_name;
+    std::optional<std::string> parallelization_strategy;
 };
 
 
@@ -272,12 +272,12 @@ class Operation {
         }
 
         ProfilerInfo create_profiler_info(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
-            std::string preferred_name = "None";
+            std::optional<std::string> preferred_name = std::nullopt;
             if constexpr(detail::implements_to_string<T>()) {
                 preferred_name = fmt::format("{}", this->object);
             }
 
-            std::string parallelization_strategy = "None";
+            std::optional<std::string> parallelization_strategy = std::nullopt;
             if constexpr (detail::implements_get_parallelization_strategy<T>()) {
                 parallelization_strategy = magic_enum::enum_name(this->object.get_parallelization_strategy(input_tensors));
             }
