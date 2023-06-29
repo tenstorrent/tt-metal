@@ -13,6 +13,13 @@ namespace tt_metal {
 namespace op_profiler {
 
     namespace detail {
+        static string replace_comma(const string& s)
+        {
+            string ret = s;
+            std::replace( ret.begin(), ret.end(), ',', ';');
+            return ret;
+        }
+
         static string join_vector(const vector<string>& strs, string delimiter = "-")
         {
             string ret = "";
@@ -197,34 +204,36 @@ namespace op_profiler {
 
             public:
 
-                void start_profiling(const string opName)
+                void start_profiling(const string& opName)
                 {
                     if (profileOps)
                     {
+                        auto opNameNoComma = replace_comma(opName);
                         auto callCount = get_call_count_increment(opName);
-                        OpData opData = OpData(opName, callCount, globalCallCount, opStack.size() + 1);
+                        OpData opData = OpData(opNameNoComma, callCount, globalCallCount, opStack.size() + 1);
 
                         opData.profiler.setHostDoProfile(true);
-                        opData.profiler.markStart(opName);
+                        opData.profiler.markStart(opNameNoComma);
 
                         tt::tt_metal::SetHostProfilerFlag(true);
 
-                        setup_profiling_folders (opName, callCount, opData.profiler);
+                        setup_profiling_folders (opNameNoComma, callCount, opData.profiler);
 
                         opStack.push(opData);
                     }
                 }
 
 
-                void stop_profiling(const string opName)
+                void stop_profiling(const string& opName)
                 {
                     if (profileOps)
                     {
+                        auto opNameNoComma = replace_comma(opName);
                         auto& opData = get_op_data();
-                        TT_ASSERT (opName == opData.name, "Something is wrong, op name mismatch");
+                        TT_ASSERT (opNameNoComma == opData.name, "Something is wrong, op name mismatch");
 
                         auto additionalFields = generate_additional_data();
-                        opData.profiler.markStop(opName, false);
+                        opData.profiler.markStop(opNameNoComma, false);
                         opData.profiler.dumpHostResults(additionalFields);
                         clear_profiler();
                     }
@@ -237,46 +246,36 @@ namespace op_profiler {
 
                 void append_input_data (const string& input)
                 {
-                    get_op_data().inputs.push_back(input);
+                    get_op_data().inputs.push_back(replace_comma(input));
                 }
 
                 void append_output_data (const string& output)
                 {
-                    get_op_data().outputs.push_back(output);
+                    get_op_data().outputs.push_back(replace_comma(output));
                 }
 
-                void set_math_fidelity (string fidelity)
+                void set_math_fidelity (const string& fidelity)
                 {
-                    get_op_data().mathFidelity = fidelity;
+                    get_op_data().mathFidelity = replace_comma(fidelity);
                 }
 
-                void set_parallelization_strategy (string strategy)
+                void set_parallelization_strategy (const string& strategy)
                 {
-                    get_op_data().parlStrategy = strategy;
+                    get_op_data().parlStrategy = replace_comma(strategy);
                 }
 
-                void set_preferred_name (string name)
+                void set_preferred_name (const string& name)
                 {
-                    get_op_data().preferredName = name;
+                    get_op_data().preferredName = replace_comma(name);
                 }
 
-                void append_meta_data(string metaData)
+                void append_meta_data(const string& metaData)
                 {
                     if (profileOps)
                     {
                         TT_ASSERT (opStack.size() > 0, "Something is wrong, cannot append meta data, op stack is empty");
-                        string noDashMetaData = "";
-                        for (auto &ch : metaData)
-                        {
-                            if (ch != '-')
-                            {
-                                noDashMetaData += ch;
-                            }
-                            else
-                            {
-                                noDashMetaData += '_';
-                            }
-                        }
+                        string noDashMetaData = replace_comma(metaData);
+                        std::replace( noDashMetaData.begin(), noDashMetaData.end(), '-', '_');
                         get_op_data().metaDataVector.push_back(noDashMetaData);
                     }
                 }
@@ -286,7 +285,7 @@ namespace op_profiler {
                     profileOps = doProfile;
                 }
 
-                void set_profiler_location(string profilerLogFolder)
+                void set_profiler_location(const string& profilerLogFolder)
                 {
                     if (profileOps)
                     {

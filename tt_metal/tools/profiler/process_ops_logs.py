@@ -145,7 +145,7 @@ def parse_ops_logs(opsFolder):
                         outputs = row[9].strip()
                         mathFidelity = row[10].strip()
                         parallelizationStrategy = row[11].strip()
-                        preferredName = row[12].strip()
+                        preferredName = row[12].strip().split("tt::tt_metal::")[-1]
                         metadata = row[13].strip()
 
                         if preferredName:
@@ -173,6 +173,7 @@ def parse_ops_logs(opsFolder):
 
                         timeDataDict = {
                             "CALL COUNT": op_flavour_to_count[op_name],
+                            "_OP CALL COUNT": call_count,
                             "IS OP": is_op,
                             "GLOBAL CALL COUNT": global_call_count,
                             "HOST START TS": start_ts,
@@ -218,7 +219,7 @@ def run_dashbaord_webapp(ops, opsFolder, port=None):
         for opCall in opCalls:
             s = opCall["HOST START TS"] - minTime
             e = opCall["HOST END TS"] - minTime
-            c = opCall["CALL COUNT"]
+            c = opCall["_OP CALL COUNT"]
             callDepth = opCall["CALL DEPTH"]
             y = 1 + (0.2 / maxStackSize) * (maxStackSize - callDepth + 1)
             diff = opCall["HOST DURATION [ns]"]

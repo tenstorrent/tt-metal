@@ -620,7 +620,7 @@ operation::Hash BertLargeMatmul::compute_program_hash(
 std::ostream& operator<<(std::ostream& os, const BertLargeMatmul& op) {
     os << boost::core::demangle(typeid(op).name());
     os << "{";
-    os << ".bert_large_tm_op_type=" << magic_enum::enum_name(op.bert_large_matmul_op_type);
+    os << ".bert_large_matmul_op_type=" << magic_enum::enum_name(op.bert_large_matmul_op_type);
     // TODO(arakhmati): add output_mem_config
     os << ", .fuse_gelu_activation=" << op.fuse_gelu_activation;
     os << "}";
