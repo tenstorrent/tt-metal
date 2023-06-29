@@ -313,8 +313,8 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     return {std::move(program), override_runtime_args_callback};
 }
 
-void Reshape::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+void Reshape::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 
     auto output_shape = infer_dims_for_reshape(this->N, this->C, this->H, this->W, input_tensor_a.volume());
@@ -333,18 +333,18 @@ void Reshape::validate(const std::vector<std::reference_wrapper<const Tensor>> &
     }
 }
 
-std::vector<Shape> Reshape::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Shape> Reshape::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     return {infer_dims_for_reshape(this->N, this->C, this->H, this->W, input_tensor_a.volume())};
 }
 
-std::vector<Tensor> Reshape::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Tensor> Reshape::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
 }
 
-operation::ProgramWithCallbacks Reshape::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+operation::ProgramWithCallbacks Reshape::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         return {reshape_rm_single_core(input_tensor_a, output_tensor, this->N, this->C, this->H, this->W)};
@@ -356,8 +356,8 @@ operation::ProgramWithCallbacks Reshape::create_program(const std::vector<std::r
     }
 }
 
-operation::Hash Reshape::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+operation::Hash Reshape::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
 
     return fmt::format(
         "Reshape_{}_{}_{}_{}_{}",

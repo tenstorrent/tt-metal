@@ -3,7 +3,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 namespace tt {
 
@@ -33,12 +33,12 @@ struct Reduce {
     const ReduceOpDim::Enum dim;
     const float scaler;
 
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
-    ReduceOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    void validate(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    ReduceOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
 };
 

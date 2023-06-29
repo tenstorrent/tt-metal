@@ -9,8 +9,8 @@ namespace tt {
 
 namespace tt_metal {
 
-void BertLargeTM::validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+void BertLargeTM::validate(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
     switch (this->bert_large_tm_op_type) {
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
             TT_ASSERT((input_tensor.shape() == Shape({9, 1, 384, 3072})), "Unsupported input shape");
@@ -28,7 +28,7 @@ void BertLargeTM::validate(const std::vector<std::reference_wrapper<const Tensor
     }
 }
 
-std::vector<Shape> BertLargeTM::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
+std::vector<Shape> BertLargeTM::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     std::vector<Shape> output_shape_vec;
     switch (this->bert_large_tm_op_type) {
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
@@ -50,12 +50,12 @@ std::vector<Shape> BertLargeTM::compute_output_shapes(const std::vector<std::ref
     return output_shape_vec;
 }
 
-std::vector<Tensor> BertLargeTM::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
+std::vector<Tensor> BertLargeTM::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
-operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
     auto device_compute_and_storage_grid_size = input_tensor.device()->compute_and_storage_grid_size();
@@ -79,8 +79,8 @@ operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<st
     return {};
 }
 
-operation::Hash BertLargeTM::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+operation::Hash BertLargeTM::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
 
     return fmt::format(
         "bert_large_tm_{}_{}_{}",

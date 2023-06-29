@@ -10,8 +10,8 @@ namespace tt {
 
 namespace tt_metal {
 
-void Transpose::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
     const auto shape = input_tensor.shape();
     u32 W = shape[3], H = shape[2], C = shape[3], NC = shape[1]*shape[0];
     u32 HW = H*W;
@@ -24,8 +24,8 @@ void Transpose::validate(const std::vector<std::reference_wrapper<const Tensor>>
 }
 
 
-std::vector<Shape> Transpose::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+std::vector<Shape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
     auto out_shape = input_tensor.shape();
     switch (this->dim){
         case TransposeOpDim::CN:
@@ -45,12 +45,12 @@ std::vector<Shape> Transpose::compute_output_shapes(const std::vector<std::refer
 }
 
 
-std::vector<Tensor> Transpose::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
-operation::ProgramWithCallbacks Transpose::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
@@ -67,8 +67,8 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<std:
     }
 }
 
-TransposeOpParallelizationStrategy::Enum Transpose::get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+TransposeOpParallelizationStrategy::Enum Transpose::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
     auto ashape = input_tensor.shape();
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
     if (this->dim == TransposeOpDim::WH && num_tiles > 1) {

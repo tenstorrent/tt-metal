@@ -24,29 +24,29 @@ struct BertLargeTM {
     BertLargeTMOpType bert_large_tm_op_type;
     MemoryConfig output_mem_config;
 
-    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
 std::ostream& operator<<(std::ostream& os, const BertLargeTM& op);
 
 inline std::vector<Tensor> bert_large_split_fused_qkv(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeTM{BertLargeTMOpType::SPLIT_FUSED_QKV, mem_config}, {std::cref(input_tensor_a)});
+    return operation::run(BertLargeTM{BertLargeTMOpType::SPLIT_FUSED_QKV, mem_config}, {input_tensor_a});
 }
 inline Tensor bert_large_create_q_head(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeTM{BertLargeTMOpType::CREATE_Q_HEAD, mem_config}, {std::cref(input_tensor_a)}).at(0);
+    return operation::run(BertLargeTM{BertLargeTMOpType::CREATE_Q_HEAD, mem_config}, {input_tensor_a}).at(0);
 }
 inline Tensor bert_large_create_k_head(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeTM{BertLargeTMOpType::CREATE_K_HEAD, mem_config}, {std::cref(input_tensor_a)}).at(0);
+    return operation::run(BertLargeTM{BertLargeTMOpType::CREATE_K_HEAD, mem_config}, {input_tensor_a}).at(0);
 }
 inline Tensor bert_large_create_v_head(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeTM{BertLargeTMOpType::CREATE_V_HEAD, mem_config}, {std::cref(input_tensor_a)}).at(0);
+    return operation::run(BertLargeTM{BertLargeTMOpType::CREATE_V_HEAD, mem_config}, {input_tensor_a}).at(0);
 }
 inline Tensor bert_large_concat_heads(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeTM{BertLargeTMOpType::CONCAT_HEADS, mem_config}, {std::cref(input_tensor_a)}).at(0);
+    return operation::run(BertLargeTM{BertLargeTMOpType::CONCAT_HEADS, mem_config}, {input_tensor_a}).at(0);
 }
 
 }  // namespace tt_metal

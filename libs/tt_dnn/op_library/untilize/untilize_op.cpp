@@ -153,26 +153,26 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
 }
 
 
-void Untilize::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+void Untilize::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.dtype() != DataType::BFLOAT8_B, "Bfloat8_b can only exist as tilized data");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
 }
 
-std::vector<Shape> Untilize::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Shape> Untilize::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     return {input_tensor_a.shape()};
 }
 
-std::vector<Tensor> Untilize::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
 }
 
-operation::ProgramWithCallbacks Untilize::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+operation::ProgramWithCallbacks Untilize::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return {untilize_single_core(input_tensor_a, output_tensor)};
 }
@@ -368,8 +368,8 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
     return program;
 }
 
-void UntilizeWithUnpadding::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.dtype() != DataType::BFLOAT8_B, "Bfloat8_b can only exist as tilized data");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
@@ -397,16 +397,16 @@ void UntilizeWithUnpadding::validate(const std::vector<std::reference_wrapper<co
     TT_ASSERT(((this->output_tensor_end[3] - this->output_tensor_start[3] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
 
 }
-std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     return {this->output_tensor_shape};
 }
-std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
 }
 
-operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return {untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end)};
 }

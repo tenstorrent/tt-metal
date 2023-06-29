@@ -318,7 +318,7 @@ namespace op_profiler {
         detail::operationProfiler.append_input_data(detail::tensor_to_str(input));
     }
 
-    static void append_input_optional_data (std::optional<std::reference_wrapper<const Tensor>> input)
+    static void append_input_optional_data (std::optional<const Tensor> input)
     {
         if (input.has_value()) {
             detail::operationProfiler.append_input_data(detail::tensor_to_str(input.value()));
@@ -335,8 +335,8 @@ namespace op_profiler {
     }
 
     static void append_all_tensor_io_data (
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         const std::vector<Tensor> &output_tensors)
     {
         if (detail::operationProfiler.get_profiler_flag())

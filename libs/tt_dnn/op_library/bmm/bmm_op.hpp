@@ -58,23 +58,23 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_mcast_padding  (const Tenso
 
 struct Matmul {
     const MemoryConfig output_mem_config;
-    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
-    BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 };
 
 
 struct BatchedMatmul {
     const MemoryConfig output_mem_config;
-    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
-    BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 };
 
 
@@ -103,7 +103,7 @@ enum class BertLargeMatmulOpType {
     POST_SOFTMAX_BMM = 5,
 };
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<std::reference_wrapper<const Tensor>> bias, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool gelu=false);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool gelu=false);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const Shape &ashape, const Shape &bshape, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 
@@ -112,40 +112,40 @@ struct BertLargeMatmul {
     const MemoryConfig output_mem_config;
     const bool fuse_gelu_activation;
 
-    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
     operation::Hash compute_program_hash(
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors
     ) const;
 };
 
 std::ostream& operator<<(std::ostream& os, const BertLargeMatmul& op);
 
 
-inline Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::FUSED_QKV, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0);
+inline Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config) {
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::FUSED_QKV, mem_config, false}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
 }
-inline Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, bool fuse_gelu_activation, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF1, mem_config, fuse_gelu_activation}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0);
+inline Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, bool fuse_gelu_activation, const MemoryConfig& mem_config) {
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF1, mem_config, fuse_gelu_activation}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
 }
-inline Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF2, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0);
+inline Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config) {
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::FF2, mem_config, false}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
 }
-inline Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<std::reference_wrapper<const Tensor>> bias, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::SELFOUT, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {bias}).at(0);
+inline Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config) {
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::SELFOUT, mem_config, false}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
 }
 inline Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0);
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::PRE_SOFTMAX_BMM, mem_config, false}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 inline Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config, false}, {std::cref(input_tensor_a), std::cref(input_tensor_b)}, {std::nullopt}).at(0);
+    return operation::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config, false}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 
 

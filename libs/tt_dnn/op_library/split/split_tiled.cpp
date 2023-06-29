@@ -50,8 +50,8 @@ tt::DataFormat get_data_format(const Tensor &a) {
     return cb_data_format;
 }
 
-void SplitTiled::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto &input_tensor = input_tensors.at(0).get();
+void SplitTiled::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto &input_tensor = input_tensors.at(0);
     tt_metal::Buffer *in0_buffer = input_tensor.buffer();
     auto cb_data_format = get_data_format(input_tensor);
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
@@ -61,8 +61,8 @@ void SplitTiled::validate(const std::vector<std::reference_wrapper<const Tensor>
 }
 
 std::vector<Shape> SplitTiled::compute_output_shapes(
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto &input_tensor = input_tensors.at(0).get();
+    const std::vector<Tensor> &input_tensors) const {
+    const auto &input_tensor = input_tensors.at(0);
     auto input_shape = input_tensor.shape();
     auto output_shape = get_single_output_shape(input_tensor.shape());
     // split last dim in half
@@ -70,17 +70,17 @@ std::vector<Shape> SplitTiled::compute_output_shapes(
 }
 
 std::vector<Tensor> SplitTiled::create_output_tensors(
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    const std::vector<Tensor> &input_tensors) const {
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks SplitTiled::create_program(
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, std::vector<Tensor> &output_tensors) const {
+    const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     return {};
 }
 
-operation::Hash SplitTiled::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+operation::Hash SplitTiled::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
 
     return fmt::format(
         "SplitTiled_{}_{}_{}_{}",

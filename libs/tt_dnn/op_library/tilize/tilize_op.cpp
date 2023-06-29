@@ -164,8 +164,8 @@ Program tilize_single_core(const Tensor &a, Tensor& output) {
     return program;
 }
 
-void Tilize::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR or input_tensor_a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
 
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
@@ -177,8 +177,8 @@ void Tilize::validate(const std::vector<std::reference_wrapper<const Tensor>> &i
     TT_ASSERT((stick_size % 2) == 0, "Stick size must be divisible by 2");
 }
 
-std::vector<Shape> Tilize::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Shape> Tilize::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     auto output_shape = input_tensor_a.shape();
     if(input_tensor_a.layout() == Layout::CHANNELS_LAST) {
         // Set channels last in the innermost dim in the shape
@@ -187,13 +187,13 @@ std::vector<Shape> Tilize::compute_output_shapes(const std::vector<std::referenc
     return {output_shape};
 }
 
-std::vector<Tensor> Tilize::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Tensor> Tilize::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
 }
 
-operation::ProgramWithCallbacks Tilize::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+operation::ProgramWithCallbacks Tilize::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return {tilize_single_core(input_tensor_a, output_tensor)};
 }
@@ -344,8 +344,8 @@ Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
     return program;
 }
 
-void TilizeWithZeroPadding::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+void TilizeWithZeroPadding::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR or input_tensor_a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
 
     uint32_t stick_s =  input_tensor_a.layout() == Layout::ROW_MAJOR ? input_tensor_a.shape()[3] : input_tensor_a.shape()[1];
@@ -356,8 +356,8 @@ void TilizeWithZeroPadding::validate(const std::vector<std::reference_wrapper<co
     TT_ASSERT((stick_size % 2) == 0, "Stick size must be divisible by 2");
 }
 
-std::vector<Shape> TilizeWithZeroPadding::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Shape> TilizeWithZeroPadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     auto output_shape = input_tensor_a.shape();
     if(input_tensor_a.layout() == Layout::CHANNELS_LAST) {
         // Set channels last in the innermost dim in the shape
@@ -368,13 +368,13 @@ std::vector<Shape> TilizeWithZeroPadding::compute_output_shapes(const std::vecto
     return {output_shape};
 }
 
-std::vector<Tensor> TilizeWithZeroPadding::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Tensor> TilizeWithZeroPadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
 }
 
-operation::ProgramWithCallbacks TilizeWithZeroPadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+operation::ProgramWithCallbacks TilizeWithZeroPadding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return {tilize_with_zero_padding_single_core(input_tensor_a, output_tensor)};
 }
@@ -584,8 +584,8 @@ Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::arra
     return program;
 }
 
-void TilizeWithValPadding::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT((input_tensor_a.layout() == Layout::ROW_MAJOR), "Can only tilize row major data");
 
     TT_ASSERT(input_tensor_a.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0]);
@@ -597,18 +597,18 @@ void TilizeWithValPadding::validate(const std::vector<std::reference_wrapper<con
     TT_ASSERT(this->output_tensor_shape[2] % TILE_HEIGHT == 0, "Output shape must be tilizable");
     TT_ASSERT(this->output_tensor_shape[3] % TILE_WIDTH == 0, "Output shape must be tilizable");
 }
-std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     return {this->output_tensor_shape};
 }
-std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
 // Currently calling pad on a tile requires the output pad shape to be tile
-operation::ProgramWithCallbacks TilizeWithValPadding::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+operation::ProgramWithCallbacks TilizeWithValPadding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return {tilize_with_val_padding(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
 }

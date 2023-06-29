@@ -939,15 +939,15 @@ Program conv_single_core(const Tensor& a, const Tensor &b, const vector<int> con
     return conv_as_large_bmm_single_core_(a, b, conv_params, in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, untilize_out, output);
 }
 
-void Conv::validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
-    const auto& input_tensor_b = input_tensors.at(1).get();
+void Conv::validate(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
     // TODO: ...
 }
 
-std::vector<Shape> Conv::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
-    const auto& input_tensor_b = input_tensors.at(1).get();
+std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
     vector<int> input_tensor_a_shape = { (int) input_tensor_a.shape()[1], (int) input_tensor_a.shape()[2], (int) input_tensor_a.shape()[3]};
     auto mm_shape = compute_conv_as_mm_shape(input_tensor_a_shape, conv_params, in0_block_h, in0_block_w);
     // TODO: Update batch size below
@@ -955,9 +955,9 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<std::reference_
     return {output_tensor_shape};
 }
 
-std::vector<Tensor> Conv::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const {
+std::vector<Tensor> Conv::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-    const auto& input_tensor = input_tensors.at(0).get();
+    const auto& input_tensor = input_tensors.at(0);
     Tensor output = create_output_dram_buffer_(input_tensor.device(), input_tensor.dtype(), output_shape, untilize_out);
     std::vector<Tensor> output_tensors;
     // TODO: check if anything else needs to be done here.
@@ -965,9 +965,9 @@ std::vector<Tensor> Conv::create_output_tensors(const std::vector<std::reference
     return output_tensors;
 }
 
-operation::ProgramWithCallbacks Conv::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
-    const auto& input_tensor_b = input_tensors.at(1).get();
+operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
     return {conv_single_core(input_tensor_a, input_tensor_b, conv_params, in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w, untilize_out, output_tensor)};

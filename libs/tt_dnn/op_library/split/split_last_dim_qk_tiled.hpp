@@ -13,7 +13,7 @@ struct SplitLastDimQKTiled : public SplitTiled {
     // num_chunks = 2
     SplitLastDimQKTiled(const MemoryConfig& mem_config) : SplitTiled{3, 2, mem_config} { ; }
     operation::ProgramWithCallbacks create_program(
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+        const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
 };
 

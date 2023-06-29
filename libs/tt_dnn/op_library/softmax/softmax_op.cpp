@@ -18,13 +18,13 @@ namespace tt {
 namespace tt_metal {
 
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.buffer_type() == BufferType::DRAM; }
-inline bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> input_tensor) {
-     return input_tensor.has_value() ? is_dram(input_tensor.value().get()) : true;
+inline bool is_dram(const std::optional<const Tensor> input_tensor) {
+     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, const std::optional<std::reference_wrapper<const Tensor>> mask, float scale) {
+operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, const std::optional<const Tensor> mask, float scale) {
 
     const auto shape = input_tensor.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
     TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
-    TT_ASSERT(not mask.has_value() || mask.value().get().dtype() == DataType::BFLOAT16);
+    TT_ASSERT(not mask.has_value() || mask.value().dtype() == DataType::BFLOAT16);
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
@@ -164,7 +164,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 
         uint32_t src_addr = src0_dram_buffer->address();
         //uint32_t dst_addr = dst_dram_buffer->address();
-        uint32_t mask_addr = mask.has_value() ? mask.value().get().buffer()->address() : 0;
+        uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
         uint32_t tile_offset = wtpc*Wt*icore;
         //cout << "WTPC=" << wtpc << endl;
         //cout << "Wt=" << Wt << endl;
@@ -215,23 +215,23 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 } // scale_mask_softmax_
 
 
-void AttentionSoftmaxInPlace::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const {
+void AttentionSoftmaxInPlace::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 1, "Must have 1 or 2 input tensors");
 }
 
-std::vector<Shape> AttentionSoftmaxInPlace::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Shape> AttentionSoftmaxInPlace::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }
 
-std::vector<Tensor> AttentionSoftmaxInPlace::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Tensor> AttentionSoftmaxInPlace::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }
 
 operation::ProgramWithCallbacks AttentionSoftmaxInPlace::create_program(
-    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor> &output_tensors
 ) const {
     auto& input_tensor = input_tensors.at(0);
@@ -241,23 +241,21 @@ operation::ProgramWithCallbacks AttentionSoftmaxInPlace::create_program(
 }
 
 operation::Hash AttentionSoftmaxInPlace::compute_program_hash(
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors
 ) const {
-    const auto& input_tensor = input_tensors.at(0).get();
-    const auto& mask = optional_input_tensors.at(0);
+    const auto& input_tensor = input_tensors.at(0);    const auto& mask = optional_input_tensors.at(0);
 
     return fmt::format(
         "attention_softmax_in_place_{}_{}_{}",
         this->scale,
         operation::hash_tensor(input_tensor),
-        mask.has_value() ? operation::hash_tensor(mask.value().get()) : "nullopt"
+        mask.has_value() ? operation::hash_tensor(mask.value()) : "nullopt"
     );
 }
 
-Tensor scale_mask_softmax_in_place(float scale, std::optional<std::reference_wrapper<const Tensor>> mask, Tensor& input_tensor) {
-    std::vector<std::reference_wrapper<const Tensor>> input_tensors{input_tensor};
-    operation::run(AttentionSoftmaxInPlace{.scale=scale}, input_tensors, {mask});
+Tensor scale_mask_softmax_in_place(float scale, std::optional<const Tensor> mask, Tensor& input_tensor) {
+    operation::run(AttentionSoftmaxInPlace{.scale=scale}, {input_tensor}, {mask});
     return input_tensor;
 }
 

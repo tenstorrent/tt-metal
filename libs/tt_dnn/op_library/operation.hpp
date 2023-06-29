@@ -46,7 +46,7 @@ constexpr bool implements_validate() {
     return std::experimental::is_detected<
         has_validate_t,
         T,
-        const std::vector<std::reference_wrapper<const Tensor>>&
+        const std::vector<Tensor>&
     >{};
 }
 
@@ -58,8 +58,8 @@ constexpr bool implements_validate_with_optional_input_tensors() {
     return std::experimental::is_detected<
         has_validate_with_optional_input_tensors_t,
         T,
-        const std::vector<std::reference_wrapper<const Tensor>>&,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>&
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&
     >{};
 }
 
@@ -71,7 +71,7 @@ constexpr bool implements_compute_program_hash() {
     return std::experimental::is_detected<
         has_compute_program_hash_t,
         T,
-        const std::vector<std::reference_wrapper<const Tensor>>&
+        const std::vector<Tensor>&
     >{};
 }
 
@@ -83,8 +83,8 @@ constexpr bool implements_compute_program_hash_with_optional_input_tensors() {
     return std::experimental::is_detected<
         has_compute_program_hash_with_optional_input_tensors_t,
         T,
-        const std::vector<std::reference_wrapper<const Tensor>>&,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>&
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&
     >{};
 }
 
@@ -96,7 +96,7 @@ constexpr bool implements_create_program() {
     return std::experimental::is_detected<
         has_create_program_t,
         T,
-        const std::vector<std::reference_wrapper<const Tensor>>&,
+        const std::vector<Tensor>&,
         std::vector<Tensor>&
     >{};
 }
@@ -109,8 +109,8 @@ constexpr bool implements_create_program_with_optional_input_tensors() {
     return std::experimental::is_detected<
         has_create_program_with_optional_input_tensors_t,
         T,
-        const std::vector<std::reference_wrapper<const Tensor>>&,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>&,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&,
         std::vector<Tensor>&
     >{};
 }
@@ -123,7 +123,7 @@ constexpr bool implements_get_parallelization_strategy() {
     return std::experimental::is_detected<
         has_get_parallelization_strategy_t,
         T,
-        const std::vector<std::reference_wrapper<const Tensor>>&
+        const std::vector<Tensor>&
     >{};
 }
 
@@ -145,39 +145,39 @@ class Operation {
     struct Interface {
         virtual ~Interface() {}
 
-        virtual void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
+        virtual void validate(const std::vector<Tensor> &input_tensors) const = 0;
 
         virtual void validate(
-            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-            const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors
         ) const = 0;
 
-        virtual std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
+        virtual std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const = 0;
 
-        virtual std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
+        virtual std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const = 0;
 
         virtual ProgramWithCallbacks create_program(
-            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+            const std::vector<Tensor> &input_tensors,
             std::vector<Tensor> &output_tensors
         ) const = 0;
 
         virtual ProgramWithCallbacks create_program(
-            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-            const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
             std::vector<Tensor> &output_tensors
         ) const = 0;
 
-        virtual Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
+        virtual Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const = 0;
 
         virtual Hash compute_program_hash(
-            const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
-            const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors
         ) const = 0;
 
         virtual bool supports_program_caching() const = 0;
         virtual std::string get_type_name() const = 0 ;
 
-        virtual ProfilerInfo create_profiler_info(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const = 0;
+        virtual ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const = 0;
     };
 
     template< typename T >
@@ -185,7 +185,7 @@ class Operation {
 
         Implementation(const T& t) : object(t) {}
 
-        void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
+        void validate(const std::vector<Tensor> &input_tensors) const override {
             if constexpr (detail::implements_validate<T>()) {
                 static_assert(detail::implements_create_program<T>());
                 return this->object.validate(input_tensors);
@@ -196,8 +196,8 @@ class Operation {
         }
 
         void validate(
-            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-            const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors
         ) const override {
             if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
                 static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
@@ -208,16 +208,16 @@ class Operation {
             }
         }
 
-        std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
+        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const override {
             return this->object.compute_output_shapes(input_tensors);
         }
 
-        std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
+        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const override {
             return this->object.create_output_tensors(input_tensors);
         }
 
         ProgramWithCallbacks create_program(
-            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+            const std::vector<Tensor> &input_tensors,
             std::vector<Tensor> &output_tensors
         ) const override {
             if constexpr (detail::implements_create_program<T>()) {
@@ -229,8 +229,8 @@ class Operation {
         }
 
         ProgramWithCallbacks create_program(
-            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-            const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
             std::vector<Tensor> &output_tensors
         ) const override {
             if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
@@ -241,7 +241,7 @@ class Operation {
             }
         }
 
-        Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
+        Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const override {
             if constexpr (detail::implements_compute_program_hash<T>()) {
                 static_assert(detail::implements_create_program<T>());
                 return this->object.compute_program_hash(input_tensors);
@@ -251,8 +251,8 @@ class Operation {
         }
 
         Hash compute_program_hash(
-            const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-            const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors
         ) const {
             if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
                 static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
@@ -271,7 +271,7 @@ class Operation {
             return boost::core::demangle(typeid(T).name());
         }
 
-        ProfilerInfo create_profiler_info(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const override {
+        ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const override {
             std::optional<std::string> preferred_name = std::nullopt;
             if constexpr(detail::implements_to_string<T>()) {
                 preferred_name = fmt::format("{}", this->object);
@@ -298,8 +298,8 @@ class Operation {
     Operation(T&& operation): implementation_(std::make_unique<Implementation<T>>(std::forward<T>(operation))) {}
 
     void validate(
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors
     ) const {
         if (optional_input_tensors.empty()) {
             return this->implementation_->validate(input_tensors);
@@ -307,17 +307,17 @@ class Operation {
         return this->implementation_->validate(input_tensors, optional_input_tensors);
     }
 
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
         return this->implementation_->compute_output_shapes(input_tensors);
     }
 
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const {
         return this->implementation_->create_output_tensors(input_tensors);
     }
 
     ProgramWithCallbacks create_program(
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const {
         if (optional_input_tensors.empty()) {
@@ -327,8 +327,8 @@ class Operation {
     }
 
     Hash compute_program_hash(
-        const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors = {}
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}
     ) const {
         if (optional_input_tensors.empty()) {
             return this->implementation_->compute_program_hash(input_tensors);
@@ -345,7 +345,7 @@ class Operation {
     }
 
 
-    ProfilerInfo create_profiler_info(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+    ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const {
         return this->implementation_->create_profiler_info(input_tensors);
     }
 

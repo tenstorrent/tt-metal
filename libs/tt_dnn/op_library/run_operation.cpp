@@ -1,5 +1,7 @@
 #include <libs/tensor/tensor.hpp>
+#include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/operation.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
@@ -9,10 +11,10 @@ namespace tt::tt_metal::operation {
 
 namespace detail {
 
-static Device* get_device(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
+static Device* get_device(const std::vector<Tensor> &input_tensors) {
     for (auto &input_tensor : input_tensors) {
-        if (not input_tensor.get().on_host()) {
-            return input_tensor.get().device();
+        if (not input_tensor.on_host()) {
+            return input_tensor.device();
         }
     }
     auto device = AutoFormat::GetDefaultDevice();
@@ -22,16 +24,16 @@ static Device* get_device(const std::vector<std::reference_wrapper<const Tensor>
 
 void override_runtime_args(
     const OverrideRuntimeArgsCallback& override_runtime_args_callback,
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>> &optional_input_tensors,
     const std::vector<Tensor> &output_tensors
 ) {
     std::vector<Buffer*> input_buffers;
     for (auto& tensor : input_tensors) {
-        input_buffers.push_back(tensor.get().buffer());
+        input_buffers.push_back(tensor.buffer());
     }
     for (auto& tensor : optional_input_tensors) {
-        auto buffer = tensor.has_value() ? tensor.value().get().buffer() : nullptr;
+        auto buffer = tensor.has_value() ? tensor.value().buffer() : nullptr;
         input_buffers.push_back(buffer);
     }
 
@@ -43,7 +45,7 @@ void override_runtime_args(
     override_runtime_args_callback(input_buffers, output_buffers);
 }
 
-void setup_profiler(const Operation& op, const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) {
+void setup_profiler(const Operation& op, const std::vector<Tensor> &input_tensors) {
     auto profiler_info = op.create_profiler_info(input_tensors);
     if (profiler_info.preferred_name.has_value()) {
         op_profiler::set_preferred_name(profiler_info.preferred_name.value());
@@ -55,8 +57,8 @@ void setup_profiler(const Operation& op, const std::vector<std::reference_wrappe
 
 std::vector<Tensor> run_without_program_cache(
     const Operation& op,
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>> &optional_input_tensors) {
 
     auto profile_scope = op_profiler::ProfileScope(op.get_type_name());
     auto do_profile = op_profiler::get_profiler_flag();
@@ -108,8 +110,8 @@ struct CircularBufferContext {
 
 std::vector<Tensor> run_with_program_cache(
     const Operation& op,
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors) {
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>> &optional_input_tensors) {
 
     auto profile_scope = op_profiler::ProfileScope(op.get_type_name());
     auto do_profile = op_profiler::get_profiler_flag();
@@ -153,8 +155,8 @@ std::vector<Tensor> run_with_program_cache(
 
 std::vector<Tensor> run(
     const Operation& op,
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>> &optional_input_tensors
 ) {
     if (program_cache::is_enabled() and op.supports_program_caching()) {
         return detail::run_with_program_cache(op, input_tensors, optional_input_tensors);
@@ -168,21 +170,93 @@ std::vector<Tensor> run(
 
 std::vector<Tensor> generic_create_output_tensors(
     const Operation& op,
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-    Layout output_layout = Layout::TILE,
-    const MemoryConfig &output_mem_config = MemoryConfig{.interleaved = true}
+    const std::vector<Tensor> &input_tensors,
+    Layout output_layout,
+    const MemoryConfig &output_mem_config
 ) {
-    const auto& input_tensor = input_tensors.at(0).get();
+    const auto& input_tensor = input_tensors.at(0);
     const auto& output_shapes = op.compute_output_shapes(input_tensors);
 
-    // HACK to avoid copy constructors when using vectors
-    // TODO: If we have default initializers for Tensor, we can do: std::vector<Tensor> output_tensor(num_tensors);
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(output_shapes.size());
     for (const auto& output_shape : output_shapes) {
         output_tensors.emplace_back(Tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), output_mem_config));
     }
     return output_tensors;
+}
+
+Tensor run_without_autoformat(const Operation& op, const Tensor &input_tensor) {
+    Device* device;
+    if (input_tensor.on_host()) {
+        device = AutoFormat::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else {
+        device = input_tensor.device();
+    }
+
+    auto input_tensor_on_dev = input_tensor;
+    if (input_tensor_on_dev.on_host()) {
+        input_tensor_on_dev = input_tensor_on_dev.to(device);
+    }
+    return run(op, {input_tensor}).at(0);
+}
+
+Tensor run_with_autoformat(const Operation& op, const Tensor &input_tensor, float pad_value, bool pad_c) {
+    Device* device;
+    if (input_tensor.on_host()) {
+        device = AutoFormat::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else {
+        device = input_tensor.device();
+    }
+
+    auto output_shape = op.compute_output_shapes({input_tensor}).at(0);
+
+    auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape(), pad_c);
+    auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
+    auto padded_input_tensor = input_tensor;
+    if (pad_input) {
+        padded_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, pad_value);
+    }
+    auto output_tensor = run(op, {padded_input_tensor}).at(0);
+    if (pad_input) {
+        output_tensor = AutoFormat::format_output_tensor(output_tensor, output_shape, device);
+    }
+    return output_tensor;
+}
+
+Tensor run_with_autoformat(const Operation& op, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float pad_value) {
+    Device* device;
+    if (input_tensor_a.on_host() && input_tensor_b.on_host()) {
+        device = AutoFormat::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    } else if (!input_tensor_a.on_host()){
+        device = input_tensor_a.device();
+    } else {
+        device = input_tensor_b.device();
+    }
+
+    auto output_shape = op.compute_output_shapes({input_tensor_a, input_tensor_b}).at(0);
+
+    auto padded_input_shape_a = AutoFormat::pad_to_tile_shape(input_tensor_a.shape());
+    auto padded_input_shape_b = AutoFormat::pad_to_tile_shape(input_tensor_b.shape());
+
+    auto pad_a = not AutoFormat::check_input_tensor_format(input_tensor_a, padded_input_shape_a);
+    auto padded_input_tensor_a = input_tensor_a;
+    if (pad_a) {
+        padded_input_tensor_a = AutoFormat::format_input_tensor(input_tensor_a, device, padded_input_shape_a, pad_value);
+    }
+
+    auto pad_b = not AutoFormat::check_input_tensor_format(input_tensor_b, padded_input_shape_b);
+    auto padded_input_tensor_b = input_tensor_b;
+    if (pad_b) {
+        padded_input_tensor_b = AutoFormat::format_input_tensor(input_tensor_b, device, padded_input_shape_b, pad_value);
+    }
+    auto output_tensor = run(op, {padded_input_tensor_a, padded_input_tensor_b}).at(0);
+    if (pad_a or pad_b) {
+        output_tensor = AutoFormat::format_output_tensor(output_tensor, output_shape, device);
+    }
+    return output_tensor;
 }
 
 Hash hash_tensor(const Tensor& tensor) {

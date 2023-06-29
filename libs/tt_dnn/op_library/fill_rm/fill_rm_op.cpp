@@ -81,28 +81,28 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
     return {std::move(program), override_runtime_args_callback};
 }
 
-void FillRM::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+void FillRM::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT((this->N > 0 && this->C > 0 && this-> H > 0 && this-> W > 0));
     TT_ASSERT((this->hFill <= this->H && this->wFill <= this->W));
 }
 
-std::vector<Shape> FillRM::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Shape> FillRM::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     Shape output_shape = {this->N, this->C, this->H, this->W};
     return {output_shape};
 }
 
-std::vector<Tensor> FillRM::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Tensor> FillRM::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR);
 }
 
-operation::ProgramWithCallbacks FillRM::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+operation::ProgramWithCallbacks FillRM::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return fill_rm_single_core(input_tensor, output_tensor, this->N, this->C, this->H, this->W, this->hFill, this-> wFill, this->val_hi, this->val_lo);
 
 }
-operation::Hash FillRM::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+operation::Hash FillRM::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
 
     uint32_t N, C, H, W, hFill, wFill;
     float val_hi, val_lo;

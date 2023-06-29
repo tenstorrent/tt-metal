@@ -16,15 +16,15 @@ struct SplitTiled {
     void boiler_plate_asserts(const Tensor &a) const;
     void shape_asserts(const Tensor &a) const;
     Shape get_single_output_shape(const Shape &input_shape) const;
-    void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+        const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+        const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
+        const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
 }  // namespace tt_metal

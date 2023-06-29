@@ -1,4 +1,6 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -42,10 +44,10 @@ void add_defines(ComputeKernel * reduce_kernel, ReduceOpMath::Enum reduce_op, Re
 namespace tt {
 namespace tt_metal {
 
-void Reduce::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {}
+void Reduce::validate(const std::vector<Tensor> &input_tensors) const {}
 
-std::vector<Shape> Reduce::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+std::vector<Shape> Reduce::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
 
     auto output_shape = input_tensor.shape();
     switch (this->dim){
@@ -64,12 +66,12 @@ std::vector<Shape> Reduce::compute_output_shapes(const std::vector<std::referenc
     return {output_shape};
 }
 
-std::vector<Tensor> Reduce::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     return operation::generic_create_output_tensors(*this, input_tensors);
 }
 
-operation::ProgramWithCallbacks Reduce::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+operation::ProgramWithCallbacks Reduce::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
@@ -86,8 +88,8 @@ operation::ProgramWithCallbacks Reduce::create_program(const std::vector<std::re
 
 }
 
-operation::Hash Reduce::compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+operation::Hash Reduce::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
 
     return fmt::format(
         "reduce_{}_{}_{}_{}",
@@ -98,8 +100,8 @@ operation::Hash Reduce::compute_program_hash(const std::vector<std::reference_wr
     );
 }
 
-ReduceOpParallelizationStrategy::Enum Reduce::get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
+ReduceOpParallelizationStrategy::Enum Reduce::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
 
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
     auto shape = input_tensor.shape();

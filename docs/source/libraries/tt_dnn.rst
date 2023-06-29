@@ -33,10 +33,10 @@ Below, is an example of how to declare a new operation with all of the methods r
 .. code-block::
 
     struct <NewOperation> {
-        void validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
-        std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
-        std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
-        operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
+        void validate(const std::vector<Tensor> &input_tensors) const;
+        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+        operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     };
 
 Profiler
@@ -50,7 +50,7 @@ And there are 2 special methods that can be optionally implemented to set the pr
 
     // Implement `get_parallelization_strategy`` to set the parallelization strategy on the profiler
     struct <NewOperation> {
-        <ParallelizationStrategyEnum> get_parallelization_strategy(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+        <ParallelizationStrategyEnum> get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     };
 
 
@@ -89,11 +89,11 @@ In order for an op to be cachable, it needs to implement the following:
        // Mandatory methods
 
         // Implement `compute_program_hash`` method
-        operation::Hash compute_program_hash(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const;
+        operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 
         // Return type of `create_program`` needs to implement override_runtime_args_callback
         // i.e.:
-        operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+        operation::ProgramWithCallbacks create_program(const std::vector<Tensor> &input_tensors) const {
 
             Program program{};
 

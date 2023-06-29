@@ -13,8 +13,8 @@ namespace detail {
 struct ProgramCache {
     operation::ProgramWithCallbacks& get_or_create(
         const operation::Operation& op,
-        const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-        const std::vector<std::optional<std::reference_wrapper<const Tensor>>> &optional_input_tensors,
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors,
         Device* device,
         bool profile_device

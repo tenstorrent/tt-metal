@@ -19,8 +19,8 @@ namespace tt {
 namespace tt_metal {
 
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.buffer_type() == BufferType::DRAM; }
-inline bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> input_tensor) {
-     return input_tensor.has_value() ? is_dram(input_tensor.value().get()) : true;
+inline bool is_dram(const std::optional<const Tensor> input_tensor) {
+     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
@@ -28,9 +28,9 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 // if b is nullptr it's treated as zero (no addition)
 operation::ProgramWithCallbacks layernorm_(
     const Tensor &a,
-    const std::optional<std::reference_wrapper<const Tensor>> b,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma,
-    const std::optional<std::reference_wrapper<const Tensor>> beta,
+    const std::optional<const Tensor> b,
+    const std::optional<const Tensor> gamma,
+    const std::optional<const Tensor> beta,
     Tensor& output,
     float eps
 ) {
@@ -44,9 +44,9 @@ operation::ProgramWithCallbacks layernorm_(
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
     TT_ASSERT(a.dtype() == DataType::BFLOAT16);
     const auto& a_dtype = a.dtype();
-    TT_ASSERT(not b.has_value() || b.value().get().dtype() == a_dtype);
-    TT_ASSERT(not gamma.has_value() || gamma.value().get().dtype() == a_dtype);
-    TT_ASSERT(not beta.has_value() || beta.value().get().dtype() == a_dtype);
+    TT_ASSERT(not b.has_value() || b.value().dtype() == a_dtype);
+    TT_ASSERT(not gamma.has_value() || gamma.value().dtype() == a_dtype);
+    TT_ASSERT(not beta.has_value() || beta.value().dtype() == a_dtype);
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
@@ -64,15 +64,15 @@ operation::ProgramWithCallbacks layernorm_(
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     auto a_addr = a.buffer()->address();
-    auto b_dram_addr = b ? b.value().get().buffer()->address() : 0;
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().get().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().get().buffer()->address() : 0;
+    auto b_dram_addr = b ? b.value().buffer()->address() : 0;
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
+    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
-    TT_ASSERT(not b.has_value() || a.shape() == b.value().get().shape());
+    TT_ASSERT(not b.has_value() || a.shape() == b.value().shape());
     TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume()/TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().get().volume()/TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().get().volume()/TILE_HW : 0;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume()/TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume()/TILE_HW : 0;
     TT_ASSERT(num_gamma_tiles == Wt || num_gamma_tiles == 0);
     TT_ASSERT(num_beta_tiles == Wt || num_beta_tiles == 0);
 
@@ -241,8 +241,8 @@ operation::ProgramWithCallbacks layernorm_(
     for (uint32_t icore = 0; icore < num_cores; icore++) {
         auto core = grid.wrap_core(icore);
 
-        uint32_t gamma_tiles = gamma ? gamma.value().get().volume() / TILE_HW : 0;
-        uint32_t beta_tiles = beta ? beta.value().get().volume() / TILE_HW : 0;
+        uint32_t gamma_tiles = gamma ? gamma.value().volume() / TILE_HW : 0;
+        uint32_t beta_tiles = beta ? beta.value().volume() / TILE_HW : 0;
         uint32_t tile_offset = wtpc*Wt*icore;
         SetRuntimeArgs(reader_kernels, core,
             { a_addr, wtpc, Wt, wtpc*Wt, tile_offset, winv.u, e.u, // 0-6
@@ -298,26 +298,24 @@ operation::ProgramWithCallbacks layernorm_(
     return {std::move(program), override_runtime_args_callback};
 }
 
-void ResidualLayerNorm::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors, const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors) const {
+void ResidualLayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
 }
 
-std::vector<Shape> ResidualLayerNorm::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0).get();
-    return {input_tensor.shape()};
+std::vector<Shape> ResidualLayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);    return {input_tensor.shape()};
 }
 
-std::vector<Tensor> ResidualLayerNorm::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Tensor> ResidualLayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks ResidualLayerNorm::create_program(
-    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor> &output_tensors
 ) const {
-    auto& a = input_tensors.at(0).get();
-    const auto& b = optional_input_tensors.at(0);
+    auto& a = input_tensors.at(0);    const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
@@ -326,11 +324,10 @@ operation::ProgramWithCallbacks ResidualLayerNorm::create_program(
 }
 
 operation::Hash ResidualLayerNorm::compute_program_hash(
-    const std::vector<std::reference_wrapper<const Tensor>> &input_tensors,
-    const std::vector<std::optional<std::reference_wrapper<const Tensor>>>& optional_input_tensors
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors
 ) const {
-    const auto& input_tensor = input_tensors.at(0).get();
-    const auto& b = optional_input_tensors.at(0);
+    const auto& input_tensor = input_tensors.at(0);    const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
 
@@ -339,9 +336,9 @@ operation::Hash ResidualLayerNorm::compute_program_hash(
         this->eps,
         operation::hash_memory_config(this->output_mem_config),
         operation::hash_tensor(input_tensor),
-        b.has_value() ? operation::hash_tensor(b.value().get()) : "nullopt",
-        gamma.has_value() ? operation::hash_tensor(gamma.value().get()) : "nullopt",
-        beta.has_value() ? operation::hash_tensor(beta.value().get()) : "nullopt"
+        b.has_value() ? operation::hash_tensor(b.value()) : "nullopt",
+        gamma.has_value() ? operation::hash_tensor(gamma.value()) : "nullopt",
+        beta.has_value() ? operation::hash_tensor(beta.value()) : "nullopt"
     );
 }
 

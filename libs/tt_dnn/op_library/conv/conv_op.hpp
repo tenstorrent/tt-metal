@@ -14,10 +14,10 @@ struct ConvOpParallelizationStrategy {
 };
 
 struct Conv {
-    void validate(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 
     Conv(uint32_t in0_bh, uint32_t in0_bw, uint32_t in1_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, bool unt_out = true)
         : in0_block_h(in0_bh),

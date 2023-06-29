@@ -232,8 +232,8 @@ Program unpad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4
 }
 
 
-void Unpad::validate(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+void Unpad::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR);
 
     TT_ASSERT(
@@ -264,18 +264,18 @@ void Unpad::validate(const std::vector<std::reference_wrapper<const Tensor>> &in
         TT_ASSERT(this->output_tensor_shape[3] % 2 == 0, "RM unpadding requires output X dim to be a multiple of 2");
     }
 }
-std::vector<Shape> Unpad::compute_output_shapes(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
+std::vector<Shape> Unpad::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     return {this->output_tensor_shape};
 }
-std::vector<Tensor> Unpad::create_output_tensors(const std::vector<std::reference_wrapper<const Tensor>> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+std::vector<Tensor> Unpad::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
 }
 
 // TODO: If unpad is called on a tile and output is not tile, we could untilize then unpad, and output is RM
 // Currently calling unpad on a tile requires the output unpad shape to be tile
-operation::ProgramWithCallbacks Unpad::create_program(const std::vector<std::reference_wrapper<const Tensor>>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0).get();
+operation::ProgramWithCallbacks Unpad::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         return {unpad_rm(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end)};
