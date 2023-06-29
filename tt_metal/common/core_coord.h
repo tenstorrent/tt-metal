@@ -103,10 +103,10 @@ struct CoreRange {
 
     bool contains ( const CoreRange & other ) const
     {
-        return this->start.x <= other.start.x <= this->end.x &&
-                this->start.x <= other.end.x <= this->end.x &&
-                this->start.y <= other.start.y <= this->end.y &&
-                this->start.y <= other.end.y <= this->end.y;
+        return (other.start.x >= this->start.x ) &&
+               (other.end.x <= this->end.x) &&
+               (other.start.y >= this->start.y)  &&
+               (other.end.y <= this->end.y);
     }
 
     // Merge adjacent lined-up rectangles
@@ -198,6 +198,8 @@ struct CoresInCoreRangeGenerator {
 
 class CoreRangeSet {
   public:
+    // CoreRangeSet(const std::set<CoreRange> &core_ranges) {
+    //   this->merge ( core_ranges );
     CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges) {
       for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
         for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
