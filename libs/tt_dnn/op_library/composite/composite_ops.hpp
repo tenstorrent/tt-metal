@@ -146,6 +146,14 @@ Tensor hardtanh(const Tensor& a,float low = -1.0f, float high = +1.0f);
 extern std::function<Tensor(const Tensor& a,float low, float high)> clamp;
 
 
+/**
+ * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]
+ * and result is of size [1,1,N,M].
+ * - implementation supports any 1D "squeezable tensor" at input operands
+ *   by running reshape.
+ */
+Tensor outer(Tensor& a, Tensor& b);
+
 } //namespace tt_metal
 
 } //namespace tt

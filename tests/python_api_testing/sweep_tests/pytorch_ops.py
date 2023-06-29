@@ -317,6 +317,8 @@ def mul(x, y, *args, **kwargs):
 def matmul(x, y, *args, **kwargs):
     return torch.matmul(x, y)
 
+def outer(x, y, *args, **kwargs):
+    return torch.outer(x.squeeze(), y.squeeze())
 
 def reduce_sum(x, dims=None, keepdim=True, *args, **kwargs):
     return torch.sum(x, dims, keepdim)

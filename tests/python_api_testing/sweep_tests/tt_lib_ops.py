@@ -1426,6 +1426,36 @@ def matmul(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
 
     return output
 
+@setup_host_and_device
+def outer(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
+
+    t2 = ttl.tensor.outer(t0, t1)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
+
+    return output
 
 @setup_host_and_device
 def bmm(x, y, *args, host, device, dtype, layout, on_device, **kwargs):

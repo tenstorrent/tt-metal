@@ -262,6 +262,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.matmul,
         "pytorch_op": pytorch_ops.matmul,
     },
+    "outer": {
+        "tt_lib_op": tt_lib_ops.outer,
+        "pytorch_op": pytorch_ops.outer,
+    },    
     "bmm": {
         "tt_lib_op": tt_lib_ops.bmm,
         "pytorch_op": pytorch_ops.matmul,

@@ -1,5 +1,7 @@
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/reshape/reshape_op.hpp"
 
 #include "tt_numpy/functions.hpp"
 
@@ -425,6 +427,48 @@ Tensor arange(int32_t start, int32_t end, int32_t step /*= 1*/) {
   return tt::numpy::arange<bfloat16>(start, end, step);
 }
 
+
+/**
+ * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]
+ * and result is of size [1,1,N,M].
+ * - implementation supports any 1D "squeezable tensor" at input operands
+ *   by running reshape.
+ */
+Tensor outer(Tensor& a, Tensor& b) {
+    const Shape s_a = a.shape();
+    const Shape s_b = b.shape();
+
+    auto num_ones = [](const Shape& s) -> uint32_t {
+      uint32_t num1s = 0;
+      for(uint32_t idx = 0 ; idx < 4; idx++)
+          num1s += (uint32_t)(s[idx] == 1);
+      return num1s;
+    };
+
+    //check if 3 dimensions are 1
+    TT_ASSERT( !(num_ones(s_a) < 3) , "3 dimensions are required to be 1 for use with outer product");
+    TT_ASSERT( !(num_ones(s_b) < 3) , "3 dimensions are required to be 1 for use with outer product");
+
+    const bool skip_reshape_a = (s_a[0] == 1 && s_a[1] == 1 && s_a[2] >= 1 && s_a[3] == 1 );
+    const bool skip_reshape_b = (s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1 && s_b[3] >= 1 );
+
+
+    if ( skip_reshape_a && skip_reshape_b ) {
+        return std::move(matmul(a,b));
+    } else if ( !skip_reshape_a && skip_reshape_b ) {
+        Tensor a_slim = reshape (a, 1, 1, a.volume(), 1);
+        return std::move(matmul(a_slim,b));
+    } else if ( skip_reshape_a && !skip_reshape_b ) {
+        Tensor b_slim = reshape (b, 1, 1, 1, b.volume());
+        return std::move(matmul(a,b_slim));
+    } else {
+      //TT_ASSERT( !skip_reshape_a && !skip_reshape_b,
+      //"both operands should require reshape at this point");
+      Tensor a_slim = reshape (a, 1, 1, a.volume(), 1);
+      Tensor b_slim = reshape (b, 1, 1, 1, b.volume());
+      return std::move(matmul(a_slim,b_slim));
+    }
+}
 
 }//namespace tt_metal
 

@@ -1801,6 +1801,24 @@ void TensorModule(py::module &m_tensor) {
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("outer", &outer, R"doc(
+        Perform a non-batched outer product multiplication ``arg0 x arg1`` with two tensors.
+
+        Both input tensors must have BFLOAT16 data type but shape [1,1,N,1] and [1,1,1,M] respectively
+        or reshapeable with only one major dimension while other 3 being squeezable dimensions.
+
+        Output tensor will have BFLOAT16 data type but of shape [1,1,N,M].
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     | First tensor to multiply  | Tensor    | Tensor of shape [1, 1, N, 1] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | arg1     | Second tensor to multiply | Tensor    | Tensor of shape [1, 1, 1, M] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+
+    )doc");
+
     m_tensor.def("bmm", &bmm,
         py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a batched matmul ``arg0 x arg1`` with two tensors, where batch dims match.
