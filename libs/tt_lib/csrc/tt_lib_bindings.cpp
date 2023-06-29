@@ -2093,6 +2093,10 @@ void DeviceModule(py::module &m_device) {
         Get a reference to host machine of a TT accelerator device, usually a reference to the host
         machine executing Python code.
     )doc");
+
+    m_device.def("Synchronize", &Synchronize, R"doc(
+        Wait for all kernels on TT device to complete.
+    )doc");
 }
 
 void ProfilerModule(py::module &m_profiler) {

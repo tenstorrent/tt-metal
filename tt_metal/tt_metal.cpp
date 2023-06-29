@@ -1127,6 +1127,12 @@ bool WriteToDeviceL1(
     return pass;
 }
 
+void Synchronize() {
+    if (HACK_CQ) {
+        Finish(*HACK_CQ);
+    }
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

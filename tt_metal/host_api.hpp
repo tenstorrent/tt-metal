@@ -915,6 +915,8 @@ void GenerateBankToNocCoordHeaders(
     build_kernel_for_riscv_options_t *build_options,
     const std::string &op_path);
 
+void Synchronize();
+
 }  // namespace tt_metal
 
 }  // namespace tt
