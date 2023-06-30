@@ -60,7 +60,7 @@ namespace op_profiler {
                 shape_to_str(tensor.shape()),
                 layout_to_str.at(tensor.layout()),
                 dtype_to_str.at(tensor.dtype()),
-                tensor.on_host() ? "ON_HOST" : "ON_DEVICE"
+                tensor.on_host() ? "HOST" : fmt::format("DEV_{}_{}", tensor.device()->pcie_slot(), magic_enum::enum_name(tensor.buffer_type())),
             };
 
             return join_vector(tensorStrs, "|");
