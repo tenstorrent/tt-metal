@@ -4,14 +4,13 @@ import torch.nn as nn
 
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions_new import (
     torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
 )
-from python_api_testing.models.ssd.ssd_utils import create_batchnorm
+from models.ssd.ssd_utils import create_batchnorm
 
 ACT_FN_1 = tt_lib.tensor.relu
-ACT_FN_2 = nn.Hardswish()
+ACT_FN_2 = tt_lib.tensor.hard_swish
 
 
 class TtMobileNetV3ConvLayer(nn.Module):
@@ -75,11 +74,6 @@ class TtMobileNetV3ConvLayer(nn.Module):
         else:
             features = self.normalization(features)
         if self.activation is not None:
-            if self.activation_str == "HS":
-                features = tt_to_torch_tensor(features, self.host)
-                features = self.activation(features)
-                features = torch_to_tt_tensor_rm(features, self.device)
-            else:
-                features = self.activation(features)
+            features = self.activation(features)
 
         return features

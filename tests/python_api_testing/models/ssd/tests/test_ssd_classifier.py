@@ -8,6 +8,7 @@ sys.path.append(f"{f}/../../..")
 import torch
 import pytest
 from loguru import logger
+from torch import nn
 from torchvision.models import mobilenet_v3_large as pretrained
 from torchvision.models import MobileNet_V3_Large_Weights
 
@@ -18,51 +19,34 @@ from models.utility_functions_new import (
     comp_allclose,
     comp_pcc,
 )
-from models.ssd.tt.ssd_mobilenetv3_inverted_squeeze import (
-    TtMobileNetV3InvertedSqueeze,
-)
+from models.ssd.tt.ssd_mobilenetv3_classifier import TtClassifier
 
 
 @pytest.mark.parametrize(
     "pcc",
     ((0.99),),
 )
-def test_ssd_inverted_squeeze_inference(pcc, reset_seeds):
+def test_ssd_classifier_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
     host = tt_lib.device.GetHost()
 
+    # Pretrained model
     model = pretrained(weights=MobileNet_V3_Large_Weights.IMAGENET1K_V1)
 
-    # torch invertedsqueeze
-    torch_model = model.features[4]
+    torch_model = model.classifier
 
-    # Tt ssd_invertedsqueeze
-    config = {"in_channels": 24}
-    tt_model = TtMobileNetV3InvertedSqueeze(
-        config,
-        in_channels=config["in_channels"],
-        expanded_channels=72,
-        out_channels=40,
-        fc_channels=24,
-        kernel_size=5,
-        stride=2,
-        padding=2,
-        use_activation=True,
-        state_dict=model.state_dict(),
-        base_address=f"features.4",
-        device=device,
-        host=host,
-    )
+    # Tt ssd_classifier
+    tt_model = TtClassifier(state_dict=model.state_dict(), device=device, host=host)
 
     # Run torch model
-    input_tensor = torch.randn(1, 24, 56, 56)
+    input_tensor = torch.randn(1, 1, 1, 960)
     torch_output = torch_model(input_tensor)
 
     # Run tt model
-    tt_inverted_squeeze_input = torch_to_tt_tensor_rm(input_tensor, device)
-    tt_output = tt_model(tt_inverted_squeeze_input)
+    tt_conv_input = torch_to_tt_tensor_rm(input_tensor, device)
+    tt_output = tt_model(tt_conv_input)
 
     # Compare outputs
     tt_output_torch = tt_to_torch_tensor(tt_output, host)
@@ -75,6 +59,6 @@ def test_ssd_inverted_squeeze_inference(pcc, reset_seeds):
     tt_lib.device.CloseDevice(device)
 
     if does_pass:
-        logger.info("SSDInvertedSqueeze Passed!")
+        logger.info("SSDClassfier Passed!")
 
-    assert does_pass, "SSDInvertedSqueeze Failed!"
+    assert does_pass, "SSDClassfier Failed!"

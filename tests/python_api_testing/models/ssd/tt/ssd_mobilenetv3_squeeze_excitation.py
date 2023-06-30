@@ -2,9 +2,8 @@ import torch
 from torch import nn, Tensor
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions_new import (
     torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
 )
 
 
@@ -13,7 +12,7 @@ class TtSqueezeExcitation(torch.nn.Module):
         self,
         config,
         in_channels: int,
-        out_channels: int,
+        fc_channels: int,
         kernel_size: int = 1,
         stride: int = 1,
         padding: int = 0,
@@ -38,7 +37,7 @@ class TtSqueezeExcitation(torch.nn.Module):
             weights=weight_fc1,
             biases=bias_fc1,
             in_channels=in_channels,
-            out_channels=out_channels,
+            out_channels=fc_channels,
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
@@ -53,7 +52,7 @@ class TtSqueezeExcitation(torch.nn.Module):
         self.fc2 = fallback_ops.Conv2d(
             weights=weight_fc2,
             biases=bias_fc2,
-            in_channels=out_channels,
+            in_channels=fc_channels,
             out_channels=in_channels,
             kernel_size=kernel_size,
             stride=stride,
@@ -61,16 +60,14 @@ class TtSqueezeExcitation(torch.nn.Module):
             dilation=dilation,
         )
         self.activation = tt_lib.tensor.relu
-        self.scale_activation = torch.nn.Hardsigmoid()
+        self.scale_activation = tt_lib.tensor.hard_sigmoid
 
     def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         scale = self.avgpool(input)
         scale = self.fc1(scale)
         scale = self.activation(scale)
         scale = self.fc2(scale)
-        scale = tt_to_torch_tensor(scale, self.host)
         scale = self.scale_activation(scale)
-        scale = torch_to_tt_tensor_rm(scale, self.host)
         final_out = tt_lib.tensor.bcast(
             input, scale, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW
         )

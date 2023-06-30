@@ -3,7 +3,7 @@ import sys
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
-sys.path.append(f"{f}/../../../..")
+sys.path.append(f"{f}/../../..")
 
 import torch
 import pytest
@@ -12,13 +12,13 @@ from torchvision.models import mobilenet_v3_large as pretrained
 from torchvision.models import MobileNet_V3_Large_Weights
 
 import tt_lib
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions_new import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
     comp_allclose,
     comp_pcc,
 )
-from python_api_testing.models.ssd.tt.ssd_mobilenetv3_convlayer import (
+from models.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
 )
 

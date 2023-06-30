@@ -2,7 +2,7 @@ from typing import Union
 import torch
 import torch.nn as nn
 import tt_lib
-from python_api_testing.models.ssd.tt.ssd_mobilenetv3_convlayer import (
+from models.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
 )
 

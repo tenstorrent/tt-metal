@@ -1,7 +1,7 @@
 from typing import Union
 import torch.nn as nn
 import tt_lib
-from python_api_testing.models.ssd.tt.ssd_mobilenetv3_convlayer import (
+from models.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
 )
 
@@ -37,7 +37,8 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             kernel_size=1,
             stride=1,
             padding=0,
-            use_activation=True,
+            use_activation=use_activation,
+            activation=activation,
             state_dict=state_dict,
             base_address=f"{base_address}.block.0",
             device=device,
@@ -53,7 +54,8 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             padding=padding,
             groups=expanded_channels,
             dilation=dilation,
-            use_activation=True,
+            use_activation=use_activation,
+            activation=activation,
             state_dict=state_dict,
             base_address=f"{base_address}.block.1",
             device=device,

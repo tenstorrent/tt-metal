@@ -1,10 +1,10 @@
 from typing import Union
 import torch.nn as nn
 import tt_lib
-from python_api_testing.models.ssd.tt.ssd_mobilenetv3_convlayer import (
+from models.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
 )
-from python_api_testing.models.ssd.tt.ssd_mobilenetv3_squeeze_excitation import (
+from models.ssd.tt.ssd_mobilenetv3_squeeze_excitation import (
     TtSqueezeExcitation,
 )
 
@@ -16,6 +16,7 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
         in_channels: int,
         expanded_channels: int,
         out_channels: int,
+        fc_channels: int,
         kernel_size: int,
         padding: int = 1,
         stride: int = 1,
@@ -38,7 +39,7 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
             kernel_size=1,
             stride=1,
             padding=0,
-            use_activation=True,
+            use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
             base_address=f"{base_address}.block.0",
@@ -55,7 +56,7 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
             padding=padding,
             groups=expanded_channels,
             dilation=dilation,
-            use_activation=True,
+            use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
             base_address=f"{base_address}.block.1",
@@ -66,7 +67,7 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
         self.squeeze = TtSqueezeExcitation(
             config,
             in_channels=expanded_channels,
-            out_channels=in_channels,
+            fc_channels=fc_channels,
             kernel_size=1,
             stride=1,
             padding=0,

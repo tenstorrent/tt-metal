@@ -21,8 +21,6 @@ import torchvision
 from torchvision.transforms import functional as F
 from torchvision.utils import _make_ntuple
 from torch.hub import load_state_dict_from_url
-from tt_lib.fallback_ops import fallback_ops
-from python_api_testing.models.utility_functions_new import torch_to_tt_tensor_rm
 
 
 class SqueezeExcitation(torch.nn.Module):
