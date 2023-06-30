@@ -154,9 +154,23 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.mul
 
+.. autofunction:: tt_lib.tensor.add_unary
+
+.. autofunction:: tt_lib.tensor.sub_unary
+
+.. autofunction:: tt_lib.tensor.mul_unary
+
+.. autofunction:: tt_lib.tensor.div_unary
+
 .. autofunction:: tt_lib.tensor.gelu
 
 .. autofunction:: tt_lib.tensor.relu
+
+.. autofunction:: tt_lib.tensor.relu6
+
+.. autofunction:: tt_lib.tensor.relu_min
+
+.. autofunction:: tt_lib.tensor.relu_max
 
 .. autofunction:: tt_lib.tensor.exp
 
@@ -170,7 +184,64 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.log10
 
+.. autofunction:: tt_lib.tensor.log1p
+
 .. autofunction:: tt_lib.tensor.tanh
+
+.. autofunction:: tt_lib.tensor.clip
+
+.. autofunction:: tt_lib.tensor.hardtanh
+
+.. autofunction:: tt_lib.tensor.deg2rad
+
+.. autofunction:: tt_lib.tensor.rad2deg
+
+.. autofunction:: tt_lib.tensor.cbrt
+
+.. autofunction:: tt_lib.tensor.hypot
+
+.. autofunction:: tt_lib.tensor.softplus
+
+.. autofunction:: tt_lib.tensor.mish
+
+.. autofunction:: tt_lib.tensor.polyval
+
+.. autofunction:: tt_lib.tensor.power
+
+.. autofunction:: tt_lib.tensor.sign
+
+.. autofunction:: tt_lib.tensor.abs
+
+.. autofunction:: tt_lib.tensor.silu
+
+.. autofunction:: tt_lib.tensor.square
+
+.. autofunction:: tt_lib.tensor.neg
+
+.. autofunction:: tt_lib.tensor.add1
+
+.. autofunction:: tt_lib.tensor.mac
+
+Tensor unary relational operations
+----------------------------------
+.. autofunction:: tt_lib.tensor.ltz
+
+.. autofunction:: tt_lib.tensor.eqz
+
+.. autofunction:: tt_lib.tensor.nez
+
+.. autofunction:: tt_lib.tensor.lez
+
+.. autofunction:: tt_lib.tensor.gtz
+
+.. autofunction:: tt_lib.tensor.gez
+
+Tensor ternary operations
+-------------------------
+.. autofunction:: tt_lib.tensor.where
+
+.. autofunction:: tt_lib.tensor.threshold
+
 
 Tensor matrix math operations
 -----------------------------
@@ -204,6 +275,30 @@ but in general retaining the data.
 .. autofunction:: tt_lib.tensor.pad
 
 .. autofunction:: tt_lib.tensor.unpad
+
+Tensor creation operations
+--------------------------
+.. autofunction:: tt_lib.tensor.arange
+
+.. autofunction:: tt_lib.tensor.full
+
+.. autofunction:: tt_lib.tensor.ones
+
+.. autofunction:: tt_lib.tensor.ones_like
+
+.. autofunction:: tt_lib.tensor.zeros
+
+.. autofunction:: tt_lib.tensor.zeros_like
+
+.. autofunction:: tt_lib.tensor.full_like
+
+.. autofunction:: tt_lib.tensor.sigmoid
+
+.. autofunction:: tt_lib.tensor.hardsigmoid
+
+.. autofunction:: tt_lib.tensor.swish
+
+.. autofunction:: tt_lib.tensor.hardswish
 
 Broadcast and Reduce
 --------------------
@@ -266,10 +361,6 @@ Operations in this section are experimental, don't have full support, and may be
 
 Tensor elementwise operations
 -----------------------------
-.. autofunction:: tt_lib.tensor.sigmoid
-
-.. autofunction:: tt_lib.tensor.silu
-
 .. autofunction:: tt_lib.tensor.cos
 
 .. autofunction:: tt_lib.tensor.sin
