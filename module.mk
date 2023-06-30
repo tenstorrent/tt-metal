@@ -81,6 +81,9 @@ WARNINGS += -Wmaybe-uninitialized
 LDFLAGS += -lstdc++
 endif
 
+# For GDDR5 bug in WH
+ISSUE_3487_FIX = 1
+
 LIBS_TO_BUILD = \
 	common \
 	src/ckernels \
