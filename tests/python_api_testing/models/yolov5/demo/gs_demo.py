@@ -107,7 +107,7 @@ def test_detection_model():
                 p, im0, frame = f, im0s.copy(), getattr(dataset, "frame", 0)
 
                 p = Path(p)  # to Path
-                save_path = str(p / "out_image.jpg")
+                save_path = str(p / "out_img.jpg")
 
                 s += "%gx%g " % im.shape[2:]  # print string
                 gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh

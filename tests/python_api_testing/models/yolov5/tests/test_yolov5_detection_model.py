@@ -18,7 +18,11 @@ import tt_lib
 import torch
 from torch import nn
 from loguru import logger
+from datasets import load_dataset
+
 from python_api_testing.models.yolov5.reference.models.common import DetectMultiBackend
+from python_api_testing.models.yolov5.reference.utils.dataloaders import LoadImages
+from python_api_testing.models.yolov5.reference.utils.general import check_img_size
 from python_api_testing.models.yolov5.tt.yolov5_detection_model import (
     TtYolov5DetectionModel,
 )
@@ -27,6 +31,12 @@ from python_api_testing.models.utility_functions_new import (
     tt2torch_tensor,
 )
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+
+
+def download_images(path):
+    dataset = load_dataset("huggingface/cats-image")
+    image = dataset["test"]["image"][0]
+    image.save(path / "input_image.jpg")
 
 
 def test_Yolov5_detection_model():
@@ -45,7 +55,23 @@ def test_Yolov5_detection_model():
     refence_module = refence_model.model
 
     torch.manual_seed(0)
-    test_input = torch.rand(1, 3, 256, 256)
+    # test_input = torch.rand(1, 3, 640, 640)
+
+    download_images(Path(ROOT))
+
+    stride = max(int(max(refence_module.stride)), 32)  # model stride
+    imgsz = check_img_size((640, 640), s=stride)  # check image size
+    dataset = LoadImages(ROOT, img_size=imgsz, stride=stride, auto=True)
+
+    for path, test_input, im0s, _, s in dataset:
+        test_input = torch.from_numpy(test_input)
+        test_input = test_input.float()
+        test_input /= 255  # 0 - 255 to 0.0 - 1.0
+
+        if len(test_input.shape) == 3:
+            test_input = test_input[None]  # expand for batch dim
+
+    logger.debug(f"Running inference on {path}")
 
     with torch.no_grad():
         refence_module.eval()

@@ -42,9 +42,9 @@ def test_Yolov5_detect():
 
     torch.manual_seed(0)
 
-    a = torch.rand(1, 128, 64, 80)
-    b = torch.rand(1, 256, 32, 40)
-    c = torch.rand(1, 512, 16, 20)
+    a = torch.rand(1, 128, 32, 32)
+    b = torch.rand(1, 256, 16, 16)
+    c = torch.rand(1, 512, 8, 8)
     test_input = [a, b, c]
 
     nc = 80
