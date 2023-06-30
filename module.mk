@@ -82,7 +82,9 @@ LDFLAGS += -lstdc++
 endif
 
 # For GDDR5 bug in WH
-ISSUE_3487_FIX = 1
+ifneq (,$(filter "$(ARCH_NAME)","wormhole" "wormhole_b0"))
+	ISSUE_3487_FIX = 1
+endif
 
 LIBS_TO_BUILD = \
 	common \
