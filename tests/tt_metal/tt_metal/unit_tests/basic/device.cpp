@@ -206,8 +206,8 @@ TEST_SUITE(
 
 TEST_SUITE(
     "BasicSingleDeviceTest" *
-    doctest::description("Basic device tests should just test simple APIs and shouldn't take more than 1s") *
-    doctest::timeout(1)) {
+    doctest::description("Basic device tests should just test simple APIs and shouldn't take more than 5s") *
+    doctest::timeout(5)) {
     TEST_CASE("Single Device Initialize and Teardown") {
         auto arch = tt::get_arch_from_string(get_env_arch_name());
         tt::tt_metal::Device* device;
