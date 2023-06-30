@@ -198,86 +198,9 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     return pass;
 }
 
-bool test_core_range(){
-    CoreRange cr1 = {.start={0, 0}, .end={2, 2}};
-    CoreRange cr2 = {.start={3, 3}, .end={5, 4}};
-    CoreRange cr3 = {.start={1, 2}, .end={3, 3}};
-    CoreRange cr4 = {.start={0, 0}, .end={5, 4}};
-    CoreRange cr5 = {.start={1, 0}, .end={6, 4}};
-    CoreRange cr6 = {.start={0, 0}, .end={6, 4}};
-    CoreRange single_core = {.start={1, 1}, .end={1, 1}};
 
-    TT_ASSERT ( cr1.contains(single_core));
-    TT_ASSERT ( !single_core.contains(cr1));
-    TT_ASSERT ( !cr1.contains(cr2) );
 
-    TT_ASSERT ( !cr1.intersects(cr2));
-    TT_ASSERT ( !single_core.intersects( cr2));
-    TT_ASSERT ( cr2.intersects(cr3).value() == CoreRange({3,3}, {3,3}));
-    TT_ASSERT ( cr1.intersects(cr3).value() == CoreRange({1,2}, {2,2}));
 
-    TT_ASSERT ( single_core.intersects(cr6).value() == single_core);
-    TT_ASSERT ( cr4.intersects(cr5).value() == CoreRange({1,0}, {5,4} ));
-    TT_ASSERT ( cr1.intersects(cr5).value() == CoreRange({1,0}, {2,2} ));
-    TT_ASSERT ( cr1.intersects(cr6).value() == cr1 );
-
-    TT_ASSERT ( !cr1.merge(cr3));
-    TT_ASSERT ( !cr2.merge(cr3));
-    TT_ASSERT ( !cr1.merge(cr6));
-    TT_ASSERT ( cr4.merge(cr5).value() == cr6 );
-    TT_ASSERT ( cr4.merge(cr6).value() == cr6 );
-
-    return true;
-}
-bool test_merge_core_range_set(){
-    CoreRange cr1 = {.start={0, 0}, .end={1, 1}};
-    CoreRange cr2 = {.start={3, 3}, .end={5, 4}};
-    CoreRange cr3 = {.start={1, 2}, .end={2, 2}};
-    CoreRange cr4 = {.start={0, 0}, .end={5, 4}};
-    CoreRange cr5 = {.start={1, 0}, .end={6, 4}};
-    CoreRange cr6 = {.start={0, 0}, .end={6, 4}};
-    CoreRange cr7 = {.start={2, 0}, .end={7, 4}};
-    CoreRange cr8 = {.start={0, 0}, .end={7, 4}};
-
-    TT_ASSERT ( CoreRangeSet({cr1}).merge({cr2}).merge({cr3}).ranges() == std::set<CoreRange>( {cr1,cr2,cr3}) );
-    TT_ASSERT ( CoreRangeSet({cr1, cr2, cr3}).merge({cr4}).ranges() == std::set<CoreRange>( {cr4}) );
-
-    TT_ASSERT ( CoreRangeSet({cr1, cr2}).merge({cr4}).merge({cr6}).ranges() == std::set<CoreRange>( {cr6}) );
-
-    TT_ASSERT ( CoreRangeSet({cr7}).merge({cr6}).merge({cr4}).ranges() == std::set<CoreRange>( {cr8} ) );
-
-    TT_ASSERT ( CoreRangeSet({cr8}).merge({cr7}).merge({cr6}).merge({cr4}).ranges() == std::set<CoreRange>( {cr8} ) );
-
-    return true;
-}
-
-bool test_overlapping_core_range_set() {
-    bool pass = true;
-    CoreRange core_range_one = {.start={0, 0}, .end={2, 2}};
-    CoreRange core_range_two = {.start={3, 3}, .end={5, 4}};
-
-    CoreRangeSet valid_ranges = CoreRangeSet({core_range_one, core_range_two});
-    TT_ASSERT(valid_ranges.ranges().size() == 2);
-
-    CoreRange overlapping_range = {.start={1, 2}, .end={3, 3}};
-
-    try {
-        CoreRangeSet invalid_ranges = CoreRangeSet({core_range_one, core_range_two, overlapping_range});
-        pass &= false;
-        TT_ASSERT(false);
-    } catch (const std::exception &e) {}
-
-    CoreRange single_core = {.start={1, 1}, .end={1, 1}};
-    CoreRangeSet second_valid_ranges = CoreRangeSet({single_core, core_range_two});
-
-    try {
-        CoreRangeSet second_invalid_ranges = CoreRangeSet({single_core, core_range_two, core_range_one});
-        pass &= false;
-        TT_ASSERT(false);
-    } catch (const std::exception &e) {}
-
-    return pass;
-}
 
 int main(int argc, char **argv) {
     bool pass = true;
@@ -305,15 +228,11 @@ int main(int argc, char **argv) {
         pass &= tt_metal::InitializeDevice(device);
 
         tt_metal::Program program = tt_metal::Program();
-        pass &= test_core_range();
-
         CoreRange core_range_one = {.start={0, 0}, .end={1, 1}};
         CoreRange core_range_two = {.start={2, 2}, .end={3, 3}};
         CoreRangeSet core_ranges = CoreRangeSet({core_range_one, core_range_two});
 
         pass &= test_program_specified_with_core_range_set(device, program, core_ranges);
-        pass &= test_merge_core_range_set();
-        pass &= test_overlapping_core_range_set();
 
         ////////////////////////////////////////////////////////////////////////////
         //                              Teardown

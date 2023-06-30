@@ -2,7 +2,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
-
 class CommandQueueHarness : public ::testing::Test {
    protected:
     tt::ARCH arch;
@@ -31,4 +30,18 @@ class CommandQueueHarness : public ::testing::Test {
         }
         tt::tt_metal::CloseDevice(this->device);
     }
+};
+
+class CoreCoordHarness : public ::testing::Test {
+   protected:
+    CoreRange cr1 = {.start={0, 0}, .end={1, 1}};
+    CoreRange cr2 = {.start={3, 3}, .end={5, 4}};
+    CoreRange cr3 = {.start={1, 2}, .end={2, 2}};
+    CoreRange cr4 = {.start={0, 0}, .end={5, 4}};
+    CoreRange cr5 = {.start={1, 0}, .end={6, 4}};
+    CoreRange cr6 = {.start={0, 0}, .end={6, 4}};
+    CoreRange cr7 = {.start={2, 0}, .end={7, 4}};
+    CoreRange cr8 = {.start={0, 0}, .end={7, 4}};
+    CoreRange single_core = {.start={1, 1}, .end={1, 1}};
+
 };
