@@ -1,6 +1,5 @@
 from pathlib import Path
 import sys
-
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/")
 sys.path.append(f"{f}/..")
@@ -282,6 +281,6 @@ def test_perf():
         BATCH_SIZE,
         first_iter_time,
         second_iter_time,
-        "v1.4",
+        f"image size: {height}x{width} - v1.4",
         cpu_time,
     )
