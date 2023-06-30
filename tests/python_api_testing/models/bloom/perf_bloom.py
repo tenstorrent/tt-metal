@@ -14,7 +14,7 @@ from datasets import load_dataset
 from loguru import logger
 
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
+from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
 from utility_functions_new import disable_compile_cache, enable_compile_cache
 from utility_functions_new import prep_report
 
@@ -31,12 +31,12 @@ BATCH_SIZE = 1
 
 
 def test_perf():
-    profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-    profiler_key = first_key
+    model_name = "bigscience/bloom-560m"
+    tokenizer_name = "bigscience/bloom-560m"
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -44,12 +44,8 @@ def test_perf():
     tt_lib.device.SetDefaultDevice(device)
     host = tt_lib.device.GetHost()
 
-    model_name = "bloom"
-    tokenizer_name = model_name
-
-
     HF_model_top = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
+        model_name, torchscript=False
     )
     HF_model_top.eval()
 
@@ -62,7 +58,7 @@ def test_perf():
     HF_model = HF_model_top.transformer
 
     # Prepare input
-    tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
+    tokenizer = BloomTokenizerFast.from_pretrained(tokenizer_name)
     inputs = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
 
     tokenized = tokenizer(inputs, return_tensors="pt")

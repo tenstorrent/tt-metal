@@ -16,7 +16,7 @@ from torchvision import models
 from transformers import AutoImageProcessor
 
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
+from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
 from utility_functions_new import disable_compile_cache, enable_compile_cache
 from utility_functions_new import prep_report
 
@@ -28,12 +28,11 @@ BATCH_SIZE = 1
 
 
 def test_perf():
-    profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-    profiler_key = first_key
+    model_name = "microsoft/resnet-50"
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -41,11 +40,10 @@ def test_perf():
     tt_lib.device.SetDefaultDevice(device)
     host = tt_lib.device.GetHost()
 
-    model_name = "resnet50"
 
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0]
-    image_processor = AutoImageProcessor.from_pretrained("microsoft/resnet-50")
+    image_processor = AutoImageProcessor.from_pretrained(model_name)
     inputs = image_processor(image, return_tensors="pt")
 
     inputs = inputs["pixel_values"]
