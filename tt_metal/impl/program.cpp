@@ -164,7 +164,7 @@ std::vector<CoreCoord> Program::logical_cores() const {
 void Program::construct_core_range_set_for_worker_cores() {
     for (auto kernel : kernels_ )
     {
-        worker_crs_.merge ( kernel->core_range_set());
+        this->worker_crs_.merge ( kernel->core_range_set());
     }
 }
 
