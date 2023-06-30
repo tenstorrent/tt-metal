@@ -183,6 +183,15 @@ constexpr static bool IS_BFP_FORMAT(uint format) {
     };
 }
 
+constexpr static bool IS_BFP_A_FORMAT(uint format) {
+    switch (format&0x1F) {
+        case ((uint8_t)DataFormat::Bfp8):
+        case ((uint8_t)DataFormat::Bfp4):
+        case ((uint8_t)DataFormat::Bfp2): return true;
+        default: return false;
+    };
+}
+
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16) 
 

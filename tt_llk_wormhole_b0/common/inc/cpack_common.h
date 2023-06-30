@@ -164,6 +164,15 @@ namespace ckernel::packer
       config.f.in_data_format    = (uint)pack_src_format[operand_id];
       config.f.pack_per_xy_plane = 1;
 
+
+      // Workaround for bug in HW: tenstorrent/budabackend#1394
+      if constexpr (is_fp32_dest_acc_en) {
+         if (IS_BFP_A_FORMAT((uint)pack_dst_format[operand_id])) {
+            config.f.exp_threshold_en = 1;
+            config.f.exp_threshold = 113;
+         }
+      } 
+
       // Program:
       // THCON_SEC0_REG1_Row_start_section_size = cfg_reg_array[1][0 +: 16];
       // THCON_SEC0_REG1_Exp_section_size = cfg_reg_array[1][16 +: 16];
@@ -274,6 +283,7 @@ namespace ckernel::packer
    }   
 
 
+   template <bool is_fp32_dest_acc_en = false>
    inline void reconfig_packer_data_format(const uint operand_id)
    {
       // Get pointer to registers for current state ID
@@ -324,6 +334,18 @@ namespace ckernel::packer
 
       TT_SETDMAREG(0, LOWER_HALFWORD(GET_L1_TILE_SIZE((uint)pack_dst_format[operand_id])), 0, LO_16(p_gpr_pack::TILE_HEADER));
 
+      // Workaround for HW bug: tenstorrent/budabackend#1394
+      if constexpr (is_fp32_dest_acc_en) {
+         if (IS_BFP_A_FORMAT((uint)pack_dst_format[operand_id])) {
+            config.val[3] = 0; // Only need to modify word[2][15:0]
+            config.f.exp_threshold_en = 1;
+            config.f.exp_threshold = 113;
+            TT_SETDMAREG(0, UPPER_HALFWORD(config.val[3]), 0, HI_16(p_gpr_pack::TMP_HI));
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_HI);
+         } else {
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+         }
+      }
 
       // Flush packer pipeline before strides gasket alu format change
       TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);

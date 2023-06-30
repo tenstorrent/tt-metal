@@ -161,10 +161,12 @@ inline void llk_pack_debug_dump_seek(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_operand) {
-    reconfig_packer_data_format(get_output_id(new_operand));
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(get_output_id(new_operand));
 }
 
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_operand, const std::uint32_t new_operand) {
     std::uint32_t old_operand_id = get_output_id(old_operand);
     std::uint32_t new_operand_id = get_output_id(new_operand);
@@ -172,7 +174,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_operand, const
     if((pack_dst_format[old_operand_id] != pack_dst_format[new_operand_id])
        && (pack_dst_format[old_operand_id] != (uint)DataFormat::Invalid) 
        && (pack_dst_format[new_operand_id] != (uint)DataFormat::Invalid)) {
-        reconfig_packer_data_format(new_operand_id);
+        reconfig_packer_data_format<is_fp32_dest_acc_en>(new_operand_id);
     }
 }
 
