@@ -171,7 +171,13 @@ def convert_tt_tensors_wrapper(func):
 
         if ttl_profiler.get_profiler_flag():
             ttl_profiler.start_profiling("fallback_op")
-            ttl_profiler.set_preferred_name(func.__qualname__)
+            # This is to check if this is a function of a class. We add the object id if it is
+            if '.' in func.__qualname__:
+                obj_id = id(args[0])
+                split_name = func.__qualname__.rsplit(".", 1)
+                ttl_profiler.set_preferred_name(f"{split_name[0]}_{obj_id}.{split_name[1]}")
+            else:
+                ttl_profiler.set_preferred_name(func.__qualname__)
 
             # Override str functions for PT and TT Tensors to format/report desired values
             with custom_tensor_print_handler(
