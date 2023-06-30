@@ -21,4 +21,4 @@ def test_cpu_demo():
     predicted_label = logits.argmax(-1).item()
 
     logger.info(f"Input image saved as deit_without_teacher_cpu_input_image.jpg")
-    logger.info(f"TT's prediction: {model.config.id2label[predicted_label]}.")
+    logger.info(f"CPU's prediction: {model.config.id2label[predicted_label]}.")

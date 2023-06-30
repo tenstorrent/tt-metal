@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../tt")
 sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 
-from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
+from transformers import AutoImageProcessor, DeiTForImageClassification
 import torch
 from datasets import load_dataset
 from loguru import logger
