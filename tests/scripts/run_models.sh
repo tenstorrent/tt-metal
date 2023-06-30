@@ -89,3 +89,11 @@ env pytest tests/python_api_testing/models/bloom -k bloom_merge_heads
 env pytest tests/python_api_testing/models/bloom -k bloom_mlp
 env pytest tests/python_api_testing/models/bloom -k bloom_model
 env pytest tests/python_api_testing/models/bloom -k bloom_causal_lm
+
+env pytest tests/python_api_testing/models/yolov3 -k conv2d_module
+env pytest tests/python_api_testing/models/yolov3 -k conv_module
+env pytest tests/python_api_testing/models/yolov3 -k concat_module
+env pytest tests/python_api_testing/models/yolov3 -k bottleneck_module
+env pytest tests/python_api_testing/models/yolov3 -k detect_module
+env pytest tests/python_api_testing/models/yolov3 -k detection_model
+env pytest tests/python_api_testing/models/yolov3 -k upsample_module

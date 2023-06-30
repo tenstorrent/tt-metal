@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import torch
 
+from python_api_testing.models.yolov3.tt.yolov3_conv2d import TtConv2D
 from python_api_testing.models.yolov3.reference.models.common import autopad
 from python_api_testing.models.yolov3.reference.models.yolo import Conv, Model
 import tt_lib
@@ -38,26 +39,17 @@ class TtConv(nn.Module):
         self.device = device
         self.base_address = base_address
 
-        self.conv_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.conv.weight"], self.device, put_on_device=False
-        )
-        if f"{base_address}.conv.bias" in state_dict:
-            self.conv_bias = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.conv.bias"], self.device
-            )
-        else:
-            self.conv_bias = None
-
-        self.conv = fallback_ops.Conv2d(
-            weights=self.conv_weight,
-            biases=self.conv_bias,
-            in_channels=c1,
-            out_channels=c2,
-            kernel_size=k,
-            stride=s,
-            padding=autopad(k, p, d),
-            groups=g,
-            dilation=d,
+        self.conv = TtConv2D(
+            base_address=f"{base_address}.conv",
+            state_dict=state_dict,
+            device=device,
+            c1=c1,
+            c2=c2,
+            k=k,
+            s=s,
+            p=p,
+            g=g,
+            d=d,
         )
 
         self.act = act
