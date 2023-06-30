@@ -23,7 +23,7 @@ def custom_tensor_print_handler(tensor_cls):
         return f"tt_lib.tensor.Tensor({'_'.join(map(str, tensor.shape()))})"
 
     def custom_pt_tensor_to_str_fn(tensor):
-        return f"torch.Tensor({'|'.join(['_'.join(map(str, tensor.shape)), str(tensor.dtype), str(tensor.device), str(tensor.layout)])})"
+        return f"torch.Tensor({'|'.join(['_'.join(map(str, tensor.shape)), str(tensor.layout), str(tensor.dtype), str(tensor.device)])})"
 
     # Save original methods
     tensor_str_og = tensor_cls.__str__
@@ -188,7 +188,7 @@ def convert_tt_tensors_wrapper(func):
                     # Note that this may not work correctly in all cases
                     ttl_profiler.append_meta_data(
                         f"args:({str(args) if '.' not in func.__qualname__ else str(args[1:])})".replace(
-                            ",", "|"
+                            ",", ";"
                         ).replace(
                             " ", ""
                         )
