@@ -45,28 +45,46 @@
 # pytest tests/python_api_testing/unit_testing/test_bmm_tilize_untilize.py > bmm_tilize_untilize.log
 # python3 tt_metal/tools/profiler/custom_profile.py bmm_tilize_untilize.log > log/bmm_tilize_untilize_64.log
 
+
+
+# power_of_2() {
+#     local n=$1
+#     local result=1
+
+#     for ((i=1; i<=n; i++)); do
+#         result=$((result * 2))
+#     done
+
+#     echo $result
+# }
+
+# ./build/test/build_kernels_for_riscv/test_build_kernel_blank
 # ./build/test/build_kernels_for_riscv/test_build_kernel_risc_read_speed
-# ./build/test/llrt/test_run_risc_read_speed --buffer-size 32768 --transaction-size 16384
+# ./build/test/build_kernels_for_riscv/test_build_kernel_risc_write_speed
+
+# for buffer_pow in {6..18}
+# do
+# for transaction_pow in {6..18}
+# do
+# if (($buffer_pow >= $transaction_pow))
+# then
+# buffer=$(power_of_2 $buffer_pow)
+# transaction=$(power_of_2 $transaction_pow)
+# ./build/test/llrt/test_run_risc_write_speed --buffer-size $buffer --transaction-size $transaction
+# fi
+# done
+# done
+
+
 
 # ./build/test/build_kernels_for_riscv/test_build_kernel_risc_rw_speed_banked_dram
 
-power_of_2() {
-    local n=$1
-    local result=1
-
-    for ((i=1; i<=n; i++)); do
-        result=$((result * 2))
-    done
-
-    echo $result
-}
-
-for buffer_pow in {13..19}
-do
-for transaction_pow in {6..13}
-do
-buffer=$(power_of_2 $buffer_pow)
-transaction=$(power_of_2 $transaction_pow)
-./build/test/llrt/test_run_risc_rw_speed_banked_dram $buffer 10000 $transaction 2 1 1
-done
-done
+# for buffer_pow in {13..19}
+# do
+# for transaction_pow in {6..13}
+# do
+# buffer=$(power_of_2 $buffer_pow)
+# transaction=$(power_of_2 $transaction_pow)
+# ./build/test/llrt/test_run_risc_rw_speed_banked_dram $buffer 10000 $transaction 2 1 1
+# done
+# done

@@ -77,7 +77,7 @@ void kernel_main() {
     bool one_time_tilemajor_end = true;
 
     uint32_t dim_x = 512 * 1 * 1;   // Each noc_async_read tile size
-    uint32_t dim_y = 128*2*128*2*2/dim_x;
+    uint32_t dim_y = 256*256*2/dim_x;
 
     const InterleavedPow2AddrGen<true> s2 = {
         .bank_base_address = in0_addr,
